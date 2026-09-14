@@ -79,17 +79,33 @@ async function login(){
   status.className = "status"; status.textContent = "";
 
   try{
-    // Resolve what the person typed to their real Auth login email. A staff
-    // member's username is their Employee ID; Super Admins use their real
-    // email as their username. The RPC maps either to the login email.
+    // What the person typed could be their Employee ID (their real
+    // username) or their personal email. If it looks like an email, first
+    // check whether it belongs to a known employee — if so, resolve it to
+    // THEIR Employee ID and proceed exactly as a normal username login
+    // would, through the same trusted username->Auth-email RPC. This
+    // means email login piggybacks on the existing, already-correct
+    // username resolution rather than needing its own separate path.
+    let identifier = username;
+    if(username.indexOf("@") !== -1){
+      try{
+        const { data: empId } = await sb.rpc("resolve_email_to_username", { p_email: username });
+        if(empId) identifier = empId;
+      }catch(e){ /* not a recognized employee email — fall through below */ }
+    }
+
+    // Resolve what the person typed (or the Employee ID we just resolved
+    // their email to) to their real Auth login email. A staff member's
+    // username is their Employee ID; Super Admins use their real email as
+    // their username. The RPC maps either to the login email.
     let email = null;
     try{
-      const { data } = await sb.rpc("resolve_username_to_email", { p_username: username });
+      const { data } = await sb.rpc("resolve_username_to_email", { p_username: identifier });
       if(data) email = data;
     }catch(e){ /* fall through to the email fallback below */ }
 
-    // If it wasn't resolved but looks like an email, try it directly — this
-    // lets staff sign in with their own email once their account carries it.
+    // If it still wasn't resolved but looks like an email, try it
+    // directly — covers a Super Admin whose Auth email itself was typed.
     if(!email && username.indexOf("@") !== -1) email = username;
 
     if(!email){
