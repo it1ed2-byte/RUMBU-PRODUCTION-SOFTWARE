@@ -97,14 +97,22 @@ async function requireAuth(loginPath) {
 
   let departmentIds = [];
   let departmentNames = [];
+  // Non-fatal by design, same reasoning as the KWP check above: if this
+  // lookup ever fails (wrong table name, missing data, anything) it must
+  // not block login for every "user"-role account — degrade to empty
+  // department info rather than throwing.
   if (profile.role === "user") {
-    const { data: ud, error: udErr } = await sb.from("user_departments").select("department_id").eq("profile_id", profile.id);
-    if (udErr) throw new Error("Could not load department assignments: " + udErr.message);
-    departmentIds = (ud || []).map(r => r.department_id);
-    if (departmentIds.length) {
-      const { data: depts, error: deptErr } = await sb.from("app_departments").select("id,name").in("id", departmentIds);
-      if (deptErr) throw new Error("Could not load departments: " + deptErr.message);
-      departmentNames = (depts || []).map(d => d.name);
+    try {
+      const { data: ud, error: udErr } = await sb.from("user_departments").select("department_id").eq("profile_id", profile.id);
+      if (udErr) throw udErr;
+      departmentIds = (ud || []).map(r => r.department_id);
+      if (departmentIds.length) {
+        const { data: depts, error: deptErr } = await sb.from("app_departments").select("id,name").in("id", departmentIds);
+        if (deptErr) throw deptErr;
+        departmentNames = (depts || []).map(d => d.name);
+      }
+    } catch (e) {
+      console.warn("Department assignment lookup failed (non-fatal):", e);
     }
   }
 
