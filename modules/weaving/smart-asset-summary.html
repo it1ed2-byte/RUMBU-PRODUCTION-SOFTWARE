@@ -34,6 +34,7 @@
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="../../auth.js"></script>
+<script src="../../table-resolver.js"></script>
 </head>
 <body>
 
@@ -66,27 +67,12 @@
 const SECTION_LABEL = { "Rumbu": "Rumbu", "MamaSannu": "Mama Sannu" };
 
 let MW_ROWS = [], CTRL_ROWS = []; CTRL_ROWS.forEach(normalizeControlRow);
+let MW_TABLE = "mat_weaving"; // resolved properly in init() below
 
 function parseDT(v){ const d=new Date(v); return isNaN(d)?null:d; }
 function minutesBetween(a,b){ return (!a||!b) ? 0 : Math.round((b-a)/60000); }
 function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
 
-
-// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
-async function fetchAllRows(table, select, query){
-  let all = [], offset = 0; const pageSize = 1000;
-  const q = query || "";
-  for(let guard=0; guard<500; guard++){
-    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
-    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=" + (select||"*") + q, { headers });
-    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
-    const batch = await res.json();
-    all = all.concat(batch);
-    if(batch.length < pageSize) break;
-    offset += pageSize;
-  }
-  return all;
-}
 
 function normalizeControlRow(r){
   if(r.date_col === undefined) r.date_col = r.date;
@@ -97,20 +83,12 @@ function normalizeControlRow(r){
   return r;
 }
 
-async function fetchRangeData(fromDate, toDate){
-  const [mw, ctrl] = await Promise.all([
-    fetchAllRows("Mat_Weaving","*", "&date_col=gte."+fromDate+"&date_col=lte."+toDate),
-    fetchAllRows("control","*", "&date=gte."+fromDate+"&date=lte."+toDate)
-  ]);
-  MW_ROWS = mw;
-  CTRL_ROWS = ctrl; CTRL_ROWS.forEach(normalizeControlRow);
-}
-
 async function init(){
   const status = document.getElementById("status");
   try{
     const me = await requireAuth("../../login.html");
     if(!me) return;
+    MW_TABLE = await resolveWeavingTable();
 
     const mySections = (me.sectionNames && me.sectionNames.length) ? me.sectionNames : ["Rumbu","MamaSannu"];
     document.getElementById("section").innerHTML = '<option value="All">All</option>' +
@@ -121,24 +99,26 @@ async function init(){
       document.getElementById("section").disabled = true;
     }
 
+    const [mwRes, ctrlRes] = await Promise.all([
+      fetch(SUPABASE_URL + "/rest/v1/" + MW_TABLE + "?select=*", { headers: authHeaders() }),
+      fetch(SUPABASE_URL + "/rest/v1/control?select=*", { headers: authHeaders() })
+    ]);
+    if(!mwRes.ok) throw new Error(MW_TABLE + ": HTTP " + mwRes.status);
+    if(!ctrlRes.ok) throw new Error("control: HTTP " + ctrlRes.status);
+    MW_ROWS = await mwRes.json();
+    CTRL_ROWS = await ctrlRes.json(); CTRL_ROWS.forEach(normalizeControlRow);
     status.style.color="#1d8a4e";
-    status.textContent = "Ready. Select a date range and click Generate.";
+    status.textContent = "Connected. matweaving: " + MW_ROWS.length + " rows, control: " + CTRL_ROWS.length + " rows.";
   }catch(e){
     status.style.color="#c0392b";
     status.textContent = "Could not read data: " + (e.message||e);
   }
 }
 
-async function generate(){
+function generate(){
+  if(!MW_ROWS.length){ alert("matweaving returned 0 rows — check its read policy."); return; }
   const fromDate = document.getElementById("fromDate").value;
   const toDate = document.getElementById("toDate").value;
-  if(!fromDate || !toDate){ alert("Please select From and To dates."); return; }
-  const status = document.getElementById("status");
-  if(status){ status.style.color="#555"; status.textContent="Loading "+fromDate+" to "+toDate+"…"; }
-  try{ await fetchRangeData(fromDate, toDate); }
-  catch(e){ if(status){ status.style.color="#c0392b"; status.textContent="Could not read data: "+(e.message||e);} return; }
-  if(status){ status.textContent=""; }
-  if(!MW_ROWS.length){ alert("No production rows found for this date range."); return; }
   const shift = document.getElementById("shift").value;
   const group = document.getElementById("group").value;
   const section = document.getElementById("section").value;
@@ -236,6 +216,5 @@ async function generate(){
 
 init();
 </script>
-<script src="../../assets/letterhead.js"></script>
 </body>
 </html>

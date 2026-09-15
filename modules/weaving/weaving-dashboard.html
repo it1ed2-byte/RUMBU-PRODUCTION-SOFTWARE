@@ -14,6 +14,7 @@
 </script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="../../auth.js"></script>
+<script src="../../table-resolver.js"></script>
 <style>
   :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;--amber:#d97706;--teal:#0f766e;}
   *{box-sizing:border-box;}
@@ -114,6 +115,7 @@
 <script>
 const SECTION_LABEL = { "Rumbu":"Rumbu", "MamaSannu":"Mama Sannu" };
 let ME = null, MY_SECTIONS = [], ROWS = [];
+let MW_TABLE = "mat_weaving"; // resolved properly in init() below
 
 function n(v){ const x = parseFloat(v); return isNaN(x)?0:x; }
 function fmt(v){ return Math.round(v).toLocaleString(); }
@@ -125,6 +127,7 @@ async function init(){
   try{
     ME = await requireAuth("../../login.html");
     if(!ME) return;
+    MW_TABLE = await resolveWeavingTable();
 
     MY_SECTIONS = (ME.sectionNames && ME.sectionNames.length) ? ME.sectionNames.filter(s=>["Rumbu","MamaSannu"].includes(s)) : [];
     if(ME.role === "super_admin" && !MY_SECTIONS.length) MY_SECTIONS = ["Rumbu","MamaSannu"];
@@ -177,12 +180,12 @@ async function fetchRows(fromDate, toDate, sectionFilter){
     const list = MY_SECTIONS.map(s=>`"${s}"`).join(",");
     sectionClause = "&section=in.(" + encodeURIComponent(list) + ")";
   }
-  const base = SUPABASE_URL + "/rest/v1/Mat_Weaving?select=date_col,shift,mat_type,group_name,assets,a_double,a_single,b,c,total,target,shed,units,section,operator_name,operator_id,rank"
+  const base = SUPABASE_URL + "/rest/v1/" + MW_TABLE + "?select=date_col,shift,mat_type,group_name,assets,a_double,a_single,b,c,total,target,shed,units,section,operator_name,operator_id,rank"
     + "&date_col=gte." + fromDate + "&date_col=lte." + toDate + sectionClause + "&order=date_col.asc";
   for(let guard=0; guard<400; guard++){
     const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
     const res = await fetch(base, { headers });
-    if(!res.ok) throw new Error("Mat_Weaving: HTTP " + res.status);
+    if(!res.ok) throw new Error(MW_TABLE + ": HTTP " + res.status);
     const batch = await res.json();
     all = all.concat(batch);
     if(batch.length < pageSize) break;

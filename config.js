@@ -15,7 +15,7 @@ const SUPABASE_ANON_KEY = "sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp";
 const TABLES = {
   monitoring: "monitoring",   // BigQuery "tracking table" (monitoring room)
   control: "control",         // BigQuery "maintenance log" (control room)
-  Mat_Weaving: "Mat_Weaving"    // BigQuery "Mat Weaving"
+  mat_weaving: "mat_weaving"    // BigQuery "Mat Weaving"
 };
 
 // A small shared helper every page can use to read a table read-only.
