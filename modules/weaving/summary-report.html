@@ -233,7 +233,7 @@ let MW_TABLE = "mat_weaving"; // resolved properly in init() below
 let MW_ROWS = [], CTRL_ROWS = [], COMPLAINTS_ROWS = [], EXCLUDED_JOB_CODES = new Set(); CTRL_ROWS.forEach(normalizeControlRow);
 
 function parseDT(v){ const d=new Date(v); return isNaN(d)?null:d; }
-function minutesBetween(a,b){ return (!a||!b) ? 0 : Math.round((b-a)/60000); }
+function minutesBetween(a,b){ return (!a||!b) ? 0 : Math.trunc((b-a)/60000); } // FIX A: trunc matches BigQuery TIMESTAMP_DIFF(MINUTE)
 function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
 
 
@@ -407,9 +407,25 @@ async function generate(){
     const ATG = t.target - t.mld;
     const MLU = t.total - ATG;
     overall.A += t.A; overall.B += t.B; overall.C += t.C; overall.total += t.total;
-    overall.target += t.target; overall.downtime += t.downtime; overall.mld += t.mld;
+    overall.target += t.target; overall.mld += t.mld;
     overall.mlu += MLU; overall.assets += t.assets; overall.actualTarget += ATG;
   });
+
+  // FIX B: compute total downtime directly from control rows — matches BigQuery's
+  // standalone SUM(DowntimeMin) query. The byType loop misses assets that have
+  // maintenance records but no production rows, causing undercount.
+  let totalDT = 0;
+  CTRL_ROWS.forEach(r=>{
+    if(r.date_col < f.fromDate || r.date_col > f.toDate) return;
+    if(f.shift   !== "All" && r.shift   !== f.shift)   return;
+    if(f.section !== "All" && r.section !== f.section) return;
+    if(EXCLUDED_JOB_CODES.has(r.job_code)) return;
+    if(!WEAVING_ASSETS.has(r.assets)) return;
+    const stop = parseDT(r.stop_time), finish = parseDT(r.finish_time);
+    if(!stop || !finish) return;
+    totalDT += minutesBetween(stop, finish);
+  });
+  overall.downtime = totalDT;
   const overallATG = overall.target - overall.mld;
   const pB = overall.total ? Math.round((overall.B/overall.total)*100) : 0;
   const pC = overall.total ? Math.round((overall.C/overall.total)*100) : 0;
