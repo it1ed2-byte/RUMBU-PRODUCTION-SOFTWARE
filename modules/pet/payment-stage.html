@@ -12,6 +12,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="../../auth.js"></script>
 <script src="review-modal.js"></script>
+<script src="queue-collapse.js"></script>
 <style>
   body{padding:20px;}
   .wrap{max-width:1100px;margin:0 auto;}
@@ -40,6 +41,7 @@
     <div class="phase-header">Stage 3 — Phase 1: 90% Payment (Fill Queue)</div>
     <div class="phase-body">
       <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Collections approved by Quality Control awaiting first payment entry.</p>
+      <div class="panel-title" id="p1FillQueueTitle" style="font-size:13px;margin-bottom:8px;">Pending Entries</div>
       <div id="p1FillQueue"></div>
 
       <!-- Phase 1 Form -->
@@ -79,6 +81,7 @@
     <div class="phase-header" style="background:var(--accent);">Stage 3 — Phase 1: 90% Payment (Approval Queue)</div>
     <div class="phase-body">
       <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Approve or reject Phase 1 payment submissions.</p>
+      <div class="panel-title" id="p1ApprovalQueueTitle" style="font-size:13px;margin-bottom:8px;">Pending Approvals</div>
       <div id="p1ApprovalQueue"></div>
     </div>
   </div>
@@ -88,6 +91,7 @@
     <div class="phase-header">Stage 3 — Phase 2: 10% Balance Payment (Fill Queue)</div>
     <div class="phase-body">
       <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Production complete. Enter deduction and balance payment receipt.</p>
+      <div class="panel-title" id="p2FillQueueTitle" style="font-size:13px;margin-bottom:8px;">Pending Entries</div>
       <div id="p2FillQueue"></div>
 
       <!-- Phase 2 Form -->
@@ -134,6 +138,7 @@
   <div id="p2ApprovalSection" style="display:none;margin-top:16px;">
     <div class="phase-header" style="background:var(--accent);">Stage 3 — Phase 2: 10% Balance Payment (Approval Queue)</div>
     <div class="phase-body">
+      <div class="panel-title" id="p2ApprovalQueueTitle" style="font-size:13px;margin-bottom:8px;">Pending Approvals</div>
       <div id="p2ApprovalQueue"></div>
     </div>
   </div>
@@ -191,23 +196,32 @@ async function loadP1FillQueue(sections){
     .in("section",sections.length?sections:ALL_SECTIONS)
     .order("updated_at",{ascending:false});
   const queue=document.getElementById("p1FillQueue");
-  if(!data||!data.length){ queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No collections waiting for Phase 1 payment entry.</p>`; return; }
+  if(!data||!data.length){
+    queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No collections waiting for Phase 1 payment entry.</p>`;
+    setupCollapsibleQueue("p1FillQueueTitle","p1FillQueue",0,"Pending Entries");
+    return;
+  }
   queue.innerHTML=data.map(c=>`<div class="queue-row">
     <div><b>${c.form_number}</b> <span style="font-size:12px;color:var(--muted);margin-left:8px;">${c.agent_name} — ${c.section}</span>
     ${c.status==="rejected_to_stage3p1"?`<span style="font-size:11px;color:var(--bad);margin-left:8px;">(Returned for correction)</span>`:""}
     </div>
     <button onclick="openP1Form(${c.id})">Enter Payment</button>
   </div>`).join("");
+  setupCollapsibleQueue("p1FillQueueTitle","p1FillQueue",data.length,"Pending Entries");
 }
 
 async function loadP1ApprovalQueue(sections){
   const { data }=await sb.from("pet_collections")
-    .select("id,form_number,agent_name,agent_code,section,status,cycle,agent_waybill_weight,rumbu_weighbridge_weight,pet_stage3_payment(*),pet_stage2_qc(offload_location,unacceptable_waste_value,weight_difference)")
+    .select("id,form_number,agent_name,agent_code,section,status,cycle,agent_waybill_weight,rumbu_weighbridge_weight,pet_stage3_payment(*),pet_stage2_qc(offload_location)")
     .eq("status","stage3p1_approval")
     .in("section",sections.length?sections:ALL_SECTIONS)
     .order("updated_at",{ascending:false});
   const queue=document.getElementById("p1ApprovalQueue");
-  if(!data||!data.length){ queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No Phase 1 submissions awaiting approval.</p>`; return; }
+  if(!data||!data.length){
+    queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No Phase 1 submissions awaiting approval.</p>`;
+    setupCollapsibleQueue("p1ApprovalQueueTitle","p1ApprovalQueue",0,"Pending Approvals");
+    return;
+  }
 
   // Scoped to THIS cycle — a decision from before a reject/correct loop must not
   // hide the buttons once the form has been corrected and resubmitted.
@@ -230,6 +244,7 @@ async function loadP1ApprovalQueue(sections){
       </div>`:""}
     </div>`;
   }).join("");
+  setupCollapsibleQueue("p1ApprovalQueueTitle","p1ApprovalQueue",data.length,"Pending Approvals");
 }
 
 function openP1Review(collectionId){
@@ -246,8 +261,6 @@ function openP1Review(collectionId){
         ["LOT Assigned", qc.offload_location],
         ["Agent Waybill Weight", (c.agent_waybill_weight||0) + " kg"],
         ["Rumbu Weighbridge Weight", (c.rumbu_weighbridge_weight||0) + " kg"],
-        ["Unacceptable Waste Value", (qc.unacceptable_waste_value||0) + " kg"],
-        ["Weight Difference", (qc.weight_difference||0) + " kg"],
       ]},
       { heading: "Payment Details", rows: [
         ["Odoo PO Number", pay.odoo_po_number],
@@ -266,13 +279,18 @@ async function loadP2FillQueue(sections){
     .in("section",sections.length?sections:ALL_SECTIONS)
     .order("updated_at",{ascending:false});
   const queue=document.getElementById("p2FillQueue");
-  if(!data||!data.length){ queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No collections ready for Phase 2 payment.</p>`; return; }
+  if(!data||!data.length){
+    queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No collections ready for Phase 2 payment.</p>`;
+    setupCollapsibleQueue("p2FillQueueTitle","p2FillQueue",0,"Pending Entries");
+    return;
+  }
   queue.innerHTML=data.map(c=>`<div class="queue-row">
     <div><b>${c.form_number}</b> <span style="font-size:12px;color:var(--muted);margin-left:8px;">${c.agent_name} — ${c.section}</span>
     ${c.status==="rejected_to_stage4"?`<span style="font-size:11px;color:var(--bad);margin-left:8px;">(Returned for correction)</span>`:""}
     </div>
     <button onclick="openP2Form(${c.id})">Enter Balance Payment</button>
   </div>`).join("");
+  setupCollapsibleQueue("p2FillQueueTitle","p2FillQueue",data.length,"Pending Entries");
 }
 
 async function loadP2ApprovalQueue(sections){
@@ -282,7 +300,11 @@ async function loadP2ApprovalQueue(sections){
     .in("section",sections.length?sections:ALL_SECTIONS)
     .order("updated_at",{ascending:false});
   const queue=document.getElementById("p2ApprovalQueue");
-  if(!data||!data.length){ queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No Phase 2 submissions awaiting approval.</p>`; return; }
+  if(!data||!data.length){
+    queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No Phase 2 submissions awaiting approval.</p>`;
+    setupCollapsibleQueue("p2ApprovalQueueTitle","p2ApprovalQueue",0,"Pending Approvals");
+    return;
+  }
 
   // Scoped to THIS cycle — a decision from before a reject/correct loop must not
   // hide the buttons once the form has been corrected and resubmitted.
@@ -305,6 +327,7 @@ async function loadP2ApprovalQueue(sections){
       </div>`:""}
     </div>`;
   }).join("");
+  setupCollapsibleQueue("p2ApprovalQueueTitle","p2ApprovalQueue",data.length,"Pending Approvals");
 }
 
 function openP2Review(collectionId){
@@ -355,9 +378,7 @@ async function openP1Form(id){
   document.getElementById("p1Summary").innerHTML=`
     <div class="info-row"><b>Waybill Weight:</b> ${c.agent_waybill_weight||0} kg</div>
     <div class="info-row"><b>Rumbu Weight:</b> ${c.rumbu_weighbridge_weight||0} kg</div>
-    <div class="info-row"><b>LOT Assigned:</b> ${qc.offload_location||"—"}</div>
-    <div class="info-row"><b>Unacceptable Waste:</b> ${qc.unacceptable_waste_value||0} kg</div>
-    <div class="info-row"><b>Weight Difference:</b> ${qc.weight_difference||0} kg</div>`;
+    <div class="info-row"><b>LOT Assigned:</b> ${qc.offload_location||"—"}</div>`;
 
   if(c.status==="rejected_to_stage3p1"){
     const { data:log }=await sb.from("pet_activity_log").select("note").eq("collection_id",id).eq("action","rejected").order("created_at",{ascending:false}).limit(1);
@@ -442,7 +463,7 @@ async function openP2Form(id){
   document.getElementById("p2ReceiptUrl").textContent=pay.payment_10pct_attachment||"";
 
   const rumbuW=c.rumbu_weighbridge_weight||0;
-  const unaccVal=qc.unacceptable_waste_value||0;
+  const unaccVal=prod.unacceptable_waste_value||0;
   const deductPct=rumbuW>0 ? ((unaccVal/rumbuW)*100) : 0;
   document.getElementById("p2RumbuW").value=rumbuW;
   document.getElementById("p2UnaccVal").value=unaccVal;

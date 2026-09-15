@@ -12,8 +12,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="../../auth.js"></script>
 <script src="review-modal.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script src="queue-collapse.js"></script>
 <style>
   body{padding:20px;}
   .wrap{max-width:1000px;margin:0 auto;}
@@ -22,12 +21,18 @@
   input[readonly]{background:var(--bg);color:var(--muted);}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
   .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;}
+  .grid4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;}
   .sec-title{font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--heading);margin:18px 0 10px;padding-bottom:4px;border-bottom:2px solid var(--line);}
   .queue-row{padding:10px 14px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;background:var(--card);gap:10px;flex-wrap:wrap;}
   .approve-card{border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:10px;}
   .correction-note{background:#fef3c7;border:1px solid #d97706;border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:12px;}
   .info-box{background:var(--bg);border-radius:8px;padding:12px;margin-bottom:14px;font-size:12px;line-height:1.8;}
   .info-box b{color:var(--heading);}
+  /* Plain numeric entry — no up/down spinner arrows, so the person types the
+     number directly instead of clicking tiny increment controls. */
+  input.no-spinner::-webkit-outer-spin-button,
+  input.no-spinner::-webkit-inner-spin-button{ -webkit-appearance:none; margin:0; }
+  input.no-spinner{ -moz-appearance:textfield; }
 </style>
 </head>
 <body>
@@ -38,7 +43,7 @@
   <!-- Fill queue -->
   <div id="fillSection" style="display:none;">
     <div class="card-panel">
-      <div class="panel-title" style="font-weight:700;font-size:14px;color:var(--heading);margin:0 0 10px;">Stage 4 — Production (Fill Queue)</div>
+      <div class="panel-title" id="fillQueueTitle" style="font-weight:700;font-size:14px;color:var(--heading);margin:0 0 10px;">Stage 4 — Production (Fill Queue)</div>
       <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Enter production details for collections ready to go into production.</p>
       <div id="fillQueue"></div>
     </div>
@@ -86,24 +91,60 @@
         </div>
 
         <div class="sec-title">Waste Data</div>
-        <div class="grid3">
+        <div class="grid4">
           <div>
-            <label>Waste — Non-PET Bottles (kg)</label>
-            <input type="number" id="pfWasteNonPet" step="0.01" oninput="computeWaste()">
+            <label>Coloured PET (kg) *</label>
+            <input type="number" class="no-spinner" id="pfWasteColoured" min="0" step="1" inputmode="numeric" oninput="computeWaste()">
           </div>
           <div>
-            <label>Waste — Oily Bottles (kg)</label>
-            <input type="number" id="pfWasteOily" step="0.01" oninput="computeWaste()">
+            <label>Labelled Bottles (kg) *</label>
+            <input type="number" class="no-spinner" id="pfWasteLabels" min="0" step="1" inputmode="numeric" oninput="computeWaste()">
           </div>
           <div>
-            <label>Waste — Aged Bottles (kg)</label>
-            <input type="number" id="pfWasteAged" step="0.01" oninput="computeWaste()">
+            <label>Caps &amp; Rings (kg) *</label>
+            <input type="number" class="no-spinner" id="pfWasteCapsRings" min="0" step="1" inputmode="numeric" oninput="computeWaste()">
+          </div>
+          <div>
+            <label>Non-Food Contact (kg) *</label>
+            <input type="number" class="no-spinner" id="pfWasteNonFood" min="0" step="1" inputmode="numeric" oninput="computeWaste()">
+          </div>
+          <div>
+            <label>Non-PET Product (kg) *</label>
+            <input type="number" class="no-spinner" id="pfWasteNonPet" min="0" step="1" inputmode="numeric" oninput="computeWaste()">
+          </div>
+          <div>
+            <label>Aged PET Bottles (kg) *</label>
+            <input type="number" class="no-spinner" id="pfWasteAged" min="0" step="1" inputmode="numeric" oninput="computeWaste()">
+          </div>
+          <div>
+            <label>Oily PET Bottles (kg) *</label>
+            <input type="number" class="no-spinner" id="pfWasteOily" min="0" step="1" inputmode="numeric" oninput="computeWaste()">
+          </div>
+          <div>
+            <label>Bottles with Metal Ring (kg) *</label>
+            <input type="number" class="no-spinner" id="pfWasteMetal" min="0" step="1" inputmode="numeric" oninput="computeWaste()">
           </div>
         </div>
-        <div class="grid2" style="margin-top:6px;">
+        <div class="grid3" style="margin-top:6px;">
           <div>
-            <label>Total Waste Record (kg) — WASTE_NON_PET + WASTE_OILY + WASTE_AGED</label>
+            <label>Total Waste Record (kg) — sum of all 8 waste categories above</label>
             <input type="number" id="pfTotalWaste" readonly>
+          </div>
+          <div>
+            <label>Accepted Waste (Rumbu Weighbridge Weight × 3%)</label>
+            <input type="number" id="pfAcceptedWaste" readonly>
+          </div>
+          <div>
+            <label>Unacceptable Waste (kg)</label>
+            <input type="number" id="pfUnacceptableKg" readonly>
+          </div>
+          <div>
+            <label>Unacceptable Waste Value (if &gt; 0)</label>
+            <input type="number" id="pfUnacceptableVal" readonly>
+          </div>
+          <div>
+            <label>Weight Difference (Rumbu − Agent)</label>
+            <input type="number" id="pfWeightDiff" readonly>
           </div>
           <div>
             <label>Total Production + Total Waste (kg)</label>
@@ -123,31 +164,17 @@
   <!-- Approval queue -->
   <div id="approvalSection" style="display:none;margin-top:16px;">
     <div class="card-panel">
-      <div style="font-weight:700;font-size:14px;color:var(--heading);margin:0 0 10px;">Stage 4 — Production (Approval Queue)</div>
+      <div class="panel-title" id="approvalQueueTitle" style="font-weight:700;font-size:14px;color:var(--heading);margin:0 0 10px;">Stage 4 — Production (Approval Queue)</div>
       <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Review and approve or reject. Approval frees the LOT and triggers Phase 2 payment.</p>
       <div id="approvalQueue"></div>
     </div>
   </div>
 
-  <!-- Production Report -->
-  <div class="card-panel" style="margin-top:16px;">
-    <div style="font-weight:700;font-size:14px;color:var(--heading);margin:0 0 10px;">Production Report</div>
-    <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Browse every production entry. Filter by date range, agent, or branch.</p>
-    <div class="grid3">
-      <div><label>From Date</label><input type="date" id="prFrom" onchange="loadProductionReport()"></div>
-      <div><label>To Date</label><input type="date" id="prTo" onchange="loadProductionReport()"></div>
-      <div><label>Branch</label>
-        <select id="prSection" onchange="loadProductionReport()"><option value="">All</option></select>
-      </div>
-    </div>
-    <div class="grid2" style="margin-top:6px;">
-      <div><label>Agent</label><input type="text" id="prAgent" placeholder="Search by agent name or code" oninput="loadProductionReport()"></div>
-      <div style="display:flex;align-items:flex-end;gap:8px;">
-        <button class="btn-ghost" onclick="clearProductionFilters()" style="width:100%;">Clear Filters</button>
-        <button onclick="downloadProductionReportPdf()" style="width:100%;">⬇ Download PDF</button>
-      </div>
-    </div>
-    <div id="productionReportWrap" style="margin-top:14px;overflow-x:auto;"></div>
+  <!-- Production Report moved to its own page -->
+  <div class="card-panel" style="margin-top:16px;text-align:center;">
+    <div style="font-weight:700;font-size:14px;color:var(--heading);margin:0 0 8px;">Production Report</div>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Browse every production entry from initiation through to production, with filters and PDF export.</p>
+    <a href="production-report.html" style="display:inline-block;padding:9px 18px;background:var(--accent);color:var(--logo-fg);border-radius:8px;font-size:13px;font-weight:700;text-decoration:none;">Open PET Production Report &rarr;</a>
   </div>
 
   <div id="noQueue" style="display:none;text-align:center;color:var(--muted);padding:40px;font-size:14px;">
@@ -156,11 +183,7 @@
 </div>
 
 <script>
-let ME=null, CURRENT_PROD=null, ALL_SECTIONS=[], PROD_QUEUE_DATA=[], PROD_REPORT_ROWS=[];
-
-// PET collection currently only happens at these two sites — matches the
-// same restriction applied at Initiation.
-const ACTIVE_PET_BRANCHES = ["LagosWash", "KanoWash"];
+let ME=null, CURRENT_PROD=null, ALL_SECTIONS=[], PROD_QUEUE_DATA=[];
 
 const NEXT_STATUS={stage4:'stage3p2_filling'};
 const REJECT_STATUS={stage4:'rejected_to_stage3p1'};
@@ -188,127 +211,8 @@ async function init(){
     if(isApprover){ await loadApprovalQueue(aSecs); document.getElementById("approvalSection").style.display="block"; anyQ=true; }
     if(!anyQ) document.getElementById("noQueue").style.display="block";
 
-    const prSel = document.getElementById("prSection");
-    prSel.innerHTML = '<option value="">All</option>' + ACTIVE_PET_BRANCHES.map(s=>`<option value="${s}">${s}</option>`).join("");
-    await loadProductionReport();
-
     cs.style.color="var(--ok)"; cs.textContent="Connected.";
   }catch(e){ cs.style.color="var(--bad)"; cs.textContent="Error: "+e.message; }
-}
-
-function clearProductionFilters(){
-  document.getElementById("prFrom").value = "";
-  document.getElementById("prTo").value = "";
-  document.getElementById("prSection").value = "";
-  document.getElementById("prAgent").value = "";
-  loadProductionReport();
-}
-
-async function loadProductionReport(){
-  const from = document.getElementById("prFrom").value;
-  const to = document.getElementById("prTo").value;
-  const section = document.getElementById("prSection").value;
-  const agentQ = document.getElementById("prAgent").value.trim().toLowerCase();
-  const wrap = document.getElementById("productionReportWrap");
-
-  let query = sb.from("pet_stage4_production")
-    .select("id,production_start,production_end,colored_flex_kg,non_colored_flex_kg,total_production_kg,waste_non_pet_kg,waste_oily_kg,waste_aged_kg,total_waste_kg,total_production_plus_waste_kg,pet_collections(form_number,agent_name,agent_code,section)")
-    .order("production_start",{ascending:false});
-  if(from) query = query.gte("production_start", from+"T00:00:00");
-  if(to)   query = query.lte("production_start", to+"T23:59:59");
-
-  const { data, error } = await query;
-  if(error){ wrap.innerHTML = `<p style="color:var(--bad);font-size:13px;">Error loading report: ${error.message}</p>`; return; }
-
-  let rows = data||[];
-  rows = rows.filter(r=>{
-    const c = r.pet_collections||{};
-    if(section && c.section !== section) return false;
-    if(agentQ && !((c.agent_name||"")+(c.agent_code||"")).toLowerCase().includes(agentQ)) return false;
-    return true;
-  });
-  PROD_REPORT_ROWS = rows;
-
-  if(!rows.length){ wrap.innerHTML = `<p style="font-size:13px;color:var(--muted);">No production records match these filters.</p>`; return; }
-
-  wrap.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:12px;">
-    <thead><tr style="text-align:left;border-bottom:2px solid var(--line);">
-      <th style="padding:6px;">Form #</th><th style="padding:6px;">Agent</th><th style="padding:6px;">Branch</th>
-      <th style="padding:6px;">Start</th><th style="padding:6px;">End</th>
-      <th style="padding:6px;">Colored Flex</th><th style="padding:6px;">Non-Colored Flex</th><th style="padding:6px;">Total Production</th>
-      <th style="padding:6px;">Total Waste</th><th style="padding:6px;">Production + Waste</th>
-    </tr></thead>
-    <tbody>${rows.map(r=>{
-      const c=r.pet_collections||{};
-      return `<tr style="border-bottom:1px solid var(--line);">
-        <td style="padding:6px;"><b>${c.form_number||"—"}</b></td>
-        <td style="padding:6px;">${c.agent_name||"—"} ${c.agent_code?"("+c.agent_code+")":""}</td>
-        <td style="padding:6px;">${c.section||"—"}</td>
-        <td style="padding:6px;">${r.production_start?new Date(r.production_start).toLocaleString("en-GB"):"—"}</td>
-        <td style="padding:6px;">${r.production_end?new Date(r.production_end).toLocaleString("en-GB"):"—"}</td>
-        <td style="padding:6px;">${r.colored_flex_kg||0}</td>
-        <td style="padding:6px;">${r.non_colored_flex_kg||0}</td>
-        <td style="padding:6px;">${r.total_production_kg||0}</td>
-        <td style="padding:6px;">${r.total_waste_kg||0}</td>
-        <td style="padding:6px;">${r.total_production_plus_waste_kg||0}</td>
-      </tr>`;
-    }).join("")}</tbody>
-  </table>`;
-}
-
-function downloadProductionReportPdf(){
-  if(!PROD_REPORT_ROWS.length){ alert("Nothing to export — no records match the current filters."); return; }
-  const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
-  const navy = [31, 56, 100]; // #1F3864 — Rumbu house style heading colour
-
-  doc.setFillColor(navy[0], navy[1], navy[2]);
-  doc.rect(0, 0, doc.internal.pageSize.getWidth(), 56, "F");
-  doc.setTextColor(255,255,255);
-  doc.setFont("helvetica","bold"); doc.setFontSize(13);
-  doc.text("RUMBU INDUSTRIES GROUP", 30, 24);
-  doc.setFont("helvetica","normal"); doc.setFontSize(10);
-  doc.text("PET Collection — Production Report", 30, 40);
-  doc.text("Printed " + new Date().toLocaleString("en-GB"), doc.internal.pageSize.getWidth()-30, 24, { align: "right" });
-
-  doc.setTextColor(60,60,60); doc.setFontSize(9);
-  const from = document.getElementById("prFrom").value || "—";
-  const to = document.getElementById("prTo").value || "—";
-  const section = document.getElementById("prSection").value || "All";
-  const agent = document.getElementById("prAgent").value || "—";
-  doc.text(`Date range: ${from} to ${to}   |   Branch: ${section}   |   Agent: ${agent}   |   ${PROD_REPORT_ROWS.length} records`, 30, 72);
-
-  const body = PROD_REPORT_ROWS.map(r=>{
-    const c = r.pet_collections||{};
-    return [
-      c.form_number||"—",
-      (c.agent_name||"—") + (c.agent_code?" ("+c.agent_code+")":""),
-      c.section||"—",
-      r.production_start?new Date(r.production_start).toLocaleString("en-GB"):"—",
-      r.production_end?new Date(r.production_end).toLocaleString("en-GB"):"—",
-      r.colored_flex_kg||0, r.non_colored_flex_kg||0, r.total_production_kg||0,
-      r.total_waste_kg||0, r.total_production_plus_waste_kg||0
-    ];
-  });
-
-  doc.autoTable({
-    startY: 84,
-    head: [["Form #","Agent","Branch","Start","End","Colored Flex","Non-Colored Flex","Total Production","Total Waste","Production + Waste"]],
-    body,
-    styles: { fontSize: 7.5, cellPadding: 4 },
-    headStyles: { fillColor: navy, textColor: 255, fontStyle: "bold" },
-    alternateRowStyles: { fillColor: [240, 244, 249] },
-    margin: { left: 30, right: 30 },
-    didDrawPage: function(){
-      const pageCount = doc.internal.getNumberOfPages();
-      doc.setFontSize(8); doc.setTextColor(120,120,120);
-      doc.text("CONFIDENTIAL", 30, doc.internal.pageSize.getHeight()-16);
-      doc.text("Page " + doc.internal.getCurrentPageInfo().pageNumber + " of " + pageCount,
-        doc.internal.pageSize.getWidth()-30, doc.internal.pageSize.getHeight()-16, { align: "right" });
-    }
-  });
-
-  doc.save("PET_Production_Report_" + new Date().toISOString().slice(0,10) + ".pdf");
 }
 
 async function loadFillQueue(sections){
@@ -318,23 +222,32 @@ async function loadFillQueue(sections){
     .in("section",sections.length?sections:ALL_SECTIONS)
     .order("updated_at",{ascending:false});
   const queue=document.getElementById("fillQueue");
-  if(!data||!data.length){ queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No collections ready for production entry.</p>`; return; }
+  if(!data||!data.length){
+    queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No collections ready for production entry.</p>`;
+    setupCollapsibleQueue("fillQueueTitle","fillQueue",0,"Stage 4 — Production (Fill Queue)");
+    return;
+  }
   queue.innerHTML=data.map(c=>`<div class="queue-row">
     <div><b>${c.form_number}</b> <span style="font-size:12px;color:var(--muted);margin-left:8px;">${c.agent_name} (${c.agent_code}) — ${c.section}</span>
     ${c.status==="rejected_to_stage4"?`<span style="font-size:11px;color:var(--bad);margin-left:8px;">(Returned for correction)</span>`:""}
     </div>
     <button onclick="openProdForm(${c.id})">Enter Production Data</button>
   </div>`).join("");
+  setupCollapsibleQueue("fillQueueTitle","fillQueue",data.length,"Stage 4 — Production (Fill Queue)");
 }
 
 async function loadApprovalQueue(sections){
   const { data }=await sb.from("pet_collections")
-    .select("id,form_number,agent_name,agent_code,section,status,cycle,updated_at,pet_stage4_production(*),pet_stage2_qc(offload_location,unacceptable_waste_value,weight_difference)")
+    .select("id,form_number,agent_name,agent_code,section,status,cycle,updated_at,pet_stage4_production(*),pet_stage2_qc(offload_location)")
     .eq("status","stage4_approval")
     .in("section",sections.length?sections:ALL_SECTIONS)
     .order("updated_at",{ascending:false});
   const queue=document.getElementById("approvalQueue");
-  if(!data||!data.length){ queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No production submissions awaiting approval.</p>`; return; }
+  if(!data||!data.length){
+    queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No production submissions awaiting approval.</p>`;
+    setupCollapsibleQueue("approvalQueueTitle","approvalQueue",0,"Stage 4 — Production (Approval Queue)");
+    return;
+  }
 
   // Scoped to THIS cycle — a decision from before a reject/correct loop must not
   // hide the buttons once the form has been corrected and resubmitted.
@@ -367,6 +280,7 @@ async function loadApprovalQueue(sections){
       </div>`:""}
     </div>`;
   }).join("");
+  setupCollapsibleQueue("approvalQueueTitle","approvalQueue",data.length,"Stage 4 — Production (Approval Queue)");
 }
 
 function openProdReview(collectionId){
@@ -390,10 +304,18 @@ function openProdReview(collectionId){
         ["Total Production (kg)", prod.total_production_kg],
       ]},
       { heading: "Waste Data", rows: [
-        ["Waste — Non-PET Bottles (kg)", prod.waste_non_pet_kg],
-        ["Waste — Oily Bottles (kg)", prod.waste_oily_kg],
-        ["Waste — Aged Bottles (kg)", prod.waste_aged_kg],
+        ["Coloured PET (kg)", prod.waste_coloured_kg],
+        ["Labelled Bottles (kg)", prod.waste_labels_kg],
+        ["Caps & Rings (kg)", prod.waste_caps_rings_kg],
+        ["Non-Food Contact (kg)", prod.waste_non_food_kg],
+        ["Non-PET Product (kg)", prod.waste_non_pet_kg],
+        ["Aged PET Bottles (kg)", prod.waste_aged_kg],
+        ["Oily PET Bottles (kg)", prod.waste_oily_kg],
+        ["Bottles with Metal Ring (kg)", prod.waste_metal_kg],
         ["Total Waste Record (kg)", prod.total_waste_kg],
+        ["Accepted Waste (kg)", prod.accepted_waste_kg],
+        ["Unacceptable Waste (kg)", prod.unacceptable_waste_kg],
+        ["Weight Difference (kg)", prod.weight_difference_kg],
         ["Total Production + Total Waste (kg)", prod.total_production_plus_waste_kg],
       ]}
     ],
@@ -417,20 +339,27 @@ async function openProdForm(id){
     <b>Agent:</b> ${c.agent_name} (${c.agent_code})<br>
     <b>LOT:</b> ${qc.offload_location||"—"} — <b>Section:</b> ${c.section}<br>
     <b>Rumbu Weighbridge Weight:</b> ${c.rumbu_weighbridge_weight||0} kg<br>
-    <b>Unacceptable Waste Value:</b> ${qc.unacceptable_waste_value||0} kg (used for Phase 2 deduction)`;
+    <b>Agent Waybill Weight:</b> ${c.agent_waybill_weight||0} kg`;
 
   if(prod.id){
     document.getElementById("pfStart").value=prod.production_start?prod.production_start.slice(0,16):"";
     document.getElementById("pfEnd").value=prod.production_end?prod.production_end.slice(0,16):"";
     document.getElementById("pfColoredFlex").value=prod.colored_flex_kg||"";
     document.getElementById("pfNonColoredFlex").value=prod.non_colored_flex_kg||"";
+    document.getElementById("pfWasteColoured").value=prod.waste_coloured_kg||"";
+    document.getElementById("pfWasteLabels").value=prod.waste_labels_kg||"";
+    document.getElementById("pfWasteCapsRings").value=prod.waste_caps_rings_kg||"";
+    document.getElementById("pfWasteNonFood").value=prod.waste_non_food_kg||"";
     document.getElementById("pfWasteNonPet").value=prod.waste_non_pet_kg||"";
-    document.getElementById("pfWasteOily").value=prod.waste_oily_kg||"";
     document.getElementById("pfWasteAged").value=prod.waste_aged_kg||"";
+    document.getElementById("pfWasteOily").value=prod.waste_oily_kg||"";
+    document.getElementById("pfWasteMetal").value=prod.waste_metal_kg||"";
     computeProductionTotals();
     computeWaste();
   } else {
-    ["pfStart","pfEnd","pfColoredFlex","pfNonColoredFlex","pfTotalProduction","pfWasteNonPet","pfWasteOily","pfWasteAged","pfTotalWaste","pfProductionPlusWaste"].forEach(id=>{ document.getElementById(id).value=""; });
+    ["pfStart","pfEnd","pfColoredFlex","pfNonColoredFlex","pfTotalProduction",
+     "pfWasteColoured","pfWasteLabels","pfWasteCapsRings","pfWasteNonFood","pfWasteNonPet","pfWasteAged","pfWasteOily","pfWasteMetal",
+     "pfTotalWaste","pfAcceptedWaste","pfUnacceptableKg","pfUnacceptableVal","pfWeightDiff","pfProductionPlusWaste"].forEach(id=>{ document.getElementById(id).value=""; });
   }
 
   if(c.status==="rejected_to_stage4"){
@@ -452,10 +381,31 @@ function computeProductionTotals(){
 }
 
 function computeWaste(){
-  const np=parseFloat(document.getElementById("pfWasteNonPet").value)||0;
-  const oi=parseFloat(document.getElementById("pfWasteOily").value)||0;
-  const ag=parseFloat(document.getElementById("pfWasteAged").value)||0;
-  document.getElementById("pfTotalWaste").value=(np+oi+ag).toFixed(2);
+  const coloured  = parseFloat(document.getElementById("pfWasteColoured").value)||0;
+  const labels    = parseFloat(document.getElementById("pfWasteLabels").value)||0;
+  const capsRings = parseFloat(document.getElementById("pfWasteCapsRings").value)||0;
+  const nonFood   = parseFloat(document.getElementById("pfWasteNonFood").value)||0;
+  const np        = parseFloat(document.getElementById("pfWasteNonPet").value)||0;
+  const ag        = parseFloat(document.getElementById("pfWasteAged").value)||0;
+  const oi        = parseFloat(document.getElementById("pfWasteOily").value)||0;
+  const metal     = parseFloat(document.getElementById("pfWasteMetal").value)||0;
+  const totalWaste = coloured+labels+capsRings+nonFood+np+ag+oi+metal;
+  document.getElementById("pfTotalWaste").value = totalWaste.toFixed(2);
+
+  // Moved here from QC — this used to run once QC was filled, now it runs
+  // once Production's waste breakdown is filled, since that's the actual
+  // source of the waste figures. Feeds Payment Phase 2's deduction %.
+  const rumbuW = parseFloat(CURRENT_PROD?.rumbu_weighbridge_weight)||0;
+  const agentW = parseFloat(CURRENT_PROD?.agent_waybill_weight)||0;
+  const accepted = rumbuW*0.03;
+  const unaccKg  = totalWaste-accepted;
+  const unaccVal = unaccKg>0 ? unaccKg : 0;
+  const diff     = rumbuW-agentW;
+  document.getElementById("pfAcceptedWaste").value  = accepted.toFixed(2);
+  document.getElementById("pfUnacceptableKg").value = unaccKg.toFixed(2);
+  document.getElementById("pfUnacceptableVal").value= unaccVal.toFixed(2);
+  document.getElementById("pfWeightDiff").value      = diff.toFixed(2);
+
   computeProductionPlusWaste();
 }
 
@@ -472,12 +422,19 @@ async function submitProd(){
   if(!start||!end){ st.style.color="var(--bad)"; st.textContent="Production start and end times are required."; return; }
 
   const wasteFields = [
-    ["pfWasteNonPet","Waste — Non-PET Bottles (kg)"],
-    ["pfWasteOily","Waste — Oily Bottles (kg)"],
-    ["pfWasteAged","Waste — Aged Bottles (kg)"]
+    ["pfWasteColoured","Coloured PET (kg)"],
+    ["pfWasteLabels","Labelled Bottles (kg)"],
+    ["pfWasteCapsRings","Caps & Rings (kg)"],
+    ["pfWasteNonFood","Non-Food Contact (kg)"],
+    ["pfWasteNonPet","Non-PET Product (kg)"],
+    ["pfWasteAged","Aged PET Bottles (kg)"],
+    ["pfWasteOily","Oily PET Bottles (kg)"],
+    ["pfWasteMetal","Bottles with Metal Ring (kg)"]
   ];
   for(const [id,label] of wasteFields){
-    if(document.getElementById(id).value===""){ st.style.color="var(--bad)"; st.textContent=`"${label}" is required (enter 0 if none).`; return; }
+    const v = document.getElementById(id).value;
+    if(v===""){ st.style.color="var(--bad)"; st.textContent=`"${label}" is required (enter 0 if none).`; return; }
+    if(!/^\d+$/.test(v)){ st.style.color="var(--bad)"; st.textContent=`"${label}" must be a positive whole number.`; return; }
   }
 
   // Colored/Non-Colored Flex are mandatory — Total Production, and in turn
@@ -507,10 +464,18 @@ async function submitProd(){
         ["Total Production (kg)", document.getElementById("pfTotalProduction").value],
       ]},
       { heading: "Waste Data", rows: [
-        ["Waste — Non-PET Bottles (kg)", document.getElementById("pfWasteNonPet").value],
-        ["Waste — Oily Bottles (kg)", document.getElementById("pfWasteOily").value],
-        ["Waste — Aged Bottles (kg)", document.getElementById("pfWasteAged").value],
+        ["Coloured PET (kg)", document.getElementById("pfWasteColoured").value],
+        ["Labelled Bottles (kg)", document.getElementById("pfWasteLabels").value],
+        ["Caps & Rings (kg)", document.getElementById("pfWasteCapsRings").value],
+        ["Non-Food Contact (kg)", document.getElementById("pfWasteNonFood").value],
+        ["Non-PET Product (kg)", document.getElementById("pfWasteNonPet").value],
+        ["Aged PET Bottles (kg)", document.getElementById("pfWasteAged").value],
+        ["Oily PET Bottles (kg)", document.getElementById("pfWasteOily").value],
+        ["Bottles with Metal Ring (kg)", document.getElementById("pfWasteMetal").value],
         ["Total Waste Record (kg)", document.getElementById("pfTotalWaste").value],
+        ["Accepted Waste (kg)", document.getElementById("pfAcceptedWaste").value],
+        ["Unacceptable Waste (kg)", document.getElementById("pfUnacceptableKg").value],
+        ["Weight Difference (kg)", document.getElementById("pfWeightDiff").value],
         ["Total Production + Total Waste (kg)", document.getElementById("pfProductionPlusWaste").value],
       ]}
     ],
@@ -526,13 +491,26 @@ async function proceedWithProdSubmit(){
   st.style.color="var(--muted)"; st.textContent="Saving...";
   try{
     const qc=(Array.isArray(CURRENT_PROD.pet_stage2_qc)?CURRENT_PROD.pet_stage2_qc[0]:CURRENT_PROD.pet_stage2_qc)||{};
-    const np=parseFloat(document.getElementById("pfWasteNonPet").value)||0;
-    const oi=parseFloat(document.getElementById("pfWasteOily").value)||0;
-    const ag=parseFloat(document.getElementById("pfWasteAged").value)||0;
+    const coloured  = parseFloat(document.getElementById("pfWasteColoured").value)||0;
+    const labels    = parseFloat(document.getElementById("pfWasteLabels").value)||0;
+    const capsRings = parseFloat(document.getElementById("pfWasteCapsRings").value)||0;
+    const nonFood   = parseFloat(document.getElementById("pfWasteNonFood").value)||0;
+    const np = parseFloat(document.getElementById("pfWasteNonPet").value)||0;
+    const ag = parseFloat(document.getElementById("pfWasteAged").value)||0;
+    const oi = parseFloat(document.getElementById("pfWasteOily").value)||0;
+    const metal = parseFloat(document.getElementById("pfWasteMetal").value)||0;
     const colored=parseFloat(document.getElementById("pfColoredFlex").value)||0;
     const nonColored=parseFloat(document.getElementById("pfNonColoredFlex").value)||0;
     const totalProduction=parseFloat((colored+nonColored).toFixed(2));
-    const totalWaste=parseFloat((np+oi+ag).toFixed(2));
+    const totalWaste=parseFloat((coloured+labels+capsRings+nonFood+np+ag+oi+metal).toFixed(2));
+
+    const rumbuW = parseFloat(CURRENT_PROD.rumbu_weighbridge_weight)||0;
+    const agentW = parseFloat(CURRENT_PROD.agent_waybill_weight)||0;
+    const accepted = parseFloat((rumbuW*0.03).toFixed(2));
+    const unaccKg  = parseFloat((totalWaste-accepted).toFixed(2));
+    const unaccVal = unaccKg>0 ? unaccKg : 0;
+    const diff     = parseFloat((rumbuW-agentW).toFixed(2));
+
     const payload={
       collection_id:        CURRENT_PROD.id,
       agent_code:           CURRENT_PROD.agent_code,
@@ -543,10 +521,19 @@ async function proceedWithProdSubmit(){
       colored_flex_kg:      colored,
       non_colored_flex_kg:  nonColored,
       total_production_kg:  totalProduction,
+      waste_coloured_kg:    coloured,
+      waste_labels_kg:      labels,
+      waste_caps_rings_kg:  capsRings,
+      waste_non_food_kg:    nonFood,
       waste_non_pet_kg:     np,
-      waste_oily_kg:        oi,
       waste_aged_kg:        ag,
+      waste_oily_kg:        oi,
+      waste_metal_kg:       metal,
       total_waste_kg:       totalWaste,
+      accepted_waste_kg:    accepted,
+      unacceptable_waste_kg: unaccKg,
+      unacceptable_waste_value: unaccVal,
+      weight_difference_kg: diff,
       total_production_plus_waste_kg: parseFloat((totalProduction+totalWaste).toFixed(2)),
       filled_by_profile_id: ME.id,
       filled_at:            new Date().toISOString()
