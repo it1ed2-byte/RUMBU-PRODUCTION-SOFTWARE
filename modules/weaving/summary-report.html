@@ -357,8 +357,8 @@ async function generate(){
     return;
   }
 
-  // ---- downtime per unit+date (control), same date range + shift/section (not shed/group/worktype) ----
-  const downtimeByUnitDate = {};
+  // ---- downtime per asset+date (control) — matches BigQuery GROUP BY m.Assets, m.Date ----
+  const downtimeByAssetDate = {};
   CTRL_ROWS.forEach(r=>{
     if(r.date_col < f.fromDate || r.date_col > f.toDate) return;
     if(f.shift !== "All" && r.shift !== f.shift) return;
@@ -367,39 +367,38 @@ async function generate(){
     if(!WEAVING_ASSETS.has(r.assets)) return; // matches GAS buildAssetInClause() whitelist
     const stop = parseDT(r.stop_time), finish = parseDT(r.finish_time);
     if(!stop || !finish) return;
-    const key = r.unit + "||" + r.date_col;
-    downtimeByUnitDate[key] = (downtimeByUnitDate[key] || 0) + minutesBetween(stop, finish);
+    const key = r.assets + "||" + r.date_col;  // FIX 1: asset-level, not unit-level
+    downtimeByAssetDate[key] = (downtimeByAssetDate[key] || 0) + minutesBetween(stop, finish);
   });
 
-  // ---- production per unit+date (for MatLoss calc) ----
-  const prodByUnitDate = {};
+  // ---- production per asset+date (for MLD calc) — matches BigQuery GROUP BY p.Assets, p.Date ----
+  const prodByAssetDate = {};
   prod.forEach(r=>{
-    const key = r.units + "||" + r.date_col;
-    if(!prodByUnitDate[key]) prodByUnitDate[key] = { target:0, total:0, assets:0 };
-    prodByUnitDate[key].target += Number(r.target||0);
-    prodByUnitDate[key].total += Number(r.total||0);
-    prodByUnitDate[key].assets += 1;
+    const key = r.assets + "||" + r.date_col;  // FIX 2: asset-level, not unit-level
+    if(!prodByAssetDate[key]) prodByAssetDate[key] = { target:0, total:0, count:0 };
+    prodByAssetDate[key].target += Number(r.target||0);
+    prodByAssetDate[key].total  += Number(r.total||0);
+    prodByAssetDate[key].count  += 1; // = COUNT(p.Assets) per asset+date in BigQuery
   });
 
   // ---- production grouped by Mat Type (daily MLD summed) ----
   const byType = {};
   prod.forEach(r=>{
     const type = r.mat_type || "(blank)";
-    if(!byType[type]) byType[type] = { type, assetsSet: new Set(), assets:0, A:0, B:0, C:0, total:0, target:0, downtime:0, mld:0 };
+    if(!byType[type]) byType[type] = { type, assets:0, A:0, B:0, C:0, total:0, target:0, downtime:0, mld:0 };
     const t = byType[type];
-    t.assetsSet.add(r.assets); // count unique assets per type (matches GAS COUNT(p.Assets))
-    t.assets = t.assetsSet.size;
+    t.assets += 1; // FIX 3: COUNT(p.Assets) per mat_type — matches BigQuery, counts all records not unique machines
     t.A += Number(r.a_double||0) + Number(r.a_single||0);
     t.B += Number(r.b||0);
     t.C += Number(r.c||0);
-    t.total += Number(r.total||0);
+    t.total  += Number(r.total||0);
     t.target += Number(r.target||0);
-    const ukey = r.units + "||" + r.date_col;
-    const dt = downtimeByUnitDate[ukey] || 0;
-    const pu = prodByUnitDate[ukey] || { assets:1 };
-    const mld = r.target ? Math.round((Number(r.target||0) * dt) / (f.workMinutes * (pu.assets||1))) : 0;
-    t.downtime += dt / (pu.assets||1); // spread unit-level downtime across its rows once per row's share
-    t.mld += mld;
+    const akey = r.assets + "||" + r.date_col;          // FIX 1 applied here: asset-level key
+    const dt   = downtimeByAssetDate[akey] || 0;
+    const pa   = prodByAssetDate[akey] || { count:1 };
+    const mld  = r.target ? Math.round((Number(r.target||0) * dt) / (f.workMinutes * (pa.count||1))) : 0;
+    t.downtime += dt / (pa.count||1); // spread asset-level downtime across its shift records
+    t.mld      += mld;
   });
 
   // ---- overall totals ----
@@ -431,10 +430,10 @@ async function generate(){
     if(!byDept[key]) byDept[key] = { department:key, downtime:0, matLoss:0 };
     const dt = minutesBetween(stop, finish);
     byDept[key].downtime += dt;
-    const ukey = r.unit + "||" + r.date_col;
-    const pu = prodByUnitDate[ukey];
-    if(pu){
-      const loss = Math.round((pu.target * dt) / (f.workMinutes * (pu.assets||1)));
+    const akey = r.assets + "||" + r.date_col;  // FIX 1 applied to dept: asset-level
+    const pa   = prodByAssetDate[akey];
+    if(pa){
+      const loss = Math.round((pa.target * dt) / (f.workMinutes * (pa.count||1)));
       byDept[key].matLoss += loss;
     }
   });
