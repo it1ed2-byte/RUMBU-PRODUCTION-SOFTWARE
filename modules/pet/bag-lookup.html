@@ -19,6 +19,10 @@
   .row .v{font-size:15px;font-weight:700;color:var(--navy);margin-top:2px;}
   .status{text-align:center;font-size:13px;color:var(--muted);margin-top:30px;}
   .ref-badge{display:inline-block;background:var(--accent);color:var(--navy);font-weight:800;font-size:13px;padding:6px 14px;border-radius:20px;margin-top:10px;}
+  .gate label{font-size:12px;font-weight:700;color:var(--muted);display:block;margin:14px 0 6px;}
+  .gate input{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:8px;font-size:15px;box-sizing:border-box;letter-spacing:2px;text-align:center;}
+  .gate button{width:100%;margin-top:14px;padding:11px;border:none;border-radius:8px;background:var(--navy);color:#fff;font-size:14px;font-weight:700;cursor:pointer;}
+  .gate .err{color:#c0392b;font-size:12px;text-align:center;margin-top:10px;min-height:16px;}
 </style>
 </head>
 <body>
@@ -28,7 +32,14 @@
       <h1>RUMBU INDUSTRIES GROUP</h1>
       <p>PET Production — Bag Information</p>
     </div>
-    <div id="content"><p style="text-align:center;color:var(--muted);">Loading...</p></div>
+    <div id="gate" class="gate">
+      <p style="text-align:center;font-size:13px;color:var(--muted);margin:0;">Enter the access password to view this bag's information.</p>
+      <label>Password</label>
+      <input type="password" id="gatePw" autocomplete="off" onkeydown="if(event.key==='Enter') checkPassword()">
+      <button onclick="checkPassword()">View Information</button>
+      <div class="err" id="gateErr"></div>
+    </div>
+    <div id="content" style="display:none;"></div>
   </div>
 </div>
 
@@ -41,20 +52,30 @@ function row(label, value){
   return `<div class="row"><div class="l">${label}</div><div class="v">${value!=null&&value!==""?value:"—"}</div></div>`;
 }
 
-async function load(){
+async function checkPassword(){
   const params = new URLSearchParams(window.location.search);
   const ref = params.get("ref");
+  const pw = document.getElementById("gatePw").value;
+  const err = document.getElementById("gateErr");
   const content = document.getElementById("content");
-  if(!ref){ content.innerHTML = `<p style="text-align:center;color:#c0392b;">No bag reference given.</p>`; return; }
 
-  const { data, error } = await sb.rpc("get_bag_public_info", { p_reference: ref });
+  if(!ref){ err.textContent="No bag reference given in this link."; return; }
+  if(!pw){ err.textContent="Enter the password."; return; }
+
+  err.textContent="";
+  content.style.display="block";
+  content.innerHTML = `<p style="text-align:center;color:var(--muted);">Checking...</p>`;
+
+  const { data, error } = await sb.rpc("get_bag_public_info_gated", { p_reference: ref, p_password: pw });
   const info = Array.isArray(data) ? data[0] : data;
 
   if(error || !info){
-    content.innerHTML = `<p style="text-align:center;color:#c0392b;">No record found for this reference number. It may be mistyped, or not yet generated in the system.</p>`;
+    content.style.display="none";
+    err.textContent="Incorrect password, or no record found for this reference number.";
     return;
   }
 
+  document.getElementById("gate").style.display="none";
   content.innerHTML = `
     <div style="text-align:center;margin-bottom:6px;"><span class="ref-badge">${info.bag_reference}</span></div>
     ${row("Form Number", info.form_number)}
@@ -77,8 +98,6 @@ async function load(){
     <div class="status">Rumbu Industries Group — PET Recycling Division</div>
   `;
 }
-
-load();
 </script>
 </body>
 </html>
