@@ -14,6 +14,7 @@
 <script src="review-modal.js"></script>
 <script src="queue-collapse.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <style>
   body{padding:20px;}
   .wrap{max-width:1000px;margin:0 auto;}
@@ -617,13 +618,21 @@ async function generateBagReferences(){
     renderBagQrGrid(data);
     document.getElementById("bagPrintActions").style.display="block";
     document.getElementById("finalSubmitRow").style.display="flex";
-    st.style.color="var(--ok)"; st.textContent=count+" reference number(s) and QR codes generated.";
+    st.style.color="var(--ok)"; st.textContent=count+" reference number(s) and QR codes generated. Archiving labels...";
+
+    // Archive the labels as a PDF straight away — not dependent on whether
+    // the person actually prints successfully — so a lost/damaged physical
+    // label can always be regenerated from the Production Report later.
+    await archiveLabelsPdf(data);
+    st.style.color="var(--ok)"; st.textContent=count+" reference number(s) and QR codes generated. Labels archived.";
   }catch(e){ st.style.color="var(--bad)"; st.textContent="Error: "+e.message; }
 }
 
 let GENERATED_BAGS=[];
+let GENERATED_CANVASES=[];
 function renderBagQrGrid(bags){
   GENERATED_BAGS=bags;
+  GENERATED_CANVASES=[];
   const grid=document.getElementById("bagQrGrid");
   grid.innerHTML="";
   bags.forEach(b=>{
@@ -637,7 +646,43 @@ function renderBagQrGrid(bags){
     cell.appendChild(refText);
     grid.appendChild(cell);
     new QRCode(qrBox, { text: QR_LOOKUP_BASE+"?ref="+encodeURIComponent(b.reference_number), width:120, height:120 });
+    GENERATED_CANVASES.push(qrBox);
   });
+}
+
+async function archiveLabelsPdf(bags){
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit:"pt", format:"a4" });
+  const cols=3, cell=170, margin=30;
+  let x=margin, y=margin, col=0;
+
+  doc.setFont("helvetica","bold"); doc.setFontSize(11);
+  doc.text("PET Production — Bag Labels — "+(CURRENT_PROD?.form_number||""), margin, y);
+  y += 24;
+
+  bags.forEach((b,i)=>{
+    const qrBox = GENERATED_CANVASES[i];
+    const canvas = qrBox ? qrBox.querySelector("canvas") : null;
+    if(canvas){
+      const imgData = canvas.toDataURL("image/png");
+      doc.addImage(imgData, "PNG", x, y, 110, 110);
+    }
+    doc.setFont("helvetica","normal"); doc.setFontSize(9);
+    doc.text(b.reference_number, x+55, y+124, { align:"center" });
+
+    col++; x += cell;
+    if(col>=cols){ col=0; x=margin; y+=150; }
+    if(y > 700){ doc.addPage(); y=margin; x=margin; col=0; }
+  });
+
+  const blob = doc.output("blob");
+  const path = `labels/${CURRENT_PROD.id}-${Date.now()}.pdf`;
+  const { error: upErr } = await sb.storage.from("pet-attachments").upload(path, blob, { contentType:"application/pdf" });
+  if(upErr) throw new Error("Labels generated, but archiving the PDF failed: "+upErr.message);
+  const { data: urlData } = sb.storage.from("pet-attachments").getPublicUrl(path);
+
+  const { error: saveErr } = await sb.from("pet_stage4_production").update({ labels_pdf_url: urlData.publicUrl }).eq("id", CURRENT_PROD_ID);
+  if(saveErr) throw new Error("Labels PDF was archived, but could not be linked to this production record: "+saveErr.message);
 }
 
 async function submitProd(){
