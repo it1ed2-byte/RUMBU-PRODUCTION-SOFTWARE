@@ -599,12 +599,22 @@ async function init(){
       await loadEmployeeDirectory();
       // super admin: all panels available
     } else if(ME.role === "admin"){
-      document.getElementById("adminEmployeeDirectory").classList.remove("hidden");
+      // Employees tab retired for the Admin role — staff management now has
+      // exactly one non-Super-Admin path: the "Manage Staff" page under HR
+      // Department, gated by hr_branch_admins, open to any account (Admin or
+      // User) actually flagged HR Admin. Having two separate doors to the
+      // same ability (this tab, gated by role, vs. that page, gated by the
+      // flag) was the "duplicate process" — an Admin who wasn't HR could
+      // still reach this tab and add/edit staff. Retiring it here removes
+      // that gap outright instead of re-checking it in two places forever.
+      // loadEmployeeDirectory() still runs — Manage Role's Employee ID
+      // search reuses the same EMPLOYEES data — it just no longer renders
+      // the Employees tab UI.
       document.getElementById("listTitle").textContent = "Manage Role";
       document.getElementById("roleDropdownLabel").textContent = "Enter the Employee ID of a User you created to manage their access. Their name will appear so you can confirm it is the right person.";
-      await loadMyHrStatus(); // must resolve before loadEmployeeDirectory()'s render, so Add/Bulk gate correctly on first paint
       await loadRoleDropdown();
-      await loadEmployeeDirectory(); // shared loader; renderAdminEmployeeDirectory() scopes it to ME.sectionNames
+      await loadEmployeeDirectory();
+      document.getElementById("sec-create-user").classList.add("role-unavailable");
       // admin: no Settings panel
       document.getElementById("sec-settings").classList.add("role-unavailable");
     } else {
@@ -1958,60 +1968,12 @@ async function addEmployeeAsAdmin(){
   }
 }
 
-// Builds the inline Department/Unit <select> HTML for one Employee
-// Directory row. Department options are every real Department belonging
-// to that employee's current Branch; Unit options are every real Unit
-// belonging to that employee's current Department. Both come from
-// ALL_DEPARTMENTS/ALL_UNITS, loaded once in loadEmployeeDirectory().
-function buildDeptSelectHtml(e, selectId, statusElId){
-  const depts = ALL_DEPARTMENTS.filter(d => d.section === e.branch);
-  const options = '<option value="">— none —</option>' +
-    depts.map(d=>`<option value="${d.name}" ${e.department===d.name?"selected":""}>${d.name}</option>`).join("");
-  return `<select id="${selectId}" style="width:auto;" onchange="setEmployeeDepartment(${e.id}, this.value, '${statusElId}')">${options}</select>`;
-}
-function buildUnitSelectHtml(e, selectId, statusElId){
-  const dept = ALL_DEPARTMENTS.find(d => d.section === e.branch && d.name === e.department);
-  const units = dept ? ALL_UNITS.filter(u => u.department_id === dept.id) : [];
-  const options = '<option value="">— none —</option>' +
-    units.map(u=>`<option value="${u.name}" ${e.unit===u.name?"selected":""}>${u.name}</option>`).join("");
-  return `<select id="${selectId}" style="width:auto;" onchange="setEmployeeUnit(${e.id}, this.value, '${statusElId}')">${options}</select>`;
-}
-
-// Updates an employee's Department directly from the inline dropdown.
-// Changing Department also clears Unit (a Unit belongs to exactly one
-// Department, so the old one is very unlikely to still apply) and
-// refreshes both directory tables so the Unit dropdown for this row
-// rebuilds against the new Department's real Units.
-async function setEmployeeDepartment(empId, newDeptName, statusElId){
-  const status = document.getElementById(statusElId||"emp_dir_status");
-  try{
-    const { error } = await sb.from("employees").update({ department: newDeptName || null, unit: null }).eq("id", empId);
-    if(error) throw error;
-    const emp = EMPLOYEES.find(e=>e.id === empId);
-    if(emp){ emp.department = newDeptName || null; emp.unit = null; }
-    if(status){ status.className = ""; status.textContent = "✅ Department updated."; }
-    await logActivity("employee_department_set", ME.username + " set department to \"" + (newDeptName||"none") + "\" for employee #" + empId);
-    renderEmployeeDirectory();
-    renderAdminEmployeeDirectory();
-  }catch(e){
-    if(status) status.textContent = "❌ Could not update department: " + (e.message||e);
-  }
-}
-
-// Updates an employee's Unit directly from the inline dropdown.
-async function setEmployeeUnit(empId, newUnitName, statusElId){
-  const status = document.getElementById(statusElId||"emp_dir_status");
-  try{
-    const { error } = await sb.from("employees").update({ unit: newUnitName || null }).eq("id", empId);
-    if(error) throw error;
-    const emp = EMPLOYEES.find(e=>e.id === empId);
-    if(emp) emp.unit = newUnitName || null;
-    if(status){ status.className = ""; status.textContent = "✅ Unit updated."; }
-    await logActivity("employee_unit_set", ME.username + " set unit to \"" + (newUnitName||"none") + "\" for employee #" + empId);
-  }catch(e){
-    if(status) status.textContent = "❌ Could not update unit: " + (e.message||e);
-  }
-}
+// NOTE: an earlier inline Department/Unit quick-editor (per-row dropdowns
+// bypassing the Edit Staff Details form) lived here. It was never actually
+// rendered by either directory view and had no HR/Super-Admin gate of its
+// own — a second, unguarded door to the same change "Edit Staff Details"
+// already makes properly. Removed rather than left dangling, as part of
+// unifying staff management onto one gated path.
 
 function renderEmployeeDirectory(){
   const wrap = document.getElementById("employeeDirectoryWrap");
