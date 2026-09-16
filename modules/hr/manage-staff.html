@@ -13,6 +13,7 @@
   })();
 </script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="../../auth.js"></script>
 <style>
   :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;}
@@ -94,10 +95,33 @@
 <div class="card" id="listCard">
   <div class="row" id="listControls">
     <div><label>Search</label><input id="search" placeholder="Search by name, ID, or department" oninput="renderList()"></div>
-    <div style="flex:0 0 auto;"><label>&nbsp;</label><button class="ghost" id="addToggleBtn" onclick="toggleAddPanel()">+ Add New Employee</button></div>
+    <div style="flex:0 0 auto;"><label>&nbsp;</label>
+      <button class="ghost" id="addToggleBtn" onclick="toggleAddPanel()">+ Add New Employee</button>
+      <button class="ghost" id="bulkToggleBtn" onclick="toggleBulkPanel()">&uarr; Bulk Upload Staff</button>
+    </div>
   </div>
   <div id="listWrap"><p class="sub">Loading…</p></div>
   <div class="status" id="list_status"></div>
+</div>
+
+<div class="card hidden" id="bulkCard">
+  <h3 style="margin-top:0;">Bulk Upload Staff</h3>
+  <p class="sub">Every staff member in one upload goes into this Branch and a single Department you pick below (Unit is optional and also applies to everyone). Required columns: <b>Employee ID</b> and <b>Full Name</b>. Optional: Rank, Email, Phone, Bank Name, Bank Account Number, Sort Code. Rows with a duplicate Employee ID (already in the system, or repeated in the file) are skipped and listed.</p>
+  <p class="sub warn">&#9888; Use the Excel template: its Bank Account Number and Sort Code columns are pre-formatted as <b>Text</b>, so leading zeros (e.g. 00023) are kept. A plain CSV also works, but Excel or Google Sheets will strip leading zeros unless you format those two columns as Text first.</p>
+  <div class="row">
+    <div><label>Department *</label><select id="bulk_department" onchange="onBulkDeptChange()"><option value="">— select —</option></select></div>
+    <div><label>Unit</label><select id="bulk_unit" disabled><option value="">— none —</option></select></div>
+  </div>
+  <div class="row">
+    <div><label>Upload Excel or CSV file</label><input type="file" id="bulk_file" accept=".xlsx,.xls,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onchange="loadBulkFile()"></div>
+    <div style="flex:0 0 auto;"><label>&nbsp;</label><button class="ghost" onclick="downloadBulkTemplate()">&darr; Download Excel template</button></div>
+  </div>
+  <label>Or paste rows (CSV, first row may be a header)</label>
+  <textarea id="bulk_text" rows="8" style="width:100%;font-family:monospace;font-size:12.5px;padding:9px;border:1px solid var(--line);border-radius:8px;" placeholder="Employee ID,Full Name,Rank,Email,Phone,Bank Name,Bank Account Number,Sort Code&#10;RIG-0201,Amina Yusuf,Officer,amina@rumbuindustries.com,08030000000,GTBank,0123456789,058-152-036"></textarea>
+  <button onclick="processBulkUpload()">UPLOAD STAFF</button>
+  <button class="ghost" onclick="toggleBulkPanel(false)">Cancel</button>
+  <div class="status" id="bulk_status"></div>
+  <div id="bulk_results" style="margin-top:10px;"></div>
 </div>
 
 </div>
@@ -203,8 +227,10 @@ async function loadMyHrFlag(){
 
 function syncManageChrome(){
   document.getElementById("addToggleBtn").classList.toggle("hidden", !CAN_MANAGE);
+  document.getElementById("bulkToggleBtn").classList.toggle("hidden", !CAN_MANAGE);
   document.getElementById("notHrNote").classList.toggle("hidden", CAN_MANAGE);
   toggleAddPanel(false);
+  toggleBulkPanel(false);
 }
 
 async function loadDepartments(){
@@ -444,6 +470,271 @@ async function saveEdit(empId){
     setTimeout(()=>openDetail(empId), 400);
   }catch(err){
     status.className = "status err"; status.textContent = "❌ " + (err.message || err);
+  }
+}
+
+// =========================================================
+// BULK UPLOAD STAFF — one Department (required) for the whole batch, all
+// going into this page's fixed WORKING_BRANCH; optional Unit for everyone.
+// Accepts a CSV file or pasted rows, with an optional header row; otherwise
+// columns are read positionally as Employee ID, Full Name, Rank, Email,
+// Phone, Bank Name, Bank Account Number, Sort Code. Ported from Account
+// Admin's bulk uploader — same validation, same template.
+// =========================================================
+function csvCell(v){
+  if(v === null || v === undefined) v = "";
+  v = String(v);
+  if(/[",\n\r]/.test(v)) v = '"' + v.replace(/"/g, '""') + '"';
+  return v;
+}
+function aoaToCsv(aoa){
+  return aoa.map(row => (row||[]).map(csvCell).join(",")).join("\r\n");
+}
+
+const BULK_FIELDS = ["employee_id","full_name","rank","email","phone","bank_name","bank_account_number","sort_code"];
+const BULK_HEADER_ALIASES = {
+  employee_id: ["employee id","employee_id","emp id","staff id","id","idnumber","id number"],
+  full_name:   ["full name","fullname","name","full_name","staff name"],
+  rank:        ["rank","position","title","grade"],
+  email:       ["email","email address","e-mail"],
+  phone:       ["phone","phone number","phone no","tel","telephone","mobile"],
+  bank_name:   ["bank name","bank","bank_name"],
+  bank_account_number: ["bank account number","account number","account no","acct no","acct number","account","bank_account_number"],
+  sort_code:   ["sort code","sortcode","sort_code","sort"]
+};
+
+function toggleBulkPanel(force){
+  const panel = document.getElementById("bulkCard");
+  const opening = force !== undefined ? force : panel.classList.contains("hidden");
+  panel.classList.toggle("hidden", !opening);
+  if(opening){
+    const sel = document.getElementById("bulk_department");
+    sel.innerHTML = '<option value="">— select —</option>' + DEPARTMENTS.map(d=>`<option value="${d.id}">${esc(d.name)}</option>`).join("");
+  }
+}
+function onBulkDeptChange(){
+  const sel = document.getElementById("bulk_department");
+  loadUnitsForDept(sel.value, "bulk_unit", "");
+}
+
+function loadBulkFile(){
+  const fileInput = document.getElementById("bulk_file");
+  const statusEl = document.getElementById("bulk_status");
+  const file = fileInput && fileInput.files && fileInput.files[0];
+  if(!file) return;
+  const name = (file.name || "").toLowerCase();
+  const isExcel = /\.(xlsx|xls|xlsm)$/.test(name);
+  const reader = new FileReader();
+  reader.onerror = function(){ if(statusEl){ statusEl.className = "status err"; statusEl.textContent = "Could not read that file."; } };
+
+  if(isExcel){
+    if(typeof XLSX === "undefined"){
+      if(statusEl){ statusEl.className = "status err"; statusEl.textContent = "The spreadsheet reader did not load — check your connection and reopen this page, or paste the rows instead."; }
+      return;
+    }
+    reader.onload = function(ev){
+      try{
+        const wb = XLSX.read(new Uint8Array(ev.target.result), { type: "array" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: "" });
+        document.getElementById("bulk_text").value = aoaToCsv(aoa);
+        if(statusEl){ statusEl.className = "status"; statusEl.textContent = "Loaded \"" + file.name + "\" (sheet \"" + wb.SheetNames[0] + "\"). Review the rows below, then click UPLOAD STAFF."; }
+      }catch(err){
+        if(statusEl){ statusEl.className = "status err"; statusEl.textContent = "Could not read that Excel file: " + (err.message || err); }
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  } else {
+    reader.onload = function(ev){
+      document.getElementById("bulk_text").value = ev.target.result || "";
+      if(statusEl){ statusEl.className = "status"; statusEl.textContent = "Loaded \"" + file.name + "\". Review the rows below, then click UPLOAD STAFF."; }
+    };
+    reader.readAsText(file);
+  }
+}
+
+function downloadBulkTemplate(){
+  const HEADERS = ["Employee ID","Full Name","Rank","Email","Phone","Bank Name","Bank Account Number","Sort Code"];
+  const SAMPLE  = ["RIG-0201","Amina Yusuf","Officer","amina@rumbuindustries.com","0803 000 0000","GTBank","0123456789","058-152-036"];
+  if(typeof XLSX === "undefined"){
+    const csv = "\ufeff" + HEADERS.join(",") + "\r\n" + SAMPLE.map(csvCell).join(",") + "\r\n";
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "Staff_Bulk_Upload_Template.csv";
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(url), 1500);
+    return;
+  }
+  const ws = XLSX.utils.aoa_to_sheet([HEADERS, SAMPLE]);
+  const TEXT_COLS = [6, 7];
+  const PREFORMAT_ROWS = 600;
+  TEXT_COLS.forEach(c=>{
+    for(let r=1; r<=PREFORMAT_ROWS; r++){
+      const addr = XLSX.utils.encode_cell({ r: r, c: c });
+      let cell = ws[addr];
+      if(!cell){ cell = { t: "s", v: "" }; ws[addr] = cell; }
+      cell.t = "s"; cell.z = "@";
+      if(cell.v !== undefined && cell.v !== null) cell.v = String(cell.v);
+    }
+  });
+  const range = XLSX.utils.decode_range(ws["!ref"]);
+  range.e.r = Math.max(range.e.r, PREFORMAT_ROWS);
+  range.e.c = Math.max(range.e.c, HEADERS.length - 1);
+  ws["!ref"] = XLSX.utils.encode_range(range);
+  ws["!cols"] = HEADERS.map(h => ({ wch: Math.max(14, h.length + 2) }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Staff");
+  XLSX.writeFile(wb, "Staff_Bulk_Upload_Template.xlsx");
+}
+
+function parseCsvRows(text){
+  const rows = []; let row = []; let field = ""; let inQuotes = false;
+  for(let i=0; i<text.length; i++){
+    const c = text[i];
+    if(inQuotes){
+      if(c === '"'){
+        if(text[i+1] === '"'){ field += '"'; i++; }
+        else inQuotes = false;
+      } else field += c;
+    } else {
+      if(c === '"') inQuotes = true;
+      else if(c === ','){ row.push(field); field = ""; }
+      else if(c === '\n'){ row.push(field); rows.push(row); row = []; field = ""; }
+      else if(c === '\r'){ /* handled by \n or trailing */ }
+      else field += c;
+    }
+  }
+  if(field.length > 0 || row.length > 0){ row.push(field); rows.push(row); }
+  return rows.filter(r => r.some(cell => (cell||"").trim() !== ""));
+}
+
+function bulkColumnMap(firstRow){
+  const norm = firstRow.map(c => (c||"").trim().toLowerCase());
+  let isHeader = false;
+  const map = {};
+  BULK_FIELDS.forEach(f=>{
+    const aliases = BULK_HEADER_ALIASES[f];
+    const idx = norm.findIndex(h => aliases.indexOf(h) !== -1);
+    if(idx !== -1){ map[f] = idx; if(f === "employee_id" || f === "full_name") isHeader = true; }
+  });
+  if(isHeader) return { isHeader: true, map };
+  const pos = {};
+  BULK_FIELDS.forEach((f,i)=>{ pos[f] = i; });
+  return { isHeader: false, map: pos };
+}
+
+async function processBulkUpload(){
+  const statusEl = document.getElementById("bulk_status");
+  const resultsEl = document.getElementById("bulk_results");
+  if(resultsEl) resultsEl.innerHTML = "";
+  if(!CAN_MANAGE){ statusEl.className="status err"; statusEl.textContent="Adding staff is limited to HR-designated staff for this Branch."; return; }
+
+  const deptSel = document.getElementById("bulk_department");
+  const department = deptSel.value ? deptSel.options[deptSel.selectedIndex].text : null;
+  const unitSel = document.getElementById("bulk_unit");
+  const unit = unitSel && unitSel.value ? unitSel.value : null;
+  const text = document.getElementById("bulk_text").value || "";
+
+  if(!department){ statusEl.className="status err"; statusEl.textContent="Choose the Department all these staff belong to."; return; }
+  if(!text.trim()){ statusEl.className="status err"; statusEl.textContent="Paste some rows or upload a CSV file first."; return; }
+
+  const rows = parseCsvRows(text);
+  if(!rows.length){ statusEl.className="status err"; statusEl.textContent="No rows found in the input."; return; }
+
+  const { isHeader, map } = bulkColumnMap(rows[0]);
+  const dataRows = isHeader ? rows.slice(1) : rows;
+  if(!dataRows.length){ statusEl.className="status err"; statusEl.textContent="Only a header row was found — no staff to add."; return; }
+
+  const existingIds = new Set(EMPLOYEES.map(e => (e.employee_id||"").trim().toLowerCase()));
+  const seenInFile = new Set();
+  const valid = []; const errors = []; const warnings = [];
+  const cellAt = (row, f) => {
+    if(map[f] === undefined || row[map[f]] === undefined) return "";
+    let v = String(row[map[f]]).trim();
+    if(v.charAt(0) === "="){
+      v = v.slice(1);
+      const m = v.match(/^"(.*)"$/);
+      if(m) v = m[1];
+    }
+    return v.trim();
+  };
+  const looksMangledAccount = (acct) => {
+    if(!acct) return false;
+    const compact = acct.replace(/\s/g, "");
+    if(/[eE.+]/.test(compact)) return true;
+    if(/[^0-9]/.test(compact)) return true;
+    return compact.length < 10;
+  };
+
+  dataRows.forEach((row, i)=>{
+    const lineNo = (isHeader ? i + 2 : i + 1);
+    const employeeId = cellAt(row, "employee_id");
+    const fullName   = cellAt(row, "full_name");
+    if(!employeeId && !fullName) return;
+    if(!employeeId){ errors.push({ line: lineNo, id: "(blank)", reason: "Missing Employee ID" }); return; }
+    if(!fullName){ errors.push({ line: lineNo, id: employeeId, reason: "Missing Full Name" }); return; }
+    const idKey = employeeId.toLowerCase();
+    if(existingIds.has(idKey)){ errors.push({ line: lineNo, id: employeeId, reason: "Employee ID already exists" }); return; }
+    if(seenInFile.has(idKey)){ errors.push({ line: lineNo, id: employeeId, reason: "Duplicate Employee ID within this file" }); return; }
+    seenInFile.add(idKey);
+    const acct = cellAt(row, "bank_account_number");
+    if(looksMangledAccount(acct)) warnings.push({ line: lineNo, id: employeeId, value: acct });
+    valid.push({
+      employee_id: employeeId, full_name: fullName, branch: WORKING_BRANCH, department, unit,
+      rank: cellAt(row, "rank") || null,
+      email: cellAt(row, "email") || null,
+      phone: cellAt(row, "phone") || null,
+      bank_name: cellAt(row, "bank_name") || null,
+      bank_account_number: acct || null,
+      sort_code: cellAt(row, "sort_code") || null
+    });
+  });
+
+  const renderReport = (addedCount) => {
+    let h = "";
+    h += "<p class=\"sub\" style=\"margin:0 0 6px;\"><b>" + addedCount + "</b> added &middot; <b>" + errors.length + "</b> skipped" +
+         " into <b>" + esc(WORKING_BRANCH) + " / " + esc(department) + (unit ? " / " + esc(unit) : "") + "</b></p>";
+    if(errors.length){
+      h += "<table><tr><th>Line</th><th>Employee ID</th><th>Problem</th></tr>";
+      h += errors.map(e=>"<tr><td>" + e.line + "</td><td>" + esc(e.id) + "</td><td>" + esc(e.reason) + "</td></tr>").join("");
+      h += "</table>";
+    }
+    if(addedCount && warnings.length){
+      h += "<p class=\"sub warn\" style=\"margin:10px 0 4px;\">&#9888; Imported, but please verify these Bank Account Numbers — they look like a spreadsheet may have dropped a leading zero or converted them to scientific notation:</p>";
+      h += "<table><tr><th>Line</th><th>Employee ID</th><th>Account Number as uploaded</th></tr>";
+      h += warnings.map(w=>"<tr><td>" + w.line + "</td><td>" + esc(w.id) + "</td><td>" + esc(w.value) + "</td></tr>").join("");
+      h += "</table>";
+    }
+    if(resultsEl) resultsEl.innerHTML = h;
+  };
+
+  if(!valid.length){
+    statusEl.className = "status err";
+    statusEl.textContent = "Nothing added — every row had a problem (see below).";
+    renderReport(0);
+    return;
+  }
+
+  statusEl.className = "status"; statusEl.textContent = "Uploading " + valid.length + " staff…";
+  try{
+    const { error } = await sb.from("employees").insert(valid);
+    if(error) throw error;
+    statusEl.className = "status ok";
+    statusEl.textContent = "✅ Added " + valid.length + " staff to " + WORKING_BRANCH + " / " + department + (unit ? " / " + unit : "") +
+      (errors.length ? (". " + errors.length + " row(s) were skipped — see below.") : ".");
+    renderReport(valid.length);
+    await logActivity("staff_bulk_uploaded", ME.username + " bulk-added " + valid.length + " staff to " + WORKING_BRANCH + " / " + department + (errors.length ? (" (" + errors.length + " skipped)") : "") + " via HR Manage Staff");
+    document.getElementById("bulk_text").value = "";
+    const fileInput = document.getElementById("bulk_file"); if(fileInput) fileInput.value = "";
+    await loadEmployees();
+  }catch(err){
+    statusEl.className = "status err";
+    const msg = (err.message || String(err));
+    statusEl.textContent = (msg.toLowerCase().indexOf("duplicate") !== -1)
+      ? "❌ A duplicate Employee ID was rejected by the database. No staff were added — fix the file and try again."
+      : "❌ Upload failed: " + msg;
+    renderReport(0);
   }
 }
 
