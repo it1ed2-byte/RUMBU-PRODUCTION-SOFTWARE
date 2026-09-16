@@ -3436,6 +3436,21 @@ async function openRolePanelForProfile(id){
   const { data: profile, error } = await sb.from("profiles").select("id, username, role").eq("id", id).single();
   if(error || !profile){ panel.innerHTML = "Error loading account."; panel.classList.remove("hidden"); return; }
 
+  // Which Branch(es) this account is already assigned to (profile_sections)
+  // — this is the actual, live Branch scoping used everywhere else (the
+  // Admin's own Employee Directory, every HR/module page's "your Branch"
+  // dropdown, etc). A Super Admin can assign any Branch; an Admin can only
+  // pass on a Branch they themselves hold, same rule as Pages.
+  const { data: psRows } = await sb.from("profile_sections").select("section_id").eq("profile_id", id);
+  const checkedSectionIds = (psRows||[]).map(r=>r.section_id);
+  const availableSectionIds = ME.role === "super_admin"
+    ? ALL_SECTIONS.map(s=>s.id)
+    : (ME.sectionIds || []);
+
+  const branchPickerHtml = `
+      <label>Branch / Section (governs which Branch's data and dropdowns this account sees everywhere in the app)</label>
+      <div id="role_sections"></div>`;
+
   if(profile.role === "admin"){
     const { data: ap } = await sb.from("assigned_pages").select("page_id").eq("profile_id", id);
     const assignedPageIds = (ap||[]).map(r=>r.page_id);
@@ -3443,6 +3458,7 @@ async function openRolePanelForProfile(id){
     panel.innerHTML = `
       <p class="sub" style="margin-top:0;">Managing <b>${esc(profile.username)}</b> — role: <b>${esc(profile.role)}</b></p>
       <label>Username</label><input id="role_username" value="${esc(profile.username)}">
+      ${branchPickerHtml}
       <label>Pages (tick the exact modules and pages this Admin may use)</label>
       <div id="role_pages"></div>
       <button onclick="saveRoleDetails('${id}','admin')">SAVE DETAILS</button>
@@ -3450,6 +3466,7 @@ async function openRolePanelForProfile(id){
       <div class="status" id="role_status"></div>
       <button class="danger" onclick="deleteRoleAccount('${id}','${esc(profile.username)}')">DELETE ACCOUNT</button>
     `;
+    renderPlainBranchPicker("role_sections", availableSectionIds, checkedSectionIds);
     await renderPagesByModuleOnly("role_pages", assignedPageIds);
   } else {
     const { data: ap } = await sb.from("assigned_pages").select("page_id").eq("profile_id", id);
@@ -3458,6 +3475,7 @@ async function openRolePanelForProfile(id){
     panel.innerHTML = `
       <p class="sub" style="margin-top:0;">Managing <b>${esc(profile.username)}</b> — role: <b>${esc(profile.role)}</b></p>
       <label>Username</label><input id="role_username" value="${esc(profile.username)}">
+      ${branchPickerHtml}
       <label>Pages (tick the exact modules and pages this account may use)</label>
       <div id="role_pages"></div>
       <button onclick="saveRoleDetails('${id}','user')">SAVE DETAILS</button>
@@ -3465,6 +3483,7 @@ async function openRolePanelForProfile(id){
       <div class="status" id="role_status"></div>
       <button class="danger" onclick="deleteRoleAccount('${id}','${esc(profile.username)}')">DELETE ACCOUNT</button>
     `;
+    renderPlainBranchPicker("role_sections", availableSectionIds, checkedSectionIds);
     await renderPagesByModuleOnly("role_pages", assignedPageIds);
   }
   panel.classList.remove("hidden");
@@ -3488,9 +3507,21 @@ async function saveRoleDetails(id, role){
     const { error: uErr } = await sb.from("profiles").update({ username }).eq("id", id);
     if(uErr) throw uErr;
 
-    // Branches/profile_sections is no longer set from here — removed per
-    // request. Whatever Branch scoping an account already has stays exactly
-    // as-is; this Save only ever touches Username and Pages now.
+    // Branch/Section assignment — the actual, live scoping used everywhere
+    // else in the app (Employee Directory, every "your Branch" dropdown,
+    // etc). An Admin can only grant a Branch they themselves hold, same
+    // rule as Pages; enforced here client-side and it's also all the RLS
+    // on profile_sections currently checks for an Admin actor.
+    const availableSectionIds = ME.role === "super_admin" ? ALL_SECTIONS.map(s=>s.id) : (ME.sectionIds || []);
+    const sectionIds = getCheckedPlainBranches("role_sections").filter(sid => availableSectionIds.indexOf(sid) !== -1);
+    const { error: delSecErr } = await sb.from("profile_sections").delete().eq("profile_id", id);
+    if(delSecErr) throw delSecErr;
+    if(sectionIds.length){
+      const sectionRows = sectionIds.map(sid=>({ profile_id: id, section_id: sid }));
+      const { error: insSecErr } = await sb.from("profile_sections").insert(sectionRows);
+      if(insSecErr) throw insSecErr;
+    }
+
     const pageIds = getCheckedPagesOnly("role_pages");
     const { error: delPageErr } = await sb.from("assigned_pages").delete().eq("profile_id", id);
     if(delPageErr) throw delPageErr;
