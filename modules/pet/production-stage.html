@@ -13,6 +13,7 @@
 <script src="../../auth.js"></script>
 <script src="review-modal.js"></script>
 <script src="queue-collapse.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
   body{padding:20px;}
   .wrap{max-width:1000px;margin:0 auto;}
@@ -33,7 +34,20 @@
   input.no-spinner::-webkit-outer-spin-button,
   input.no-spinner::-webkit-inner-spin-button{ -webkit-appearance:none; margin:0; }
   input.no-spinner{ -moz-appearance:textfield; }
+
+  /* Bag Tracking */
+  .bag-label{border:1px solid var(--line);border-radius:8px;padding:10px;text-align:center;background:var(--card);}
+  .bag-label .ref{font-size:11px;font-weight:700;color:var(--heading);margin-top:6px;word-break:break-all;}
+  @media print{
+    body *{visibility:hidden;}
+    #bagQrGrid, #bagQrGrid *{visibility:visible;}
+    #bagQrGrid{position:absolute;top:0;left:0;width:100%;grid-template-columns:repeat(3,1fr)!important;gap:10px!important;}
+    .bag-label{break-inside:avoid;border:1px dashed #999;}
+  }
 </style>
+<script>
+  var QR_LOOKUP_BASE = "https://rumbu-production-software-my4h.vercel.app/modules/pet/bag-lookup.html";
+</script>
 </head>
 <body>
 <div class="wrap">
@@ -152,11 +166,38 @@
           </div>
         </div>
 
-        <div style="margin-top:20px;display:flex;gap:10px;">
-          <button onclick="submitProd()">Submit for Approval</button>
+        <div style="margin-top:20px;display:flex;gap:10px;" id="prodSaveRow">
+          <button onclick="saveAndContinue()">Save and Continue</button>
           <button class="btn-ghost" onclick="closeProdForm()">Cancel</button>
         </div>
         <div id="prodFormStatus" style="margin-top:10px;font-size:13px;font-weight:700;min-height:16px;"></div>
+
+        <!-- Bag Tracking — appears after Save and Continue, or immediately if
+             reopening a collection where this step was already started. -->
+        <div id="bagTrackingCard" style="display:none;margin-top:10px;padding-top:20px;border-top:2px solid var(--line);">
+          <div class="sec-title">Bag Tracking</div>
+          <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">
+            Production data is saved. Enter how many bags this batch produced, then generate a unique reference number and QR code for each — print and paste one on every bag.
+          </p>
+          <div class="grid2">
+            <div>
+              <label>Number of Bags Produced *</label>
+              <input type="number" class="no-spinner" id="bagCount" min="1" step="1" inputmode="numeric">
+            </div>
+            <div style="display:flex;align-items:flex-end;">
+              <button onclick="generateBagReferences()" id="bagGenBtn" style="width:100%;">Generate Reference Numbers &amp; QR Codes</button>
+            </div>
+          </div>
+          <div id="bagGenStatus" style="margin-top:8px;font-size:13px;font-weight:700;min-height:16px;"></div>
+          <div id="bagQrGrid" style="margin-top:14px;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px;"></div>
+          <div id="bagPrintActions" style="display:none;margin-top:14px;" class="no-print">
+            <button onclick="window.print()">🖨️ Print All Labels</button>
+          </div>
+        </div>
+
+        <div style="margin-top:20px;gap:10px;display:none;" id="finalSubmitRow">
+          <button onclick="submitProd()">Submit for Approval</button>
+        </div>
       </div>
     </div>
   </div>
@@ -170,20 +211,13 @@
     </div>
   </div>
 
-  <!-- Production Report moved to its own page -->
-  <div class="card-panel" style="margin-top:16px;text-align:center;">
-    <div style="font-weight:700;font-size:14px;color:var(--heading);margin:0 0 8px;">Production Report</div>
-    <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Browse every production entry from initiation through to production, with filters and PDF export.</p>
-    <a href="production-report.html" style="display:inline-block;padding:9px 18px;background:var(--accent);color:var(--logo-fg);border-radius:8px;font-size:13px;font-weight:700;text-decoration:none;">Open PET Production Report &rarr;</a>
-  </div>
-
   <div id="noQueue" style="display:none;text-align:center;color:var(--muted);padding:40px;font-size:14px;">
     No production actions assigned to you at this stage.
   </div>
 </div>
 
 <script>
-let ME=null, CURRENT_PROD=null, ALL_SECTIONS=[], PROD_QUEUE_DATA=[];
+let ME=null, CURRENT_PROD=null, CURRENT_PROD_ID=null, ALL_SECTIONS=[], PROD_QUEUE_DATA=[];
 
 const NEXT_STATUS={stage4:'stage3p2_filling'};
 const REJECT_STATUS={stage4:'rejected_to_stage3p1'};
@@ -218,7 +252,7 @@ async function init(){
 async function loadFillQueue(sections){
   const { data }=await sb.from("pet_collections")
     .select("id,form_number,agent_name,agent_code,section,status,updated_at")
-    .in("status",["stage4_filling","rejected_to_stage4"])
+    .in("status",["stage4_filling","rejected_to_stage4","stage4_bagging"])
     .in("section",sections.length?sections:ALL_SECTIONS)
     .order("updated_at",{ascending:false});
   const queue=document.getElementById("fillQueue");
@@ -230,8 +264,9 @@ async function loadFillQueue(sections){
   queue.innerHTML=data.map(c=>`<div class="queue-row">
     <div><b>${c.form_number}</b> <span style="font-size:12px;color:var(--muted);margin-left:8px;">${c.agent_name} (${c.agent_code}) — ${c.section}</span>
     ${c.status==="rejected_to_stage4"?`<span style="font-size:11px;color:var(--bad);margin-left:8px;">(Returned for correction)</span>`:""}
+    ${c.status==="stage4_bagging"?`<span style="font-size:11px;color:var(--accent);margin-left:8px;">(Bag tracking pending)</span>`:""}
     </div>
-    <button onclick="openProdForm(${c.id})">Enter Production Data</button>
+    <button onclick="openProdForm(${c.id})">${c.status==="stage4_bagging"?"Continue Bag Tracking":"Enter Production Data"}</button>
   </div>`).join("");
   setupCollapsibleQueue("fillQueueTitle","fillQueue",data.length,"Stage 4 — Production (Fill Queue)");
 }
@@ -283,11 +318,12 @@ async function loadApprovalQueue(sections){
   setupCollapsibleQueue("approvalQueueTitle","approvalQueue",data.length,"Stage 4 — Production (Approval Queue)");
 }
 
-function openProdReview(collectionId){
+async function openProdReview(collectionId){
   const c = PROD_QUEUE_DATA.find(x=>x.id===collectionId);
   if(!c) return;
   const prod = (Array.isArray(c.pet_stage4_production)?c.pet_stage4_production[0]:c.pet_stage4_production)||{};
   const qc   = (Array.isArray(c.pet_stage2_qc)?c.pet_stage2_qc[0]:c.pet_stage2_qc)||{};
+  const { data:bags } = await sb.from("pet_stage4_bags").select("reference_number").eq("collection_id",collectionId).order("bag_index");
   showReviewModal({
     title: "Production — Review Submission",
     subtitle: c.form_number + " — " + c.agent_name + " (" + c.agent_code + ") — " + c.section + " — Approving frees the LOT and triggers Phase 2 payment",
@@ -317,6 +353,10 @@ function openProdReview(collectionId){
         ["Unacceptable Waste (kg)", prod.unacceptable_waste_kg],
         ["Weight Difference (kg)", prod.weight_difference_kg],
         ["Total Production + Total Waste (kg)", prod.total_production_plus_waste_kg],
+      ]},
+      { heading: "Bag Tracking", rows: [
+        ["Number of Bags Produced", (bags||[]).length],
+        ["Reference Range", (bags&&bags.length) ? (bags[0].reference_number+" — "+bags[bags.length-1].reference_number) : "—"],
       ]}
     ],
     onApprove: ()=>decide(collectionId,'approved',null),
@@ -342,6 +382,7 @@ async function openProdForm(id){
     <b>Agent Waybill Weight:</b> ${c.agent_waybill_weight||0} kg`;
 
   if(prod.id){
+    CURRENT_PROD_ID=prod.id;
     document.getElementById("pfStart").value=prod.production_start?prod.production_start.slice(0,16):"";
     document.getElementById("pfEnd").value=prod.production_end?prod.production_end.slice(0,16):"";
     document.getElementById("pfColoredFlex").value=prod.colored_flex_kg||"";
@@ -369,6 +410,38 @@ async function openProdForm(id){
 
   document.getElementById("prodFormTitle").textContent="Production Entry — "+c.form_number;
   document.getElementById("prodFormStatus").textContent="";
+
+  // Reset the bag-tracking UI, then decide what to show based on where this
+  // collection actually is in the flow.
+  document.getElementById("bagCount").value="";
+  document.getElementById("bagGenStatus").textContent="";
+  document.getElementById("bagQrGrid").innerHTML="";
+  document.getElementById("bagPrintActions").style.display="none";
+  document.getElementById("bagTrackingCard").style.display="none";
+  document.getElementById("finalSubmitRow").style.display="none";
+  document.getElementById("prodSaveRow").style.display="flex";
+  GENERATED_BAGS=[];
+
+  if(c.status==="stage4_bagging"){
+    // Production data was already saved on a previous visit — skip straight
+    // to bag tracking. If references were already generated, show them
+    // again rather than risk generating a second, duplicate set.
+    document.getElementById("prodSaveRow").style.display="none";
+    document.getElementById("bagTrackingCard").style.display="block";
+    const { data:bags } = await sb.from("pet_stage4_bags").select("*").eq("collection_id",id).order("bag_index");
+    if(bags&&bags.length){
+      document.getElementById("bagCount").value=bags.length;
+      document.getElementById("bagCount").disabled=true;
+      document.getElementById("bagGenBtn").disabled=true;
+      renderBagQrGrid(bags);
+      document.getElementById("bagPrintActions").style.display="block";
+      document.getElementById("finalSubmitRow").style.display="flex";
+    } else {
+      document.getElementById("bagCount").disabled=false;
+      document.getElementById("bagGenBtn").disabled=false;
+    }
+  }
+
   document.getElementById("prodForm").style.display="block";
   document.getElementById("prodForm").scrollIntoView({behavior:"smooth"});
 }
@@ -415,7 +488,7 @@ function computeProductionPlusWaste(){
   document.getElementById("pfProductionPlusWaste").value = (totalProd+totalWaste).toFixed(2);
 }
 
-async function submitProd(){
+async function saveAndContinue(){
   const st=document.getElementById("prodFormStatus");
   const start=document.getElementById("pfStart").value;
   const end=document.getElementById("pfEnd").value;
@@ -447,46 +520,6 @@ async function submitProd(){
   for(const [id,label] of productionFields){
     if(document.getElementById(id).value===""){ st.style.color="var(--bad)"; st.textContent=`"${label}" is required (enter 0 if none).`; return; }
   }
-
-  st.textContent = "";
-  showReviewModal({
-    title: "Review Before Submitting",
-    subtitle: (CURRENT_PROD?.form_number||"") + " — check everything below before it goes for approval",
-    mode: "submit",
-    sections: [
-      { heading: "Production Time", rows: [
-        ["Production Start", new Date(start).toLocaleString("en-GB")],
-        ["Production End", new Date(end).toLocaleString("en-GB")],
-      ]},
-      { heading: "Production Entry", rows: [
-        ["Total Colored Flex (kg)", document.getElementById("pfColoredFlex").value],
-        ["Total Non-Colored Flex (kg)", document.getElementById("pfNonColoredFlex").value],
-        ["Total Production (kg)", document.getElementById("pfTotalProduction").value],
-      ]},
-      { heading: "Waste Data", rows: [
-        ["Coloured PET (kg)", document.getElementById("pfWasteColoured").value],
-        ["Labelled Bottles (kg)", document.getElementById("pfWasteLabels").value],
-        ["Caps & Rings (kg)", document.getElementById("pfWasteCapsRings").value],
-        ["Non-Food Contact (kg)", document.getElementById("pfWasteNonFood").value],
-        ["Non-PET Product (kg)", document.getElementById("pfWasteNonPet").value],
-        ["Aged PET Bottles (kg)", document.getElementById("pfWasteAged").value],
-        ["Oily PET Bottles (kg)", document.getElementById("pfWasteOily").value],
-        ["Bottles with Metal Ring (kg)", document.getElementById("pfWasteMetal").value],
-        ["Total Waste Record (kg)", document.getElementById("pfTotalWaste").value],
-        ["Accepted Waste (kg)", document.getElementById("pfAcceptedWaste").value],
-        ["Unacceptable Waste (kg)", document.getElementById("pfUnacceptableKg").value],
-        ["Weight Difference (kg)", document.getElementById("pfWeightDiff").value],
-        ["Total Production + Total Waste (kg)", document.getElementById("pfProductionPlusWaste").value],
-      ]}
-    ],
-    onConfirm: proceedWithProdSubmit
-  });
-}
-
-async function proceedWithProdSubmit(){
-  const st=document.getElementById("prodFormStatus");
-  const start=document.getElementById("pfStart").value;
-  const end=document.getElementById("pfEnd").value;
 
   st.style.color="var(--muted)"; st.textContent="Saving...";
   try{
@@ -543,14 +576,101 @@ async function proceedWithProdSubmit(){
     if(ex){
       const { error: prodErr } = await sb.from("pet_stage4_production").update(payload).eq("collection_id",CURRENT_PROD.id);
       if(prodErr) throw new Error("Could not save production data: "+prodErr.message);
+      CURRENT_PROD_ID = ex.id;
     } else {
-      const { error: prodErr } = await sb.from("pet_stage4_production").insert(payload);
+      const { data:ins, error: prodErr } = await sb.from("pet_stage4_production").insert(payload).select("id").single();
       if(prodErr) throw new Error("Could not save production data: "+prodErr.message);
+      CURRENT_PROD_ID = ins.id;
     }
 
     const oldStatus=CURRENT_PROD.status;
+    const { error: stErr } = await sb.from("pet_collections").update({ status:"stage4_bagging", updated_at:new Date().toISOString() }).eq("id",CURRENT_PROD.id);
+    if(stErr) throw new Error("Production data was saved, but could not move to bag tracking: "+stErr.message);
+    CURRENT_PROD.status="stage4_bagging";
+    const { error: logErr } = await sb.from("pet_activity_log").insert({ collection_id:CURRENT_PROD.id, action:"stage4_production_saved", stage:"stage4", actor_profile_id:ME.id, actor_username:ME.username, old_status:oldStatus, new_status:"stage4_bagging" });
+    if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
+
+    st.style.color="var(--ok)"; st.textContent="Production data saved. Now enter bag tracking below.";
+    document.getElementById("prodSaveRow").style.display="none";
+    document.getElementById("bagTrackingCard").style.display="block";
+    document.getElementById("bagTrackingCard").scrollIntoView({behavior:"smooth"});
+  }catch(e){ st.style.color="var(--bad)"; st.textContent="Error: "+e.message; }
+}
+
+async function generateBagReferences(){
+  const st=document.getElementById("bagGenStatus");
+  const countEl=document.getElementById("bagCount");
+  const count=parseInt(countEl.value);
+  if(!count||count<1||!/^\d+$/.test(countEl.value)){ st.style.color="var(--bad)"; st.textContent="Enter a whole number of bags (at least 1)."; return; }
+
+  st.style.color="var(--muted)"; st.textContent="Generating reference numbers...";
+  try{
+    const { data, error } = await sb.rpc("generate_bag_references", {
+      p_production_id: CURRENT_PROD_ID,
+      p_collection_id: CURRENT_PROD.id,
+      p_bag_count: count
+    });
+    if(error) throw new Error(error.message);
+
+    countEl.disabled=true;
+    document.getElementById("bagGenBtn").disabled=true;
+    renderBagQrGrid(data);
+    document.getElementById("bagPrintActions").style.display="block";
+    document.getElementById("finalSubmitRow").style.display="flex";
+    st.style.color="var(--ok)"; st.textContent=count+" reference number(s) and QR codes generated.";
+  }catch(e){ st.style.color="var(--bad)"; st.textContent="Error: "+e.message; }
+}
+
+let GENERATED_BAGS=[];
+function renderBagQrGrid(bags){
+  GENERATED_BAGS=bags;
+  const grid=document.getElementById("bagQrGrid");
+  grid.innerHTML="";
+  bags.forEach(b=>{
+    const cell=document.createElement("div");
+    cell.className="bag-label";
+    const qrBox=document.createElement("div");
+    cell.appendChild(qrBox);
+    const refText=document.createElement("div");
+    refText.className="ref";
+    refText.textContent=b.reference_number;
+    cell.appendChild(refText);
+    grid.appendChild(cell);
+    new QRCode(qrBox, { text: QR_LOOKUP_BASE+"?ref="+encodeURIComponent(b.reference_number), width:120, height:120 });
+  });
+}
+
+async function submitProd(){
+  const st=document.getElementById("prodFormStatus");
+  if(!GENERATED_BAGS.length){ st.style.color="var(--bad)"; st.textContent="Generate bag reference numbers before submitting."; return; }
+
+  st.textContent = "";
+  showReviewModal({
+    title: "Review Before Submitting",
+    subtitle: (CURRENT_PROD?.form_number||"") + " — check everything below before it goes for approval",
+    mode: "submit",
+    sections: [
+      { heading: "Production Entry", rows: [
+        ["Total Production (kg)", document.getElementById("pfTotalProduction").value],
+        ["Total Waste Record (kg)", document.getElementById("pfTotalWaste").value],
+        ["Total Production + Total Waste (kg)", document.getElementById("pfProductionPlusWaste").value],
+      ]},
+      { heading: "Bag Tracking", rows: [
+        ["Number of Bags Produced", GENERATED_BAGS.length],
+        ["Reference Range", GENERATED_BAGS[0].reference_number + " — " + GENERATED_BAGS[GENERATED_BAGS.length-1].reference_number],
+      ]}
+    ],
+    onConfirm: proceedWithProdSubmit
+  });
+}
+
+async function proceedWithProdSubmit(){
+  const st=document.getElementById("prodFormStatus");
+  st.style.color="var(--muted)"; st.textContent="Submitting...";
+  try{
+    const oldStatus=CURRENT_PROD.status;
     const { error: stErr } = await sb.from("pet_collections").update({ status:"stage4_approval", updated_at:new Date().toISOString() }).eq("id",CURRENT_PROD.id);
-    if(stErr) throw new Error("Production data was saved, but could not advance status: "+stErr.message);
+    if(stErr) throw new Error("Could not advance status: "+stErr.message);
     const { error: logErr } = await sb.from("pet_activity_log").insert({ collection_id:CURRENT_PROD.id, action:"stage4_filled", stage:"stage4", actor_profile_id:ME.id, actor_username:ME.username, old_status:oldStatus, new_status:"stage4_approval" });
     if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
 
@@ -559,7 +679,7 @@ async function proceedWithProdSubmit(){
   }catch(e){ st.style.color="var(--bad)"; st.textContent="Error: "+e.message; }
 }
 
-function closeProdForm(){ document.getElementById("prodForm").style.display="none"; CURRENT_PROD=null; }
+function closeProdForm(){ document.getElementById("prodForm").style.display="none"; CURRENT_PROD=null; CURRENT_PROD_ID=null; GENERATED_BAGS=[]; }
 
 async function decide(collectionId, decision, note){
   const stage="stage4";
