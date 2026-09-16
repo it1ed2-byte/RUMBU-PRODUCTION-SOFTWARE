@@ -317,6 +317,7 @@
 <div class="hidden" id="adminEmployeeDirectory">
   <h3>Employee Directory</h3>
   <p class="sub">Employees in your Branch(es) only. Click a row to open a staff profile; Grant Access there creates their login (username = Employee ID, temporary password 12345678, changed on first login).</p>
+  <p class="sub hidden" id="hrGateNote" style="color:var(--warn);">Adding and editing staff records is limited to HR-designated staff for your Branch. Contact your HR office or a Super Admin if a change is needed.</p>
 
   <button class="ghost" onclick="toggleAddEmployeePanelAdmin()" id="addEmpToggleBtnAdmin" style="margin-bottom:12px;">+ Add New Employee</button>
   <button class="ghost" onclick="toggleBulkPanel('admin_bulk')" id="adminBulkUploadToggleBtn" style="margin-bottom:12px;">⬆ Bulk Upload Staff</button>
@@ -503,6 +504,10 @@
 <script>
 const EDGE_FUNCTION_URL = "https://betfhunzmhtdzgvufmfk.supabase.co/functions/v1/swift-handler";
 let ME = null;let ACCESS_TOKEN = null;
+// Whether the signed-in Admin's own staff record is flagged HR Admin for
+// their Branch. Set once in init() via loadMyHrStatus(). Super Admin never
+// consults this — it always has full access, regardless of value.
+let ME_IS_HR = false;
 let ALL_SECTIONS = [];
 let SECTION_DISPLAY_NAME = {}; // section.id -> friendly display label for the
   // Sections & Pages ticklist specifically. The real branch names (ED1
@@ -592,6 +597,7 @@ async function init(){
       document.getElementById("adminEmployeeDirectory").classList.remove("hidden");
       document.getElementById("listTitle").textContent = "Manage Role";
       document.getElementById("roleDropdownLabel").textContent = "Enter the Employee ID of a User you created to manage their access. Their name will appear so you can confirm it is the right person.";
+      await loadMyHrStatus(); // must resolve before loadEmployeeDirectory()'s render, so Add/Bulk gate correctly on first paint
       await loadRoleDropdown();
       await loadEmployeeDirectory(); // shared loader; renderAdminEmployeeDirectory() scopes it to ME.sectionNames
       // admin: no Settings panel
@@ -635,6 +641,21 @@ async function init(){
     status.style.color = "#c0392b";
     status.textContent = "❌ " + e.message;
     console.error(e);
+  }
+}
+
+// Resolves whether THIS Admin's own staff record is flagged HR Admin for
+// their Branch — the only Admins (besides Super Admin) allowed to add or
+// edit employees. A missing/unlinked employee row, or any lookup failure,
+// degrades to false rather than throwing, so a login problem here can never
+// accidentally widen access.
+async function loadMyHrStatus(){
+  ME_IS_HR = false;
+  try{
+    const { data } = await sb.from("employees").select("is_hr_admin").eq("linked_profile_id", ME.id).maybeSingle();
+    ME_IS_HR = !!(data && data.is_hr_admin);
+  }catch(e){
+    console.warn("Could not load HR status (non-fatal, defaults to no HR access):", e);
   }
 }
 
@@ -1867,6 +1888,13 @@ async function addEmployee(){
 
 async function addEmployeeAsAdmin(){
   const status = document.getElementById("add_emp_status_admin");
+  // Defence in depth — the Add-Employee button is already hidden for
+  // non-HR Admins; the real enforcement is the database RLS policy.
+  if(!ME_IS_HR){
+    status.className = "status err";
+    status.textContent = "\u274c Adding staff is limited to HR-designated staff for your Branch.";
+    return;
+  }
   const employeeId = document.getElementById("admin_new_emp_employee_id").value.trim();
   const fullName   = document.getElementById("admin_new_emp_full_name").value.trim();
   const branch     = document.getElementById("admin_new_emp_branch").value;
@@ -2054,27 +2082,36 @@ function currentDirWrap(){
 // both roles. Any open Add-Employee panel is collapsed either way.
 function showEmployeeDirChrome(hide){
   const disp = hide ? "none" : "";
-  [
-    ["addEmpToggleBtn","emp_dir_controls","addEmployeePanel"],
-    ["addEmpToggleBtnAdmin","admin_emp_dir_controls","addEmployeePanelAdmin"]
-  ].forEach(([btnId,ctrlId,panelId])=>{
-    const btn = document.getElementById(btnId);
-    const ctrl = document.getElementById(ctrlId);
-    const panel = document.getElementById(panelId);
-    if(btn) btn.style.display = disp;
-    if(ctrl) ctrl.style.display = disp;
-    if(panel) panel.classList.add("hidden");
+
+  // Super Admin's own chrome — unaffected by HR gating (Super Admin can
+  // always add/edit staff, any Branch).
+  ["addEmpToggleBtn","emp_dir_controls","addEmployeePanel","bulkUploadToggleBtn","bulkUploadPanel"].forEach(id=>{
+    const el = document.getElementById(id);
+    if(!el) return;
+    if(id === "addEmployeePanel" || id === "bulkUploadPanel"){ el.classList.add("hidden"); }
+    else { el.style.display = disp; }
   });
-  // Bulk Upload button + panel for both roles.
-  [
-    ["bulkUploadToggleBtn","bulkUploadPanel"],
-    ["adminBulkUploadToggleBtn","adminBulkUploadPanel"]
-  ].forEach(([btnId,panelId])=>{
-    const btn = document.getElementById(btnId);
-    const panel = document.getElementById(panelId);
-    if(btn) btn.style.display = disp;
-    if(panel) panel.classList.add("hidden");
-  });
+
+  // Admin's chrome: the Add-Employee and Bulk-Upload buttons only ever show
+  // when the list is visible AND this Admin is HR Admin for their Branch
+  // (ME_IS_HR, resolved once in loadMyHrStatus()). The search/filter/export
+  // controls are unaffected — viewing the directory stays open to any Admin
+  // scoped to the Branch, only adding/editing staff is HR-only.
+  const adminAllowed = ME.role !== "admin" || ME_IS_HR;
+  const adminDisp = (!hide && adminAllowed) ? "" : "none";
+  const addBtnAdmin = document.getElementById("addEmpToggleBtnAdmin");
+  const bulkBtnAdmin = document.getElementById("adminBulkUploadToggleBtn");
+  const ctrlAdmin = document.getElementById("admin_emp_dir_controls");
+  const panelAdmin = document.getElementById("addEmployeePanelAdmin");
+  const bulkPanelAdmin = document.getElementById("adminBulkUploadPanel");
+  if(addBtnAdmin) addBtnAdmin.style.display = adminDisp;
+  if(bulkBtnAdmin) bulkBtnAdmin.style.display = adminDisp;
+  if(ctrlAdmin) ctrlAdmin.style.display = disp;
+  if(panelAdmin) panelAdmin.classList.add("hidden");
+  if(bulkPanelAdmin) bulkPanelAdmin.classList.add("hidden");
+
+  const hrNote = document.getElementById("hrGateNote");
+  if(hrNote) hrNote.classList.toggle("hidden", hide || adminAllowed);
 }
 
 function detailRow(label, valueHtml){
@@ -2091,7 +2128,12 @@ function openEmployeeDetail(empId){
   const e = EMPLOYEES.find(x=>x.id === empId);
   if(!e){ return; }
   const isAdmin = ME.role === "admin";
-  const canSeeSalary = ME.role === "super_admin";
+  const isSuperAdmin = ME.role === "super_admin";
+  const canSeeSalary = isSuperAdmin;
+  // Only Super Admin, or an Admin flagged HR Admin for their own Branch, may
+  // add or edit staff records. Read-only viewing (this whole detail page)
+  // stays open to any Admin scoped to the Branch.
+  const canManageStaff = isSuperAdmin || (isAdmin && ME_IS_HR);
   showEmployeeDirChrome(true);
 
   let html = "<button class=\"ghost\" style=\"margin-bottom:12px;\" onclick=\"closeEmployeeDetail()\">← Back to list</button>";
@@ -2153,8 +2195,24 @@ function openEmployeeDetail(empId){
   }
   html += "</div>";
 
+  // HR Admin designation — Super Admin only. This flag (employees.is_hr_admin)
+  // is the sole gate, besides Super Admin, on adding or editing staff for a
+  // Branch, so only Super Admin may grant or revoke it (also enforced by a
+  // database trigger, independent of this UI).
+  if(isSuperAdmin){
+    const hrChecked = e.is_hr_admin ? "checked" : "";
+    html += "<div class=\"card\" style=\"max-width:760px;\"><h3 style=\"margin-top:0;\">HR Permissions</h3>" +
+      "<p class=\"sub\" style=\"margin:0 0 10px;\">Only staff flagged here may add or edit employee records for their own Branch (" + esc(e.branch || "—") + "). Super Admin can always add or edit staff, regardless of this flag.</p>" +
+      "<label style=\"display:flex;align-items:center;gap:8px;font-weight:normal;\">" +
+        "<input type=\"checkbox\" id=\"hr_flag_" + e.id + "\" " + hrChecked + " onchange=\"setEmployeeHrAdmin(" + e.id + ", this.checked)\" style=\"width:auto;\"> " +
+        "HR Admin for " + esc(e.branch || "this Branch") +
+      "</label>" +
+      "<div class=\"status\" id=\"hr_flag_status_" + e.id + "\"></div>" +
+    "</div>";
+  }
+
   html += "<div style=\"max-width:760px;\">" +
-    "<button onclick=\"enterEmployeeEditMode(" + e.id + ")\">Edit</button>" +
+    (canManageStaff ? "<button onclick=\"enterEmployeeEditMode(" + e.id + ")\">Edit</button>" : "") +
     "<button class=\"ghost\" onclick=\"closeEmployeeDetail()\">Back to list</button>" +
     "<div class=\"status\" id=\"emp_detail_status\"></div></div>";
 
@@ -2166,6 +2224,28 @@ function openEmployeeDetail(empId){
 function closeEmployeeDetail(){
   if(ME.role === "admin") renderAdminEmployeeDirectory();
   else renderEmployeeDirectory();
+}
+
+// Super-Admin-only: grants or revokes HR Admin status for one employee's own
+// Branch — the sole gate, besides Super Admin, on adding or editing staff
+// records for that Branch. The database also enforces (via trigger) that
+// only a Super Admin can change this column, independent of this UI.
+async function setEmployeeHrAdmin(empId, makeHr){
+  const status = document.getElementById("hr_flag_status_" + empId);
+  if(status){ status.className = "status"; status.textContent = "Saving…"; }
+  try{
+    const { error } = await sb.from("employees").update({ is_hr_admin: !!makeHr }).eq("id", empId);
+    if(error) throw error;
+    const e = EMPLOYEES.find(x=>x.id === empId);
+    if(e) e.is_hr_admin = !!makeHr;
+    await logActivity("hr_admin_flag_changed", ME.username + (makeHr ? " granted" : " revoked") + " HR Admin for employee #" + empId + (e ? (" (" + e.full_name + ", " + e.branch + ")") : ""));
+    if(status){ status.className = "status ok"; status.textContent = "\u2705 Saved."; }
+  }catch(err){
+    // Revert the checkbox on failure so the UI doesn't lie about what saved.
+    const box = document.getElementById("hr_flag_" + empId);
+    if(box) box.checked = !makeHr;
+    if(status){ status.className = "status err"; status.textContent = "\u274c " + (err.message || err); }
+  }
 }
 
 function editDeptOptions(branch, selName){
@@ -2200,6 +2280,12 @@ function enterEmployeeEditMode(empId){
   if(!wrap) return;
   const e = EMPLOYEES.find(x=>x.id === empId);
   if(!e) return;
+  // Defence in depth — the Edit button is already hidden for anyone who
+  // fails this check; the real enforcement is the database RLS policy.
+  if(ME.role !== "super_admin" && !(ME.role === "admin" && ME_IS_HR)){
+    alert("Adding and editing staff records is limited to HR-designated staff for your Branch.");
+    return openEmployeeDetail(empId);
+  }
   const isAdmin = ME.role === "admin";
   const canSeeSalary = ME.role === "super_admin";
   const canEditBranch = ME.role === "super_admin";
@@ -2254,6 +2340,12 @@ async function saveEmployeeDetails(empId){
   const status = document.getElementById("edit_emp_status");
   const e = EMPLOYEES.find(x=>x.id === empId);
   if(!e){ return; }
+  // Defence in depth — the Edit form is already unreachable for anyone who
+  // fails this check; the real enforcement is the database RLS policy.
+  if(ME.role !== "super_admin" && !(ME.role === "admin" && ME_IS_HR)){
+    if(status){ status.className = "status err"; status.textContent = "\u274c Editing staff records is limited to HR-designated staff for your Branch."; }
+    return;
+  }
   const canSeeSalary = ME.role === "super_admin";
   const canEditBranch = ME.role === "super_admin";
 
@@ -2881,6 +2973,7 @@ async function processBulkUpload(prefix, isAdmin){
   const unit = unitSel && unitSel.value ? unitSel.value : null;
   const text = document.getElementById(prefix + "_text").value || "";
 
+  if(isAdmin && !ME_IS_HR){ statusEl.className="status err"; statusEl.textContent="Adding staff is limited to HR-designated staff for your Branch."; return; }
   if(!branch){ statusEl.className="status err"; statusEl.textContent="Choose a Branch for this upload."; return; }
   if(isAdmin && !(ME.sectionNames||[]).includes(branch)){ statusEl.className="status err"; statusEl.textContent="Choose one of your assigned Branch(es)."; return; }
   if(!department){ statusEl.className="status err"; statusEl.textContent="Choose the Department all these staff belong to."; return; }
