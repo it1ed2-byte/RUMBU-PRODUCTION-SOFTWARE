@@ -508,6 +508,10 @@ let ME = null;let ACCESS_TOKEN = null;
 // their Branch. Set once in init() via loadMyHrStatus(). Super Admin never
 // consults this — it always has full access, regardless of value.
 let ME_IS_HR = false;
+// profile_id -> branch, from hr_branch_admins (NOT employees — HR Admin
+// status lives in its own table now, to avoid a self-referencing RLS
+// policy on employees; see HR_Fix_Recursion.sql for why).
+let HR_ADMIN_BY_PROFILE = {};
 let ALL_SECTIONS = [];
 let SECTION_DISPLAY_NAME = {}; // section.id -> friendly display label for the
   // Sections & Pages ticklist specifically. The real branch names (ED1
@@ -591,6 +595,7 @@ async function init(){
       await loadRoleDropdown();
       populateBranchModulesDropdown();
       populateDeptBranchSelect();
+      await loadHrAdminMap();
       await loadEmployeeDirectory();
       // super admin: all panels available
     } else if(ME.role === "admin"){
@@ -644,19 +649,26 @@ async function init(){
   }
 }
 
-// Resolves whether THIS Admin's own staff record is flagged HR Admin for
-// their Branch — the only Admins (besides Super Admin) allowed to add or
-// edit employees. A missing/unlinked employee row, or any lookup failure,
-// degrades to false rather than throwing, so a login problem here can never
-// accidentally widen access.
-async function loadMyHrStatus(){
-  ME_IS_HR = false;
+// Loads the full profile_id -> branch map from hr_branch_admins. Cheap
+// (one row per HR Admin org-wide) and needed both for ME_IS_HR (below) and
+// for rendering the HR Permissions checkbox correctly on every employee's
+// detail view without a query per click.
+async function loadHrAdminMap(){
+  HR_ADMIN_BY_PROFILE = {};
   try{
-    const { data } = await sb.from("employees").select("is_hr_admin").eq("linked_profile_id", ME.id).maybeSingle();
-    ME_IS_HR = !!(data && data.is_hr_admin);
+    const { data } = await sb.from("hr_branch_admins").select("profile_id, branch");
+    (data||[]).forEach(r=>{ HR_ADMIN_BY_PROFILE[r.profile_id] = r.branch; });
   }catch(e){
-    console.warn("Could not load HR status (non-fatal, defaults to no HR access):", e);
+    console.warn("Could not load HR Admin map (non-fatal):", e);
   }
+}
+
+// Resolves whether THIS Admin is HR Admin for their Branch — the only
+// Admins (besides Super Admin) allowed to add or edit employees. Reads
+// hr_branch_admins, not employees (see HR_Fix_Recursion.sql).
+async function loadMyHrStatus(){
+  await loadHrAdminMap();
+  ME_IS_HR = HR_ADMIN_BY_PROFILE.hasOwnProperty(ME.id);
 }
 
 // =========================================================
@@ -2195,18 +2207,20 @@ function openEmployeeDetail(empId){
   }
   html += "</div>";
 
-  // HR Admin designation — Super Admin only. This flag (employees.is_hr_admin)
-  // is the sole gate, besides Super Admin, on adding or editing staff for a
-  // Branch, so only Super Admin may grant or revoke it (also enforced by a
-  // database trigger, independent of this UI).
+  // HR Admin designation — Super Admin only. Status now lives in
+  // hr_branch_admins, keyed by profile_id (see HR_Fix_Recursion.sql), so it
+  // requires this employee to already have a login (Grant Access, above).
   if(isSuperAdmin){
-    const hrChecked = e.is_hr_admin ? "checked" : "";
+    const linked = !!e.linked_profile_id;
+    const hrChecked = linked && HR_ADMIN_BY_PROFILE[e.linked_profile_id] === e.branch ? "checked" : "";
     html += "<div class=\"card\" style=\"max-width:760px;\"><h3 style=\"margin-top:0;\">HR Permissions</h3>" +
       "<p class=\"sub\" style=\"margin:0 0 10px;\">Only staff flagged here may add or edit employee records for their own Branch (" + esc(e.branch || "—") + "). Super Admin can always add or edit staff, regardless of this flag.</p>" +
-      "<label style=\"display:flex;align-items:center;gap:8px;font-weight:normal;\">" +
-        "<input type=\"checkbox\" id=\"hr_flag_" + e.id + "\" " + hrChecked + " onchange=\"setEmployeeHrAdmin(" + e.id + ", this.checked)\" style=\"width:auto;\"> " +
-        "HR Admin for " + esc(e.branch || "this Branch") +
-      "</label>" +
+      (linked
+        ? "<label style=\"display:flex;align-items:center;gap:8px;font-weight:normal;\">" +
+            "<input type=\"checkbox\" id=\"hr_flag_" + e.id + "\" " + hrChecked + " onchange=\"setEmployeeHrAdmin(" + e.id + ", this.checked)\" style=\"width:auto;\"> " +
+            "HR Admin for " + esc(e.branch || "this Branch") +
+          "</label>"
+        : "<p class=\"sub\" style=\"margin:0;color:var(--warn);\">Grant this employee a login (see Access, above) before they can be made HR Admin.</p>") +
       "<div class=\"status\" id=\"hr_flag_status_" + e.id + "\"></div>" +
     "</div>";
   }
@@ -2227,18 +2241,30 @@ function closeEmployeeDetail(){
 }
 
 // Super-Admin-only: grants or revokes HR Admin status for one employee's own
-// Branch — the sole gate, besides Super Admin, on adding or editing staff
-// records for that Branch. The database also enforces (via trigger) that
-// only a Super Admin can change this column, independent of this UI.
+// Branch, by adding/removing their row in hr_branch_admins (keyed by their
+// login's profile id — see HR_Fix_Recursion.sql for why this isn't a column
+// on employees). Requires the employee to already have a login.
 async function setEmployeeHrAdmin(empId, makeHr){
   const status = document.getElementById("hr_flag_status_" + empId);
+  const e = EMPLOYEES.find(x=>x.id === empId);
+  if(!e || !e.linked_profile_id){
+    if(status){ status.className = "status err"; status.textContent = "This employee needs a login (Grant Access) before they can be made HR Admin."; }
+    const box = document.getElementById("hr_flag_" + empId); if(box) box.checked = false;
+    return;
+  }
   if(status){ status.className = "status"; status.textContent = "Saving…"; }
   try{
-    const { error } = await sb.from("employees").update({ is_hr_admin: !!makeHr }).eq("id", empId);
-    if(error) throw error;
-    const e = EMPLOYEES.find(x=>x.id === empId);
-    if(e) e.is_hr_admin = !!makeHr;
-    await logActivity("hr_admin_flag_changed", ME.username + (makeHr ? " granted" : " revoked") + " HR Admin for employee #" + empId + (e ? (" (" + e.full_name + ", " + e.branch + ")") : ""));
+    if(makeHr){
+      const { error } = await sb.from("hr_branch_admins")
+        .upsert({ profile_id: e.linked_profile_id, branch: e.branch, granted_by: ME.id }, { onConflict: "profile_id" });
+      if(error) throw error;
+      HR_ADMIN_BY_PROFILE[e.linked_profile_id] = e.branch;
+    } else {
+      const { error } = await sb.from("hr_branch_admins").delete().eq("profile_id", e.linked_profile_id);
+      if(error) throw error;
+      delete HR_ADMIN_BY_PROFILE[e.linked_profile_id];
+    }
+    await logActivity("hr_admin_flag_changed", ME.username + (makeHr ? " granted" : " revoked") + " HR Admin for " + e.full_name + " (" + e.branch + ")");
     if(status){ status.className = "status ok"; status.textContent = "\u2705 Saved."; }
   }catch(err){
     // Revert the checkbox on failure so the UI doesn't lie about what saved.
