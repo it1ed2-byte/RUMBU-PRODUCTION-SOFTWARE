@@ -15,6 +15,7 @@
 </script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="../../auth.js"></script>
+<script src="attachments-modal.js"></script>
 <style>
   body{padding:20px;}
   .wrap{max-width:1000px;margin:0 auto;}
@@ -410,6 +411,9 @@ function renderEditPanel(panel, r){
   if(!panel) return;
   STAGED_FILES[r.id] = { request_form: [], other_document: [], proforma_invoice: [], proforma_invoice_2: [] };
   panel.innerHTML = `
+    <div style="margin-bottom:10px;">
+      <button class="btn-ghost btn-sm" onclick="previewExistingAttachments('${r.id}', '${r.reference_no}')">\u{1F4CE} Preview Currently Uploaded Files</button>
+    </div>
     <div class="field"><label>Title *</label><input id="et-title-${r.id}" value="${(r.title||"").replace(/"/g,'&quot;')}"></div>
     <div class="field"><label>Description</label><textarea id="et-desc-${r.id}">${r.description || ""}</textarea></div>
     <div class="form-row">
@@ -417,11 +421,11 @@ function renderEditPanel(panel, r){
       <div class="field"><label>Project Duration in Days *</label><input type="number" min="1" id="et-duration-${r.id}" value="${r.project_duration_days}"></div>
     </div>
     <div class="field">
-      <label>Add / Replace Attachments (optional — leave blank to keep what you already submitted)</label>
-      <div class="dropzone" data-req="${r.id}" data-target="request_form" data-multi="false" data-accept="image/*">
-        <div class="dz-action">Upload image — Request form</div>
+      <label>Add / Replace Attachments (optional — leave blank to keep what you already submitted; preview above first if you're unsure a reupload is needed)</label>
+      <div class="dropzone" data-req="${r.id}" data-target="request_form" data-multi="false">
+        <div class="dz-action">Upload file — Request form</div>
         <div class="dz-hint">Drag and drop file or paste from clipboard</div>
-        <input type="file" accept="image/*">
+        <input type="file">
       </div>
       <div class="file-list" data-list="${r.id}-request_form"></div>
       <div class="dropzone" style="margin-top:8px;" data-req="${r.id}" data-target="other_document" data-multi="true">
@@ -430,10 +434,10 @@ function renderEditPanel(panel, r){
         <input type="file" multiple>
       </div>
       <div class="file-list" data-list="${r.id}-other_document"></div>
-      <div class="dropzone" style="margin-top:8px;" data-req="${r.id}" data-target="proforma_invoice" data-multi="false" data-accept="image/*">
-        <div class="dz-action">Upload image — Pre-former Invoice</div>
+      <div class="dropzone" style="margin-top:8px;" data-req="${r.id}" data-target="proforma_invoice" data-multi="false">
+        <div class="dz-action">Upload file — Pre-former Invoice</div>
         <div class="dz-hint">Drag and drop file or paste from clipboard</div>
-        <input type="file" accept="image/*">
+        <input type="file">
       </div>
       <div class="file-list" data-list="${r.id}-proforma_invoice"></div>
     </div>
@@ -442,6 +446,15 @@ function renderEditPanel(panel, r){
   `;
   wireDropzonesFor(panel, r.id);
 }
+
+async function previewExistingAttachments(requestId, referenceNo){
+  const { data: attachments, error } = await sb.from("naslina_request_attachments").select("*").eq("request_id", requestId);
+  if(error){ alert("Could not load attachments: " + error.message); return; }
+  if(typeof showAttachmentsModal === "function"){
+    showAttachmentsModal("Currently Uploaded \u2014 " + referenceNo, attachments || []);
+  }
+}
+window.previewExistingAttachments = previewExistingAttachments;
 
 function wireDropzonesFor(container, requestId){
   container.querySelectorAll(".dropzone").forEach(zone=>{
@@ -471,9 +484,10 @@ function stageFiles(requestId, key, multi, fileList){
 function renderFileList(requestId, key){
   const wrap = document.querySelector(`.file-list[data-list="${requestId}-${key}"]`);
   if(!wrap) return;
-  wrap.innerHTML = STAGED_FILES[requestId][key].map((f, i) =>
-    `<div class="file-chip"><span>${f.name}</span><button class="fc-remove" onclick="removeStagedFile('${requestId}','${key}',${i})">&times;</button></div>`
-  ).join("");
+  wrap.innerHTML = STAGED_FILES[requestId][key].map((f, i) => {
+    const previewUrl = URL.createObjectURL(f);
+    return `<div class="file-chip"><span>${f.name}</span><span><a href="${previewUrl}" target="_blank" rel="noopener" style="margin-right:8px;">Preview</a><button class="fc-remove" onclick="removeStagedFile('${requestId}','${key}',${i})">&times;</button></span></div>`;
+  }).join("");
 }
 
 function removeStagedFile(requestId, key, idx){
