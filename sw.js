@@ -7,11 +7,15 @@
 // the cache only helps when there's no connection at all.
 //
 // Bump CACHE_NAME whenever this file changes, so old caches get cleared.
-const CACHE_NAME = "rumbu-shell-v1";
+const CACHE_NAME = "rumbu-shell-v2";
 
 // Only truly static, rarely-changing assets get cache-first treatment.
+// styles.css was removed from this list — in practice it changes just as
+// often as the HTML pages do, so cache-first on it meant CSS updates could
+// silently never reach an already-installed PWA even after a real deploy.
+// It now falls through to the same network-first handling as everything
+// else below.
 const STATIC_ASSETS = [
-  "styles.css",
   "manifest.json",
   "icon-192.png",
   "icon-512.png",
