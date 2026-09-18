@@ -17,7 +17,6 @@
 <script src="../../auth.js"></script>
 <script src="attachments-modal.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf-autotable.min.js"></script>
 <style>
   body{padding:20px;}
   .wrap{max-width:1000px;margin:0 auto;}
@@ -624,15 +623,56 @@ function exportPDF(){
   const rangeLabel = (from || to) ? ("Date range: " + (from || "\u2014") + " to " + (to || "\u2014")) : "All dates";
   doc.text(rangeLabel + " \u2014 Exported " + new Date().toLocaleString(), 14, 20);
 
-  doc.autoTable({
-    head: [headers],
-    body: body,
-    startY: 26,
-    styles: { fontSize: 8 },
-    headStyles: { fillColor: [18, 32, 60] }
-  });
+  drawSimpleTable(doc, headers, body, 26);
 
   doc.save("naslina_express_requests_" + new Date().toISOString().slice(0,10) + ".pdf");
+}
+
+// Hand-rolled table renderer — no autoTable plugin dependency (jsPDF
+// plugin/version pairings for autoTable are fragile via plain script
+// tags; this only needs jsPDF core, which is far more reliable).
+function drawSimpleTable(doc, headers, body, startY){
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const marginX = 14;
+  const usableWidth = pageWidth - marginX * 2;
+  const colWidths = headers.map(() => usableWidth / headers.length);
+  const rowHeight = 8;
+  let y = startY;
+
+  function drawRow(cells, isHeader){
+    let x = marginX;
+    doc.setFontSize(8);
+    doc.setFont(undefined, isHeader ? "bold" : "normal");
+    if(isHeader){
+      doc.setFillColor(18, 32, 60);
+      doc.setTextColor(255, 255, 255);
+      doc.rect(marginX, y, usableWidth, rowHeight, "F");
+    } else {
+      doc.setTextColor(0, 0, 0);
+    }
+    cells.forEach((cell, i) => {
+      const text = cell == null ? "" : String(cell);
+      const truncated = doc.splitTextToSize(text, colWidths[i] - 4)[0] || "";
+      doc.text(truncated, x + 2, y + rowHeight - 2.5);
+      x += colWidths[i];
+    });
+    if(!isHeader){
+      doc.setDrawColor(220, 220, 220);
+      doc.line(marginX, y + rowHeight, marginX + usableWidth, y + rowHeight);
+    }
+    y += rowHeight;
+  }
+
+  drawRow(headers, true);
+  body.forEach(row => {
+    if(y + rowHeight > pageHeight - 14){
+      doc.addPage();
+      y = 14;
+      drawRow(headers, true);
+    }
+    drawRow(row, false);
+  });
 }
 window.exportPDF = exportPDF;
 
