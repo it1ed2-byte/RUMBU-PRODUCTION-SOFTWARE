@@ -508,6 +508,15 @@ let ME = null;let ACCESS_TOKEN = null;
 // their Branch. Set once in init() via loadMyHrStatus(). Super Admin never
 // consults this — it always has full access, regardless of value.
 let ME_IS_HR = false;
+// profile_id -> branch, from hr_branch_admins (NOT employees — HR Admin
+// status lives in its own table now, to avoid a self-referencing RLS
+// policy on employees; see HR_Fix_Recursion.sql for why).
+let HR_ADMIN_BY_PROFILE = {};
+// The id of the "Manage Staff" page (hr/manage-staff) — resolved once in
+// init(). Ticking/unticking this page in Manage Role is now the ONE place
+// that grants or revokes HR Admin status, kept in sync automatically by
+// saveRoleDetails(); see loadManageStaffPageId().
+let MANAGE_STAFF_PAGE_ID = null;
 let ALL_SECTIONS = [];
 let SECTION_DISPLAY_NAME = {}; // section.id -> friendly display label for the
   // Sections & Pages ticklist specifically. The real branch names (ED1
@@ -591,15 +600,23 @@ async function init(){
       await loadRoleDropdown();
       populateBranchModulesDropdown();
       populateDeptBranchSelect();
+      await loadHrAdminMap();
+      await loadManageStaffPageId();
       await loadEmployeeDirectory();
       // super admin: all panels available
     } else if(ME.role === "admin"){
+      // Employees tab restored for view — an Admin should always be able to
+      // browse staff in their own Branch(es), same as before. What stays
+      // gated to HR Admin (via hr_branch_admins, see loadMyHrStatus) is only
+      // the ability to add/edit — Add Employee, Bulk Upload, and the Edit
+      // button inside a staff profile, exactly as already implemented.
       document.getElementById("adminEmployeeDirectory").classList.remove("hidden");
       document.getElementById("listTitle").textContent = "Manage Role";
       document.getElementById("roleDropdownLabel").textContent = "Enter the Employee ID of a User you created to manage their access. Their name will appear so you can confirm it is the right person.";
-      await loadMyHrStatus(); // must resolve before loadEmployeeDirectory()'s render, so Add/Bulk gate correctly on first paint
+      await loadMyHrStatus();
+      await loadManageStaffPageId();
       await loadRoleDropdown();
-      await loadEmployeeDirectory(); // shared loader; renderAdminEmployeeDirectory() scopes it to ME.sectionNames
+      await loadEmployeeDirectory();
       // admin: no Settings panel
       document.getElementById("sec-settings").classList.add("role-unavailable");
     } else {
@@ -644,18 +661,36 @@ async function init(){
   }
 }
 
-// Resolves whether THIS Admin's own staff record is flagged HR Admin for
-// their Branch — the only Admins (besides Super Admin) allowed to add or
-// edit employees. A missing/unlinked employee row, or any lookup failure,
-// degrades to false rather than throwing, so a login problem here can never
-// accidentally widen access.
-async function loadMyHrStatus(){
-  ME_IS_HR = false;
+// Loads the full profile_id -> branch map from hr_branch_admins. Cheap
+// (one row per HR Admin org-wide) and needed both for ME_IS_HR (below) and
+// for rendering the HR Permissions checkbox correctly on every employee's
+// detail view without a query per click.
+async function loadHrAdminMap(){
+  HR_ADMIN_BY_PROFILE = {};
   try{
-    const { data } = await sb.from("employees").select("is_hr_admin").eq("linked_profile_id", ME.id).maybeSingle();
-    ME_IS_HR = !!(data && data.is_hr_admin);
+    const { data } = await sb.from("hr_branch_admins").select("profile_id, branch");
+    (data||[]).forEach(r=>{ HR_ADMIN_BY_PROFILE[r.profile_id] = r.branch; });
   }catch(e){
-    console.warn("Could not load HR status (non-fatal, defaults to no HR access):", e);
+    console.warn("Could not load HR Admin map (non-fatal):", e);
+  }
+}
+
+// Resolves whether THIS Admin is HR Admin for their Branch — the only
+// Admins (besides Super Admin) allowed to add or edit employees. Reads
+// hr_branch_admins, not employees (see HR_Fix_Recursion.sql).
+async function loadMyHrStatus(){
+  await loadHrAdminMap();
+  ME_IS_HR = HR_ADMIN_BY_PROFILE.hasOwnProperty(ME.id);
+}
+
+// Looks up the "Manage Staff" page's id once, so saveRoleDetails() can tell
+// whether it's among the pages just ticked for someone.
+async function loadManageStaffPageId(){
+  try{
+    const { data } = await sb.from("pages").select("id").eq("module_path", "hr/manage-staff").maybeSingle();
+    MANAGE_STAFF_PAGE_ID = data ? data.id : null;
+  }catch(e){
+    console.warn("Could not resolve the Manage Staff page id (non-fatal):", e);
   }
 }
 
@@ -1527,7 +1562,11 @@ function renderPlainBranchPicker(containerId, availableSectionIds, checkedSectio
   if(!sections.length){ container.innerHTML = "<p class='sub'>No Branches available yet.</p>"; return; }
   container.innerHTML = sections.map(s=>{
     const checked = checkedSectionIds.indexOf(s.id) !== -1 ? "checked" : "";
-    return `<label class="checks" style="display:inline-flex;"><input type="checkbox" class="plain-branch-check" value="${s.id}" ${checked}> ${SECTION_DISPLAY_NAME[s.id] || s.name}</label>`;
+    // Real Branch name, always — this picker assigns someone's actual
+    // working Branch, so the "Category N" placeholder (meant only for a
+    // since-retired ticklist, see SECTION_DISPLAY_NAME above) has no place
+    // here.
+    return `<label class="checks" style="display:inline-flex;"><input type="checkbox" class="plain-branch-check" value="${s.id}" ${checked}> ${esc(s.name)}</label>`;
   }).join(" ");
 }
 
@@ -1946,60 +1985,12 @@ async function addEmployeeAsAdmin(){
   }
 }
 
-// Builds the inline Department/Unit <select> HTML for one Employee
-// Directory row. Department options are every real Department belonging
-// to that employee's current Branch; Unit options are every real Unit
-// belonging to that employee's current Department. Both come from
-// ALL_DEPARTMENTS/ALL_UNITS, loaded once in loadEmployeeDirectory().
-function buildDeptSelectHtml(e, selectId, statusElId){
-  const depts = ALL_DEPARTMENTS.filter(d => d.section === e.branch);
-  const options = '<option value="">— none —</option>' +
-    depts.map(d=>`<option value="${d.name}" ${e.department===d.name?"selected":""}>${d.name}</option>`).join("");
-  return `<select id="${selectId}" style="width:auto;" onchange="setEmployeeDepartment(${e.id}, this.value, '${statusElId}')">${options}</select>`;
-}
-function buildUnitSelectHtml(e, selectId, statusElId){
-  const dept = ALL_DEPARTMENTS.find(d => d.section === e.branch && d.name === e.department);
-  const units = dept ? ALL_UNITS.filter(u => u.department_id === dept.id) : [];
-  const options = '<option value="">— none —</option>' +
-    units.map(u=>`<option value="${u.name}" ${e.unit===u.name?"selected":""}>${u.name}</option>`).join("");
-  return `<select id="${selectId}" style="width:auto;" onchange="setEmployeeUnit(${e.id}, this.value, '${statusElId}')">${options}</select>`;
-}
-
-// Updates an employee's Department directly from the inline dropdown.
-// Changing Department also clears Unit (a Unit belongs to exactly one
-// Department, so the old one is very unlikely to still apply) and
-// refreshes both directory tables so the Unit dropdown for this row
-// rebuilds against the new Department's real Units.
-async function setEmployeeDepartment(empId, newDeptName, statusElId){
-  const status = document.getElementById(statusElId||"emp_dir_status");
-  try{
-    const { error } = await sb.from("employees").update({ department: newDeptName || null, unit: null }).eq("id", empId);
-    if(error) throw error;
-    const emp = EMPLOYEES.find(e=>e.id === empId);
-    if(emp){ emp.department = newDeptName || null; emp.unit = null; }
-    if(status){ status.className = ""; status.textContent = "✅ Department updated."; }
-    await logActivity("employee_department_set", ME.username + " set department to \"" + (newDeptName||"none") + "\" for employee #" + empId);
-    renderEmployeeDirectory();
-    renderAdminEmployeeDirectory();
-  }catch(e){
-    if(status) status.textContent = "❌ Could not update department: " + (e.message||e);
-  }
-}
-
-// Updates an employee's Unit directly from the inline dropdown.
-async function setEmployeeUnit(empId, newUnitName, statusElId){
-  const status = document.getElementById(statusElId||"emp_dir_status");
-  try{
-    const { error } = await sb.from("employees").update({ unit: newUnitName || null }).eq("id", empId);
-    if(error) throw error;
-    const emp = EMPLOYEES.find(e=>e.id === empId);
-    if(emp) emp.unit = newUnitName || null;
-    if(status){ status.className = ""; status.textContent = "✅ Unit updated."; }
-    await logActivity("employee_unit_set", ME.username + " set unit to \"" + (newUnitName||"none") + "\" for employee #" + empId);
-  }catch(e){
-    if(status) status.textContent = "❌ Could not update unit: " + (e.message||e);
-  }
-}
+// NOTE: an earlier inline Department/Unit quick-editor (per-row dropdowns
+// bypassing the Edit Staff Details form) lived here. It was never actually
+// rendered by either directory view and had no HR/Super-Admin gate of its
+// own — a second, unguarded door to the same change "Edit Staff Details"
+// already makes properly. Removed rather than left dangling, as part of
+// unifying staff management onto one gated path.
 
 function renderEmployeeDirectory(){
   const wrap = document.getElementById("employeeDirectoryWrap");
@@ -2195,20 +2186,20 @@ function openEmployeeDetail(empId){
   }
   html += "</div>";
 
-  // HR Admin designation — Super Admin only. This flag (employees.is_hr_admin)
-  // is the sole gate, besides Super Admin, on adding or editing staff for a
-  // Branch, so only Super Admin may grant or revoke it (also enforced by a
-  // database trigger, independent of this UI).
-  if(isSuperAdmin){
-    const hrChecked = e.is_hr_admin ? "checked" : "";
+  // HR Admin status is now granted/revoked in exactly one place — ticking
+  // "Manage Staff" for this account in Manage Role (see saveRoleDetails) —
+  // rather than a second, separate control here that could drift out of
+  // sync with it. This is read-only, just so it's visible from the profile
+  // too.
+  if(isSuperAdmin && e.linked_profile_id){
+    const isHr = HR_ADMIN_BY_PROFILE[e.linked_profile_id] === e.branch;
     html += "<div class=\"card\" style=\"max-width:760px;\"><h3 style=\"margin-top:0;\">HR Permissions</h3>" +
-      "<p class=\"sub\" style=\"margin:0 0 10px;\">Only staff flagged here may add or edit employee records for their own Branch (" + esc(e.branch || "—") + "). Super Admin can always add or edit staff, regardless of this flag.</p>" +
-      "<label style=\"display:flex;align-items:center;gap:8px;font-weight:normal;\">" +
-        "<input type=\"checkbox\" id=\"hr_flag_" + e.id + "\" " + hrChecked + " onchange=\"setEmployeeHrAdmin(" + e.id + ", this.checked)\" style=\"width:auto;\"> " +
-        "HR Admin for " + esc(e.branch || "this Branch") +
-      "</label>" +
-      "<div class=\"status\" id=\"hr_flag_status_" + e.id + "\"></div>" +
-    "</div>";
+      "<p class=\"sub\" style=\"margin:0;\">" +
+      (isHr
+        ? "✅ This account is HR Admin for " + esc(e.branch || "this Branch") + " — can add and edit staff there."
+        : "Not currently HR Admin.") +
+      " To change this, go to Manage Role for this account and tick (or untick) <b>Manage Staff</b> under HR Department." +
+      "</p></div>";
   }
 
   html += "<div style=\"max-width:760px;\">" +
@@ -2226,27 +2217,12 @@ function closeEmployeeDetail(){
   else renderEmployeeDirectory();
 }
 
-// Super-Admin-only: grants or revokes HR Admin status for one employee's own
-// Branch — the sole gate, besides Super Admin, on adding or editing staff
-// records for that Branch. The database also enforces (via trigger) that
-// only a Super Admin can change this column, independent of this UI.
-async function setEmployeeHrAdmin(empId, makeHr){
-  const status = document.getElementById("hr_flag_status_" + empId);
-  if(status){ status.className = "status"; status.textContent = "Saving…"; }
-  try{
-    const { error } = await sb.from("employees").update({ is_hr_admin: !!makeHr }).eq("id", empId);
-    if(error) throw error;
-    const e = EMPLOYEES.find(x=>x.id === empId);
-    if(e) e.is_hr_admin = !!makeHr;
-    await logActivity("hr_admin_flag_changed", ME.username + (makeHr ? " granted" : " revoked") + " HR Admin for employee #" + empId + (e ? (" (" + e.full_name + ", " + e.branch + ")") : ""));
-    if(status){ status.className = "status ok"; status.textContent = "\u2705 Saved."; }
-  }catch(err){
-    // Revert the checkbox on failure so the UI doesn't lie about what saved.
-    const box = document.getElementById("hr_flag_" + empId);
-    if(box) box.checked = !makeHr;
-    if(status){ status.className = "status err"; status.textContent = "\u274c " + (err.message || err); }
-  }
-}
+// NOTE: HR Admin status used to be toggled from a checkbox right here.
+// That's now driven entirely by ticking "Manage Staff" for the account in
+// Manage Role (see saveRoleDetails), so there's exactly one place it can be
+// granted or revoked — see the read-only note in openEmployeeDetail above.
+
+
 
 function editDeptOptions(branch, selName){
   const depts = ALL_DEPARTMENTS.filter(d => d.section === branch);
@@ -3464,6 +3440,21 @@ async function openRolePanelForProfile(id){
   const { data: profile, error } = await sb.from("profiles").select("id, username, role").eq("id", id).single();
   if(error || !profile){ panel.innerHTML = "Error loading account."; panel.classList.remove("hidden"); return; }
 
+  // Which Branch(es) this account is already assigned to (profile_sections)
+  // — this is the actual, live Branch scoping used everywhere else (the
+  // Admin's own Employee Directory, every HR/module page's "your Branch"
+  // dropdown, etc). A Super Admin can assign any Branch; an Admin can only
+  // pass on a Branch they themselves hold, same rule as Pages.
+  const { data: psRows } = await sb.from("profile_sections").select("section_id").eq("profile_id", id);
+  const checkedSectionIds = (psRows||[]).map(r=>r.section_id);
+  const availableSectionIds = ME.role === "super_admin"
+    ? ALL_SECTIONS.map(s=>s.id)
+    : (ME.sectionIds || []);
+
+  const branchPickerHtml = `
+      <label>Branch / Section (governs which Branch's data and dropdowns this account sees everywhere in the app)</label>
+      <div id="role_sections"></div>`;
+
   if(profile.role === "admin"){
     const { data: ap } = await sb.from("assigned_pages").select("page_id").eq("profile_id", id);
     const assignedPageIds = (ap||[]).map(r=>r.page_id);
@@ -3471,6 +3462,7 @@ async function openRolePanelForProfile(id){
     panel.innerHTML = `
       <p class="sub" style="margin-top:0;">Managing <b>${esc(profile.username)}</b> — role: <b>${esc(profile.role)}</b></p>
       <label>Username</label><input id="role_username" value="${esc(profile.username)}">
+      ${branchPickerHtml}
       <label>Pages (tick the exact modules and pages this Admin may use)</label>
       <div id="role_pages"></div>
       <button onclick="saveRoleDetails('${id}','admin')">SAVE DETAILS</button>
@@ -3478,6 +3470,7 @@ async function openRolePanelForProfile(id){
       <div class="status" id="role_status"></div>
       <button class="danger" onclick="deleteRoleAccount('${id}','${esc(profile.username)}')">DELETE ACCOUNT</button>
     `;
+    renderPlainBranchPicker("role_sections", availableSectionIds, checkedSectionIds);
     await renderPagesByModuleOnly("role_pages", assignedPageIds);
   } else {
     const { data: ap } = await sb.from("assigned_pages").select("page_id").eq("profile_id", id);
@@ -3486,6 +3479,7 @@ async function openRolePanelForProfile(id){
     panel.innerHTML = `
       <p class="sub" style="margin-top:0;">Managing <b>${esc(profile.username)}</b> — role: <b>${esc(profile.role)}</b></p>
       <label>Username</label><input id="role_username" value="${esc(profile.username)}">
+      ${branchPickerHtml}
       <label>Pages (tick the exact modules and pages this account may use)</label>
       <div id="role_pages"></div>
       <button onclick="saveRoleDetails('${id}','user')">SAVE DETAILS</button>
@@ -3493,6 +3487,7 @@ async function openRolePanelForProfile(id){
       <div class="status" id="role_status"></div>
       <button class="danger" onclick="deleteRoleAccount('${id}','${esc(profile.username)}')">DELETE ACCOUNT</button>
     `;
+    renderPlainBranchPicker("role_sections", availableSectionIds, checkedSectionIds);
     await renderPagesByModuleOnly("role_pages", assignedPageIds);
   }
   panel.classList.remove("hidden");
@@ -3516,9 +3511,21 @@ async function saveRoleDetails(id, role){
     const { error: uErr } = await sb.from("profiles").update({ username }).eq("id", id);
     if(uErr) throw uErr;
 
-    // Branches/profile_sections is no longer set from here — removed per
-    // request. Whatever Branch scoping an account already has stays exactly
-    // as-is; this Save only ever touches Username and Pages now.
+    // Branch/Section assignment — the actual, live scoping used everywhere
+    // else in the app (Employee Directory, every "your Branch" dropdown,
+    // etc). An Admin can only grant a Branch they themselves hold, same
+    // rule as Pages; enforced here client-side and it's also all the RLS
+    // on profile_sections currently checks for an Admin actor.
+    const availableSectionIds = ME.role === "super_admin" ? ALL_SECTIONS.map(s=>s.id) : (ME.sectionIds || []);
+    const sectionIds = getCheckedPlainBranches("role_sections").filter(sid => availableSectionIds.indexOf(sid) !== -1);
+    const { error: delSecErr } = await sb.from("profile_sections").delete().eq("profile_id", id);
+    if(delSecErr) throw delSecErr;
+    if(sectionIds.length){
+      const sectionRows = sectionIds.map(sid=>({ profile_id: id, section_id: sid }));
+      const { error: insSecErr } = await sb.from("profile_sections").insert(sectionRows);
+      if(insSecErr) throw insSecErr;
+    }
+
     const pageIds = getCheckedPagesOnly("role_pages");
     const { error: delPageErr } = await sb.from("assigned_pages").delete().eq("profile_id", id);
     if(delPageErr) throw delPageErr;
@@ -3530,6 +3537,28 @@ async function saveRoleDetails(id, role){
 
     status.className = "status ok"; status.textContent = "✅ Details saved.";
     await logActivity("account_edited", ME.username + " edited account details for \"" + username + "\"");
+
+    // The ONE action that grants or revokes HR Admin status: ticking
+    // "Manage Staff" here upserts hr_branch_admins for this person's own
+    // Branch; unticking it removes them. Keeps HR status and page access
+    // always in sync — no separate control anywhere else to drift out of
+    // step with this one.
+    if(MANAGE_STAFF_PAGE_ID){
+      const grantingHr = pageIds.indexOf(MANAGE_STAFF_PAGE_ID) !== -1;
+      const targetEmp = EMPLOYEES.find(e => e.linked_profile_id === id);
+      if(grantingHr && targetEmp && targetEmp.branch){
+        const { error: hrErr } = await sb.from("hr_branch_admins")
+          .upsert({ profile_id: id, branch: targetEmp.branch, granted_by: ME.id }, { onConflict: "profile_id" });
+        if(hrErr){ status.textContent += " (Note: could not set HR Admin status: " + hrErr.message + ")"; }
+        else HR_ADMIN_BY_PROFILE[id] = targetEmp.branch;
+      } else if(grantingHr && (!targetEmp || !targetEmp.branch)){
+        status.textContent += " (Note: \"Manage Staff\" was ticked, but this account isn't linked to a staff record with a Branch, so HR Admin status could not be set.)";
+      } else if(!grantingHr){
+        const { error: hrErr } = await sb.from("hr_branch_admins").delete().eq("profile_id", id);
+        if(!hrErr) delete HR_ADMIN_BY_PROFILE[id];
+      }
+    }
+
     await loadRoleDropdown();
   }catch(e){
     status.className = "status err"; status.textContent = "❌ " + e.message;
