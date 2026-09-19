@@ -26,20 +26,32 @@
   function buildBanner(){
     const bar = document.createElement("div");
     bar.id = "pwaInstallBar";
-    bar.style.cssText = "position:fixed;left:0;right:0;bottom:0;z-index:9999;background:#12203c;color:#fff;padding:12px 16px;display:flex;align-items:center;gap:12px;box-shadow:0 -4px 16px rgba(0,0,0,.25);font-family:inherit;";
-    bar.innerHTML =
-      '<div style="flex:1;font-size:13px;line-height:1.4;">' +
-        '<b>Install RumbuApp</b><br>' +
-        '<span id="pwaInstallText" style="opacity:.85;font-size:12px;">Add it to your home screen for quick, full-screen access.</span>' +
-      '</div>' +
-      '<button id="pwaInstallBtn" style="background:#c8a34e;color:#12203c;border:0;padding:9px 16px;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;">Install</button>' +
-      '<button id="pwaInstallDismiss" aria-label="Dismiss" style="background:transparent;color:#fff;border:0;font-size:20px;line-height:1;cursor:pointer;padding:4px;">&times;</button>';
+    bar.style.cssText = "position:fixed;left:0;right:0;bottom:0;z-index:9999;background:#12203c;color:#fff;padding:8px 12px;display:flex;align-items:center;gap:10px;box-shadow:0 -4px 16px rgba(0,0,0,.25);font-family:inherit;box-sizing:border-box;min-height:0;";
+
+    const text = document.createElement("div");
+    text.style.cssText = "flex:1 1 auto;min-width:0;font-size:12.5px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+    text.innerHTML = '<b>Install RumbuApp</b> <span id="pwaInstallText" style="opacity:.8;">— add to home screen</span>';
+    bar.appendChild(text);
+
+    const btn = document.createElement("button");
+    btn.id = "pwaInstallBtn";
+    // Explicit overrides for every property a page's own button{} rule
+    // (e.g. login.html's full-width login button) could otherwise leak
+    // through onto this one, since unset properties still fall through
+    // to the page's stylesheet even with inline styles applied.
+    btn.style.cssText = "flex:0 0 auto;width:auto;height:auto;min-height:0;margin:0;background:#c8a34e;color:#12203c;border:0;padding:6px 14px;border-radius:6px;font-size:12.5px;font-weight:700;cursor:pointer;white-space:nowrap;";
+    btn.textContent = "Install";
+    bar.appendChild(btn);
+
+    const dismiss = document.createElement("button");
+    dismiss.id = "pwaInstallDismiss";
+    dismiss.setAttribute("aria-label", "Dismiss");
+    dismiss.style.cssText = "flex:0 0 auto;width:auto;height:auto;min-height:0;margin:0;background:transparent;color:#fff;border:0;font-size:17px;line-height:1;cursor:pointer;padding:2px 4px;";
+    dismiss.innerHTML = "&times;";
+    bar.appendChild(dismiss);
+
     document.body.appendChild(bar);
-
-    document.getElementById("pwaInstallDismiss").onclick = function(){
-      bar.remove();
-    };
-
+    dismiss.onclick = function(){ bar.remove(); };
     return bar;
   }
 
