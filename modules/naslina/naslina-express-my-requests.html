@@ -15,6 +15,8 @@
 </script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="../../auth.js"></script>
+<script src="attachments-modal.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 <style>
   body{padding:20px;}
   .wrap{max-width:1000px;margin:0 auto;}
@@ -115,6 +117,10 @@
     <div class="field"><label>From</label><input type="date" id="fFrom" onchange="renderList()"></div>
     <div class="field"><label>To</label><input type="date" id="fTo" onchange="renderList()"></div>
     <div class="field" style="grid-column:span 2;"><label>Search</label><input type="text" id="fSearch" placeholder="Reference, title or submitter" oninput="renderList()"></div>
+    <div class="field" style="display:flex;gap:8px;align-items:flex-end;">
+      <button class="btn-ghost btn-sm" onclick="exportCSV()">Export CSV</button>
+      <button class="btn-ghost btn-sm" onclick="exportPDF()">Export PDF</button>
+    </div>
   </div>
 </div>
 
@@ -215,8 +221,7 @@ async function loadRequests(){
 }
 window.loadRequests = loadRequests;
 
-function renderList(){
-  const wrap = document.getElementById("listWrap");
+function getFilteredRows(){
   const stageF = document.getElementById("fStage").value;
   const statusF = document.getElementById("fStatus").value;
   const from = document.getElementById("fFrom").value;
@@ -232,6 +237,12 @@ function renderList(){
     const sub = r.employees ? r.employees.full_name : "";
     return ((r.reference_no||"") + " " + (r.title||"") + " " + sub).toLowerCase().indexOf(term) !== -1;
   });
+  return rows;
+}
+
+function renderList(){
+  const wrap = document.getElementById("listWrap");
+  const rows = getFilteredRows();
 
   if(!rows.length){ wrap.innerHTML = "<div class='empty-note'>No requests match these filters.</div>"; return; }
   wrap.innerHTML = "";
@@ -410,18 +421,21 @@ function renderEditPanel(panel, r){
   if(!panel) return;
   STAGED_FILES[r.id] = { request_form: [], other_document: [], proforma_invoice: [], proforma_invoice_2: [] };
   panel.innerHTML = `
+    <div style="margin-bottom:10px;">
+      <button class="btn-ghost btn-sm" onclick="previewExistingAttachments('${r.id}', '${r.reference_no}')">\u{1F4CE} Preview Currently Uploaded Files</button>
+    </div>
     <div class="field"><label>Title *</label><input id="et-title-${r.id}" value="${(r.title||"").replace(/"/g,'&quot;')}"></div>
     <div class="field"><label>Description</label><textarea id="et-desc-${r.id}">${r.description || ""}</textarea></div>
     <div class="form-row">
-      <div class="field"><label>Total Amount *</label><input type="number" step="0.01" id="et-amount-${r.id}" value="${r.total_amount}"></div>
+      <div class="field"><label>Total Amount *</label><input type="number" step="0.01" min="0" id="et-amount-${r.id}" value="${r.total_amount}"></div>
       <div class="field"><label>Project Duration in Days *</label><input type="number" min="1" id="et-duration-${r.id}" value="${r.project_duration_days}"></div>
     </div>
     <div class="field">
-      <label>Add / Replace Attachments (optional — leave blank to keep what you already submitted)</label>
-      <div class="dropzone" data-req="${r.id}" data-target="request_form" data-multi="false" data-accept="image/*">
-        <div class="dz-action">Upload image — Request form</div>
+      <label>Add / Replace Attachments (optional — leave blank to keep what you already submitted; preview above first if you're unsure a reupload is needed)</label>
+      <div class="dropzone" data-req="${r.id}" data-target="request_form" data-multi="false">
+        <div class="dz-action">Upload file — Request form</div>
         <div class="dz-hint">Drag and drop file or paste from clipboard</div>
-        <input type="file" accept="image/*">
+        <input type="file">
       </div>
       <div class="file-list" data-list="${r.id}-request_form"></div>
       <div class="dropzone" style="margin-top:8px;" data-req="${r.id}" data-target="other_document" data-multi="true">
@@ -430,10 +444,10 @@ function renderEditPanel(panel, r){
         <input type="file" multiple>
       </div>
       <div class="file-list" data-list="${r.id}-other_document"></div>
-      <div class="dropzone" style="margin-top:8px;" data-req="${r.id}" data-target="proforma_invoice" data-multi="false" data-accept="image/*">
-        <div class="dz-action">Upload image — Pre-former Invoice</div>
+      <div class="dropzone" style="margin-top:8px;" data-req="${r.id}" data-target="proforma_invoice" data-multi="false">
+        <div class="dz-action">Upload file — Pre-former Invoice</div>
         <div class="dz-hint">Drag and drop file or paste from clipboard</div>
-        <input type="file" accept="image/*">
+        <input type="file">
       </div>
       <div class="file-list" data-list="${r.id}-proforma_invoice"></div>
     </div>
@@ -442,6 +456,15 @@ function renderEditPanel(panel, r){
   `;
   wireDropzonesFor(panel, r.id);
 }
+
+async function previewExistingAttachments(requestId, referenceNo){
+  const { data: attachments, error } = await sb.from("naslina_request_attachments").select("*").eq("request_id", requestId);
+  if(error){ alert("Could not load attachments: " + error.message); return; }
+  if(typeof showAttachmentsModal === "function"){
+    showAttachmentsModal("Currently Uploaded \u2014 " + referenceNo, attachments || []);
+  }
+}
+window.previewExistingAttachments = previewExistingAttachments;
 
 function wireDropzonesFor(container, requestId){
   container.querySelectorAll(".dropzone").forEach(zone=>{
@@ -472,9 +495,17 @@ function renderFileList(requestId, key){
   const wrap = document.querySelector(`.file-list[data-list="${requestId}-${key}"]`);
   if(!wrap) return;
   wrap.innerHTML = STAGED_FILES[requestId][key].map((f, i) =>
-    `<div class="file-chip"><span>${f.name}</span><button class="fc-remove" onclick="removeStagedFile('${requestId}','${key}',${i})">&times;</button></div>`
+    `<div class="file-chip"><span>${f.name}</span><span><button type="button" onclick="previewStagedFile('${requestId}','${key}',${i})" style="background:none;border:none;color:var(--primary);font-weight:600;cursor:pointer;margin-right:8px;padding:0;">Preview</button><button class="fc-remove" onclick="removeStagedFile('${requestId}','${key}',${i})">&times;</button></span></div>`
   ).join("");
 }
+
+function previewStagedFile(requestId, key, idx){
+  const f = STAGED_FILES[requestId][key][idx];
+  if(!f) return;
+  const url = URL.createObjectURL(f);
+  previewFileDirect(url, f.name);
+}
+window.previewStagedFile = previewStagedFile;
 
 function removeStagedFile(requestId, key, idx){
   STAGED_FILES[requestId][key].splice(idx, 1);
@@ -491,6 +522,10 @@ async function resubmit(requestId){
 
   if(!title || !amount || !duration){
     status.className = "status err"; status.textContent = "Title, Total Amount and Project Duration are required.";
+    return;
+  }
+  if(Number(amount) < 0 || Number(duration) < 0){
+    status.className = "status err"; status.textContent = "Total Amount and Project Duration cannot be negative.";
     return;
   }
 
@@ -526,6 +561,120 @@ async function resubmit(requestId){
   }
 }
 window.resubmit = resubmit;
+
+// ---- Export (respects whatever filters, including date range, are
+// currently applied — exports exactly what's on screen) ----
+function csvEscape(v){
+  const s = (v == null ? "" : String(v));
+  return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+function exportRowsToTable(rows){
+  const headers = ["Reference", "Title", "Status", "Current Stage", "Amount", "Currency", "Duration (days)", "Request Date", "Submitted By"];
+  const body = rows.map(r => {
+    const stage = STAGES_BY_ID[r.current_stage_id];
+    const submitter = r.employees ? r.employees.full_name : "";
+    return [
+      r.reference_no || "",
+      r.title || "",
+      r.status || "",
+      stage ? stage.stage_name : "",
+      r.total_amount != null ? Number(r.total_amount) : "",
+      r.currency || "",
+      r.project_duration_days != null ? r.project_duration_days : "",
+      r.request_date ? new Date(r.request_date).toLocaleDateString() : "",
+      submitter
+    ];
+  });
+  return { headers, body };
+}
+
+function exportCSV(){
+  const rows = getFilteredRows();
+  if(!rows.length){ alert("No requests match the current filters to export."); return; }
+  const { headers, body } = exportRowsToTable(rows);
+  const lines = [headers.map(csvEscape).join(",")].concat(body.map(row => row.map(csvEscape).join(",")));
+  const csvContent = lines.join("\r\n");
+  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "naslina_express_requests_" + new Date().toISOString().slice(0,10) + ".csv";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+window.exportCSV = exportCSV;
+
+function exportPDF(){
+  const rows = getFilteredRows();
+  if(!rows.length){ alert("No requests match the current filters to export."); return; }
+  if(typeof window.jspdf === "undefined"){ alert("PDF export library did not load. Check your connection and try again."); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: "landscape" });
+  const { headers, body } = exportRowsToTable(rows);
+
+  doc.setFontSize(13);
+  doc.text("Naslina Express \u2014 Requests", 14, 14);
+  doc.setFontSize(9);
+  const from = document.getElementById("fFrom").value;
+  const to = document.getElementById("fTo").value;
+  const rangeLabel = (from || to) ? ("Date range: " + (from || "\u2014") + " to " + (to || "\u2014")) : "All dates";
+  doc.text(rangeLabel + " \u2014 Exported " + new Date().toLocaleString(), 14, 20);
+
+  drawSimpleTable(doc, headers, body, 26);
+
+  doc.save("naslina_express_requests_" + new Date().toISOString().slice(0,10) + ".pdf");
+}
+
+// Hand-rolled table renderer — no autoTable plugin dependency (jsPDF
+// plugin/version pairings for autoTable are fragile via plain script
+// tags; this only needs jsPDF core, which is far more reliable).
+function drawSimpleTable(doc, headers, body, startY){
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const marginX = 14;
+  const usableWidth = pageWidth - marginX * 2;
+  const colWidths = headers.map(() => usableWidth / headers.length);
+  const rowHeight = 8;
+  let y = startY;
+
+  function drawRow(cells, isHeader){
+    let x = marginX;
+    doc.setFontSize(8);
+    doc.setFont(undefined, isHeader ? "bold" : "normal");
+    if(isHeader){
+      doc.setFillColor(18, 32, 60);
+      doc.setTextColor(255, 255, 255);
+      doc.rect(marginX, y, usableWidth, rowHeight, "F");
+    } else {
+      doc.setTextColor(0, 0, 0);
+    }
+    cells.forEach((cell, i) => {
+      const text = cell == null ? "" : String(cell);
+      const truncated = doc.splitTextToSize(text, colWidths[i] - 4)[0] || "";
+      doc.text(truncated, x + 2, y + rowHeight - 2.5);
+      x += colWidths[i];
+    });
+    if(!isHeader){
+      doc.setDrawColor(220, 220, 220);
+      doc.line(marginX, y + rowHeight, marginX + usableWidth, y + rowHeight);
+    }
+    y += rowHeight;
+  }
+
+  drawRow(headers, true);
+  body.forEach(row => {
+    if(y + rowHeight > pageHeight - 14){
+      doc.addPage();
+      y = 14;
+      drawRow(headers, true);
+    }
+    drawRow(row, false);
+  });
+}
+window.exportPDF = exportPDF;
 
 init();
 </script>

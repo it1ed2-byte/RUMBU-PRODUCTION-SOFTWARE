@@ -15,6 +15,7 @@
 </script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="../../auth.js"></script>
+<script src="attachments-modal.js"></script>
 <style>
   body{padding:20px;}
   .wrap{max-width:900px;margin:0 auto;}
@@ -65,18 +66,10 @@
     </div>
     <div class="field">
       <label>Recipient Account Name: *</label>
-      <select id="f_beneficiary_id" onchange="onBeneficiaryChange()">
+      <select id="f_beneficiary_id">
         <option value="">— Select —</option>
       </select>
       <div class="req-note">Company Account Number</div>
-    </div>
-  </div>
-
-  <div class="field" id="newBeneficiaryBlock" style="display:none;">
-    <div class="form-row-3">
-      <div class="field"><label>New Recipient Name</label><input id="nb_name"></div>
-      <div class="field"><label>Account Number</label><input id="nb_account_number"></div>
-      <div class="field"><label>Bank</label><input id="nb_bank"></div>
     </div>
   </div>
 
@@ -108,8 +101,12 @@
     <div class="field">
       <label>Total Amount *</label>
       <div class="amount-row">
-        <input type="number" step="0.01" id="f_total_amount" placeholder="₦">
-        <select id="f_currency"><option value="NGN" selected>NGN</option></select>
+        <input type="number" step="0.01" min="0" id="f_total_amount" placeholder="Amount">
+        <select id="f_currency">
+          <option value="NGN" selected>NGN</option>
+          <option value="USD">USD</option>
+          <option value="EUR">EUR</option>
+        </select>
       </div>
       <div class="req-note">Total request amount</div>
     </div>
@@ -121,11 +118,11 @@
 
   <div class="field">
     <label>Request form *</label>
-    <div class="dropzone" data-target="request_form" data-multi="false" data-accept="image/*">
-      <div class="dz-icon">🖼️</div>
-      <div class="dz-action">Upload image</div>
+    <div class="dropzone" data-target="request_form" data-multi="false">
+      <div class="dz-icon">📄</div>
+      <div class="dz-action">Upload file</div>
       <div class="dz-hint">Drag and drop file or paste from clipboard</div>
-      <input type="file" accept="image/*">
+      <input type="file">
     </div>
     <div class="file-list" data-list="request_form"></div>
     <div class="req-note">Upload the request form</div>
@@ -133,7 +130,7 @@
 
   <div class="field">
     <label>Other Relevant Document</label>
-    <div class="dropzone" data-target="other_document" data-multi="true" data-accept="*">
+    <div class="dropzone" data-target="other_document" data-multi="true">
       <div class="dz-icon">📎</div>
       <div class="dz-action">Upload files</div>
       <div class="dz-hint">Drag and drop files or paste from clipboard</div>
@@ -144,11 +141,11 @@
 
   <div class="field">
     <label>Pre-former Invoice</label>
-    <div class="dropzone" data-target="proforma_invoice" data-multi="false" data-accept="image/*">
-      <div class="dz-icon">🖼️</div>
-      <div class="dz-action">Upload image</div>
+    <div class="dropzone" data-target="proforma_invoice" data-multi="false">
+      <div class="dz-icon">📄</div>
+      <div class="dz-action">Upload file</div>
       <div class="dz-hint">Drag and drop file or paste from clipboard</div>
-      <input type="file" accept="image/*">
+      <input type="file">
     </div>
     <div class="file-list" data-list="proforma_invoice"></div>
     <div class="req-note">Upload pre-former invoice or quotation</div>
@@ -156,11 +153,11 @@
 
   <div class="field">
     <label>Pre-former Invoice2</label>
-    <div class="dropzone" data-target="proforma_invoice_2" data-multi="false" data-accept="image/*">
-      <div class="dz-icon">🖼️</div>
-      <div class="dz-action">Upload image</div>
+    <div class="dropzone" data-target="proforma_invoice_2" data-multi="false">
+      <div class="dz-icon">📄</div>
+      <div class="dz-action">Upload file</div>
       <div class="dz-hint">Drag and drop file or paste from clipboard</div>
-      <input type="file" accept="image/*">
+      <input type="file">
     </div>
     <div class="file-list" data-list="proforma_invoice_2"></div>
   </div>
@@ -224,15 +221,8 @@ async function loadBeneficiaries(){
   const sel = document.getElementById("f_beneficiary_id");
   if(error){ sel.innerHTML = "<option value=''>Error loading recipients</option>"; return; }
   sel.innerHTML = '<option value="">\u2014 Select \u2014</option>' +
-    (data||[]).map(b => `<option value="${b.id}">${b.name} \u2014 ${b.account_number} (${b.bank})</option>`).join("") +
-    '<option value="__new__">+ Add New Recipient</option>';
+    (data||[]).map(b => `<option value="${b.id}">${b.name} \u2014 ${b.account_number} (${b.bank})</option>`).join("");
 }
-
-function onBeneficiaryChange(){
-  const v = document.getElementById("f_beneficiary_id").value;
-  document.getElementById("newBeneficiaryBlock").style.display = (v === "__new__") ? "block" : "none";
-}
-window.onBeneficiaryChange = onBeneficiaryChange;
 
 async function loadCompanies(){
   const { data, error } = await sb.from("naslina_companies").select("id,name").eq("is_active", true).order("name");
@@ -288,9 +278,17 @@ function stageFiles(key, multi, fileList){
 function renderFileList(key){
   const wrap = document.querySelector(`.file-list[data-list="${key}"]`);
   wrap.innerHTML = STAGED_FILES[key].map((f, i) =>
-    `<div class="file-chip"><span>${f.name}</span><button class="fc-remove" onclick="removeStagedFile('${key}',${i})">&times;</button></div>`
+    `<div class="file-chip"><span>${f.name}</span><span><button type="button" onclick="previewStagedFile('${key}',${i})" style="background:none;border:none;color:var(--primary);font-weight:600;cursor:pointer;margin-right:10px;padding:0;">Preview</button><button class="fc-remove" onclick="removeStagedFile('${key}',${i})">&times;</button></span></div>`
   ).join("");
 }
+
+function previewStagedFile(key, idx){
+  const f = STAGED_FILES[key][idx];
+  if(!f) return;
+  const url = URL.createObjectURL(f);
+  previewFileDirect(url, f.name);
+}
+window.previewStagedFile = previewStagedFile;
 
 function removeStagedFile(key, idx){
   STAGED_FILES[key].splice(idx, 1);
@@ -315,6 +313,10 @@ async function submitRequest(){
     status.className = "status err"; status.textContent = "Please fill in every required (*) field.";
     return;
   }
+  if(Number(totalAmount) < 0 || Number(duration) < 0){
+    status.className = "status err"; status.textContent = "Total Amount and Project Duration cannot be negative.";
+    return;
+  }
   if(!STAGED_FILES.request_form.length){
     status.className = "status err"; status.textContent = "Request form upload is required.";
     return;
@@ -324,23 +326,9 @@ async function submitRequest(){
   status.className = "status"; status.textContent = "Submitting...";
 
   try{
-    // 1) Resolve or create the beneficiary.
-    let beneficiaryId = beneficiarySel;
-    if(beneficiarySel === "__new__"){
-      const nb = {
-        name: document.getElementById("nb_name").value.trim(),
-        account_number: document.getElementById("nb_account_number").value.trim(),
-        bank: document.getElementById("nb_bank").value.trim(),
-        linked_company: "Naslina",
-        created_by: MY_EMPLOYEE_ID || null
-      };
-      if(!nb.name || !nb.account_number || !nb.bank) throw new Error("New recipient name, account number and bank are all required.");
-      const { data: inserted, error: nbErr } = await sb.from("beneficiaries").insert(nb).select("id").single();
-      if(nbErr) throw nbErr;
-      beneficiaryId = inserted.id;
-    }
+    const beneficiaryId = beneficiarySel;
 
-    // 2) Look up the first workflow stage (Task-Force Check).
+    // 1) Look up the first workflow stage (Task-Force Check).
     const { data: firstStage, error: stageErr } = await sb.from("naslina_workflow_stages")
       .select("id").eq("sequence_order", 1).single();
     if(stageErr) throw stageErr;
