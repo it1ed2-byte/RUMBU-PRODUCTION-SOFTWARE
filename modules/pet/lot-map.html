@@ -11,6 +11,8 @@
 </script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="../../auth.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <style>
   body{padding:20px;}
   .wrap{max-width:1100px;margin:0 auto;}
@@ -39,6 +41,8 @@
   .modal h4{color:var(--heading);margin:0 0 12px;}
   .detail-row{font-size:13px;padding:6px 0;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;}
   .detail-row:last-child{border-bottom:none;}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;}
+  @media(max-width:640px){ .grid3{grid-template-columns:1fr;} }
 </style>
 </head>
 <body>
@@ -61,6 +65,23 @@
     </div>
     <div class="lot-grid" id="lotGrid"></div>
   </div>
+
+  <div class="card-panel" style="margin-top:16px;">
+    <div style="font-weight:700;font-size:14px;color:var(--heading);margin:0 0 8px;">LOT History Report</div>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Every collection that has ever occupied a LOT, grouped by LOT. Filter by date and/or a specific LOT, then export to PDF for your records.</p>
+    <div class="grid3">
+      <div><label>From Date</label><input type="date" id="lhFrom" onchange="loadLotHistory()"></div>
+      <div><label>To Date</label><input type="date" id="lhTo" onchange="loadLotHistory()"></div>
+      <div><label>LOT</label>
+        <select id="lhLot" onchange="loadLotHistory()"><option value="">All LOTs</option></select>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:10px;">
+      <button class="btn-ghost" onclick="clearLotHistoryFilters()" style="width:100%;">Clear Filters</button>
+      <button onclick="downloadLotHistoryPdf()" style="width:100%;">⬇ Download PDF</button>
+    </div>
+    <div id="lotHistoryWrap" style="margin-top:14px;overflow-x:auto;"></div>
+  </div>
 </div>
 
 <!-- Detail modal -->
@@ -73,7 +94,7 @@
 </div>
 
 <script>
-let ME=null, LOTS=[];
+let ME=null, LOTS=[], LOT_HISTORY_ROWS=[];
 
 async function init(){
   const cs=document.getElementById("connStatus");
@@ -81,6 +102,9 @@ async function init(){
     ME=await requireAuth("../../login.html");
     if(!ME) return;
     await loadLots();
+    document.getElementById("lhLot").innerHTML = '<option value="">All LOTs</option>' +
+      LOTS.map(l=>`<option value="${l.lot_name}">${l.lot_name}</option>`).join("");
+    await loadLotHistory();
     cs.style.color="var(--ok)"; cs.textContent="Live — click any LOT for details.";
   }catch(e){ cs.style.color="var(--bad)"; cs.textContent="Error: "+e.message; }
 }
@@ -134,6 +158,120 @@ function showDetail(id){
 }
 
 function closeModal(){ document.getElementById("modal").classList.remove("open"); }
+
+async function loadLotHistory(){
+  const from = document.getElementById("lhFrom").value;
+  const to = document.getElementById("lhTo").value;
+  const lot = document.getElementById("lhLot").value;
+  const wrap = document.getElementById("lotHistoryWrap");
+
+  let q = sb.from("pet_stage2_qc")
+    .select("offload_location,filled_at,pet_collections(form_number,agent_name,agent_code,section,form_date,status)")
+    .not("offload_location","is",null)
+    .order("filled_at",{ascending:false});
+  if(from) q = q.gte("filled_at", from+"T00:00:00");
+  if(to)   q = q.lte("filled_at", to+"T23:59:59");
+  if(lot)  q = q.eq("offload_location", lot);
+
+  const { data, error } = await q;
+  if(error){ wrap.innerHTML = `<p style="color:var(--bad);font-size:13px;">Error: ${error.message}</p>`; return; }
+
+  LOT_HISTORY_ROWS = data||[];
+  if(!LOT_HISTORY_ROWS.length){ wrap.innerHTML = `<p style="font-size:13px;color:var(--muted);">No history matches these filters.</p>`; return; }
+
+  const byLot = {};
+  LOT_HISTORY_ROWS.forEach(r=>{
+    const key = r.offload_location||"Unassigned";
+    if(!byLot[key]) byLot[key]=[];
+    byLot[key].push(r);
+  });
+
+  wrap.innerHTML = Object.keys(byLot).sort().map(lotName=>{
+    const rows = byLot[lotName];
+    return `<div style="margin-bottom:16px;">
+      <div style="font-weight:700;font-size:13px;color:var(--heading);margin-bottom:6px;">${lotName} (${rows.length})</div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <thead><tr style="text-align:left;border-bottom:2px solid var(--line);">
+          <th style="padding:5px;">Form #</th><th style="padding:5px;">Agent</th><th style="padding:5px;">Section</th>
+          <th style="padding:5px;">Assigned On</th><th style="padding:5px;">Status</th>
+        </tr></thead>
+        <tbody>${rows.map(r=>{
+          const c=r.pet_collections||{};
+          return `<tr style="border-bottom:1px solid var(--line);">
+            <td style="padding:5px;"><b>${c.form_number||"—"}</b></td>
+            <td style="padding:5px;">${c.agent_name||"—"} (${c.agent_code||"—"})</td>
+            <td style="padding:5px;">${c.section||"—"}</td>
+            <td style="padding:5px;">${r.filled_at?new Date(r.filled_at).toLocaleString("en-GB"):"—"}</td>
+            <td style="padding:5px;">${(c.status||"—").replace(/_/g," ")}</td>
+          </tr>`;
+        }).join("")}</tbody>
+      </table>
+    </div>`;
+  }).join("");
+}
+
+function clearLotHistoryFilters(){
+  document.getElementById("lhFrom").value="";
+  document.getElementById("lhTo").value="";
+  document.getElementById("lhLot").value="";
+  loadLotHistory();
+}
+
+function downloadLotHistoryPdf(){
+  if(!LOT_HISTORY_ROWS.length){ alert("Nothing to export — no records match the current filters."); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation:"landscape", unit:"pt", format:"a4" });
+  const navy=[31,56,100];
+
+  doc.setFillColor(navy[0],navy[1],navy[2]);
+  doc.rect(0,0,doc.internal.pageSize.getWidth(),56,"F");
+  doc.setTextColor(255,255,255); doc.setFont("helvetica","bold"); doc.setFontSize(13);
+  doc.text("RUMBU INDUSTRIES GROUP", 30, 24);
+  doc.setFont("helvetica","normal"); doc.setFontSize(10);
+  doc.text("PET Collection — LOT History Report", 30, 40);
+  doc.text("Printed "+new Date().toLocaleString("en-GB"), doc.internal.pageSize.getWidth()-30, 24, {align:"right"});
+
+  doc.setTextColor(60,60,60); doc.setFontSize(9);
+  const from=document.getElementById("lhFrom").value||"—";
+  const to=document.getElementById("lhTo").value||"—";
+  const lot=document.getElementById("lhLot").value||"All";
+  doc.text(`Date range: ${from} to ${to}   |   LOT: ${lot}   |   ${LOT_HISTORY_ROWS.length} records`, 30, 72);
+
+  const body = LOT_HISTORY_ROWS
+    .slice()
+    .sort((a,b)=> (a.offload_location||"").localeCompare(b.offload_location||""))
+    .map(r=>{
+      const c=r.pet_collections||{};
+      return [
+        r.offload_location||"—",
+        c.form_number||"—",
+        (c.agent_name||"—")+(c.agent_code?" ("+c.agent_code+")":""),
+        c.section||"—",
+        r.filled_at?new Date(r.filled_at).toLocaleString("en-GB"):"—",
+        (c.status||"—").replace(/_/g," ")
+      ];
+    });
+
+  doc.autoTable({
+    startY: 84,
+    head: [["LOT","Form #","Agent","Section","Assigned On","Status"]],
+    body,
+    styles:{fontSize:8,cellPadding:4},
+    headStyles:{fillColor:navy,textColor:255,fontStyle:"bold"},
+    alternateRowStyles:{fillColor:[240,244,249]},
+    margin:{left:30,right:30},
+    didDrawPage: function(){
+      const pageCount=doc.internal.getNumberOfPages();
+      doc.setFontSize(8); doc.setTextColor(120,120,120);
+      doc.text("CONFIDENTIAL", 30, doc.internal.pageSize.getHeight()-16);
+      doc.text("Page "+doc.internal.getCurrentPageInfo().pageNumber+" of "+pageCount,
+        doc.internal.pageSize.getWidth()-30, doc.internal.pageSize.getHeight()-16, {align:"right"});
+    }
+  });
+
+  doc.save("PET_LOT_History_"+new Date().toISOString().slice(0,10)+".pdf");
+}
+
 document.getElementById("modal").addEventListener("click",function(e){ if(e.target===this) closeModal(); });
 init();
 </script>
