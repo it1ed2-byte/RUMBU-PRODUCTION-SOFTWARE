@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Manage Export Clients — PET Collection</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme")||"navy"); }catch(e){} })();
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) document.documentElement.setAttribute("data-theme",e.data.rumbuTheme); });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1000px;margin:0 auto;}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  @media(max-width:640px){ .grid2{grid-template-columns:1fr;} }
+  .badge{display:inline-block;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:700;}
+  .badge.active{background:#d1fae5;color:#065f46;}
+  .badge.inactive{background:#fee2e2;color:#991b1b;}
+  .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;justify-content:center;align-items:flex-start;padding:40px 16px;overflow-y:auto;}
+  .modal-overlay.open{display:flex;}
+  .modal{background:var(--card);border-radius:14px;padding:28px;width:100%;max-width:520px;box-shadow:0 8px 32px rgba(0,0,0,.2);}
+  .modal h3{color:var(--heading);margin:0 0 18px;}
+  label{font-size:12px;font-weight:700;display:block;margin:10px 0 4px;color:var(--muted);}
+  input,select,textarea{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);}
+  .btn-row{display:flex;gap:10px;margin-top:18px;}
+  .act-btn{padding:5px 12px;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;}
+  .act-btn.edit{background:#dbeafe;color:#1e40af;}
+  .act-btn.toggle{background:#fef3c7;color:#92400e;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back</button>
+  <div id="connStatus" style="font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);">Loading...</div>
+
+  <div class="card-panel">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+      <h3 style="margin:0;color:var(--heading);">PET Export Clients</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <input type="text" id="searchInput" placeholder="Search name or code..." style="width:220px;" oninput="filterTable()">
+        <button onclick="openAdd()">+ Add Client</button>
+      </div>
+    </div>
+    <div class="table-wrap" style="margin-top:14px;">
+      <div class="table-scroll">
+        <table id="clientTable">
+          <thead><tr>
+            <th>Code</th><th>Client Name</th><th>Contact Person</th><th>Phone</th><th>Email</th><th>Status</th><th>Actions</th>
+          </tr></thead>
+          <tbody id="clientBody"><tr><td colspan="7" style="text-align:center;color:var(--muted);">Loading...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <h3 id="modalTitle">Add Client</h3>
+    <label>Client Code <span style="color:var(--muted);font-weight:400;">(auto-generated)</span></label>
+    <input type="text" id="fCode" readonly style="background:var(--bg);">
+    <label>Client Name *</label>
+    <input type="text" id="fName" placeholder="Full legal / trading name">
+    <div class="grid2">
+      <div>
+        <label>Contact Person</label>
+        <input type="text" id="fContact" placeholder="Name of primary contact">
+      </div>
+      <div>
+        <label>Phone Number</label>
+        <input type="tel" id="fPhone" placeholder="+234...">
+      </div>
+    </div>
+    <label>Email</label>
+    <input type="email" id="fEmail" placeholder="contact@client.com">
+    <label>Address</label>
+    <textarea id="fAddress" rows="2" placeholder="Full address"></textarea>
+    <div class="btn-row">
+      <button onclick="saveClient()">Save Client</button>
+      <button class="btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>
+    <div id="modalStatus" style="margin-top:10px;font-size:13px;font-weight:700;min-height:16px;"></div>
+  </div>
+</div>
+
+<script>
+let ME = null, CLIENTS = [], EDITING_ID = null;
+
+async function init(){
+  const cs = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    await loadClients();
+    cs.style.color="var(--ok)"; cs.textContent="Connected.";
+  }catch(e){
+    cs.style.color="var(--bad)"; cs.textContent="Error: "+e.message;
+  }
+}
+
+async function loadClients(){
+  const { data, error } = await sb.from("pet_export_clients").select("*").order("client_code");
+  if(error) throw error;
+  CLIENTS = data || [];
+  renderTable(CLIENTS);
+}
+
+function renderTable(list){
+  const body = document.getElementById("clientBody");
+  if(!list.length){ body.innerHTML=`<tr><td colspan="7" style="text-align:center;color:var(--muted);">No clients found.</td></tr>`; return; }
+  body.innerHTML = list.map(c=>`<tr>
+    <td><b>${c.client_code}</b></td>
+    <td>${c.client_name}</td>
+    <td>${c.contact_person||"—"}</td>
+    <td>${c.phone||"—"}</td>
+    <td>${c.email||"—"}</td>
+    <td><span class="badge ${c.is_active?'active':'inactive'}">${c.is_active?'Active':'Inactive'}</span></td>
+    <td>
+      <button class="act-btn edit" onclick="openEdit(${c.id})">Edit</button>
+      <button class="act-btn toggle" onclick="toggleClient(${c.id},${c.is_active})">${c.is_active?'Deactivate':'Activate'}</button>
+    </td>
+  </tr>`).join("");
+}
+
+function filterTable(){
+  const q = document.getElementById("searchInput").value.toLowerCase();
+  renderTable(CLIENTS.filter(c=> (c.client_name+c.client_code).toLowerCase().includes(q)));
+}
+
+async function generateCode(){
+  const { data } = await sb.from("pet_export_clients").select("client_code").order("id",{ascending:false}).limit(1);
+  if(!data||!data.length) return "CLT-001";
+  const num = parseInt((data[0].client_code||"CLT-000").split("-")[1]||"0") + 1;
+  return "CLT-" + String(num).padStart(3,"0");
+}
+
+async function openAdd(){
+  EDITING_ID = null;
+  document.getElementById("modalTitle").textContent = "Add Client";
+  clearForm();
+  document.getElementById("fCode").value = await generateCode();
+  document.getElementById("modal").classList.add("open");
+}
+
+function openEdit(id){
+  EDITING_ID = id;
+  const c = CLIENTS.find(x=>x.id===id);
+  if(!c) return;
+  document.getElementById("modalTitle").textContent = "Edit Client";
+  document.getElementById("fCode").value = c.client_code;
+  document.getElementById("fName").value = c.client_name;
+  document.getElementById("fContact").value = c.contact_person||"";
+  document.getElementById("fPhone").value = c.phone||"";
+  document.getElementById("fEmail").value = c.email||"";
+  document.getElementById("fAddress").value = c.address||"";
+  document.getElementById("modalStatus").textContent = "";
+  document.getElementById("modal").classList.add("open");
+}
+
+function clearForm(){
+  ["fName","fContact","fPhone","fEmail","fAddress"].forEach(id=>document.getElementById(id).value="");
+  document.getElementById("modalStatus").textContent = "";
+}
+
+function closeModal(){ document.getElementById("modal").classList.remove("open"); }
+
+async function saveClient(){
+  const st = document.getElementById("modalStatus");
+  const name = document.getElementById("fName").value.trim();
+  if(!name){ st.style.color="var(--bad)"; st.textContent="Client name is required."; return; }
+
+  const payload = {
+    client_code:     document.getElementById("fCode").value,
+    client_name:     name,
+    contact_person:  document.getElementById("fContact").value.trim()||null,
+    phone:           document.getElementById("fPhone").value.trim()||null,
+    email:           document.getElementById("fEmail").value.trim()||null,
+    address:         document.getElementById("fAddress").value.trim()||null,
+  };
+
+  st.style.color="var(--muted)"; st.textContent="Saving...";
+  const { error } = EDITING_ID
+    ? await sb.from("pet_export_clients").update(payload).eq("id", EDITING_ID)
+    : await sb.from("pet_export_clients").insert(payload);
+
+  if(error){ st.style.color="var(--bad)"; st.textContent="Error: "+error.message; return; }
+  st.style.color="var(--ok)"; st.textContent="Saved.";
+  await loadClients();
+  setTimeout(closeModal, 800);
+}
+
+async function toggleClient(id, current){
+  if(!confirm(`${current?"Deactivate":"Activate"} this client?`)) return;
+  const { error } = await sb.from("pet_export_clients").update({ is_active: !current }).eq("id", id);
+  if(error){ alert("Error: "+error.message); return; }
+  await loadClients();
+}
+
+document.getElementById("modal").addEventListener("click", function(e){ if(e.target===this) closeModal(); });
+init();
+</script>
+</body>
+</html>
