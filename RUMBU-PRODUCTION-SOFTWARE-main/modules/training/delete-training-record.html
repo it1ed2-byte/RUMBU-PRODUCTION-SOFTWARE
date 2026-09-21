@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Delete Training Record</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+body { font-family:var(--sans); background:var(--bg); margin: 0; padding: 20px; display: flex; justify-content: center; }
+.container { width: 100%; max-width: 500px; background:var(--card); padding: 20px; border-radius: 14px; box-shadow: 0 8px 20px rgba(0,0,0,.1); }
+h2 { text-align: center; margin-bottom: 15px; }
+input { width: 100%; padding: 12px; border-radius: 10px; border: 1px solid var(--line); margin-top: 10px; box-sizing: border-box; }
+button { width: 100%; padding: 12px; margin-top: 10px; border: none; border-radius: 10px; background: #111; color: #fff; cursor: pointer; font-size: 15px; }
+button:hover { background: #000; }
+.card { margin-top: 15px; padding: 15px; background:var(--bg); border-radius: 12px; }
+.danger { background: #d9534f; }
+.danger:hover { background: #c9302c; }
+p { margin: 5px 0; font-size: 14px; }
+.gate-note { text-align: center; font-size: 12px; color: #888; margin-top: 10px; }
+.hidden { display: none; }
+#status { font-size:12px; text-align:center; font-weight:bold; margin-top:8px; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+</head>
+<body>
+
+<div class="container" id="statusBox">
+  <div id="status">Checking your session...</div>
+</div>
+
+<div class="container hidden" id="appBox">
+  <h2>Delete Training Record</h2>
+  <input id="staffId" placeholder="Enter Staff ID">
+  <button onclick="search()">SEARCH LAST RECORD</button>
+  <div id="result"></div>
+</div>
+
+<script>
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY, "Content-Type": "application/json" }; }
+
+let STAFF_ROWS = [], TRAINING_TABLE_ROWS = [], TRAINING_CODE_ROWS = [];
+
+// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
+async function fetchAllRows(table, query){
+  let all = [], offset = 0; const pageSize = 1000;
+  const q = query || "";
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=*" + q, { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+
+
+async function init(){
+  const status = document.getElementById("status");
+  try{
+    const me = await requireAuth("../../login.html");
+    if(!me) return;
+
+    const [s,t,c] = await Promise.all([
+      fetchAllRows("staff_list",""),
+      fetchAllRows("training_table",""),
+      fetchAllRows("training_code","")
+    ]);
+    STAFF_ROWS = s;
+    TRAINING_TABLE_ROWS = t;
+    TRAINING_CODE_ROWS = c;
+    document.getElementById("statusBox").classList.add("hidden");
+    document.getElementById("appBox").classList.remove("hidden");
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+function getStaffDetails(staffId){
+  const row = STAFF_ROWS.find(r=>r.staff_id===staffId);
+  if(!row) return { status: "NOT_REGISTERED" };
+  return { status:"FOUND", Staff_Name: row.staff_name, Department: row.department, Section: row.section };
+}
+
+function search(){
+  const staffId = document.getElementById("staffId").value;
+  if(!staffId){ alert("Enter Staff ID"); return; }
+
+  const records = TRAINING_TABLE_ROWS.filter(r=>r.staff_id===staffId)
+    .slice().sort((a,b)=>(b.created_at||"").localeCompare(a.created_at||""));
+
+  if(!records.length){
+    document.getElementById("result").innerHTML = "<p style='color:red'>No training record found</p>";
+    return;
+  }
+
+  const r = records[0];
+  document.getElementById("result").innerHTML = `
+    <div class="card">
+      <p><b>Name:</b> ${r.staff_name||""}</p>
+      <p><b>Department:</b> ${r.department||""}</p>
+      <p><b>Section:</b> ${r.section||""}</p>
+      <hr>
+      <p><b>Last Training Code:</b> ${r.training_code||""}</p>
+      <p><b>Description:</b> ${r.descriptions||""}</p>
+      <hr>
+      <button class="danger" onclick="deleteRecord(${r.id})">DELETE THIS RECORD</button>
+    </div>
+  `;
+}
+
+async function deleteRecord(id){
+  if(!confirm("Are you sure you want to delete this record?")) return;
+  try{
+    const res = await fetch(SUPABASE_URL + "/rest/v1/training_table?id=eq." + id, { method:"delete", headers: authHeaders() });
+    if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
+    TRAINING_TABLE_ROWS = TRAINING_TABLE_ROWS.filter(r=>String(r.id)!==String(id));
+    alert("🗑️ Deleted Successfully");
+    document.getElementById("result").innerHTML = "";
+    document.getElementById("staffId").value = "";
+  }catch(e){
+    alert("Error: " + (e.message||e));
+  }
+}
+
+init();
+</script>
+</body>
+</html>

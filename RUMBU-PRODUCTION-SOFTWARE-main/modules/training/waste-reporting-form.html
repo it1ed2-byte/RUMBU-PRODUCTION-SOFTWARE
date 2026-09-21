@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Waste Reporting Form</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--red-dark:#a5281b;--green:#1d8a4e;--green-dark:#156d3d;}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;color:var(--text);}
+  .wrap{max-width:720px;margin:0 auto;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;}
+  .card h3{color:var(--navy);margin:0 0 4px;font-size:16px;}
+  .card .sub{color:var(--blue);font-size:12px;margin:0 0 14px;}
+  label{display:block;font-size:12px;font-weight:bold;color:var(--text);margin:10px 0 4px;}
+  .req{color:var(--red);}
+  input,select{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  .context{background:#f4f7fb;border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:16px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;}
+  .ctx-label{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);font-weight:bold;margin-bottom:5px;}
+  select.locked{background:#e6ecf5;color:var(--navy);font-weight:bold;border:1px solid #cdd7e6;cursor:default;}
+  .btn-row{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap;}
+  button.primary,button.success{flex:1 1 160px;padding:12px;border:none;border-radius:8px;font-weight:bold;font-size:15px;cursor:pointer;font-family:inherit;color:#fff;}
+  button.primary{background:var(--blue);} button.primary:hover{background:var(--blue-dark);}
+  button.success{background:var(--green);} button.success:hover{background:var(--green-dark);}
+  button:disabled{opacity:.6;cursor:not-allowed;}
+  .badge{display:inline-block;background:var(--navy);color:#fff;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:bold;}
+  .status{margin-top:12px;font-weight:bold;font-size:14px;min-height:18px;}
+  .status.ok{color:var(--green);} .status.err{color:var(--red);}
+  table{width:100%;border-collapse:collapse;margin-top:16px;font-size:13px;}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;}
+  thead th{background:var(--navy);color:#fff;font-size:12px;}
+  tbody tr:nth-child(even){background:#f6f8fb;}
+  .row-del{background:var(--red);color:#fff;border:none;padding:5px 12px;border-radius:5px;cursor:pointer;font-family:inherit;}
+  .row-del:hover{background:var(--red-dark);}
+  .hint{font-size:12px;color:var(--muted);margin-top:8px;}
+  .hidden{display:none;}
+  .gate-card{max-width:420px;margin:10px auto;}
+  #connStatus{text-align:center;font-size:12px;font-weight:bold;margin-bottom:10px;}
+  .note{font-size:11px;color:#8a6d00;background:#fff8e1;border:1px dashed #d4a017;padding:8px;border-radius:8px;margin-top:10px;}
+  @media(max-width:520px){.grid{grid-template-columns:1fr;}.context{grid-template-columns:1fr;}}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+</head>
+<body>
+<div class="wrap">
+<div id="connStatus">Checking your session...</div>
+
+<div class="card hidden" id="formBox">
+  <h3>New Waste Entry <span class="badge" id="deptBadge"></span></h3>
+  <p class="sub">All fields are required &middot; weight in kg</p>
+
+  <div class="context" id="contextPanel">
+    <div><div class="ctx-label">Section</div><select id="section" onchange="refreshTypes()"></select></div>
+    <div><div class="ctx-label">Department</div><select id="department" onchange="onDepartmentChanged()"></select></div>
+    <div><div class="ctx-label">Measured By</div><select id="measuredBy" class="locked" disabled></select></div>
+  </div>
+
+  <div class="grid">
+    <div><label>Date <span class="req">*</span></label><input type="date" id="date" onchange="refreshTypes()"></div>
+    <div><label>Shift <span class="req">*</span></label>
+      <select id="shift" onchange="refreshTypes()"><option value="" disabled selected>Select Shift</option><option value="Morning">Morning</option><option value="Night">Night</option></select></div>
+    <div><label>Waste Type <span class="req">*</span></label><select id="wasteType"></select></div>
+    <div><label>Waste Weight (kg) <span class="req">*</span></label><input type="number" step="0.01" min="0" id="weight" placeholder="0"></div>
+  </div>
+
+  <div class="btn-row">
+    <button class="primary" onclick="addToList()">ADD TO LIST</button>
+    <button class="success" id="saveBtn" onclick="saveAndPublish()">SAVE &amp; PUBLISH</button>
+  </div>
+  <div class="status" id="status"></div>
+  <div class="note">Note: "Publish" saves your entries. Emailing a summary to the department head isn't available in this web version (that needed Google's mail service); tell me if you'd like a real email notification added separately.</div>
+  <div id="tableWrap"></div>
+</div>
+</div>
+
+<script>
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY, "Content-Type": "application/json" }; }
+
+// Which waste types apply to each Department — previously tied to a
+// department-specific passcode; now a plain lookup anyone logged in can
+// pick from, since real access control is login + page assignment now.
+const DEPT_CONFIG = {
+  "Extruder 1": { measured: "Extruder 1", waste: ["black lumps","color lumps","black waste","color waste"] },
+  "Extruder 2": { measured: "Extruder 2", waste: ["black lumps","color lumps","black waste","color waste"] },
+  "Extruder":   { measured: "Extruder",   waste: ["black lumps","color lumps","black waste","color waste"] },
+  "Weaving":    { measured: "Weaving",    waste: ["dropping pipe"] },
+  "Twine":      { measured: "Twine",      waste: ["waste"] },
+  "Finishing":  { measured: "Finishing",  waste: ["waste"] },
+  "Recycling":  { measured: "Recycling",  waste: ["black lumps","color lumps","black waste","color waste","dropping pipe","waste"] }
+};
+const SECTION_DISPLAY_MAP = { "Rumbu": "Rumbu", "MamaSannu": "Mama Sannu" };
+
+let WASTE_ROWS = [];
+let wasteList = [];
+
+// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
+// `query` may include extra params like "&order=col.desc" (no leading select).
+async function fetchAllRows(table, query){
+  let all = [], offset = 0; const pageSize = 1000;
+  const q = query || "";
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=*" + q, { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    const me = await requireAuth("../../login.html");
+    if(!me) return;
+
+    const mySections = (me.sectionNames && me.sectionNames.length)
+      ? me.sectionNames.map(s => SECTION_DISPLAY_MAP[s] || s)
+      : ["Rumbu","Mama Sannu"];
+    fillSelect("section", mySections, mySections.length > 1, "Select Section");
+
+    const deptNames = Object.keys(DEPT_CONFIG);
+    document.getElementById("department").innerHTML = '<option value="" disabled selected>Select Department</option>' +
+      deptNames.map(d=>`<option value="${d}">${d}</option>`).join("");
+
+    document.getElementById("date").value = nigeriaDateISO();
+
+    WASTE_ROWS = await fetchAllRows("waste_table", "");
+    document.getElementById("connStatus").classList.add("hidden");
+    document.getElementById("formBox").classList.remove("hidden");
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+function onDepartmentChanged(){
+  const dept = document.getElementById("department").value;
+  const cfg = DEPT_CONFIG[dept];
+  const measuredSelect = document.getElementById("measuredBy");
+  if(cfg){
+    measuredSelect.innerHTML = `<option value="${cfg.measured}">${cfg.measured}</option>`;
+    document.getElementById("deptBadge").textContent = cfg.measured;
+  } else {
+    measuredSelect.innerHTML = "";
+    document.getElementById("deptBadge").textContent = "";
+  }
+  refreshTypes();
+}
+
+function nigeriaDateISO(){
+  const now = new Date();
+  const utcMs = now.getTime() + now.getTimezoneOffset()*60000;
+  const wat = new Date(utcMs + 1*3600000);
+  return wat.getFullYear()+"-"+String(wat.getMonth()+1).padStart(2,"0")+"-"+String(wat.getDate()).padStart(2,"0");
+}
+
+function fillSelect(id, values, withPlaceholder, placeholder){
+  const el = document.getElementById(id);
+  el.innerHTML = "";
+  const single = values.length === 1;
+  if(withPlaceholder && !single) el.innerHTML = '<option value="" disabled selected>'+placeholder+'</option>';
+  values.forEach(v=>{ const o=document.createElement("option"); o.value=v; o.textContent=v; el.appendChild(o); });
+  if(single){ el.value = values[0]; el.disabled = true; el.classList.add("locked"); }
+  else { el.disabled = false; el.classList.remove("locked"); }
+}
+
+
+
+function sel(){
+  return {
+    date: document.getElementById("date").value,
+    shift: document.getElementById("shift").value,
+    section: document.getElementById("section").value,
+    department: document.getElementById("department").value,
+    measuredBy: document.getElementById("measuredBy").value
+  };
+}
+
+function localUsed(){
+  const s = sel();
+  return wasteList.filter(r=>r.Date===s.date && r.Shift===s.shift && r.Section===s.section && r.Department===s.department && r.Measured_by===s.measuredBy).map(r=>r.Waste_Type);
+}
+
+function getRecordedWasteTypes(section, department, measuredBy, date, shift){
+  return WASTE_ROWS.filter(r=>r.date_col===date && r.section===section && r.department===department && r.shift===shift && r.measured_by===measuredBy)
+    .map(r=>r.waste_type);
+}
+
+function refreshTypes(){
+  const dept = document.getElementById("department").value;
+  const cfg = DEPT_CONFIG[dept];
+  if(!cfg) return;
+  const s = sel();
+  let recorded = [];
+  if(s.date && s.shift && s.section && s.department && s.measuredBy){
+    recorded = getRecordedWasteTypes(s.section, s.department, s.measuredBy, s.date, s.shift);
+  }
+  const used = localUsed();
+  const available = cfg.waste.filter(w=>recorded.indexOf(w)===-1 && used.indexOf(w)===-1);
+  const el = document.getElementById("wasteType");
+  el.innerHTML = '<option value="" disabled selected>Select Waste Type</option>';
+  available.forEach(w=>{ const o=document.createElement("option"); o.value=w; o.textContent=w; el.appendChild(o); });
+  if(!available.length) el.innerHTML = '<option value="" disabled selected>All types recorded for this day/shift</option>';
+}
+
+function addToList(){
+  const st = document.getElementById("status");
+  const s = sel();
+  const data = { Date:s.date, Shift:s.shift, Section:s.section, Department:s.department, Measured_by:s.measuredBy,
+    Waste_Type: document.getElementById("wasteType").value, Waste_Weight: document.getElementById("weight").value };
+
+  for(const k in data){
+    if(data[k]==="" || data[k]===null){ st.className="status err"; st.textContent="❌ Please fill the "+k.replace(/_/g," ")+" field"; return; }
+  }
+
+  wasteList.push(data);
+  st.className="status ok"; st.textContent="Added to list.";
+  document.getElementById("weight").value = "";
+  refreshTypes(); renderTable();
+}
+
+function renderTable(){
+  const wrap = document.getElementById("tableWrap");
+  if(!wasteList.length){ wrap.innerHTML = '<p class="hint">No waste entries staged yet.</p>'; return; }
+  let html = "<table><thead><tr><th>Date</th><th>Shift</th><th>Section</th><th>Department</th><th>Waste Type</th><th>Weight</th><th>Measured By</th><th></th></tr></thead><tbody>";
+  wasteList.forEach((r,i)=>{
+    html += `<tr><td>${r.Date}</td><td>${r.Shift}</td><td>${r.Section}</td><td>${r.Department}</td>` +
+      `<td>${r.Waste_Type}</td><td>${r.Waste_Weight}</td><td>${r.Measured_by}</td>` +
+      `<td><button class="row-del" data-i="${i}">X</button></td></tr>`;
+  });
+  html += "</tbody></table>";
+  wrap.innerHTML = html;
+}
+document.getElementById("tableWrap").addEventListener("click", function(e){
+  const b = e.target.closest(".row-del");
+  if(!b) return;
+  wasteList.splice(Number(b.getAttribute("data-i")),1);
+  refreshTypes(); renderTable();
+});
+
+async function saveAndPublish(){
+  const st = document.getElementById("status");
+  const btn = document.getElementById("saveBtn");
+
+  if(!wasteList.length){ st.className="status err"; st.textContent="⚠️ No entries to save."; return; }
+  const shift = document.getElementById("shift").value;
+  const shiftData = wasteList.filter(w=>w.Shift===shift);
+  if(!shiftData.length){ st.className="status err"; st.textContent="⚠️ No entries for the selected shift."; return; }
+  if(!confirm("Save "+shiftData.length+" entr(y/ies) for the "+shift+" shift?")) return;
+
+  btn.disabled = true; btn.innerText = "Saving..."; st.textContent = "";
+
+  let inserted = 0, skipped = 0;
+  for(const row of shiftData){
+    const dup = WASTE_ROWS.some(r=>r.date_col===row.Date && r.section===row.Section && r.department===row.Department && r.shift===row.Shift && r.waste_type===row.Waste_Type && r.measured_by===row.Measured_by);
+    if(dup){ skipped++; continue; }
+    try{
+      const dbRow = { date_col: row.Date, shift: row.Shift, section: row.Section, department: row.Department,
+        waste_type: row.Waste_Type, waste_weight: Number(row.Waste_Weight)||0, measured_by: row.Measured_by, recorded_at: new Date().toISOString() };
+      const res = await fetch(SUPABASE_URL + "/rest/v1/waste_table", { method:"post", headers: authHeaders(), body: JSON.stringify(dbRow) });
+      if(!res.ok) throw new Error("HTTP " + res.status);
+      const saved = await res.json();
+      WASTE_ROWS.push(saved[0] || dbRow);
+      inserted++;
+    }catch(e){ skipped++; }
+  }
+
+  st.className = "status ok";
+  st.textContent = "✅ Saved " + inserted + " record(s)" + (skipped ? ", skipped " + skipped + " duplicate(s)" : "") + ".";
+  btn.disabled = false; btn.innerText = "SAVE & PUBLISH";
+  wasteList = wasteList.filter(w=>w.Shift!==shift);
+  renderTable(); refreshTypes();
+}
+
+init();
+</script>
+</body>
+</html>

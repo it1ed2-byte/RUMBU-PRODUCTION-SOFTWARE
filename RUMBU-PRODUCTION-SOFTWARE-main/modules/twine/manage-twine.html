@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Manage Twine</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme") || "navy"); }catch(e){} })();
+  window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme){ document.documentElement.setAttribute("data-theme", e.data.rumbuTheme); } });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1000px;margin:0 auto;}
+  .tab-bar{display:flex;gap:6px;flex-wrap:wrap;border-bottom:2px solid var(--line);margin-bottom:16px;}
+  .tab-btn{background:none;border:none;padding:10px 14px;font-weight:700;font-size:13px;color:var(--muted);cursor:pointer;margin:0;border-bottom:3px solid transparent;}
+  .tab-btn:hover{background:var(--bg);color:var(--heading);}
+  .tab-btn.active{color:var(--heading);border-bottom-color:var(--accent);}
+  .tab-content{display:none;} .tab-content.active{display:block;}
+  .readonly-banner{background:rgba(154,107,0,.12);color:var(--warn);padding:10px 14px;border-radius:var(--radius-sm);font-size:13px;font-weight:600;margin-bottom:14px;}
+  #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);}
+  .inline-num{width:90px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div id="connStatus">Loading...</div>
+<div id="roBanner" class="readonly-banner" style="display:none;">You have read-only access to this page. Editing Twine Types and Assets is limited to Admin and Super Admin.</div>
+
+<div class="tab-bar">
+  <button class="tab-btn active" data-tab="tab-types" onclick="showTab('tab-types')">Twine Types &amp; Targets</button>
+  <button class="tab-btn" data-tab="tab-groups" onclick="showTab('tab-groups')">Machine Groups</button>
+  <button class="tab-btn" data-tab="tab-assets" onclick="showTab('tab-assets')">Assets</button>
+  <button class="tab-btn" data-tab="tab-log" onclick="showTab('tab-log')">Activity Log</button>
+</div>
+
+<!-- ============ TWINE TYPES TAB ============ -->
+<div class="tab-content active" id="tab-types">
+  <div class="card-panel">
+    <h3>Twine Types &amp; Targets</h3>
+    <p class="sub">Target (bags) applies to every asset for that Twine Type — there is no per-asset variation.</p>
+    <div class="table-wrap"><div class="table-scroll">
+      <table id="typesTable">
+        <thead><tr><th>Type Code</th><th>Target (bags)</th><th></th></tr></thead>
+        <tbody id="typesBody"><tr><td colspan="3">Loading...</td></tr></tbody>
+      </table>
+    </div></div>
+    <div class="form-row" style="margin-top:16px;">
+      <div class="field"><label>New Type Code</label><input type="text" id="newTypeCode" placeholder="e.g. T5"></div>
+      <div class="field"><label>Target (bags)</label><input type="number" id="newTypeTarget" value="0"></div>
+    </div>
+    <button id="btnAddType" onclick="addType()">+ Add Type</button>
+    <div class="status" id="typeStatus" style="display:none;"></div>
+  </div>
+</div>
+
+<!-- ============ MACHINE GROUPS TAB ============ -->
+<div class="tab-content" id="tab-groups">
+  <div class="card-panel">
+    <h3>Machine Groups</h3>
+    <p class="sub">Groups feed the Machine Group choice when adding an Asset. Deactivating a group hides it from that dropdown without affecting existing assets already assigned to it.</p>
+    <div class="table-wrap"><div class="table-scroll">
+      <table id="groupsTable">
+        <thead><tr><th>Group Code</th><th>Description</th><th>Status</th><th></th></tr></thead>
+        <tbody id="groupsBody"><tr><td colspan="4">Loading...</td></tr></tbody>
+      </table>
+    </div></div>
+    <div class="form-row" style="margin-top:16px;">
+      <div class="field"><label>New Group Code</label><input type="text" id="newGroupCode" placeholder="e.g. KM"></div>
+      <div class="field"><label>Description (optional)</label><input type="text" id="newGroupDesc" placeholder="What this group of machines is"></div>
+    </div>
+    <button id="btnAddGroup" onclick="addGroup()">+ Add Machine Group</button>
+    <div class="status" id="groupStatus" style="display:none;"></div>
+  </div>
+</div>
+
+<!-- ============ ASSETS TAB ============ -->
+<div class="tab-content" id="tab-assets">
+  <div class="card-panel">
+    <h3>Twine Assets</h3>
+    <p class="sub">Machines available for production entry. Deactivating an asset hides it from new entries without deleting its history.</p>
+    <div class="table-wrap"><div class="table-scroll">
+      <table id="assetsTable">
+        <thead><tr><th>Asset Code</th><th>Machine Group</th><th>Status</th><th></th></tr></thead>
+        <tbody id="assetsBody"><tr><td colspan="4">Loading...</td></tr></tbody>
+      </table>
+    </div></div>
+    <div class="form-row" style="margin-top:16px;">
+      <div class="field"><label>New Asset Code</label><input type="text" id="newAssetCode" placeholder="e.g. BM-16"></div>
+      <div class="field"><label>Machine Group</label><select id="newAssetGroup"><option value="">Loading...</option></select></div>
+    </div>
+    <button id="btnAddAsset" onclick="addAsset()">+ Add Asset</button>
+    <div class="status" id="assetStatus" style="display:none;"></div>
+  </div>
+</div>
+
+<!-- ============ ACTIVITY LOG TAB ============ -->
+<div class="tab-content" id="tab-log">
+  <div class="filters">
+    <div class="f"><label>From Date</label><input type="date" id="log_from"></div>
+    <div class="f"><label>To Date</label><input type="date" id="log_to"></div>
+    <div class="f"><label>Action Type</label><select id="log_action_type"><option value="">All</option></select></div>
+    <div class="f"><label>Search (actor or description)</label><input type="text" id="log_search" placeholder="e.g. Sulaiman, T1, BM-01"></div>
+    <div class="f f-min"><button onclick="applyLogFilter()">Filter</button></div>
+  </div>
+  <div class="table-wrap"><div class="table-scroll">
+    <table id="logTable">
+      <thead><tr><th>When</th><th>By</th><th>Action</th><th>Details</th></tr></thead>
+      <tbody id="logBody"><tr><td colspan="4">Use the filters above and click Filter.</td></tr></tbody>
+    </table>
+  </div></div>
+</div>
+
+</div>
+
+<script>
+let ME = null;
+const ACTION_TYPES = ["twine_type_added","twine_type_target_changed","twine_machine_group_added","twine_machine_group_status_changed","twine_asset_added","twine_asset_status_changed"];
+
+function canWrite(){ return ME && (ME.role === "admin" || ME.role === "super_admin"); }
+function showTab(id){
+  document.querySelectorAll(".tab-content").forEach(t=>t.classList.toggle("active", t.id===id));
+  document.querySelectorAll(".tab-btn").forEach(b=>b.classList.toggle("active", b.getAttribute("data-tab")===id));
+}
+async function logActivity(actionType, description){
+  try{
+    await sb.from("activity_log").insert({
+      actor_id: ME.id, actor_username: ME.username, actor_role: ME.role,
+      section_id: ME.sectionId, action_type: actionType, description: description
+    });
+  }catch(e){ console.warn("Activity log write failed (non-fatal):", e); }
+}
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    if(!canWrite()){
+      document.getElementById("roBanner").style.display = "block";
+      document.getElementById("btnAddType").style.display = "none";
+      document.getElementById("btnAddGroup").style.display = "none";
+      document.getElementById("btnAddAsset").style.display = "none";
+    }
+    status.style.color = "var(--ok)"; status.textContent = "Connected.";
+    await loadTypes();
+    await loadGroups();
+    await loadAssets();
+  }catch(e){
+    status.style.color = "var(--bad)"; status.textContent = "Could not load: " + e.message;
+  }
+}
+
+// ---------- Twine Types ----------
+async function loadTypes(){
+  const { data, error } = await sb.from("twine_types").select("*").order("type_code");
+  const body = document.getElementById("typesBody");
+  if(error){ body.innerHTML = `<tr><td colspan="3">Error: ${error.message}</td></tr>`; return; }
+  const rows = data || [];
+  if(!rows.length){ body.innerHTML = `<tr><td colspan="3">No twine types yet.</td></tr>`; return; }
+  body.innerHTML = rows.map(t => `
+    <tr>
+      <td><b>${t.type_code}</b></td>
+      <td>${canWrite()
+        ? `<input type="number" class="inline-num" id="tg_${t.type_code}" value="${t.target_bags}">`
+        : t.target_bags}</td>
+      <td>${canWrite() ? `<button class="btn-sm btn-ghost" onclick="saveTypeTarget('${t.type_code}', ${t.target_bags})">Save</button>` : ""}</td>
+    </tr>`).join("");
+}
+
+async function saveTypeTarget(typeCode, before){
+  if(!canWrite()) return;
+  const statusEl = document.getElementById("typeStatus");
+  statusEl.style.display = "block"; statusEl.className = "status"; statusEl.textContent = "Saving...";
+  const newTarget = Number(document.getElementById("tg_" + typeCode).value) || 0;
+  try{
+    const { error } = await sb.from("twine_types").update({ target_bags: newTarget }).eq("type_code", typeCode);
+    if(error) throw error;
+    if(newTarget !== before){
+      await logActivity("twine_type_target_changed", ME.username + " changed target for " + typeCode + " from " + before + " to " + newTarget + " bags");
+    }
+    statusEl.className = "status ok"; statusEl.textContent = "Saved.";
+    await loadTypes();
+  }catch(e){
+    statusEl.className = "status err"; statusEl.textContent = "Error: " + e.message;
+  }
+}
+
+async function addType(){
+  if(!canWrite()) return;
+  const statusEl = document.getElementById("typeStatus");
+  statusEl.style.display = "block"; statusEl.className = "status"; statusEl.textContent = "Adding...";
+  const code = document.getElementById("newTypeCode").value.trim();
+  const target = Number(document.getElementById("newTypeTarget").value) || 0;
+  if(!code){ statusEl.className="status err"; statusEl.textContent="Enter a Type Code."; return; }
+  try{
+    const { error } = await sb.from("twine_types").insert({ type_code: code, target_bags: target });
+    if(error) throw error;
+    await logActivity("twine_type_added", ME.username + " added Twine Type \"" + code + "\" (target " + target + " bags)");
+    document.getElementById("newTypeCode").value = "";
+    document.getElementById("newTypeTarget").value = 0;
+    statusEl.className = "status ok"; statusEl.textContent = "Added.";
+    await loadTypes();
+  }catch(e){
+    statusEl.className = "status err";
+    statusEl.textContent = (e.message && e.message.indexOf("duplicate") !== -1) ? "That Type Code already exists." : "Error: " + e.message;
+  }
+}
+
+// ---------- Machine Groups ----------
+async function loadGroups(){
+  const { data, error } = await sb.from("twine_machine_groups").select("*").order("group_code");
+  const body = document.getElementById("groupsBody");
+  if(error){ body.innerHTML = `<tr><td colspan="4">Error: ${error.message}</td></tr>`; return; }
+  const rows = data || [];
+  if(!rows.length){ body.innerHTML = `<tr><td colspan="4">No machine groups yet.</td></tr>`; }
+  else {
+    body.innerHTML = rows.map(g => `
+      <tr>
+        <td><b>${g.group_code}</b></td>
+        <td>${g.description || "—"}</td>
+        <td>${g.is_active ? '<span class="tag" style="background:var(--ok);">Active</span>' : '<span class="tag" style="background:var(--muted);">Inactive</span>'}</td>
+        <td>${canWrite() ? `<button class="btn-sm btn-ghost" onclick="toggleGroupStatus('${g.group_code}', ${g.is_active})">${g.is_active ? "Deactivate" : "Activate"}</button>` : ""}</td>
+      </tr>`).join("");
+  }
+
+  // Feed the Assets form's Machine Group dropdown with active groups.
+  const activeGroups = rows.filter(g=>g.is_active);
+  const sel = document.getElementById("newAssetGroup");
+  sel.innerHTML = activeGroups.length
+    ? activeGroups.map(g=>`<option value="${g.group_code}">${g.group_code}</option>`).join("")
+    : '<option value="">Add a Machine Group first</option>';
+}
+
+async function toggleGroupStatus(groupCode, currentlyActive){
+  if(!canWrite()) return;
+  try{
+    const { error } = await sb.from("twine_machine_groups").update({ is_active: !currentlyActive }).eq("group_code", groupCode);
+    if(error) throw error;
+    await logActivity("twine_machine_group_status_changed", ME.username + " " + (currentlyActive ? "deactivated" : "activated") + " machine group " + groupCode);
+    await loadGroups();
+  }catch(e){
+    alert("Error: " + e.message);
+  }
+}
+
+async function addGroup(){
+  if(!canWrite()) return;
+  const statusEl = document.getElementById("groupStatus");
+  statusEl.style.display = "block"; statusEl.className = "status"; statusEl.textContent = "Adding...";
+  const code = document.getElementById("newGroupCode").value.trim();
+  const desc = document.getElementById("newGroupDesc").value.trim() || null;
+  if(!code){ statusEl.className="status err"; statusEl.textContent="Enter a Group Code."; return; }
+  try{
+    const { error } = await sb.from("twine_machine_groups").insert({ group_code: code, description: desc });
+    if(error) throw error;
+    await logActivity("twine_machine_group_added", ME.username + " added Machine Group \"" + code + "\"" + (desc ? " (" + desc + ")" : ""));
+    document.getElementById("newGroupCode").value = "";
+    document.getElementById("newGroupDesc").value = "";
+    statusEl.className = "status ok"; statusEl.textContent = "Added.";
+    await loadGroups();
+  }catch(e){
+    statusEl.className = "status err";
+    statusEl.textContent = (e.message && e.message.indexOf("duplicate") !== -1) ? "That Group Code already exists." : "Error: " + e.message;
+  }
+}
+
+// ---------- Twine Assets ----------
+async function loadAssets(){
+  const { data, error } = await sb.from("twine_assets").select("*").order("machine_group").order("asset_code");
+  const body = document.getElementById("assetsBody");
+  if(error){ body.innerHTML = `<tr><td colspan="4">Error: ${error.message}</td></tr>`; return; }
+  const rows = data || [];
+  if(!rows.length){ body.innerHTML = `<tr><td colspan="4">No assets yet.</td></tr>`; return; }
+  body.innerHTML = rows.map(a => `
+    <tr>
+      <td><b>${a.asset_code}</b></td>
+      <td>${a.machine_group}</td>
+      <td>${a.is_active ? '<span class="tag" style="background:var(--ok);">Active</span>' : '<span class="tag" style="background:var(--muted);">Inactive</span>'}</td>
+      <td>${canWrite() ? `<button class="btn-sm btn-ghost" onclick="toggleAssetStatus('${a.asset_code}', ${a.is_active})">${a.is_active ? "Deactivate" : "Activate"}</button>` : ""}</td>
+    </tr>`).join("");
+}
+
+async function toggleAssetStatus(assetCode, currentlyActive){
+  if(!canWrite()) return;
+  try{
+    const { error } = await sb.from("twine_assets").update({ is_active: !currentlyActive }).eq("asset_code", assetCode);
+    if(error) throw error;
+    await logActivity("twine_asset_status_changed", ME.username + " " + (currentlyActive ? "deactivated" : "activated") + " asset " + assetCode);
+    await loadAssets();
+  }catch(e){
+    alert("Error: " + e.message);
+  }
+}
+
+async function addAsset(){
+  if(!canWrite()) return;
+  const statusEl = document.getElementById("assetStatus");
+  statusEl.style.display = "block"; statusEl.className = "status"; statusEl.textContent = "Adding...";
+  const code = document.getElementById("newAssetCode").value.trim();
+  const group = document.getElementById("newAssetGroup").value;
+  if(!code){ statusEl.className="status err"; statusEl.textContent="Enter an Asset Code."; return; }
+  if(!group){ statusEl.className="status err"; statusEl.textContent="Add at least one active Machine Group first."; return; }
+  try{
+    const { error } = await sb.from("twine_assets").insert({ asset_code: code, machine_group: group });
+    if(error) throw error;
+    await logActivity("twine_asset_added", ME.username + " added asset \"" + code + "\" (" + group + ")");
+    document.getElementById("newAssetCode").value = "";
+    statusEl.className = "status ok"; statusEl.textContent = "Added.";
+    await loadAssets();
+  }catch(e){
+    statusEl.className = "status err";
+    statusEl.textContent = (e.message && e.message.indexOf("duplicate") !== -1) ? "That Asset Code already exists." : "Error: " + e.message;
+  }
+}
+
+// ---------- Activity Log ----------
+async function applyLogFilter(){
+  const from = document.getElementById("log_from").value;
+  const to = document.getElementById("log_to").value;
+  const actionType = document.getElementById("log_action_type").value;
+  const q = document.getElementById("log_search").value.trim();
+
+  let query = sb.from("activity_log").select("actor_username, actor_role, action_type, description, created_at")
+    .in("action_type", ACTION_TYPES).order("created_at",{ascending:false}).limit(500);
+  if(from) query = query.gte("created_at", from + "T00:00:00");
+  if(to) query = query.lte("created_at", to + "T23:59:59");
+  if(actionType) query = query.eq("action_type", actionType);
+  if(q) query = query.or(`actor_username.ilike.%${q}%,description.ilike.%${q}%`);
+
+  const { data, error } = await query;
+  const body = document.getElementById("logBody");
+  if(error){ body.innerHTML = `<tr><td colspan="4">Error: ${error.message}</td></tr>`; return; }
+  const rows = data || [];
+  if(!rows.length){ body.innerHTML = `<tr><td colspan="4">No activity matches these filters.</td></tr>`; return; }
+  body.innerHTML = rows.map(r=>{
+    const when = new Date(r.created_at).toLocaleString();
+    return `<tr><td>${when}</td><td>${r.actor_username||""} (${r.actor_role||""})</td><td>${r.action_type||""}</td><td>${r.description||""}</td></tr>`;
+  }).join("");
+}
+document.getElementById("log_action_type").innerHTML = '<option value="">All</option>' + ACTION_TYPES.map(t=>`<option value="${t}">${t}</option>`).join("");
+
+init();
+</script>
+</body>
+</html>

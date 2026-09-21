@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>IT Inventory — Reference Data</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;color:var(--text);}
+  .wrap{max-width:1000px;margin:0 auto;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;}
+  .card h3{color:var(--navy);margin:0 0 4px;font-size:16px;}
+  .card .sub{color:var(--blue);font-size:12px;margin:0 0 14px;}
+  label{display:block;font-size:12px;font-weight:bold;color:var(--text);margin:10px 0 4px;}
+  input,select{width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;}
+  .row > div{flex:1;min-width:150px;}
+  button{padding:9px 14px;border:none;border-radius:8px;font-weight:bold;font-size:13px;cursor:pointer;background:var(--blue);color:#fff;}
+  button:hover{background:var(--blue-dark);}
+  button.mini{padding:5px 9px;font-size:12px;}
+  button.del{background:var(--red);}
+  button.del:hover{background:#96242e;}
+  .status{margin-top:8px;font-weight:bold;font-size:13px;min-height:14px;}
+  .status.ok{color:var(--green);} .status.err{color:var(--red);}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;}
+  .tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;}
+  .tab{background:var(--bg);color:var(--navy);padding:8px 14px;border-radius:8px;font-size:13px;font-weight:bold;cursor:pointer;border:1px solid var(--line);}
+  .tab.active{background:var(--navy);color:#fff;border-color:var(--navy);}
+  .pane{display:none;} .pane.active{display:block;}
+  .chip-list{margin-top:10px;display:flex;flex-wrap:wrap;gap:8px;}
+  .chip{background:#f2f6fb;border:1px solid var(--line);border-radius:20px;padding:5px 8px 5px 12px;font-size:13px;display:flex;align-items:center;gap:8px;}
+  .chip button{background:transparent;color:var(--red);padding:0 4px;font-size:15px;}
+  .noaccess{color:var(--red);font-weight:bold;text-align:center;padding:30px;}
+  ul.tree{list-style:none;padding-left:0;margin:10px 0 0;}
+  ul.tree li{padding:4px 0;}
+  ul.tree .u{padding-left:22px;font-size:13px;color:var(--text);}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<div id="connStatus">Loading...</div>
+
+<div id="appArea" style="display:none;">
+  <div class="tabs">
+    <div class="tab active" data-pane="hier" onclick="showTab('hier',this)">Branch → Dept → Unit</div>
+    <div class="tab" data-pane="cats" onclick="showTab('cats',this)">Categories &amp; Types</div>
+    <div class="tab" data-pane="statuses" onclick="showTab('statuses',this)">Statuses</div>
+    <div class="tab" data-pane="conditions" onclick="showTab('conditions',this)">Conditions</div>
+  </div>
+
+  <!-- HIERARCHY -->
+  <div class="pane active" id="pane-hier">
+    <div class="card">
+      <h3>Add Department to a Branch</h3>
+      <p class="sub">Departments describe where a device sits. They are separate from access-control departments.</p>
+      <div class="row">
+        <div><label>Branch</label><select id="deptBranch" onchange="renderTree()"></select></div>
+        <div><label>Department name</label><input type="text" id="deptName" placeholder="e.g. Administration"></div>
+        <div style="flex:0 0 auto;"><button onclick="addDepartment()">Add Dept</button></div>
+      </div>
+      <div class="status" id="deptStatus"></div>
+    </div>
+
+    <div class="card">
+      <h3>Add Unit to a Department</h3>
+      <div class="row">
+        <div><label>Branch</label><select id="unitBranch" onchange="fillUnitDepts()"></select></div>
+        <div><label>Department</label><select id="unitDept"></select></div>
+        <div><label>Unit name</label><input type="text" id="unitName" placeholder="e.g. Accounts Office"></div>
+        <div style="flex:0 0 auto;"><button onclick="addUnit()">Add Unit</button></div>
+      </div>
+      <div class="status" id="unitStatus"></div>
+    </div>
+
+    <div class="card">
+      <h3>Current Structure</h3>
+      <label>View Branch</label>
+      <select id="treeBranch" onchange="renderTree()"></select>
+      <div id="treeWrap"></div>
+    </div>
+  </div>
+
+  <!-- CATEGORIES & TYPES -->
+  <div class="pane" id="pane-cats">
+    <div class="card">
+      <h3>Add Category</h3>
+      <div class="row">
+        <div><label>Category name</label><input type="text" id="catName" placeholder="e.g. Computing"></div>
+        <div style="flex:0 0 auto;"><button onclick="addCategory()">Add Category</button></div>
+      </div>
+      <div class="status" id="catStatus"></div>
+    </div>
+    <div class="card">
+      <h3>Add Type to a Category</h3>
+      <div class="row">
+        <div><label>Category</label><select id="typeCat" onchange="renderCatTree()"></select></div>
+        <div><label>Type name</label><input type="text" id="typeName" placeholder="e.g. Laptop"></div>
+        <div style="flex:0 0 auto;"><button onclick="addType()">Add Type</button></div>
+      </div>
+      <div class="status" id="typeStatus"></div>
+    </div>
+    <div class="card">
+      <h3>Categories &amp; Types</h3>
+      <div id="catTreeWrap"></div>
+    </div>
+  </div>
+
+  <!-- STATUSES -->
+  <div class="pane" id="pane-statuses">
+    <div class="card">
+      <h3>Device Statuses</h3>
+      <div class="row">
+        <div><label>New status</label><input type="text" id="statusName" placeholder="e.g. In Store"></div>
+        <div style="flex:0 0 auto;"><button onclick="addStatus()">Add</button></div>
+      </div>
+      <div class="status" id="statusStatus"></div>
+      <div class="chip-list" id="statusList"></div>
+    </div>
+  </div>
+
+  <!-- CONDITIONS -->
+  <div class="pane" id="pane-conditions">
+    <div class="card">
+      <h3>Device Conditions</h3>
+      <div class="row">
+        <div><label>New condition</label><input type="text" id="condName" placeholder="e.g. Refurbished"></div>
+        <div style="flex:0 0 auto;"><button onclick="addCondition()">Add</button></div>
+      </div>
+      <div class="status" id="condStatus"></div>
+      <div class="chip-list" id="condList"></div>
+    </div>
+  </div>
+</div>
+
+<div id="noAccess" class="noaccess" style="display:none;">
+  Only Admins and Super Admins can manage reference data.
+</div>
+</div>
+
+<script>
+let ME = null;
+let BRANCHES = [];      // app_sections names
+let DEPTS = [];         // {id, branch, name}
+let UNITS = [];         // {id, branch, department, name}
+let CATS = [];          // {id, name}
+let TYPES = [];         // {id, category, name}
+
+async function logActivity(actionType, description){
+  try{
+    await sb.from("activity_log").insert({
+      actor_id: ME.id, actor_username: ME.username, actor_role: ME.role,
+      section_id: ME.sectionId, action_type: actionType, description: description
+    });
+  }catch(e){ console.warn("Activity log write failed (non-fatal):", e); }
+}
+
+function branchScope(){
+  // Which branches can this person manage? Super admin: all. Others: their own.
+  if(ME.role === "super_admin") return BRANCHES.slice();
+  return (ME.sectionNames || []).filter(b => BRANCHES.indexOf(b) !== -1);
+}
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+
+    if(ME.role !== "super_admin" && ME.role !== "admin"){
+      status.style.color = "#1d8a4e"; status.textContent = "Connected.";
+      document.getElementById("noAccess").style.display = "block";
+      return;
+    }
+    document.getElementById("appArea").style.display = "block";
+    status.style.color = "#1d8a4e"; status.textContent = "Connected.";
+    await loadAll();
+  }catch(e){
+    status.style.color = "#c0392b"; status.textContent = "❌ " + e.message; console.error(e);
+  }
+}
+
+async function loadAll(){
+  const [sec, dep, un, ca, ty, st, co] = await Promise.all([
+    sb.from("app_sections").select("name").order("name"),
+    sb.from("it_ref_departments").select("*").order("name"),
+    sb.from("it_ref_units").select("*").order("name"),
+    sb.from("it_ref_categories").select("*").order("name"),
+    sb.from("it_ref_types").select("*").order("name"),
+    sb.from("it_ref_statuses").select("*").order("name"),
+    sb.from("it_ref_conditions").select("*").order("name")
+  ]);
+  BRANCHES = (sec.data || []).map(s => s.name);
+  DEPTS = dep.data || [];
+  UNITS = un.data || [];
+  CATS = ca.data || [];
+  TYPES = ty.data || [];
+
+  const mine = branchScope();
+  fillBranchSelect("deptBranch", mine);
+  fillBranchSelect("unitBranch", mine);
+  fillBranchSelect("treeBranch", mine);
+  fillUnitDepts();
+  renderTree();
+  fillCatSelect();
+  renderCatTree();
+  renderChips("statusList", st.data || [], "it_ref_statuses");
+  renderChips("condList", co.data || [], "it_ref_conditions");
+}
+
+function fillBranchSelect(id, list){
+  const sel = document.getElementById(id);
+  const prev = sel.value;
+  sel.innerHTML = "";
+  list.forEach(b => { const o=document.createElement("option"); o.value=b; o.textContent=b; sel.appendChild(o); });
+  if(prev && list.indexOf(prev) !== -1) sel.value = prev;
+}
+
+// ---- Tab switching ----
+function showTab(name, el){
+  document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+  el.classList.add("active");
+  document.querySelectorAll(".pane").forEach(p => p.classList.remove("active"));
+  document.getElementById("pane-"+name).classList.add("active");
+}
+
+// ---- Departments ----
+async function addDepartment(){
+  const status = document.getElementById("deptStatus");
+  const branch = document.getElementById("deptBranch").value;
+  const name = document.getElementById("deptName").value.trim();
+  if(!branch || !name){ status.className="status err"; status.textContent="Branch and name required."; return; }
+  if(DEPTS.some(d => d.branch===branch && d.name.toLowerCase()===name.toLowerCase())){
+    status.className="status err"; status.textContent="Department already exists for this branch."; return;
+  }
+  const { error } = await sb.from("it_ref_departments").insert({ branch, name });
+  if(error){ status.className="status err"; status.textContent="❌ "+error.message; return; }
+  await logActivity("it_ref_dept_added", ME.username+" added IT department '"+name+"' to "+branch);
+  document.getElementById("deptName").value="";
+  status.className="status ok"; status.textContent="✅ Added.";
+  await loadAll();
+}
+
+async function delDepartment(id){
+  const d = DEPTS.find(x=>x.id===id); if(!d) return;
+  if(!confirm("Delete department '"+d.name+"' and its units?")) return;
+  await sb.from("it_ref_units").delete().eq("branch", d.branch).eq("department", d.name);
+  const { error } = await sb.from("it_ref_departments").delete().eq("id", id);
+  if(error){ alert(error.message); return; }
+  await logActivity("it_ref_dept_deleted", ME.username+" deleted IT department '"+d.name+"' from "+d.branch);
+  await loadAll();
+}
+
+// ---- Units ----
+function fillUnitDepts(){
+  const branch = document.getElementById("unitBranch").value;
+  const sel = document.getElementById("unitDept");
+  sel.innerHTML = "";
+  DEPTS.filter(d=>d.branch===branch).forEach(d=>{
+    const o=document.createElement("option"); o.value=d.name; o.textContent=d.name; sel.appendChild(o);
+  });
+}
+
+async function addUnit(){
+  const status = document.getElementById("unitStatus");
+  const branch = document.getElementById("unitBranch").value;
+  const dept = document.getElementById("unitDept").value;
+  const name = document.getElementById("unitName").value.trim();
+  if(!branch || !dept || !name){ status.className="status err"; status.textContent="Branch, department and name required."; return; }
+  if(UNITS.some(u => u.branch===branch && u.department===dept && u.name.toLowerCase()===name.toLowerCase())){
+    status.className="status err"; status.textContent="Unit already exists."; return;
+  }
+  const { error } = await sb.from("it_ref_units").insert({ branch, department: dept, name });
+  if(error){ status.className="status err"; status.textContent="❌ "+error.message; return; }
+  await logActivity("it_ref_unit_added", ME.username+" added IT unit '"+name+"' to "+dept+" ("+branch+")");
+  document.getElementById("unitName").value="";
+  status.className="status ok"; status.textContent="✅ Added.";
+  await loadAll();
+}
+
+async function delUnit(id){
+  const u = UNITS.find(x=>x.id===id); if(!u) return;
+  if(!confirm("Delete unit '"+u.name+"'?")) return;
+  const { error } = await sb.from("it_ref_units").delete().eq("id", id);
+  if(error){ alert(error.message); return; }
+  await logActivity("it_ref_unit_deleted", ME.username+" deleted IT unit '"+u.name+"'");
+  await loadAll();
+}
+
+function renderTree(){
+  const branch = document.getElementById("treeBranch").value;
+  const wrap = document.getElementById("treeWrap");
+  const depts = DEPTS.filter(d=>d.branch===branch);
+  if(!depts.length){ wrap.innerHTML="<p style='color:#6b7280'>No departments yet for this branch.</p>"; return; }
+  let html = "<ul class='tree'>";
+  depts.forEach(d=>{
+    html += `<li><b>${d.name}</b> <button class="mini del" onclick="delDepartment(${d.id})">Delete</button></li>`;
+    const units = UNITS.filter(u=>u.branch===branch && u.department===d.name);
+    units.forEach(u=>{
+      html += `<li class="u">• ${u.name} <button class="mini del" onclick="delUnit(${u.id})">Delete</button></li>`;
+    });
+  });
+  html += "</ul>";
+  wrap.innerHTML = html;
+}
+
+// ---- Categories & Types ----
+function fillCatSelect(){
+  const sel = document.getElementById("typeCat");
+  const prev = sel.value;
+  sel.innerHTML = "";
+  CATS.forEach(c=>{ const o=document.createElement("option"); o.value=c.name; o.textContent=c.name; sel.appendChild(o); });
+  if(prev) sel.value = prev;
+}
+
+async function addCategory(){
+  const status = document.getElementById("catStatus");
+  const name = document.getElementById("catName").value.trim();
+  if(!name){ status.className="status err"; status.textContent="Name required."; return; }
+  if(CATS.some(c=>c.name.toLowerCase()===name.toLowerCase())){ status.className="status err"; status.textContent="Category exists."; return; }
+  const { error } = await sb.from("it_ref_categories").insert({ name });
+  if(error){ status.className="status err"; status.textContent="❌ "+error.message; return; }
+  await logActivity("it_ref_category_added", ME.username+" added IT category '"+name+"'");
+  document.getElementById("catName").value="";
+  status.className="status ok"; status.textContent="✅ Added.";
+  await loadAll();
+}
+
+async function delCategory(id){
+  const c = CATS.find(x=>x.id===id); if(!c) return;
+  if(!confirm("Delete category '"+c.name+"' and its types?")) return;
+  await sb.from("it_ref_types").delete().eq("category", c.name);
+  const { error } = await sb.from("it_ref_categories").delete().eq("id", id);
+  if(error){ alert(error.message); return; }
+  await logActivity("it_ref_category_deleted", ME.username+" deleted IT category '"+c.name+"'");
+  await loadAll();
+}
+
+async function addType(){
+  const status = document.getElementById("typeStatus");
+  const cat = document.getElementById("typeCat").value;
+  const name = document.getElementById("typeName").value.trim();
+  if(!cat || !name){ status.className="status err"; status.textContent="Category and name required."; return; }
+  if(TYPES.some(t=>t.category===cat && t.name.toLowerCase()===name.toLowerCase())){ status.className="status err"; status.textContent="Type exists."; return; }
+  const { error } = await sb.from("it_ref_types").insert({ category: cat, name });
+  if(error){ status.className="status err"; status.textContent="❌ "+error.message; return; }
+  await logActivity("it_ref_type_added", ME.username+" added IT type '"+name+"' to "+cat);
+  document.getElementById("typeName").value="";
+  status.className="status ok"; status.textContent="✅ Added.";
+  await loadAll();
+}
+
+async function delType(id){
+  const t = TYPES.find(x=>x.id===id); if(!t) return;
+  if(!confirm("Delete type '"+t.name+"'?")) return;
+  const { error } = await sb.from("it_ref_types").delete().eq("id", id);
+  if(error){ alert(error.message); return; }
+  await logActivity("it_ref_type_deleted", ME.username+" deleted IT type '"+t.name+"'");
+  await loadAll();
+}
+
+function renderCatTree(){
+  const wrap = document.getElementById("catTreeWrap");
+  if(!CATS.length){ wrap.innerHTML="<p style='color:#6b7280'>No categories yet.</p>"; return; }
+  let html = "<ul class='tree'>";
+  CATS.forEach(c=>{
+    html += `<li><b>${c.name}</b> <button class="mini del" onclick="delCategory(${c.id})">Delete</button></li>`;
+    TYPES.filter(t=>t.category===c.name).forEach(t=>{
+      html += `<li class="u">• ${t.name} <button class="mini del" onclick="delType(${t.id})">Delete</button></li>`;
+    });
+  });
+  html += "</ul>";
+  wrap.innerHTML = html;
+}
+
+// ---- Statuses & Conditions (generic chips) ----
+function renderChips(containerId, rows, table){
+  const wrap = document.getElementById(containerId);
+  wrap.innerHTML = "";
+  rows.forEach(r=>{
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    chip.innerHTML = r.name + ` <button title="Delete" onclick="delChip('${table}',${r.id})">×</button>`;
+    wrap.appendChild(chip);
+  });
+}
+
+async function delChip(table, id){
+  if(!confirm("Delete this item?")) return;
+  const { error } = await sb.from(table).delete().eq("id", id);
+  if(error){ alert(error.message); return; }
+  await logActivity("it_ref_deleted", ME.username+" deleted a "+table.replace("it_ref_","")+" item");
+  await loadAll();
+}
+
+async function addStatus(){
+  const status = document.getElementById("statusStatus");
+  const name = document.getElementById("statusName").value.trim();
+  if(!name){ status.className="status err"; status.textContent="Required."; return; }
+  const { error } = await sb.from("it_ref_statuses").insert({ name });
+  if(error){ status.className="status err"; status.textContent="❌ "+error.message; return; }
+  document.getElementById("statusName").value="";
+  status.className="status ok"; status.textContent="✅ Added.";
+  await loadAll();
+}
+
+async function addCondition(){
+  const status = document.getElementById("condStatus");
+  const name = document.getElementById("condName").value.trim();
+  if(!name){ status.className="status err"; status.textContent="Required."; return; }
+  const { error } = await sb.from("it_ref_conditions").insert({ name });
+  if(error){ status.className="status err"; status.textContent="❌ "+error.message; return; }
+  document.getElementById("condName").value="";
+  status.className="status ok"; status.textContent="✅ Added.";
+  await loadAll();
+}
+
+init();
+</script>
+</body>
+</html>

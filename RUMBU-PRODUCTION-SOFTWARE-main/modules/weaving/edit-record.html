@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Edit Record</title>
+<link rel="stylesheet" href="../../styles.css">
+<style>
+  body{ padding:22px; }
+  .container{ max-width:900px; margin:0 auto; }
+  #status{ text-align:center; font-size:13px; font-weight:700; }
+  .msg{ margin-top:10px; font-weight:700; }
+  .rec-grid{ display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  @media(max-width:720px){ .rec-grid{ grid-template-columns:1fr; } }
+  .locked-note{ background:rgba(154,107,0,.12); color:var(--warn); padding:10px 14px; border-radius:8px; font-size:13px; font-weight:600; margin-bottom:14px; }
+  .dupe-group{ border:1px solid var(--line); border-radius:10px; padding:12px; margin-bottom:12px; background:var(--bg); }
+  .dupe-group h4{ margin:0 0 8px; color:var(--heading); font-size:14px; }
+</style>
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+</head>
+<body>
+
+<div class="container">
+
+  <div id="statusBox" class="card-panel">
+    <div id="status">Checking your session...</div>
+  </div>
+
+  <div id="appArea" style="display:none;">
+
+    <!-- SEARCH -->
+    <div class="card-panel">
+      <h2>Edit Record</h2>
+      <p class="sub">Search a record by Work Order to view, edit, or delete it. Records older than 1 day can only be changed by a Super Admin.</p>
+      <div class="form-row">
+        <div class="field"><label>Work Order</label><input type="text" id="woInput" placeholder="Enter Work Order number"></div>
+        <div class="field" style="align-self:end;"><button onclick="searchWO()">Search</button></div>
+      </div>
+      <div class="msg" id="searchMsg"></div>
+    </div>
+
+    <!-- EDIT -->
+    <div id="editCard" class="card-panel" style="display:none;">
+      <h3>Record Detail</h3>
+      <div id="lockNote"></div>
+      <div class="rec-grid" id="editFields"></div>
+      <button id="saveBtn" onclick="saveRecord()" style="margin-top:16px;">Save Changes</button>
+      <button id="delBtn" class="btn-danger" onclick="deleteRecord()" style="margin-top:16px;">Delete Record</button>
+      <div class="msg" id="editMsg"></div>
+    </div>
+
+    <!-- DUPLICATES -->
+    <div class="card-panel">
+      <h3>Find Duplicates by Date</h3>
+      <p class="sub">Lists Work Orders that appear more than once on a chosen date.</p>
+      <div class="form-row">
+        <div class="field"><label>Date</label><input type="date" id="dupeDate"></div>
+        <div class="field" style="align-self:end;"><button class="btn-ghost" onclick="findDuplicates()">Find</button></div>
+      </div>
+      <div id="dupeResults" style="margin-top:12px;"></div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+function authHeaders(extra){ return Object.assign({ "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY, "Content-Type": "application/json" }, extra||{}); }
+
+let ME = null, CURRENT = null;
+
+// Field map: label -> {col, type, editable}. Work order is the lookup key (not editable).
+const FIELDS = [
+  { label:"Work Order",        col:"work_order",         type:"text",   editable:false },
+  { label:"Assets",            col:"assets",             type:"text" },
+  { label:"Nurse Name",        col:"nurse_name",         type:"text" },
+  { label:"Date",              col:"date",               type:"date" },
+  { label:"Duration",          col:"duration",           type:"text" },
+  { label:"Job Code",          col:"job_code",           type:"text" },
+  { label:"MC Stoppage Time",  col:"mc_stoppage_time",   type:"datetime-local" },
+  { label:"Starting Time",     col:"starting_time",      type:"datetime-local" },
+  { label:"Finish Time",       col:"finish_time",        type:"datetime-local" },
+  { label:"Part Needed",       col:"part_needed",        type:"text" },
+  { label:"Description",       col:"description",        type:"text" },
+  { label:"Shift",             col:"shift",              type:"text" },
+  { label:"Department",        col:"department",         type:"text" },
+  { label:"Shed",              col:"shed",               type:"text" },
+  { label:"Unit",              col:"unit",               type:"text" },
+  { label:"Section",           col:"section",            type:"text" },
+  { label:"Estimated Duration",col:"estimated_duration", type:"text" },
+  { label:"Nozzles",           col:"nozzles",            type:"text" },
+  { label:"Type",              col:"type",               type:"text" },
+  { label:"Denier",            col:"denier",             type:"number" }
+];
+
+async function init(){
+  ME = await requireAuth("../../login.html");
+  if(!ME) return;
+  document.getElementById("statusBox").style.display = "none";
+  document.getElementById("appArea").style.display = "block";
+}
+
+function isSuperAdmin(){ return ME && ME.role === "super_admin"; }
+
+// A record is "locked" (read-only) if it is more than 1 day old, unless super admin.
+function isLocked(row){
+  if(isSuperAdmin()) return false;
+  if(!row || !row.date) return false;
+  const recDate = new Date(row.date + "T00:00:00");
+  const today = new Date(); today.setHours(0,0,0,0);
+  const diffDays = Math.floor((today - recDate) / 86400000);
+  return diffDays > 1;
+}
+
+// datetime-local needs "YYYY-MM-DDTHH:MM"; DB gives ISO with seconds/zone.
+function toLocalInput(v){
+  if(!v) return "";
+  const d = new Date(v);
+  if(isNaN(d)) return "";
+  const pad=n=>String(n).padStart(2,"0");
+  return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate())+"T"+pad(d.getHours())+":"+pad(d.getMinutes());
+}
+
+async function searchWO(){
+  const wo = document.getElementById("woInput").value.trim();
+  const msg = document.getElementById("searchMsg");
+  msg.innerText = "";
+  document.getElementById("editCard").style.display = "none";
+  if(!wo){ msg.style.color="var(--bad)"; msg.innerText="Please enter a Work Order number."; return; }
+
+  try{
+    const url = SUPABASE_URL + "/rest/v1/control?select=*&work_order=eq." + encodeURIComponent(wo) + "&limit=1";
+    const res = await fetch(url, { headers: authHeaders() });
+    if(!res.ok) throw new Error("HTTP " + res.status);
+    const rows = await res.json();
+    if(!rows.length){ msg.style.color="var(--bad)"; msg.innerText="No record found for that Work Order."; return; }
+    CURRENT = rows[0];
+    renderEdit(CURRENT);
+  }catch(e){ msg.style.color="var(--bad)"; msg.innerText="❌ "+e.message; }
+}
+
+function renderEdit(row){
+  const locked = isLocked(row);
+  const note = document.getElementById("lockNote");
+  note.innerHTML = locked
+    ? `<div class="locked-note">This record is more than 1 day old. Only a Super Admin can edit or delete it.</div>`
+    : "";
+
+  document.getElementById("editFields").innerHTML = FIELDS.map(f=>{
+    let val = row[f.col];
+    if(f.type === "datetime-local") val = toLocalInput(val);
+    else if(val === null || val === undefined) val = "";
+    const dis = (f.editable === false || locked) ? "disabled" : "";
+    return `<div class="field"><label>${f.label}</label>`
+         + `<input type="${f.type}" data-col="${f.col}" value="${String(val).replace(/"/g,'&quot;')}" ${dis}></div>`;
+  }).join("");
+
+  document.getElementById("saveBtn").style.display = locked ? "none" : "";
+  document.getElementById("delBtn").style.display  = locked ? "none" : "";
+  document.getElementById("editMsg").innerText = "";
+  document.getElementById("editCard").style.display = "block";
+}
+
+async function saveRecord(){
+  const msg = document.getElementById("editMsg");
+  if(!CURRENT){ return; }
+  if(isLocked(CURRENT)){ msg.style.color="var(--bad)"; msg.innerText="Locked: only a Super Admin can edit records older than 1 day."; return; }
+
+  const payload = {};
+  document.querySelectorAll("#editFields input[data-col]").forEach(el=>{
+    const f = FIELDS.find(x=>x.col === el.getAttribute("data-col"));
+    if(!f || f.editable === false) return;
+    let v = el.value;
+    if(v === "") { payload[f.col] = null; return; }
+    if(f.type === "number") v = parseFloat(v);
+    if(f.type === "datetime-local") v = new Date(v).toISOString();
+    payload[f.col] = v;
+  });
+
+  try{
+    const res = await fetch(SUPABASE_URL + "/rest/v1/control?id=eq." + CURRENT.id, {
+      method:"PATCH", headers: authHeaders({ "Prefer":"return=representation" }), body: JSON.stringify(payload)
+    });
+    if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
+    const updated = await res.json();
+    if(updated && updated.length) CURRENT = updated[0];
+    msg.style.color="var(--ok)"; msg.innerText="✅ Record updated.";
+  }catch(e){ msg.style.color="var(--bad)"; msg.innerText="❌ "+e.message; }
+}
+
+async function deleteRecord(){
+  const msg = document.getElementById("editMsg");
+  if(!CURRENT){ return; }
+  if(isLocked(CURRENT)){ msg.style.color="var(--bad)"; msg.innerText="Locked: only a Super Admin can delete records older than 1 day."; return; }
+  if(!confirm("Delete this record permanently? This cannot be undone.")) return;
+
+  try{
+    const res = await fetch(SUPABASE_URL + "/rest/v1/control?id=eq." + CURRENT.id, {
+      method:"DELETE", headers: authHeaders()
+    });
+    if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
+    msg.style.color="var(--ok)"; msg.innerText="✅ Record deleted.";
+    CURRENT = null;
+    document.getElementById("editCard").style.display = "none";
+  }catch(e){ msg.style.color="var(--bad)"; msg.innerText="❌ "+e.message; }
+}
+
+async function findDuplicates(){
+  const date = document.getElementById("dupeDate").value;
+  const out = document.getElementById("dupeResults");
+  out.innerHTML = "";
+  if(!date){ out.innerHTML = `<p style="color:var(--bad);font-weight:600;">Please choose a date.</p>`; return; }
+
+  try{
+    const url = SUPABASE_URL + "/rest/v1/control?select=*&date=eq." + date + "&order=work_order,inserted_timestamp";
+    const res = await fetch(url, { headers: authHeaders() });
+    if(!res.ok) throw new Error("HTTP " + res.status);
+    const rows = await res.json();
+
+    // group by work_order, keep only groups with >1
+    const groups = {};
+    rows.forEach(r=>{ const wo=r.work_order; if(wo==null||wo==="") return; (groups[wo]=groups[wo]||[]).push(r); });
+    const dupes = Object.keys(groups).filter(wo=>groups[wo].length > 1);
+
+    if(!dupes.length){ out.innerHTML = `<p style="color:var(--muted);">No duplicate Work Orders on this date.</p>`; return; }
+
+    out.innerHTML = dupes.map(wo=>{
+      const list = groups[wo].map(r=>{
+        const when = r.inserted_timestamp ? new Date(r.inserted_timestamp).toLocaleString() : "—";
+        return `<tr><td>${r.id}</td><td>${r.assets||""}</td><td>${r.names||""}</td><td>${r.shift||""}</td><td>${when}</td>`
+             + `<td><button class="btn-sm btn-ghost" onclick="loadById(${r.id})">Open</button></td></tr>`;
+      }).join("");
+      return `<div class="dupe-group"><h4>Work Order: ${wo} (${groups[wo].length} rows)</h4>`
+           + `<div class="table-wrap"><div class="table-scroll"><table>`
+           + `<thead><tr><th>ID</th><th>Assets</th><th>Nurse</th><th>Shift</th><th>Inserted</th><th></th></tr></thead>`
+           + `<tbody>${list}</tbody></table></div></div></div>`;
+    }).join("");
+  }catch(e){ out.innerHTML = `<p style="color:var(--bad);font-weight:600;">❌ ${e.message}</p>`; }
+}
+
+async function loadById(id){
+  try{
+    const url = SUPABASE_URL + "/rest/v1/control?select=*&id=eq." + id + "&limit=1";
+    const res = await fetch(url, { headers: authHeaders() });
+    if(!res.ok) throw new Error("HTTP " + res.status);
+    const rows = await res.json();
+    if(!rows.length) return;
+    CURRENT = rows[0];
+    document.getElementById("woInput").value = CURRENT.work_order || "";
+    renderEdit(CURRENT);
+    document.getElementById("editCard").scrollIntoView({behavior:"smooth"});
+  }catch(e){ alert("Error: "+e.message); }
+}
+
+init();
+</script>
+</body>
+</html>

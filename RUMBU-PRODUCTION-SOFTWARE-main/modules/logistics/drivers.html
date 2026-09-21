@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Driver Profiles — Logistics</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme")||"navy"); }catch(e){} })();
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) document.documentElement.setAttribute("data-theme",e.data.rumbuTheme); });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body{padding:18px;}
+  .wrap{max-width:1000px;margin:0 auto;}
+  label{font-size:12px;font-weight:700;display:block;margin:10px 0 4px;color:var(--muted);}
+  input,select,textarea{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);}
+  .form-row-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;}
+  .form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  .sec-title{font-weight:700;color:var(--heading);margin:18px 0 8px;padding-bottom:4px;border-bottom:2px solid var(--line);font-size:13px;}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;}
+  th{text-align:left;padding:7px 8px;border-bottom:2px solid var(--line);color:var(--heading);white-space:nowrap;}
+  td{padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top;}
+  .btn-ghost{background:var(--bg);color:var(--heading);border:1px solid var(--line);}
+  .exp-warn{color:var(--bad,#c0392b);font-weight:700;}
+  .hidden{display:none;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back</button>
+  <div id="connStatus" style="font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);">Loading...</div>
+
+  <div class="card-panel">
+    <h3 style="color:var(--heading);margin:0 0 4px;">Driver Profiles</h3>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 16px;">A Driver profile adds driving-specific details on top of an existing Employee record — find them by name or Employee Code below. Only employees already in the Employee Directory can become a Driver.</p>
+
+    <button onclick="toggleForm()" id="toggleFormBtn">+ Add Driver</button>
+
+    <div class="hidden" id="formPanel" style="border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin:14px 0;">
+      <h4 style="margin-top:0;" id="formTitle">Add Driver</h4>
+      <input type="hidden" id="d_id">
+      <input type="hidden" id="d_employee_id">
+
+      <div id="employeePickBlock">
+        <label>Employee — Search by Name or Code</label>
+        <input id="employeeSearch" placeholder="Start typing..." oninput="searchEmployee(this.value)" autocomplete="off">
+        <div id="employeeSearchResults" style="font-size:12.5px;margin-top:6px;"></div>
+      </div>
+      <div id="employeeConfirmed" class="hidden" style="margin-top:8px;padding:8px 10px;background:var(--bg);border-radius:8px;font-size:13px;">
+        <b id="employeeConfirmedName"></b>
+        <button class="btn-ghost btn-sm" style="margin-left:10px;" onclick="clearEmployeePick()">Change</button>
+      </div>
+
+      <div class="sec-title">Licence</div>
+      <div class="form-row-3">
+        <div><label>Licence Number *</label><input id="d_licence_no"></div>
+        <div><label>Licence Class</label><input id="d_licence_class" placeholder="e.g. Class E"></div>
+        <div><label>Licence Expiry *</label><input type="date" id="d_licence_expiry"></div>
+      </div>
+
+      <div class="sec-title">Assignment &amp; Experience</div>
+      <div class="form-row">
+        <div><label>Assigned Vehicle</label>
+          <select id="d_vehicle"><option value="">— None —</option></select>
+        </div>
+        <div><label>Years of Driving Experience</label><input type="number" step="0.5" id="d_experience"></div>
+      </div>
+      <div><label>Training Notes</label><textarea id="d_training"></textarea></div>
+
+      <button onclick="saveDriver()" style="margin-top:14px;">Save Driver</button>
+      <button class="btn-ghost" onclick="toggleForm()">Cancel</button>
+      <div class="status" id="formStatus"></div>
+    </div>
+
+    <div style="margin-top:16px;"><label>Search Drivers</label><input id="search" placeholder="Name, code, or licence number" oninput="render()"></div>
+    <div id="wrap" style="margin-top:14px;overflow-x:auto;"></div>
+  </div>
+</div>
+
+<script>
+let ME = null;
+let DRIVERS = [];
+let VEHICLES = [];
+let ALL_STAFF = [];
+let PICKED_EMPLOYEE = null;
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+
+    const { data: staff } = await sb.from("employees").select("id,employee_id,full_name").order("full_name");
+    ALL_STAFF = staff || [];
+
+    await loadAll();
+    status.style.color="var(--ok)"; status.textContent="Connected.";
+  }catch(e){
+    status.style.color="var(--bad)"; status.textContent="Error: "+e.message;
+  }
+}
+
+async function loadAll(){
+  const [{ data: dData, error: dErr }, { data: vData }] = await Promise.all([
+    sb.from("logistics_drivers").select("*, employees(employee_id,full_name)").order("id"),
+    sb.from("logistics_vehicles").select("id,registration_number").order("registration_number")
+  ]);
+  if(dErr) throw dErr;
+  DRIVERS = dData || [];
+  VEHICLES = vData || [];
+  document.getElementById("d_vehicle").innerHTML = '<option value="">— None —</option>' +
+    VEHICLES.map(v=>`<option value="${v.id}">${v.registration_number}</option>`).join("");
+  render();
+}
+
+function vehicleReg(vehicleId){
+  const v = VEHICLES.find(x=>x.id===vehicleId);
+  return v ? v.registration_number : "—";
+}
+
+function daysUntil(dateStr){
+  if(!dateStr) return null;
+  return Math.ceil((new Date(dateStr) - new Date()) / 86400000);
+}
+function expiryCell(dateStr){
+  if(!dateStr) return "—";
+  const d = daysUntil(dateStr);
+  const cls = (d!=null && d<=30) ? "exp-warn" : "";
+  return `<span class="${cls}">${dateStr}${d!=null && d<=30 ? " ("+(d<0?"expired":d+"d left")+")" : ""}</span>`;
+}
+
+function render(){
+  const q = document.getElementById("search").value.trim().toLowerCase();
+  let rows = DRIVERS.filter(d=>{
+    const e = d.employees||{};
+    if(q && !((e.full_name||"")+(e.employee_id||"")+(d.licence_number||"")).toLowerCase().includes(q)) return false;
+    return true;
+  });
+  const wrap = document.getElementById("wrap");
+  if(!rows.length){ wrap.innerHTML = "<p style='color:var(--muted);font-size:13px;'>No drivers match.</p>"; return; }
+  wrap.innerHTML = `<table>
+    <thead><tr><th>Name</th><th>Employee Code</th><th>Licence No.</th><th>Class</th><th>Licence Expiry</th><th>Assigned Vehicle</th><th>Experience (yrs)</th><th></th></tr></thead>
+    <tbody>${rows.map(d=>{
+      const e = d.employees||{};
+      return `<tr>
+        <td><b>${e.full_name||"—"}</b></td>
+        <td>${e.employee_id||"—"}</td>
+        <td>${d.licence_number||"—"}</td>
+        <td>${d.licence_class||"—"}</td>
+        <td>${expiryCell(d.licence_expiry)}</td>
+        <td>${vehicleReg(d.assigned_vehicle_id)}</td>
+        <td>${d.years_experience!=null?d.years_experience:"—"}</td>
+        <td><button class="btn-ghost btn-sm" onclick="editDriver(${d.id})">Edit</button></td>
+      </tr>`;
+    }).join("")}</tbody>
+  </table>`;
+}
+
+function toggleForm(isEdit){
+  const panel = document.getElementById("formPanel");
+  panel.classList.toggle("hidden");
+  if(!panel.classList.contains("hidden") && !isEdit) clearForm();
+}
+
+function clearForm(){
+  document.getElementById("formTitle").textContent = "Add Driver";
+  document.getElementById("d_id").value = "";
+  clearEmployeePick();
+  document.getElementById("employeePickBlock").classList.remove("hidden");
+  ["d_licence_no","d_licence_class","d_licence_expiry","d_experience","d_training"].forEach(id=>document.getElementById(id).value="");
+  document.getElementById("d_vehicle").value = "";
+  document.getElementById("formStatus").textContent = "";
+}
+
+function clearEmployeePick(){
+  PICKED_EMPLOYEE = null;
+  document.getElementById("d_employee_id").value = "";
+  document.getElementById("employeeSearch").value = "";
+  document.getElementById("employeeSearchResults").innerHTML = "";
+  document.getElementById("employeePickBlock").classList.remove("hidden");
+  document.getElementById("employeeConfirmed").classList.add("hidden");
+}
+
+function searchEmployee(query){
+  const resultEl = document.getElementById("employeeSearchResults");
+  query = query.trim().toLowerCase();
+  if(!query){ resultEl.innerHTML = ""; return; }
+  const alreadyDriverIds = new Set(DRIVERS.map(d=>d.employee_id));
+  const matches = ALL_STAFF.filter(e =>
+    ((e.full_name||"").toLowerCase().includes(query) || (e.employee_id||"").toLowerCase().includes(query))
+  ).slice(0, 8);
+  if(!matches.length){ resultEl.innerHTML = `<span style="color:var(--bad);">No employee matches "${query}".</span>`; return; }
+  resultEl.innerHTML = matches.map(e=>{
+    const isDriver = alreadyDriverIds.has(e.id) && (!document.getElementById("d_id").value || DRIVERS.find(d=>d.employee_id===e.id)?.id != document.getElementById("d_id").value);
+    return `<div class="person-row" style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);">
+      <span>${e.full_name} (${e.employee_id})</span>
+      ${isDriver ? `<span style="color:var(--muted);">Already a Driver</span>` : `<button class="btn-sm" onclick="pickEmployee(${e.id})">Select</button>`}
+    </div>`;
+  }).join("");
+}
+
+function pickEmployee(employeeId){
+  const e = ALL_STAFF.find(x=>x.id===employeeId);
+  if(!e) return;
+  PICKED_EMPLOYEE = e;
+  document.getElementById("d_employee_id").value = e.id;
+  document.getElementById("employeePickBlock").classList.add("hidden");
+  document.getElementById("employeeConfirmedName").textContent = e.full_name + " (" + e.employee_id + ")";
+  document.getElementById("employeeConfirmed").classList.remove("hidden");
+}
+
+function editDriver(id){
+  const d = DRIVERS.find(x=>x.id===id);
+  if(!d) return;
+  const e = d.employees||{};
+  document.getElementById("formPanel").classList.remove("hidden");
+  document.getElementById("formTitle").textContent = "Edit Driver — " + (e.full_name||"");
+  document.getElementById("d_id").value = d.id;
+  document.getElementById("d_employee_id").value = d.employee_id;
+  document.getElementById("employeePickBlock").classList.add("hidden");
+  document.getElementById("employeeConfirmedName").textContent = (e.full_name||"") + " (" + (e.employee_id||"") + ")";
+  document.getElementById("employeeConfirmed").classList.remove("hidden");
+  document.getElementById("d_licence_no").value = d.licence_number||"";
+  document.getElementById("d_licence_class").value = d.licence_class||"";
+  document.getElementById("d_licence_expiry").value = d.licence_expiry||"";
+  document.getElementById("d_vehicle").value = d.assigned_vehicle_id||"";
+  document.getElementById("d_experience").value = d.years_experience??"";
+  document.getElementById("d_training").value = d.training_notes||"";
+  document.getElementById("formStatus").textContent = "";
+}
+
+async function saveDriver(){
+  const status = document.getElementById("formStatus");
+  const id = document.getElementById("d_id").value;
+  const employeeId = document.getElementById("d_employee_id").value;
+  const licenceNo = document.getElementById("d_licence_no").value.trim();
+  const licenceExpiry = document.getElementById("d_licence_expiry").value;
+
+  if(!employeeId){ status.className="status err"; status.textContent="Select an employee first."; return; }
+  if(!licenceNo){ status.className="status err"; status.textContent="Licence Number is required."; return; }
+  if(!licenceExpiry){ status.className="status err"; status.textContent="Licence Expiry is required."; return; }
+
+  status.className="status"; status.textContent="Saving...";
+  try{
+    const payload = {
+      employee_id: Number(employeeId),
+      licence_number: licenceNo,
+      licence_class: document.getElementById("d_licence_class").value.trim() || null,
+      licence_expiry: licenceExpiry,
+      assigned_vehicle_id: document.getElementById("d_vehicle").value || null,
+      years_experience: document.getElementById("d_experience").value ? Number(document.getElementById("d_experience").value) : null,
+      training_notes: document.getElementById("d_training").value.trim() || null,
+    };
+
+    if(id){
+      const { error } = await sb.from("logistics_drivers").update(payload).eq("id", id);
+      if(error) throw error;
+      await sb.from("logistics_activity_log").insert({
+        entity_type:"driver", entity_id:id, action:"updated",
+        actor_profile_id: ME.id, actor_username: ME.username,
+        description: ME.username + " updated driver profile for " + (PICKED_EMPLOYEE?PICKED_EMPLOYEE.full_name:("employee #"+employeeId))
+      });
+    } else {
+      payload.created_by = ME.id;
+      const { data: inserted, error } = await sb.from("logistics_drivers").insert(payload).select("id").single();
+      if(error) throw error;
+      await sb.from("logistics_activity_log").insert({
+        entity_type:"driver", entity_id:inserted.id, action:"created",
+        actor_profile_id: ME.id, actor_username: ME.username,
+        description: ME.username + " added driver profile for " + (PICKED_EMPLOYEE?PICKED_EMPLOYEE.full_name:("employee #"+employeeId))
+      });
+    }
+
+    status.className="status ok"; status.textContent="✅ Driver saved.";
+    await loadAll();
+    setTimeout(()=>{ document.getElementById("formPanel").classList.add("hidden"); }, 700);
+  }catch(e){
+    status.className="status err";
+    status.textContent = (e.message && e.message.toLowerCase().indexOf("duplicate")!==-1)
+      ? "❌ This employee already has a Driver profile."
+      : "❌ " + e.message;
+  }
+}
+
+init();
+</script>
+</body>
+</html>

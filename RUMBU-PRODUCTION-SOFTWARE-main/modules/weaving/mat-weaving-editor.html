@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Mat Weaving Editor</title>
+<link rel="stylesheet" href="../../styles.css">
+<style>
+  body{ padding:22px; }
+  .container{ max-width:560px; margin:0 auto; }
+  #status{ text-align:center; font-size:13px; font-weight:700; }
+  .msg{ text-align:center; margin-top:12px; font-weight:700; }
+  input.invalid{ border-color:var(--bad) !important; box-shadow:0 0 0 3px rgba(176,42,55,.15); }
+</style>
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="../../table-resolver.js"></script>
+</head>
+<body>
+
+<div class="container">
+
+  <div id="statusBox" class="card-panel">
+    <div id="status">Checking your session...</div>
+  </div>
+
+  <div id="appArea" style="display:none;">
+    <div class="card-panel">
+      <h2>Mat Weaving Viewer &amp; Operator Editor</h2>
+      <p class="sub">Pick a date, unit and shift to view and edit that record.</p>
+
+      <div class="field"><label>Section</label><select id="section" onchange="onSectionChange()"></select></div>
+      <div class="field"><label>Date</label><input type="date" id="date" onchange="loadUnits()"></div>
+      <div class="form-row">
+        <div class="field"><label>Unit</label><select id="unit" onchange="loadShifts()"><option value="">Select Unit</option></select></div>
+        <div class="field"><label>Shift</label><select id="shift"><option value="">Select Shift</option></select></div>
+      </div>
+      <button onclick="viewRecord()">View / Edit</button>
+      <div class="msg" id="pickMsg"></div>
+    </div>
+
+    <div id="editCard" class="card-panel" style="display:none;">
+      <h3>View / Edit Operator</h3>
+      <div id="editFields"></div>
+      <button onclick="saveRecord()">Save</button>
+      <div class="msg" id="saveMsg"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY, "Content-Type": "application/json" }; }
+const SECTION_DISPLAY_MAP = { "Rumbu":"Rumbu", "MamaSannu":"Mama Sannu" };
+const SECTION_VALUE_MAP   = { "Rumbu":"Rumbu", "Mama Sannu":"MamaSannu" }; // display -> stored value
+let CURRENT_ID = null;
+let MW_TABLE = "mat_weaving"; // resolved properly in init() below
+
+async function init(){
+  const me = await requireAuth("../../login.html");
+  if(!me) return;
+  MW_TABLE = await resolveWeavingTable();
+
+  const mine = (me.sectionNames && me.sectionNames.length)
+    ? me.sectionNames.filter(s => s === "Rumbu" || s === "MamaSannu")
+    : [];
+  const vals = mine.length ? mine : ["Rumbu","MamaSannu"];
+
+  const sel = document.getElementById("section");
+  sel.innerHTML = vals.map(v=>`<option value="${v}">${SECTION_DISPLAY_MAP[v]||v}</option>`).join("");
+  if(vals.length === 1) sel.disabled = true;
+
+  document.getElementById("statusBox").style.display = "none";
+  document.getElementById("appArea").style.display = "block";
+}
+
+function sectionValue(){ return document.getElementById("section").value; } // already stored form (Rumbu / MamaSannu)
+
+function onSectionChange(){
+  document.getElementById("unit").innerHTML = '<option value="">Select Unit</option>';
+  document.getElementById("shift").innerHTML = '<option value="">Select Shift</option>';
+  loadUnits();
+}
+
+async function distinct(col, extraFilter){
+  const url = SUPABASE_URL + "/rest/v1/" + MW_TABLE + "?select=" + col + extraFilter;
+  const res = await fetch(url, { headers: authHeaders() });
+  if(!res.ok) throw new Error("HTTP " + res.status);
+  const rows = await res.json();
+  return [...new Set(rows.map(r=>r[col]).filter(v=>v!==null && v!==""))].sort();
+}
+
+async function loadUnits(){
+  const date = document.getElementById("date").value;
+  const section = sectionValue();
+  const unitSel = document.getElementById("unit");
+  const shiftSel = document.getElementById("shift");
+  unitSel.innerHTML = '<option value="">Select Unit</option>';
+  shiftSel.innerHTML = '<option value="">Select Shift</option>';
+  if(!date || !section) return;
+  try{
+    const units = await distinct("units", "&date_col=eq."+date+"&section=eq."+encodeURIComponent(section));
+    units.forEach(u=> unitSel.innerHTML += `<option value="${u}">${u}</option>`);
+  }catch(e){ document.getElementById("pickMsg").style.color="var(--bad)"; document.getElementById("pickMsg").innerText="❌ "+e.message; }
+}
+
+async function loadShifts(){
+  const date = document.getElementById("date").value;
+  const unit = document.getElementById("unit").value;
+  const section = sectionValue();
+  const shiftSel = document.getElementById("shift");
+  shiftSel.innerHTML = '<option value="">Select Shift</option>';
+  if(!date || !unit || !section) return;
+  try{
+    const shifts = await distinct("shift", "&date_col=eq."+date+"&units=eq."+encodeURIComponent(unit)+"&section=eq."+encodeURIComponent(section));
+    shifts.forEach(s=> shiftSel.innerHTML += `<option value="${s}">${s}</option>`);
+  }catch(e){ document.getElementById("pickMsg").style.color="var(--bad)"; document.getElementById("pickMsg").innerText="❌ "+e.message; }
+}
+
+async function viewRecord(){
+  const date = document.getElementById("date").value;
+  const unit = document.getElementById("unit").value;
+  const shift = document.getElementById("shift").value;
+  const section = sectionValue();
+  const pickMsg = document.getElementById("pickMsg");
+  pickMsg.innerText = "";
+  if(!date || !unit || !shift){ pickMsg.style.color="var(--bad)"; pickMsg.innerText="Select date, unit and shift."; return; }
+
+  try{
+    const url = SUPABASE_URL + "/rest/v1/" + MW_TABLE + "?select=*"
+      + "&date_col=eq."+date+"&units=eq."+encodeURIComponent(unit)
+      + "&shift=eq."+encodeURIComponent(shift)+"&section=eq."+encodeURIComponent(section)+"&limit=1";
+    const res = await fetch(url, { headers: authHeaders() });
+    if(!res.ok) throw new Error("HTTP " + res.status);
+    const rows = await res.json();
+    if(!rows.length){ pickMsg.style.color="var(--bad)"; pickMsg.innerText="Record not found."; document.getElementById("editCard").style.display="none"; return; }
+    renderEdit(rows[0]);
+  }catch(e){ pickMsg.style.color="var(--bad)"; pickMsg.innerText="❌ "+e.message; }
+}
+
+let RANKS = [];
+async function loadRanks(){
+  if(RANKS.length) return RANKS;
+  try{
+    const url = SUPABASE_URL + "/rest/v1/" + MW_TABLE + "?select=rank&rank=not.is.null";
+    const res = await fetch(url, { headers: authHeaders() });
+    if(res.ok){ const rows = await res.json(); RANKS = [...new Set(rows.map(r=>r.rank).filter(Boolean))].sort(); }
+  }catch(e){}
+  return RANKS;
+}
+
+async function renderEdit(row){
+  CURRENT_ID = row.id;
+  const num = (f,label)=>`<div class="field"><label>${label}</label><input type="number" step="0.01" data-f="${f}" value="${row[f]??""}"></div>`;
+  const ranks = await loadRanks();
+  let rankOpts = '<option value="">Select Rank</option>' + ranks.map(r=>`<option value="${r}" ${r===row.rank?"selected":""}>${r}</option>`).join("");
+
+  document.getElementById("editFields").innerHTML =
+      num("a_double","A Double")
+    + num("a_single","A Single")
+    + num("b","B")
+    + num("c","C")
+    + `<div class="field"><label>Operator Name</label><input type="text" data-f="operator_name" value="${row.operator_name??""}"></div>`
+    + `<div class="field"><label>Operator ID</label><input type="text" data-f="operator_id" value="${row.operator_id??""}"></div>`
+    + `<div class="field"><label>Rank</label><select data-f="rank">${rankOpts}</select></div>`;
+
+  document.getElementById("editCard").style.display = "block";
+  document.getElementById("saveMsg").innerText = "";
+}
+
+async function saveRecord(){
+  const saveMsg = document.getElementById("saveMsg");
+  const fields = document.querySelectorAll("#editFields [data-f]");
+  const payload = {};
+  let valid = true;
+
+  fields.forEach(el=>{
+    const f = el.getAttribute("data-f");
+    let v = el.value;
+    if(["a_double","a_single","b","c"].includes(f)){
+      el.classList.remove("invalid");
+      if(v==="" || isNaN(v)){ el.classList.add("invalid"); valid=false; return; }
+      v = parseFloat(v);
+    }
+    payload[f] = v;
+  });
+
+  if(!valid){ saveMsg.style.color="var(--bad)"; saveMsg.innerText="Fix highlighted numeric fields."; return; }
+  if(!payload.operator_name || !payload.operator_id){ saveMsg.style.color="var(--bad)"; saveMsg.innerText="Operator Name and ID are required."; return; }
+  if(CURRENT_ID == null){ saveMsg.style.color="var(--bad)"; saveMsg.innerText="No record loaded."; return; }
+
+  try{
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + MW_TABLE + "?id=eq." + CURRENT_ID, {
+      method: "PATCH", headers: authHeaders(), body: JSON.stringify(payload)
+    });
+    if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
+    saveMsg.style.color="var(--ok)"; saveMsg.innerText="✅ Record updated";
+  }catch(e){ saveMsg.style.color="var(--bad)"; saveMsg.innerText="❌ "+e.message; }
+}
+
+init();
+</script>
+</body>
+</html>

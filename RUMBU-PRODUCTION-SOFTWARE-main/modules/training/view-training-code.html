@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>View Training Code</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+body { font-family:var(--sans); background:var(--bg); padding: 20px; margin:0; display: flex; justify-content: center; }
+.container { width: 100%; max-width: 950px; background:var(--card); padding: 20px; border-radius: 12px; box-shadow: 0 5px 20px rgba(0,0,0,.08); }
+h2 { text-align: center; margin-bottom: 15px; }
+select { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid var(--line); margin-bottom: 10px; box-sizing:border-box; }
+table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+th, td { border: 1px solid var(--line); padding: 10px; font-size: 14px; text-align: left; }
+th { background:var(--bg); }
+.badge { background: #111; color: #fff; padding: 3px 8px; border-radius: 6px; font-size: 12px; }
+#status { font-size:12px; font-weight:bold; text-align:center; margin-bottom:10px; }
+@media (max-width: 600px) { th, td { font-size: 12px; } }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <h2>View Training Code</h2>
+  <div id="status">Connecting to Supabase...</div>
+
+  <select id="department" onchange="loadData()"><option value="ALL">ALL DEPARTMENTS</option></select>
+
+  <table>
+    <thead><tr><th>ID</th><th>Code</th><th>Description</th><th>Department</th><th>Rank</th></tr></thead>
+    <tbody id="table"></tbody>
+  </table>
+</div>
+
+<script>
+const SUPABASE_URL = "https://betfhunzmhtdzgvufmfk.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp";
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
+
+let TRAINING_CODE_ROWS = [];
+
+// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
+// `query` may include extra params like "&order=col.desc" (no leading select).
+async function fetchAllRows(table, query){
+  let all = [], offset = 0; const pageSize = 1000;
+  const q = query || "";
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=*" + q, { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+
+
+async function init(){
+  const status = document.getElementById("status");
+  try{
+    TRAINING_CODE_ROWS = await fetchAllRows("training_code", "");
+    status.style.color = "#1d8a4e";
+    status.textContent = "Connected. training_code: " + TRAINING_CODE_ROWS.length + " rows.";
+    loadDepartments();
+    loadData();
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+function loadDepartments(){
+  const depts = [...new Set(TRAINING_CODE_ROWS.map(r=>r.department).filter(Boolean))].sort();
+  const select = document.getElementById("department");
+  depts.forEach(dep=>{ const opt=document.createElement("option"); opt.value=dep; opt.text=dep; select.appendChild(opt); });
+}
+
+function loadData(){
+  const department = document.getElementById("department").value;
+  const rows = (department === "ALL" ? TRAINING_CODE_ROWS : TRAINING_CODE_ROWS.filter(r=>r.department===department))
+    .slice().sort((a,b)=>Number(a.id)-Number(b.id));
+
+  let html = "";
+  rows.forEach(r=>{
+    html += `<tr>
+      <td><span class="badge">${r.id}</span></td>
+      <td>${r.code||""}</td>
+      <td>${r.description||""}</td>
+      <td>${r.department||""}</td>
+      <td><span class="badge">${r.rank||""}</span></td>
+    </tr>`;
+  });
+  document.getElementById("table").innerHTML = html;
+}
+
+init();
+</script>
+</body>
+</html>

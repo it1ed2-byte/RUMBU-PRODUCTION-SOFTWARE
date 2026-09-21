@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Maintenance Summary</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+  :root{--navy:var(--heading);}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:20px;display:flex;justify-content:center;}
+  #container{background:var(--card);padding:20px;width:100%;max-width:700px;border-radius:12px;box-shadow:0 4px 14px rgba(0,0,0,.1);}
+  h2{text-align:center;}
+  h3{text-align:center;color:var(--navy);}
+  label{font-weight:bold;margin-top:10px;display:block;}
+  select,input{width:100%;padding:10px;margin-top:5px;border-radius:6px;border:1px solid var(--line);}
+  button{background:var(--navy);border:none;color:#fff;padding:12px;width:100%;margin-top:15px;border-radius:6px;cursor:pointer;font-size:15px;}
+  button.alt{background:#38761d;}
+  #status{margin-top:12px;text-align:center;font-weight:bold;font-size:13px;}
+  table{width:100%;margin-top:20px;border-collapse:collapse;font-size:13px;}
+  th,td{border:1px solid #444;padding:8px;text-align:center;}
+  th{background:var(--navy);color:#fff;}
+  @media print{ .no-print{display:none !important;} }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+</head>
+<body>
+<div id="container">
+  <h2 class="no-print">Maintenance Summary Report</h2>
+  <div class="no-print">
+    <label>Start Date</label><input type="date" id="startDate">
+    <label>End Date</label><input type="date" id="endDate">
+    <label>Section</label>
+    <select id="section"><option value="">All</option></select>
+    <label>Shift</label>
+    <select id="shift"><option value="">All</option><option>Morning</option><option>Night</option></select>
+    <button onclick="generateReport()">Generate Report</button>
+    <button class="alt" onclick="window.print()">Print / Save as PDF</button>
+  </div>
+  <div id="status" class="no-print">Connecting to Supabase...</div>
+  <div id="result"></div>
+</div>
+
+<script>
+const SECTION_LABEL = { "Rumbu": "Rumbu", "MamaSannu": "Mama Sannu" };
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
+function parseDT(v){ const d=new Date(v); return isNaN(d)?null:d; }
+function minutesBetween(a,b){ return (!a||!b)?0:Math.round((b-a)/60000); }
+function extractNumber(v){ if(v==null) return 0; const m=String(v).match(/\d+(\.\d+)?/); return m?Number(m[0]):0; }
+
+// Exact allow-list of assets from the original script.
+const selectedAssets = new Set([
+  'WA-01','WA-02','WA-03','WA-04','WA-05','WA-06','WA-07','WA-08','WA-09','WA-10','WA-11','WA-12',
+  'WB-01','WB-02','WB-03','WB-04','WB-05','WB-06','WB-07','WB-08','WB-09','WB-10','WB-11','WB-12',
+  'WC-01','WC-02','WC-03','WC-04','WC-05','WC-06','WC-07','WC-08','WC-09','WC-10','WC-11','WC-12',
+  'WD-01','WD-02','WD-03','WD-04','WD-05','WD-06','WD-07','WD-08','WD-09','WD-10','WD-11','WD-12',
+  'WE-01','WE-02','WE-03','WE-04','WE-05','WE-06','WE-07','WE-08','WE-09','WE-10','WE-11','WE-12',
+  'WF-01','WF-02','WF-03','WF-04','WF-05','WF-06','WF-07','WF-08','WF-09','WF-10','WF-11','WF-12',
+  'WG-01','WG-02','WG-03','WG-04','WG-05','WG-06','WG-07','WG-08','WG-09','WG-10','WG-11','WG-12','WG-13','WG-14',
+  'WH-01','WH-02','WH-03','WH-04','WH-05','WH-06','WH-07','WH-08','WH-09','WH-10','WH-11','WH-12',
+  'WI-01','WI-02','WI-03','WI-04','WI-05','WI-06','WI-07','WI-08','WI-09','WI-10','WI-11','WI-12',
+  'WJ-01','WJ-02','WJ-03','WJ-04','WJ-05','WJ-06','WJ-07','WJ-08','WJ-09','WJ-10','WJ-11','WJ-12',
+  'WK-01','WK-02','WK-03','WK-04','WK-05','WK-06','WK-07','WK-08','WK-09','WK-10','WK-11','WK-12',
+  'WL-01','WL-02','WL-03','WL-04','WL-05','WL-06','WL-07','WL-08','WL-09','WL-10','WL-11','WL-12',
+  'WM-01','WM-02','WM-03','WM-04','WM-05','WM-06','WM-07','WM-08','WM-09','WM-10','WM-11','WM-12',
+  'WN-01','WN-02','WN-03','WN-04','WN-05','WN-06','WN-07','WN-08','WN-09','WN-10','WN-11','WN-12',
+  'WO-01','WO-02','WO-03','WO-04','WO-05','WO-06','WO-07','WO-08','WO-09','WO-10','WO-11','WO-12',
+  'WP-01','WP-02','WP-03','WP-04','WP-05','WP-06','WP-07','WP-08','WP-09','WP-10','WP-11','WP-12',
+  'WQ-01','WQ-02','WQ-03','WQ-04','WQ-05','WQ-06','WQ-07','WQ-08','WQ-09','WQ-10','WQ-11','WQ-12',
+  'WR-01','WR-02','WR-03','WR-04','WR-05','WR-06','WR-07','WR-08','WR-09','WR-10','WR-11','WR-12',
+  'WS-01','WS-02','WS-03','WS-04','WS-05','WS-06','WS-07','WS-08','WS-09','WS-10','WS-11','WS-12',
+  'WS-13','WS-14','WS-15','WS-16','WS-17','WS-18','WS-19','WS-20','WS-21','WS-22','WS-23',
+  'WT-01','WT-02','WT-03','WT-04','WT-05','WT-06','WT-07','WT-08','WT-09','WT-10','WT-11','WT-12','WT-13',
+  'WU-01','WU-02','WU-03','WU-04','WU-05','WU-06','WU-07','WU-08','WU-09','WU-10','WU-11','WU-12',
+  'WU-13','WU-14','WU-15','WU-16','WU-17','WU-18','WU-19','WU-20','WU-21','WU-22',
+  'WV-01','WV-02','WV-03','WV-04','WV-05','WV-06','WV-07','WV-08','WV-09','WV-10','WV-11','WV-12',
+  'WV-13','WV-14','WV-15','WV-16','WV-17','WV-18','WV-19',
+  'WW-01','WW-02','WW-03','WW-04','WW-05','WW-06','WW-07','WW-08','WW-09','WW-10','WW-11','WW-12',
+  'WW-13','WW-14','WW-15','WW-16',
+  'WX-01','WX-02','WX-03','WX-04','WX-05','WX-06','WX-07','WX-08','WX-09','WX-10','WX-11','WX-12',
+  'WY-01','WY-02','WY-03','WY-04','WY-05','WY-06','WY-07','WY-08','WY-09','WY-10','WY-11','WY-12',
+  'WY-13','WY-14','WY-15','WY-16','WY-17',
+  'WZ-01','WZ-02','WZ-03','WZ-04','WZ-05','WZ-06','WZ-07','WZ-08','WZ-09','WZ-10','WZ-11','WZ-12',
+  'WZ-13','WZ-14','WZ-15','WZ-16','WZ-17','WZ-18'
+]);
+// Hardcoded job codes to exclude — matches GAS script exactly:
+// AND Job_Code NOT IN ("OPR01","OPR02","OPR03","OPR04","WSP01","STR01")
+// This report uses a fixed list, NOT job_table, unlike other reports.
+const EXCLUDED_JOB_CODES = new Set(["OPR01","OPR02","OPR03","OPR04","WSP01","STR01"]);
+
+let CTRL_ROWS = []; CTRL_ROWS.forEach(normalizeControlRow);
+
+// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
+async function fetchAllRows(table, select){
+  let all = [], offset = 0; const pageSize = 1000;
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=" + (select||"*"), { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+function normalizeControlRow(r){
+  if(r.date_col === undefined) r.date_col = r.date;
+  if(r.names === undefined) r.names = r.nurse_name;
+  if(r.stop_time === undefined) r.stop_time = r.mc_stoppage_time;
+  if(r.extimated_time === undefined) r.extimated_time = r.estimated_duration;
+  if(r.discription === undefined) r.discription = r.description;
+  return r;
+}
+
+async function init(){
+  const status = document.getElementById("status");
+  try{
+    const me = await requireAuth("../../login.html");
+    if(!me) return;
+
+    const mySections = (me.sectionNames && me.sectionNames.length) ? me.sectionNames : ["Rumbu","MamaSannu"];
+    document.getElementById("section").innerHTML = '<option value="">All</option>' +
+      mySections.map(s=>`<option value="${s}">${SECTION_LABEL[s]||s}</option>`).join("");
+
+    status.style.color="#1d8a4e"; status.textContent = "Ready. Select a date range and click Generate.";
+  }catch(e){
+    status.style.color="#c0392b"; status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+async function fetchControlRange(fromDate, toDate){
+  CTRL_ROWS = await fetchAllRows("control","*", "&date=gte."+fromDate+"&date=lte."+toDate);
+  CTRL_ROWS.forEach(normalizeControlRow);
+}
+
+async function generateReport(){
+  const start = document.getElementById("startDate").value;
+  const end = document.getElementById("endDate").value;
+  const section = document.getElementById("section").value;
+  const shift = document.getElementById("shift").value;
+  if(!start || !end){ alert("Please select start and end dates."); return; }
+
+  const status = document.getElementById("status");
+  if(status){ status.style.color="#555"; status.textContent = "Loading "+start+" to "+end+"…"; }
+  try{ await fetchControlRange(start, end); }
+  catch(e){ if(status){ status.style.color="#c0392b"; status.textContent="Could not read data: "+(e.message||e); } return; }
+  if(status){ status.textContent = ""; }
+  if(!CTRL_ROWS.length){ alert("No downtime records found for this date range."); return; }
+
+  const rows = CTRL_ROWS.filter(r=>{
+    if(r.date_col < start || r.date_col > end) return false;
+    // GAS WHERE clause requires ALL THREE timestamps to be non-null:
+    // AND Starting_Time IS NOT NULL AND Finish_Time IS NOT NULL AND MC_Stoppage_Time IS NOT NULL
+    if(!r.starting_time || !r.finish_time || !r.stop_time) return false;
+    if(EXCLUDED_JOB_CODES.has(r.job_code)) return false;
+    // FIX 2: Case/whitespace-insensitive section match — GAS uses UPPER(TRIM(Section)).
+    // Exact match r.section !== section misses records with trailing spaces or different casing.
+    if(section){
+      const rSec = (r.section || "").toUpperCase().trim();
+      const fSec = section.toUpperCase().trim();
+      if(rSec !== fSec) return false;
+    }
+    if(shift && r.shift !== shift) return false;
+    if(!selectedAssets.has(r.assets)) return false;
+    return true;
+  });
+
+  if(!rows.length){ document.getElementById("result").innerHTML = "<p>No data found.</p>"; return; }
+
+  let totalWaiting=0, totalRepair=0, totalDowntime=0, totalEstimated=0;
+  const dailyTotals = {};
+
+  // All three timestamps are guaranteed non-null by the filter above (matching GAS WHERE clause).
+  // GAS computes:
+  //   Waiting  = TIMESTAMP_DIFF(Starting_Time, MC_Stoppage_Time, MINUTE)
+  //   Repair   = TIMESTAMP_DIFF(Finish_Time, Starting_Time, MINUTE)
+  //   Downtime = TIMESTAMP_DIFF(Finish_Time, MC_Stoppage_Time, MINUTE)
+  rows.forEach(r=>{
+    const stop   = parseDT(r.stop_time);
+    const start  = parseDT(r.starting_time);
+    const finish = parseDT(r.finish_time);
+    const estimated = extractNumber(r.extimated_time);
+
+    const waiting  = minutesBetween(stop,  start);   // start - stop
+    const repair   = minutesBetween(start, finish);  // finish - start
+    const downtime = minutesBetween(stop,  finish);  // finish - stop
+
+    totalWaiting+=waiting; totalRepair+=repair; totalDowntime+=downtime; totalEstimated+=estimated;
+
+    const d = r.date_col;
+    if(!dailyTotals[d]) dailyTotals[d] = { waiting:0, repair:0, downtime:0, estimated:0, count:0 };
+    dailyTotals[d].waiting+=waiting; dailyTotals[d].repair+=repair;
+    dailyTotals[d].downtime+=downtime; dailyTotals[d].estimated+=estimated; dailyTotals[d].count++;
+  });
+
+  const staffPerf = (totalRepair+totalEstimated===0) ? 0 : Math.round((totalEstimated/totalRepair)*100);
+
+  let html = `<h3>Overall Summary</h3><table>
+    <tr><th>Total Waiting Time (min)</th><td>${Math.round(totalWaiting)}</td></tr>
+    <tr><th>Total Repair Time (min)</th><td>${Math.round(totalRepair)}</td></tr>
+    <tr><th>Total Downtime (min)</th><td>${Math.round(totalDowntime)}</td></tr>
+    <tr><th>Total Estimated Duration</th><td>${Math.round(totalEstimated)}</td></tr>
+    <tr><th>Total Count</th><td>${rows.length}</td></tr>
+    <tr><th>Staff Performance (%)</th><td>${staffPerf}</td></tr>
+  </table>`;
+
+  html += `<h3>Daily Breakdown</h3><table><tr><th>Date</th><th>WT (min)</th><th>RT (min)</th><th>DT (min)</th><th>ET</th><th>Count</th><th>P(%)</th></tr>`;
+  Object.keys(dailyTotals).sort().forEach(date=>{
+    const d = dailyTotals[date];
+    const perf = (d.repair+d.estimated===0) ? 0 : Math.round((d.estimated/d.repair)*100);
+    html += `<tr><td>${date}</td><td>${Math.round(d.waiting)}</td><td>${Math.round(d.repair)}</td>` +
+      `<td>${Math.round(d.downtime)}</td><td>${Math.round(d.estimated)}</td><td>${d.count}</td><td>${perf}</td></tr>`;
+  });
+  html += "</table>";
+
+  document.getElementById("result").innerHTML = html;
+}
+
+init();
+</script>
+<script src="../../assets/letterhead.js"></script>
+</body>
+</html>

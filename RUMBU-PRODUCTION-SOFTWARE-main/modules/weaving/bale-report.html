@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Bale Report</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+  :root{--navy:var(--heading);}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:16px;}
+  .card{max-width:1000px;margin:0 auto 16px;background:var(--card);border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.15);padding:20px;}
+  h2{text-align:center;color:var(--navy);border-bottom:2px solid var(--navy);padding-bottom:10px;}
+  h3{background:var(--navy);color:#fff;padding:6px;text-align:center;margin-top:20px;border-radius:4px;}
+  label{font-weight:600;margin-top:8px;display:block;font-size:13px;}
+  input,select{width:100%;padding:8px;margin-top:4px;border:1px solid var(--line);border-radius:6px;font-size:13px;}
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
+  .btn-row{display:flex;gap:10px;margin-top:14px;}
+  button{flex:1;padding:11px;border:none;border-radius:8px;background:var(--navy);color:#fff;font-weight:bold;cursor:pointer;}
+  button.alt{background:#38761d;}
+  #status{margin-top:10px;font-weight:bold;font-size:13px;}
+  table{width:100%;border-collapse:collapse;font-size:12px;margin-top:6px;}
+  th,td{border:1px solid #333;padding:4px;text-align:center;}
+  th{background:#d9eaf7;}
+  tr:nth-child(even){background:#f9f9f9;}
+  .total{font-weight:bold;background:#b4c6e7;}
+  @media (max-width:700px){ .grid{grid-template-columns:1fr 1fr;} }
+  @media print{ .no-print{display:none !important;} }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="../../table-resolver.js"></script>
+</head>
+<body>
+
+<div class="card no-print">
+  <h2>🧵 Bale Report</h2>
+  <div class="grid">
+    <div><label>From Date</label><input type="date" id="fromDate"></div>
+    <div><label>To Date</label><input type="date" id="toDate"></div>
+    <div><label>Shift</label><select id="shift"><option value="All">All</option><option>Morning</option><option>Night</option></select></div>
+    <div><label>Group_Name</label><select id="groupName"><option value="All">All</option><option>A</option><option>B</option></select></div>
+    <div><label>Section</label><select id="section"><option value="All">All</option></select></div>
+    <div><label>Shed</label><select id="shed"><option value="All">All</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option value="MamaSannu">Mama Sannu</option></select></div>
+    <div><label>Work Duration (unused in calc, kept for parity)</label><select id="workMinutes"><option value="660">11 hours</option><option value="600">10 hours</option><option value="540">9 hours</option></select></div>
+  </div>
+  <div class="btn-row">
+    <button onclick="generate()">Generate Bale Report</button>
+    <button class="alt" onclick="window.print()">Print / Save as PDF</button>
+  </div>
+  <div id="status">Connecting to Supabase...</div>
+</div>
+
+<div id="reportArea"></div>
+
+<script>
+let MW_TABLE = "mat_weaving"; // resolved properly in init() below
+let MW_ROWS = [];
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
+const SECTION_LABEL = { "Rumbu": "Rumbu", "MamaSannu": "Mama Sannu" };
+
+
+// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
+async function fetchAllRows(table, select, query){
+  let all = [], offset = 0; const pageSize = 1000;
+  const q = query || "";
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=" + (select||"*") + q, { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+
+async function init(){
+  const status = document.getElementById("status");
+  try{
+    const me = await requireAuth("../../login.html");
+    if(!me) return;
+    MW_TABLE = await resolveWeavingTable();
+
+    const mySections = (me.sectionNames && me.sectionNames.length) ? me.sectionNames : ["Rumbu","MamaSannu"];
+    document.getElementById("section").innerHTML = '<option value="All">All</option>' +
+      mySections.map(s=>`<option value="${s}">${SECTION_LABEL[s]||s}</option>`).join("");
+    // Default-select and lock the dropdown to the user's own Section when they only have one.
+    if(mySections.length === 1){
+      document.getElementById("section").value = mySections[0];
+      document.getElementById("section").disabled = true;
+    }
+
+    status.style.color="#1d8a4e"; status.textContent = "Ready. Select a date range and click Generate.";
+  }catch(e){
+    status.style.color="#c0392b"; status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+// Exact categories and mats-per-belt from the original script.
+const CATEGORIES = ["A Double","No.1","No.2","No.3","No.4","Prayer Mat","Hajj Mat"];
+const MATS_PER_BELT = { "A Double":26, "No.1":25, "No.2":20, "No.3":10, "No.4":10, "Prayer Mat":30, "Hajj Mat":25 };
+
+function beltsAndRem(mats, mpb){
+  mats = Math.round(mats || 0);
+  return { belts: Math.floor(mats/mpb), rem: mats % mpb };
+}
+
+async function generate(){
+  const fromDate = document.getElementById("fromDate").value;
+  const toDate = document.getElementById("toDate").value;
+  const shift = document.getElementById("shift").value;
+  const groupName = document.getElementById("groupName").value;
+  const section = document.getElementById("section").value;
+  const shed = document.getElementById("shed").value;
+  const workMinutes = document.getElementById("workMinutes").value;
+
+  if(!fromDate || !toDate){ alert("Please select From & To dates."); return; }
+  const status = document.getElementById("status");
+  if(status){ status.style.color="#555"; status.textContent="Loading "+fromDate+" to "+toDate+"…"; }
+  try{ MW_ROWS = await fetchAllRows(MW_TABLE,"*", "&date_col=gte."+fromDate+"&date_col=lte."+toDate); }
+  catch(e){ if(status){ status.style.color="#c0392b"; status.textContent="Could not read data: "+(e.message||e);} return; }
+  if(status){ status.textContent=""; }
+  if(!MW_ROWS.length){ alert("No production rows found for this date range."); return; }
+
+  const rows = MW_ROWS.filter(r=>{
+    if(r.date_col < fromDate || r.date_col > toDate) return false;
+    if(shift !== "All" && r.shift !== shift) return false;
+    if(groupName !== "All" && r.group_name !== groupName) return false;
+    if(section !== "All" && r.section !== section) return false;
+    if(shed !== "All" && String(r.shed) !== shed) return false;
+    return true;
+  });
+
+  if(!rows.length){
+    document.getElementById("reportArea").innerHTML = "<div class='card'><p>⚠️ No data found for the selected filters.</p></div>";
+    return;
+  }
+
+  // ---- main summary: group by TRIM(Mat_Type) ----
+  const map = {};
+  rows.forEach(r=>{
+    const cat = (r.mat_type||"").trim();
+    if(!map[cat]) map[cat] = { a_double:0, a_single:0, b:0, c:0, total:0, target:0 };
+    map[cat].a_double += Number(r.a_double||0);
+    map[cat].a_single += Number(r.a_single||0);
+    map[cat].b += Number(r.b||0);
+    map[cat].c += Number(r.c||0);
+    map[cat].total += Number(r.total||0);
+    map[cat].target += Number(r.target||0);
+  });
+  CATEGORIES.forEach(c=>{ if(!map[c]) map[c] = { a_double:0,a_single:0,b:0,c:0,total:0,target:0 }; });
+
+  let html = `<div class="card"><h2>🧵 Bale Report</h2>
+    <p style="text-align:center;">${fromDate} &rarr; ${toDate} | Shift: ${shift} | Group_Name: ${groupName} | Section: ${section} | Work Minutes: ${workMinutes} | Shed: ${shed}</p>`;
+
+  // ---- PRODUCED ----
+  html += `<h3>📦 PRODUCED</h3><table><tr><th>Mat Type</th><th>Mats Produced</th><th>Mats/Belt</th><th>Belts</th><th>Rem(pcs)</th></tr>`;
+  let totalMats=0, totalBelts=0, totalRem=0;
+  CATEGORIES.forEach(cat=>{
+    // preserved exactly: "A Double" pulls from No.1's a_double; "No.1" = No.1's a_single+b+c
+    let mats = cat === "A Double" ? (map["No.1"]?.a_double || 0)
+             : cat === "No.1" ? (map["No.1"]?.a_single||0) + (map["No.1"]?.b||0) + (map["No.1"]?.c||0)
+             : map[cat]?.total || 0;
+    const br = beltsAndRem(mats, MATS_PER_BELT[cat]);
+    totalMats += mats; totalBelts += br.belts; totalRem += br.rem;
+    html += `<tr><td>${cat}</td><td>${Math.round(mats)}</td><td>${MATS_PER_BELT[cat]}</td><td>${br.belts}</td><td>${br.rem}</td></tr>`;
+  });
+  html += `<tr class="total"><td>Total</td><td>${Math.round(totalMats)}</td><td>-</td><td>${totalBelts}</td><td>${totalRem}</td></tr></table>`;
+
+  // ---- MAT & BALE SUMMARY ----
+  html += `<h3>📊 MAT & BALE SUMMARY</h3><table><tr><th>Mat Type</th><th>A Double</th><th>Belts</th><th>Rem</th>` +
+    `<th>A Single</th><th>Belts</th><th>Rem</th><th>B</th><th>Belts</th><th>Rem</th><th>C</th><th>Belts</th><th>Rem</th></tr>`;
+  CATEGORIES.filter(c=>c!=="A Double").forEach(type=>{
+    const m = map[type]; const mpb = MATS_PER_BELT[type];
+    const doubleBr = type==="No.1" ? beltsAndRem(m.a_double, MATS_PER_BELT["A Double"]) : {belts:0,rem:0};
+    const singleBr = beltsAndRem(m.a_single, mpb);
+    const bBr = beltsAndRem(m.b, mpb);
+    const cBr = beltsAndRem(m.c, mpb);
+    html += `<tr><td>${type}</td><td>${Math.round(m.a_double)}</td><td>${doubleBr.belts}</td><td>${doubleBr.rem}</td>` +
+      `<td>${Math.round(m.a_single)}</td><td>${singleBr.belts}</td><td>${singleBr.rem}</td>` +
+      `<td>${Math.round(m.b)}</td><td>${bBr.belts}</td><td>${bBr.rem}</td>` +
+      `<td>${Math.round(m.c)}</td><td>${cBr.belts}</td><td>${cBr.rem}</td></tr>`;
+  });
+  html += "</table>";
+
+  // ---- TARGET ----
+  html += `<h3>🎯 TARGET</h3><table><tr><th>Mat Type</th><th>Target Mats</th><th>Mats/Belt</th><th>Belts</th><th>Rem</th></tr>`;
+  let totalTargetMats=0, totalTargetBelts=0, totalTargetRem=0;
+  CATEGORIES.filter(c=>c!=="A Double").forEach(cat=>{
+    const mats = map[cat].target;
+    const br = beltsAndRem(mats, MATS_PER_BELT[cat]);
+    totalTargetMats += mats; totalTargetBelts += br.belts; totalTargetRem += br.rem;
+    html += `<tr><td>${cat}</td><td>${Math.round(mats)}</td><td>${MATS_PER_BELT[cat]}</td><td>${br.belts}</td><td>${br.rem}</td></tr>`;
+  });
+  html += `<tr class="total"><td>Total</td><td>${Math.round(totalTargetMats)}</td><td>-</td><td>${totalTargetBelts}</td><td>${totalTargetRem}</td></tr></table>`;
+
+  // ---- BALE SUMMARY BY DATE ----
+  html += `<h3>📅 BALE SUMMARY (DATE RANGE)</h3><table><tr><th>Date</th><th>Total Bale</th><th>Target Bale</th><th>Performance %</th></tr>`;
+  const dateMap = {};
+  rows.forEach(r=>{
+    const date = r.date_col; const type = (r.mat_type||"").trim();
+    if(!dateMap[date]){ dateMap[date] = {}; CATEGORIES.forEach(c=> dateMap[date][c] = {a_double:0,a_single:0,b:0,c:0,total:0,target:0}); }
+    if(!dateMap[date][type]) dateMap[date][type] = {a_double:0,a_single:0,b:0,c:0,total:0,target:0};
+    const d = dateMap[date][type];
+    d.a_double += Number(r.a_double||0); d.a_single += Number(r.a_single||0);
+    d.b += Number(r.b||0); d.c += Number(r.c||0);
+    d.total += Number(r.total||0); d.target += Number(r.target||0);
+  });
+  let gTotal=0, gTarget=0;
+  Object.keys(dateMap).sort().forEach(date=>{
+    let totalBelts=0, totalTargetBelts=0;
+    CATEGORIES.forEach(cat=>{
+      let mats = cat==="A Double" ? (dateMap[date]["No.1"]?.a_double||0)
+        : cat==="No.1" ? (dateMap[date]["No.1"]?.a_single||0)+(dateMap[date]["No.1"]?.b||0)+(dateMap[date]["No.1"]?.c||0)
+        : dateMap[date][cat]?.total||0;
+      totalBelts += beltsAndRem(mats, MATS_PER_BELT[cat]).belts;
+      const targetMats = dateMap[date][cat]?.target||0;
+      totalTargetBelts += beltsAndRem(targetMats, MATS_PER_BELT[cat]).belts;
+    });
+    const perf = totalTargetBelts>0 ? ((totalBelts/totalTargetBelts)*100).toFixed(1) : 0;
+    gTotal += totalBelts; gTarget += totalTargetBelts;
+    html += `<tr><td>${date}</td><td>${totalBelts}</td><td>${totalTargetBelts}</td><td>${perf}%</td></tr>`;
+  });
+  const gPerf = gTarget>0 ? ((gTotal/gTarget)*100).toFixed(1) : 0;
+  html += `<tr class="total"><td>Total</td><td>${gTotal}</td><td>${gTarget}</td><td>${gPerf}%</td></tr></table>`;
+
+  // ---- SHED BREAKDOWN (only when Shed = All) ----
+  if(shed === "All"){
+    const shedMap = {};
+    rows.forEach(r=>{
+      const sh = r.shed; const type = (r.mat_type||"").trim();
+      if(!shedMap[sh]){ shedMap[sh] = {}; CATEGORIES.forEach(c=> shedMap[sh][c] = {a_double:0,a_single:0,b:0,c:0,total:0,target:0}); }
+      if(!shedMap[sh][type]) shedMap[sh][type] = {a_double:0,a_single:0,b:0,c:0,total:0,target:0};
+      const d = shedMap[sh][type];
+      d.a_double += Number(r.a_double||0); d.a_single += Number(r.a_single||0);
+      d.b += Number(r.b||0); d.c += Number(r.c||0);
+      d.total += Number(r.total||0); d.target += Number(r.target||0);
+    });
+    html += `<h3>🏭 SHED BREAKDOWN</h3><table><tr><th>Shed</th><th>Total Bale</th><th>Target Bale</th><th>Performance %</th></tr>`;
+    Object.keys(shedMap).forEach(sh=>{
+      let totalBelts=0, targetBelts=0;
+      CATEGORIES.forEach(cat=>{
+        let mats = cat==="A Double" ? (shedMap[sh]["No.1"]?.a_double||0)
+          : cat==="No.1" ? (shedMap[sh]["No.1"]?.a_single||0)+(shedMap[sh]["No.1"]?.b||0)+(shedMap[sh]["No.1"]?.c||0)
+          : shedMap[sh][cat]?.total||0;
+        totalBelts += beltsAndRem(mats, MATS_PER_BELT[cat]).belts;
+        const tMats = shedMap[sh][cat]?.target||0;
+        targetBelts += beltsAndRem(tMats, MATS_PER_BELT[cat]).belts;
+      });
+      const perf = targetBelts>0 ? ((totalBelts/targetBelts)*100).toFixed(1) : 0;
+      html += `<tr><td>${sh}</td><td>${totalBelts}</td><td>${targetBelts}</td><td>${perf}%</td></tr>`;
+    });
+    html += "</table>";
+  }
+
+  // ---- SHED / UNIT SUMMARY (ported from the Apps Script sister report) ----
+  // Note: the Apps Script version also computes Downtime, MLD (mats lost
+  // to downtime), ATG (adjusted target), and MLU using a maintenance log
+  // keyed by Unit/Date. No such table exists for Weaving in Supabase yet
+  // (checked — kwp_downtime_events is KWP's own, scoped to different
+  // machines/columns entirely) — so those four columns are intentionally
+  // left out here rather than filled with invented numbers. %P below is
+  // therefore raw Total-vs-Target, not downtime-adjusted.
+  const shedUnitMap = {};
+  rows.forEach(r=>{
+    const sh = r.shed, unit = r.units || "—";
+    if(!shedUnitMap[sh]) shedUnitMap[sh] = {};
+    if(!shedUnitMap[sh][unit]) shedUnitMap[sh][unit] = { assets:new Set(), a:0, b:0, c:0, total:0, target:0 };
+    const u = shedUnitMap[sh][unit];
+    if(r.assets) u.assets.add(r.assets);
+    u.a += Number(r.a_double||0) + Number(r.a_single||0);
+    u.b += Number(r.b||0);
+    u.c += Number(r.c||0);
+    u.total += Number(r.total||0);
+    u.target += Number(r.target||0);
+  });
+
+  const suHeaders = ["S/N","Units","Assets Used","A","B","C","Total","Target","%A","%B","%P (raw)"];
+  const suGrand = { assets:0, a:0, b:0, c:0, total:0, target:0 };
+  html += `<h3>🏭 SHED / UNIT SUMMARY</h3>
+    <p style="font-size:11px;color:#666;text-align:center;margin-top:-4px;">Downtime/MLD/ATG/MLU omitted — no downtime data source exists for Weaving. %P is raw Total &divide; Target.</p>`;
+
+  Object.keys(shedUnitMap).sort().forEach(sh=>{
+    html += `<table><tr><th colspan="${suHeaders.length}" style="background:var(--navy);color:#fff;">SHED ${sh}</th></tr>` +
+      `<tr>${suHeaders.map(h=>`<th>${h}</th>`).join("")}</tr>`;
+    let sn=1;
+    const sub = { assets:0, a:0, b:0, c:0, total:0, target:0 };
+    Object.keys(shedUnitMap[sh]).sort().forEach(unit=>{
+      const u = shedUnitMap[sh][unit];
+      const assetsUsed = u.assets.size;
+      const pA = u.total>0 ? Math.round(u.a/u.total*100) : 0;
+      const pB = u.total>0 ? Math.round(u.b/u.total*100) : 0;
+      const pP = u.target>0 ? Math.round(u.total/u.target*100) : 0;
+      html += `<tr><td>${sn++}</td><td>${unit}</td><td>${assetsUsed}</td>` +
+        `<td>${Math.round(u.a)}</td><td>${Math.round(u.b)}</td><td>${Math.round(u.c)}</td>` +
+        `<td>${Math.round(u.total)}</td><td>${Math.round(u.target)}</td>` +
+        `<td>${pA}%</td><td>${pB}%</td><td>${pP}%</td></tr>`;
+      sub.assets += assetsUsed; sub.a += u.a; sub.b += u.b; sub.c += u.c; sub.total += u.total; sub.target += u.target;
+    });
+    const s_pA = sub.total>0 ? Math.round(sub.a/sub.total*100) : 0;
+    const s_pB = sub.total>0 ? Math.round(sub.b/sub.total*100) : 0;
+    const s_pP = sub.target>0 ? Math.round(sub.total/sub.target*100) : 0;
+    html += `<tr class="total"><td></td><td>SUBTOTAL</td><td>${sub.assets}</td>` +
+      `<td>${Math.round(sub.a)}</td><td>${Math.round(sub.b)}</td><td>${Math.round(sub.c)}</td>` +
+      `<td>${Math.round(sub.total)}</td><td>${Math.round(sub.target)}</td>` +
+      `<td>${s_pA}%</td><td>${s_pB}%</td><td>${s_pP}%</td></tr></table>`;
+    Object.keys(suGrand).forEach(k=>suGrand[k]+=sub[k]);
+  });
+
+  const g_pA = suGrand.total>0 ? Math.round(suGrand.a/suGrand.total*100) : 0;
+  const g_pB = suGrand.total>0 ? Math.round(suGrand.b/suGrand.total*100) : 0;
+  const g_pP = suGrand.target>0 ? Math.round(suGrand.total/suGrand.target*100) : 0;
+  html += `<h3>🏁 GRAND TOTAL (ALL SHEDS)</h3><table><tr>${suHeaders.map(h=>`<th>${h}</th>`).join("")}</tr>` +
+    `<tr class="total"><td></td><td>GRAND TOTAL</td><td>${suGrand.assets}</td>` +
+    `<td>${Math.round(suGrand.a)}</td><td>${Math.round(suGrand.b)}</td><td>${Math.round(suGrand.c)}</td>` +
+    `<td>${Math.round(suGrand.total)}</td><td>${Math.round(suGrand.target)}</td>` +
+    `<td>${g_pA}%</td><td>${g_pB}%</td><td>${g_pP}%</td></tr></table>`;
+
+  html += "</div>";
+  document.getElementById("reportArea").innerHTML = html;
+}
+
+init();
+</script>
+<script src="../../assets/letterhead.js"></script>
+</body>
+</html>

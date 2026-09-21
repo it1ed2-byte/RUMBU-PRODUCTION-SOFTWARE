@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Manage Assignments — PET Collection</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme")||"navy"); }catch(e){} })();
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) document.documentElement.setAttribute("data-theme",e.data.rumbuTheme); });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1100px;margin:0 auto;}
+  .stage-tabs{display:flex;gap:0;border-radius:8px;overflow:hidden;border:1px solid var(--line);width:fit-content;margin-bottom:16px;}
+  .stage-tab{padding:8px 18px;border:none;background:var(--bg);color:var(--muted);font-weight:700;font-size:12px;cursor:pointer;font-family:inherit;}
+  .stage-tab.active{background:var(--primary);color:#fff;}
+  .stage-tab:not(:last-child){border-right:1px solid var(--line);}
+  .assign-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+  .assign-card{border:1px solid var(--line);border-radius:10px;padding:16px;background:var(--card);}
+  .assign-card h4{margin:0 0 10px;color:var(--heading);font-size:13px;}
+  label{font-size:12px;font-weight:700;display:block;margin:8px 0 4px;color:var(--muted);}
+  select{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);}
+  .person-row{display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px;}
+  .person-row:last-child{border-bottom:none;}
+  .rm-btn{padding:3px 10px;border:none;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;background:#fee2e2;color:#991b1b;}
+  .add-row{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;}
+  .add-row select{flex:1;min-width:150px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back</button>
+  <div id="connStatus" style="font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);">Loading...</div>
+
+  <div class="card-panel">
+    <h3 style="color:var(--heading);margin:0 0 6px;">Stage Assignments</h3>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 16px;">Assign fillers and approvers for each stage per section (branch). ALL assigned approvers must approve for a stage to advance.</p>
+
+    <div style="margin-bottom:14px;">
+      <label>Section (Branch)</label>
+      <select id="sectionSel" onchange="loadAll()" style="max-width:260px;">
+        <option value="">Loading branches...</option>
+      </select>
+    </div>
+
+    <div class="stage-tabs">
+      <button class="stage-tab active" onclick="setStage('stage2',this)">Stage 2 — QC</button>
+      <button class="stage-tab" onclick="setStage('stage3p1',this)">Stage 3 Phase 1 — Payment 90%</button>
+      <button class="stage-tab" onclick="setStage('stage4',this)">Stage 4 — Production</button>
+      <button class="stage-tab" onclick="setStage('stage3p2',this)">Stage 3 Phase 2 — Payment 10%</button>
+    </div>
+
+    <div id="stageLabel" style="font-size:13px;color:var(--muted);margin-bottom:14px;"></div>
+
+    <div class="assign-grid" id="assignGrid">
+      <!-- Filled dynamically -->
+    </div>
+    <div id="assignStatus" style="margin-top:10px;font-size:13px;font-weight:700;min-height:16px;"></div>
+  </div>
+</div>
+
+<script>
+let ME=null, ALL_STAFF=[], CURRENT_STAGE='stage2', FILLER_IDS=new Set(), APPROVER_IDS=new Set();
+
+const STAGE_LABELS = {
+  'stage2':   'Stage 2 — Quality Control',
+  'stage3p1': 'Stage 3 Phase 1 — 90% Payment',
+  'stage4':   'Stage 4 — Production',
+  'stage3p2': 'Stage 3 Phase 2 — 10% Balance Payment'
+};
+
+async function init(){
+  const cs = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    // PET collection currently only happens at these two sites.
+    const { data: sections, error: secErr } = await sb.from("app_sections").select("name").in("name", ["LagosWash","KanoWash"]).order("name");
+    if(secErr) throw new Error("Could not load branches: "+secErr.message);
+    document.getElementById("sectionSel").innerHTML = (sections||[]).map(s=>`<option value="${s.name}">${s.name}</option>`).join("")
+      || `<option value="">No branches configured</option>`;
+    // Fillers/approvers are picked from the real employee directory (global,
+    // shared with the rest of the system). Fetches the FULL roster (not just
+    // those with a login already) so the branch list below shows everyone —
+    // an employee without system access yet just can't be Added until
+    // they're granted one, same rule as before.
+    const { data: staff } = await sb.from("employees").select("id,employee_id,full_name,branch,linked_profile_id").order("full_name");
+    ALL_STAFF = staff||[];
+    await loadAll();
+    cs.style.color="var(--ok)"; cs.textContent="Connected.";
+  }catch(e){
+    cs.style.color="var(--bad)"; cs.textContent="Error: "+e.message;
+  }
+}
+
+function setStage(stage, btn){
+  CURRENT_STAGE = stage;
+  document.querySelectorAll(".stage-tab").forEach(b=>b.classList.remove("active"));
+  btn.classList.add("active");
+  loadAll();
+}
+
+async function loadAll(){
+  const section = document.getElementById("sectionSel").value;
+  document.getElementById("stageLabel").textContent = STAGE_LABELS[CURRENT_STAGE] + " — " + section;
+
+  const [{ data: fillers }, { data: approvers }] = await Promise.all([
+    sb.from("pet_stage_fillers").select("id,profile_id").eq("section",section).eq("stage",CURRENT_STAGE),
+    sb.from("pet_stage_approvers").select("id,profile_id").eq("section",section).eq("stage",CURRENT_STAGE)
+  ]);
+  FILLER_IDS = new Set((fillers||[]).map(f=>f.profile_id));
+  APPROVER_IDS = new Set((approvers||[]).map(a=>a.profile_id));
+
+  const grid = document.getElementById("assignGrid");
+  grid.innerHTML = `
+    <div class="assign-card">
+      <h4>Fillers <span style="font-weight:400;color:var(--muted);">(who fills this stage)</span></h4>
+      <div id="fillerList">${renderPersonList(fillers||[], 'filler')}</div>
+      ${searchHtml('filler')}
+    </div>
+    <div class="assign-card">
+      <h4>Approvers <span style="font-weight:400;color:var(--muted);">(ALL must approve)</span></h4>
+      <div id="approverList">${renderPersonList(approvers||[], 'approver')}</div>
+      ${searchHtml('approver')}
+    </div>`;
+}
+
+function searchHtml(role){
+  return `
+    <div style="margin-top:10px;">
+      <label style="margin:0 0 4px;">Search by Name or Employee ID</label>
+      <input type="text" id="${role}Search" placeholder="Start typing a name or code..."
+        oninput="searchStaffByQuery('${role}', this.value)" onkeydown="if(event.key==='Enter') event.preventDefault();" autocomplete="off">
+      <div id="${role}SearchResults" style="font-size:12.5px;margin-top:6px;"></div>
+    </div>`;
+}
+
+function renderPersonList(list, role){
+  if(!list.length) return `<p style="font-size:12px;color:var(--muted);">None assigned.</p>`;
+  return list.map(r=>{
+    const u = ALL_STAFF.find(x=>x.linked_profile_id===r.profile_id);
+    return `<div class="person-row">
+      <span>${u?(u.full_name+" ("+u.employee_id+")"):("Profile #"+r.profile_id)}</span>
+      <button class="rm-btn" onclick="removeAssignment(${r.id},'${role}')">Remove</button>
+    </div>`;
+  }).join("");
+}
+
+// Type an Employee Code (PIN), see the match confirmed (scoped to the
+// currently selected Branch), then click Add. The box clears itself after
+// each successful add so the next PIN can be typed straight away — repeat
+// as many times as needed to add several people, one at a time.
+// Type a name or Employee ID; matching results (scoped to the currently
+// selected Branch) appear below, each with its own Add button — no full
+// list sitting on screen, nothing shows until you actually type something.
+function searchStaffByQuery(role, query){
+  const section = document.getElementById("sectionSel").value;
+  const resultEl = document.getElementById(role+"SearchResults");
+  query = query.trim().toLowerCase();
+  if(!query){ resultEl.innerHTML = ""; return; }
+  if(!section){ resultEl.innerHTML = `<span style="color:var(--bad);">Select a Branch first.</span>`; return; }
+
+  const already = role==='filler' ? FILLER_IDS : APPROVER_IDS;
+  const matches = ALL_STAFF.filter(e =>
+    e.branch === section &&
+    ((e.full_name||"").toLowerCase().includes(query) || (e.employee_id||"").toLowerCase().includes(query))
+  ).slice(0, 8);
+
+  if(!matches.length){
+    resultEl.innerHTML = `<span style="color:var(--muted);">No ${section} employee matches "${query}".</span>`;
+    return;
+  }
+
+  resultEl.innerHTML = matches.map(e=>{
+    const hasAccess = !!e.linked_profile_id;
+    const isAssigned = hasAccess && already.has(e.linked_profile_id);
+    let action;
+    if(!hasAccess) action = `<span style="color:var(--muted);">No login yet</span>`;
+    else if(isAssigned) action = `<span style="color:var(--ok);">✔ Already assigned</span>`;
+    else action = `<button onclick="confirmAddStaff('${role}', '${e.linked_profile_id}')" style="padding:3px 10px;font-size:11px;">Add</button>`;
+    return `<div class="person-row"><span>${e.full_name} <span style="color:var(--muted);">(${e.employee_id})</span></span>${action}</div>`;
+  }).join("");
+}
+
+async function confirmAddStaff(role, profileId){
+  const section = document.getElementById("sectionSel").value;
+  const st = document.getElementById("assignStatus");
+  const table = role==='filler' ? "pet_stage_fillers" : "pet_stage_approvers";
+  const { error } = await sb.from(table).insert({ section, stage: CURRENT_STAGE, profile_id: profileId, assigned_by: ME.username });
+  if(error){ st.style.color="var(--bad)"; st.textContent="Error: "+error.message; return; }
+  st.style.color="var(--ok)"; st.textContent="Assignment saved. Keep searching to add another.";
+  await loadAll();
+  document.getElementById(role+"Search")?.focus();
+  setTimeout(()=>{ st.textContent=""; }, 2500);
+}
+
+async function removeAssignment(id, role){
+  const table = role==='filler' ? "pet_stage_fillers" : "pet_stage_approvers";
+  const { error } = await sb.from(table).delete().eq("id", id);
+  if(error){ alert("Error: "+error.message); return; }
+  await loadAll();
+}
+
+init();
+</script>
+</body>
+</html>

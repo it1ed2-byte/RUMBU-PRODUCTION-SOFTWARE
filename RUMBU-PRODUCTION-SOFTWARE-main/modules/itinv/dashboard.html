@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>IT Inventory — Dashboard</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;--amber:#d97706;}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;color:var(--text);}
+  .wrap{max-width:1100px;margin:0 auto;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;}
+  .card h3{color:var(--navy);margin:0 0 12px;font-size:15px;}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px;}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;text-align:center;}
+  .kpi .n{font-size:30px;font-weight:800;color:var(--navy);}
+  .kpi .l{font-size:12px;color:var(--muted);margin-top:4px;font-weight:bold;text-transform:uppercase;letter-spacing:.5px;}
+  .kpi.warn .n{color:var(--amber);}
+  .kpi.bad .n{color:var(--red);}
+  .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;}
+  .bar-row{display:flex;align-items:center;gap:10px;margin:6px 0;font-size:13px;}
+  .bar-row .lbl{width:40%;color:var(--text);}
+  .bar-row .track{flex:1;background:#eef2f7;border-radius:6px;height:16px;overflow:hidden;}
+  .bar-row .fill{height:100%;background:var(--blue);}
+  .bar-row .val{width:36px;text-align:right;font-weight:bold;color:var(--navy);}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<div id="connStatus">Loading...</div>
+
+<div id="appArea" style="display:none;">
+  <div class="kpis" id="kpis"></div>
+  <div class="grid2">
+    <div class="card"><h3>Devices by Status</h3><div id="byStatus"></div></div>
+    <div class="card"><h3>Devices by Branch</h3><div id="byBranch"></div></div>
+    <div class="card"><h3>Devices by Category</h3><div id="byCategory"></div></div>
+    <div class="card"><h3>Devices by Department</h3><div id="byDept"></div></div>
+  </div>
+</div>
+</div>
+
+<script>
+let ME = null;
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    status.style.color = "#1d8a4e";
+    status.textContent = "Connected." + (ME.role === "super_admin" ? " Showing all branches." : " Showing your branch(es).");
+    document.getElementById("appArea").style.display = "block";
+    await load();
+  }catch(e){
+    status.style.color = "#c0392b"; status.textContent = "❌ " + e.message; console.error(e);
+  }
+}
+
+function scopeQuery(q){
+  if(ME.role !== "super_admin"){
+    if(ME.sectionNames && ME.sectionNames.length) return q.in("branch", ME.sectionNames);
+    return q.eq("branch","___none___");
+  }
+  return q;
+}
+
+async function load(){
+  const [dev, rep, mnt] = await Promise.all([
+    scopeQuery(sb.from("it_devices").select("*")),
+    scopeQuery(sb.from("it_repairs").select("status,branch")),
+    scopeQuery(sb.from("it_maintenance").select("status,scheduled_date,branch"))
+  ]);
+  const devices = dev.data || [];
+  const repairs = rep.data || [];
+  const maint = mnt.data || [];
+
+  const openRepairs = repairs.filter(r => r.status === "Open").length;
+  const now = new Date();
+  const dueMaint = maint.filter(m => {
+    if(m.status === "Completed" || !m.scheduled_date) return false;
+    return (new Date(m.scheduled_date) - now)/86400000 <= 7;
+  }).length;
+  const decommissioned = devices.filter(d => d.status === "Decommissioned").length;
+
+  // KPIs
+  const kpis = [
+    {n: devices.length, l:"Total Devices"},
+    {n: devices.filter(d=>d.status==="Active").length, l:"Active"},
+    {n: openRepairs, l:"Open Repairs", cls: openRepairs? "warn":""},
+    {n: dueMaint, l:"Maint. Due (7d)", cls: dueMaint? "warn":""},
+    {n: decommissioned, l:"Decommissioned", cls: decommissioned? "bad":""}
+  ];
+  document.getElementById("kpis").innerHTML = kpis.map(k =>
+    `<div class="kpi ${k.cls||''}"><div class="n">${k.n}</div><div class="l">${k.l}</div></div>`).join("");
+
+  // Breakdowns
+  bars("byStatus", tally(devices, "status"));
+  bars("byBranch", tally(devices, "branch"));
+  bars("byCategory", tally(devices, "category"));
+  bars("byDept", tally(devices, "department"));
+}
+
+function tally(rows, field){
+  const m = {};
+  rows.forEach(r => { const k = r[field] || "(none)"; m[k] = (m[k]||0)+1; });
+  return Object.entries(m).sort((a,b)=>b[1]-a[1]);
+}
+
+function bars(id, entries){
+  const wrap = document.getElementById(id);
+  if(!entries.length){ wrap.innerHTML = "<p style='color:#6b7280;font-size:13px;'>No data yet.</p>"; return; }
+  const max = Math.max.apply(null, entries.map(e=>e[1]));
+  wrap.innerHTML = entries.map(([label,val])=>{
+    const pct = max ? Math.round(val/max*100) : 0;
+    return `<div class="bar-row"><div class="lbl">${label}</div>` +
+           `<div class="track"><div class="fill" style="width:${pct}%"></div></div>` +
+           `<div class="val">${val}</div></div>`;
+  }).join("");
+}
+
+init();
+</script>
+</body>
+</html>

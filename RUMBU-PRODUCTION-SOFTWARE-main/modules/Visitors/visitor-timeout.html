@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Visitor Attendance — Visitor Timeout</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;color:var(--text);}
+  .wrap{max-width:900px;margin:0 auto;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;}
+  .card h3{color:var(--navy);margin:0 0 4px;font-size:16px;}
+  .card .sub{color:var(--blue);font-size:12px;margin:0 0 14px;}
+  label{display:block;font-size:12px;font-weight:bold;color:var(--text);margin:10px 0 4px;}
+  input{width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;font-size:14px;}
+  button{padding:9px 14px;border:none;border-radius:8px;font-weight:bold;font-size:13px;cursor:pointer;background:var(--green);color:#fff;}
+  button:hover{background:#166a2c;}
+  button.mini{padding:6px 10px;font-size:12px;}
+  .row{display:flex;gap:12px;flex-wrap:wrap;}
+  .row > div{flex:1;min-width:160px;}
+  .quickbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;}
+  .qbtn{background:var(--bg);color:var(--navy);padding:7px 12px;border:1px solid var(--line);border-radius:8px;font-size:12px;font-weight:bold;cursor:pointer;}
+  .qbtn:hover{background:#d5e2f0;}
+  .qbtn.active{background:var(--blue);color:#fff;border-color:var(--blue);}
+  .status{margin-top:10px;font-weight:bold;font-size:13px;min-height:16px;}
+  .status.ok{color:var(--green);} .status.err{color:var(--red);}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;}
+  table{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px;}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;}
+  thead th{background:var(--navy);color:#fff;font-size:12px;}
+  tbody tr:nth-child(even){background:#f6f8fb;}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;margin-bottom:12px;background:var(--navy);">&larr; Back to Menu</button>
+<div id="connStatus">Loading...</div>
+
+<div class="card">
+  <h3>Visitor Timeout</h3>
+  <p class="sub">All visitors still inside are listed below. Find your name and click "I'm Leaving" to record your time out.</p>
+
+  <label>Quick date filter</label>
+  <div class="quickbar">
+    <button type="button" class="qbtn active" data-range="today" onclick="setRange('today',this)">Today</button>
+    <button type="button" class="qbtn" data-range="yesterday" onclick="setRange('yesterday',this)">Yesterday</button>
+    <button type="button" class="qbtn" data-range="week" onclick="setRange('week',this)">This Week</button>
+    <button type="button" class="qbtn" data-range="month" onclick="setRange('month',this)">This Month</button>
+    <button type="button" class="qbtn" data-range="all" onclick="setRange('all',this)">All</button>
+    <button type="button" class="qbtn" data-range="custom" onclick="setRange('custom',this)">Custom</button>
+  </div>
+
+  <div id="customRange" class="row" style="display:none;">
+    <div>
+      <label>From Date</label>
+      <input type="date" id="fromDate" onchange="applyFilters()">
+    </div>
+    <div>
+      <label>To Date</label>
+      <input type="date" id="toDate" onchange="applyFilters()">
+    </div>
+  </div>
+
+  <label>Search your name / phone</label>
+  <input type="text" id="search" placeholder="Type your name or phone" oninput="applyFilters()">
+  <div class="status" id="status"></div>
+</div>
+
+<div class="card">
+  <div id="tableWrap"></div>
+</div>
+</div>
+
+<script>
+let ME = null;
+let INSIDE = [];   // visitors still inside (branch-scoped)
+
+async function logActivity(actionType, description){
+  try{
+    await sb.from("activity_log").insert({
+      actor_id: ME.id, actor_username: ME.username, actor_role: ME.role,
+      section_id: ME.sectionId, action_type: actionType, description: description
+    });
+  }catch(e){ console.warn("Activity log write failed (non-fatal):", e); }
+}
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    status.style.color = "#1d8a4e"; status.textContent = "Connected.";
+    await load();
+  }catch(e){
+    status.style.color = "#c0392b"; status.textContent = "❌ " + e.message; console.error(e);
+  }
+}
+
+async function load(){
+  const status = document.getElementById("status");
+  status.className = "status"; status.textContent = "Loading...";
+  try{
+    let q = sb.from("visitor_attendance").select("*").eq("status","inside").order("time_in",{ascending:false});
+    if(ME.role !== "super_admin"){
+      if(ME.sectionNames && ME.sectionNames.length){ q = q.in("branch", ME.sectionNames); }
+      else { q = q.eq("branch","___none___"); }
+    }
+    const { data, error } = await q;
+    if(error) throw error;
+    INSIDE = data || [];
+    status.className = "status ok";
+    applyFilters();
+  }catch(e){
+    status.className = "status err"; status.textContent = "❌ " + e.message;
+  }
+}
+
+let currentRange = "today";  // default view
+
+function setRange(range, btn){
+  currentRange = range;
+  document.querySelectorAll(".qbtn").forEach(b => b.classList.remove("active"));
+  if(btn) btn.classList.add("active");
+  document.getElementById("customRange").style.display = (range === "custom") ? "flex" : "none";
+  applyFilters();
+}
+
+// Returns [fromISO, toISO] (inclusive date strings) for the active range, or null for "all"
+function rangeBounds(){
+  const d = new Date();
+  const iso = x => x.toISOString().slice(0,10);
+  const startOfDay = x => { const y = new Date(x); y.setHours(0,0,0,0); return y; };
+
+  if(currentRange === "today"){
+    return [iso(d), iso(d)];
+  }
+  if(currentRange === "yesterday"){
+    const y = new Date(d); y.setDate(y.getDate()-1);
+    return [iso(y), iso(y)];
+  }
+  if(currentRange === "week"){
+    // Monday-based week
+    const day = (d.getDay()+6)%7; // 0=Mon
+    const mon = new Date(d); mon.setDate(d.getDate()-day);
+    return [iso(mon), iso(d)];
+  }
+  if(currentRange === "month"){
+    const first = new Date(d.getFullYear(), d.getMonth(), 1);
+    return [iso(first), iso(d)];
+  }
+  if(currentRange === "custom"){
+    const f = document.getElementById("fromDate").value;
+    const t = document.getElementById("toDate").value;
+    return [f || null, t || null];
+  }
+  return null; // all
+}
+
+function applyFilters(){
+  const s = document.getElementById("search").value.trim().toLowerCase();
+  let rows = INSIDE.slice();
+
+  const bounds = rangeBounds();
+  if(bounds){
+    const [from, to] = bounds;
+    if(from) rows = rows.filter(r => (r.visit_date||"") >= from);
+    if(to)   rows = rows.filter(r => (r.visit_date||"") <= to);
+  }
+
+  if(s){
+    rows = rows.filter(r =>
+      (r.visitor_name||"").toLowerCase().includes(s) ||
+      (r.phone||"").toLowerCase().includes(s));
+  }
+
+  const status = document.getElementById("status");
+  if(status.className.indexOf("err") === -1){
+    status.className = "status ok";
+    status.textContent = rows.length + " visitor(s) inside for this filter (of " + INSIDE.length + " total inside).";
+  }
+  render(rows);
+}
+
+function render(rows){
+  const wrap = document.getElementById("tableWrap");
+  if(!rows.length){ wrap.innerHTML = "<p>No matching visitors currently inside.</p>"; return; }
+  let html = "<table><thead><tr><th>Name</th><th>Phone</th><th>Visiting</th><th>Branch</th><th>Time In</th><th></th></tr></thead><tbody>";
+  rows.forEach(r=>{
+    html += "<tr>" +
+      `<td>${r.visitor_name||""}</td>` +
+      `<td>${r.phone||""}</td>` +
+      `<td>${r.visiting||""}</td>` +
+      `<td>${r.branch||""}</td>` +
+      `<td>${r.time_in ? new Date(r.time_in).toLocaleString() : ""}</td>` +
+      `<td><button class="mini" onclick="leave(${r.id})">I'm Leaving</button></td>` +
+    "</tr>";
+  });
+  html += "</tbody></table>";
+  wrap.innerHTML = html;
+}
+
+async function leave(id){
+  const r = INSIDE.find(x => x.id === id);
+  if(!r) return;
+  if(!confirm("Record time out for " + r.visitor_name + " now?")) return;
+
+  const status = document.getElementById("status");
+  status.className = "status"; status.textContent = "Saving...";
+  try{
+    const { error } = await sb.from("visitor_attendance").update({
+      time_out: new Date().toISOString(),
+      status: "checked_out"
+    }).eq("id", id);
+    if(error) throw error;
+    await logActivity("visitor_checkout", r.visitor_name + " checked out");
+    status.className = "status ok"; status.textContent = "✅ " + r.visitor_name + " checked out. Safe journey!";
+    await load();
+  }catch(e){
+    status.className = "status err"; status.textContent = "❌ " + e.message;
+  }
+}
+
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Manage LOTs — PET Collection</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme")||"navy"); }catch(e){} })();
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) document.documentElement.setAttribute("data-theme",e.data.rumbuTheme); });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1100px;margin:0 auto;}
+  .badge{display:inline-block;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:700;}
+  .badge.free{background:#d1fae5;color:#065f46;}
+  .badge.occ{background:#fee2e2;color:#991b1b;}
+  .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;justify-content:center;align-items:flex-start;padding:40px 16px;}
+  .modal-overlay.open{display:flex;}
+  .modal{background:var(--card);border-radius:14px;padding:28px;width:100%;max-width:460px;box-shadow:0 8px 32px rgba(0,0,0,.2);}
+  .modal h3{color:var(--heading);margin:0 0 18px;}
+  label{font-size:12px;font-weight:700;display:block;margin:10px 0 4px;color:var(--muted);}
+  input,select{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);}
+  .btn-row{display:flex;gap:10px;margin-top:18px;}
+  .act-btn{padding:5px 12px;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;}
+  .act-btn.del{background:#fee2e2;color:#991b1b;}
+  .lots-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+  @media(max-width:640px){
+    .lots-grid{grid-template-columns:1fr;}
+    .modal{max-width:100%;padding:20px;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back</button>
+  <div id="connStatus" style="font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);">Loading...</div>
+
+  <div class="lots-grid">
+
+    <!-- LOTs list -->
+    <div class="card-panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+        <h3 style="margin:0;color:var(--heading);">LOTs</h3>
+        <button onclick="openAddLot()">+ Add LOT</button>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px;" id="lotSummary"></div>
+      <div class="table-wrap">
+        <div class="table-scroll">
+          <table id="lotTable">
+            <thead><tr><th>LOT Name</th><th>Status</th><th>Current Collection</th><th>Action</th></tr></thead>
+            <tbody id="lotBody"><tr><td colspan="4" style="text-align:center;color:var(--muted);">Loading...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- LOT Managers -->
+    <div class="card-panel">
+      <h3 style="color:var(--heading);margin:0 0 14px;">LOT Managers</h3>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Assign persons who will be alerted when a LOT is occupied or freed. Scoped per section (branch).</p>
+      <label>Section</label>
+      <select id="mgrSection" onchange="loadManagers()">
+        <option value="">Loading branches...</option>
+      </select>
+      <div style="margin-top:14px;" id="mgrList"></div>
+      <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+        <select id="mgrUserSel" style="flex:1;min-width:160px;"><option value="">Select user to add...</option></select>
+        <button onclick="addManager()">Add Manager</button>
+      </div>
+      <div id="mgrStatus" style="margin-top:8px;font-size:12px;font-weight:700;min-height:14px;"></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Add LOT Modal -->
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <h3>Add New LOT</h3>
+    <label>LOT Name *</label>
+    <input type="text" id="fLotName" placeholder="e.g. LOT 61">
+    <div class="btn-row">
+      <button onclick="saveLot()">Save LOT</button>
+      <button class="btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>
+    <div id="modalStatus" style="margin-top:10px;font-size:13px;font-weight:700;min-height:16px;"></div>
+  </div>
+</div>
+
+<script>
+let ME = null, LOTS = [], ALL_USERS = [];
+
+async function init(){
+  const cs = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    const { data: sections, error: secErr } = await sb.from("app_sections").select("name").in("name", ["LagosWash","KanoWash"]).order("name");
+    if(secErr) throw new Error("Could not load branches: "+secErr.message);
+    document.getElementById("mgrSection").innerHTML = (sections||[]).map(s=>`<option value="${s.name}">${s.name}</option>`).join("")
+      || `<option value="">No branches configured</option>`;
+    const { data: users } = await sb.from("profiles").select("id,username,full_name").order("full_name");
+    ALL_USERS = users || [];
+    const sel = document.getElementById("mgrUserSel");
+    sel.innerHTML = '<option value="">Select user to add...</option>' +
+      ALL_USERS.map(u=>`<option value="${u.id}">${u.full_name||u.username} (${u.username})</option>`).join("");
+    await loadLots();
+    await loadManagers();
+    cs.style.color="var(--ok)"; cs.textContent="Connected.";
+  }catch(e){
+    cs.style.color="var(--bad)"; cs.textContent="Error: "+e.message;
+  }
+}
+
+async function loadLots(){
+  const { data } = await sb.from("pet_lots").select("*, pet_collections(form_number,agent_name)").order("id");
+  LOTS = data || [];
+  const free = LOTS.filter(l=>!l.is_occupied).length;
+  const occ  = LOTS.filter(l=>l.is_occupied).length;
+  document.getElementById("lotSummary").textContent =
+    `Total: ${LOTS.length} | Free: ${free} | Occupied: ${occ}`;
+  const body = document.getElementById("lotBody");
+  if(!LOTS.length){ body.innerHTML=`<tr><td colspan="4" style="text-align:center;color:var(--muted);">No LOTs.</td></tr>`; return; }
+  body.innerHTML = LOTS.map(l=>`<tr>
+    <td><b>${l.lot_name}</b></td>
+    <td><span class="badge ${l.is_occupied?'occ':'free'}">${l.is_occupied?'Occupied':'Free'}</span></td>
+    <td>${l.is_occupied && l.pet_collections ? l.pet_collections.form_number+" — "+l.pet_collections.agent_name : "—"}</td>
+    <td>${!l.is_occupied?`<button class="act-btn del" onclick="deleteLot(${l.id},'${l.lot_name}')">Delete</button>`:'<span style="color:var(--muted);font-size:11px;">In use</span>'}</td>
+  </tr>`).join("");
+}
+
+async function deleteLot(id, name){
+  if(!confirm(`Delete ${name}? This cannot be undone.`)) return;
+  const { error } = await sb.from("pet_lots").delete().eq("id", id);
+  if(error){ alert("Error: "+error.message); return; }
+  await loadLots();
+}
+
+function openAddLot(){
+  document.getElementById("fLotName").value = "";
+  document.getElementById("modalStatus").textContent = "";
+  document.getElementById("modal").classList.add("open");
+}
+function closeModal(){ document.getElementById("modal").classList.remove("open"); }
+
+async function saveLot(){
+  const st = document.getElementById("modalStatus");
+  const name = document.getElementById("fLotName").value.trim();
+  if(!name){ st.style.color="var(--bad)"; st.textContent="LOT name is required."; return; }
+  st.style.color="var(--muted)"; st.textContent="Saving...";
+  const { error } = await sb.from("pet_lots").insert({ lot_name: name });
+  if(error){ st.style.color="var(--bad)"; st.textContent="Error: "+error.message; return; }
+  st.style.color="var(--ok)"; st.textContent="LOT added.";
+  await loadLots();
+  setTimeout(closeModal, 800);
+}
+
+async function loadManagers(){
+  const section = document.getElementById("mgrSection").value;
+  const { data } = await sb.from("pet_lot_managers").select("id, profile_id").eq("section", section);
+  const list = document.getElementById("mgrList");
+  if(!data||!data.length){ list.innerHTML=`<p style="font-size:12px;color:var(--muted);">No managers assigned yet.</p>`; return; }
+  list.innerHTML = data.map(m=>{
+    const u = ALL_USERS.find(x=>x.id===m.profile_id);
+    return `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);">
+      <span style="font-size:13px;">${u ? (u.full_name||u.username) : m.profile_id}</span>
+      <button class="act-btn del" onclick="removeManager(${m.id})">Remove</button>
+    </div>`;
+  }).join("");
+}
+
+async function addManager(){
+  const section = document.getElementById("mgrSection").value;
+  const profileId = document.getElementById("mgrUserSel").value;
+  const st = document.getElementById("mgrStatus");
+  if(!profileId){ st.style.color="var(--bad)"; st.textContent="Select a user."; return; }
+  const { error } = await sb.from("pet_lot_managers").insert({ section, profile_id: profileId });
+  if(error){ st.style.color="var(--bad)"; st.textContent="Error: "+error.message; return; }
+  st.style.color="var(--ok)"; st.textContent="Manager added.";
+  await loadManagers();
+  document.getElementById("mgrUserSel").selectedIndex = 0;
+  setTimeout(()=>{ st.textContent=""; }, 2000);
+}
+
+async function removeManager(id){
+  const { error } = await sb.from("pet_lot_managers").delete().eq("id", id);
+  if(error){ alert("Error: "+error.message); return; }
+  await loadManagers();
+}
+
+document.getElementById("modal").addEventListener("click",function(e){ if(e.target===this) closeModal(); });
+init();
+</script>
+</body>
+</html>

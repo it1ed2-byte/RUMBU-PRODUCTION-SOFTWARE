@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Manage Overtime</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;--amber:#d97706;}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:22px 18px;color:var(--text);}
+  .wrap{max-width:1040px;margin:0 auto;}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:14px;color:var(--muted);}
+
+  .form-head{text-align:center;margin-bottom:16px;}
+  .form-head .co{font-size:15px;font-weight:800;letter-spacing:.4px;color:var(--navy);}
+  .form-head .ti{font-size:12px;font-weight:700;letter-spacing:2px;color:var(--blue);margin-top:2px;text-transform:uppercase;}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 22px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.04);}
+  .card > h3{color:var(--navy);margin:0 0 2px;font-size:14px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;}
+  .card > .sub{color:var(--muted);font-size:12px;margin:0 0 16px;}
+  h4{color:var(--navy);margin:16px 0 6px;font-size:13px;}
+
+  label{display:block;font-size:11.5px;font-weight:700;color:var(--text);margin:0 0 5px;}
+  input,select{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;background:var(--card);color:var(--text);}
+  input:focus,select:focus{outline:2px solid var(--blue);border-color:var(--blue);}
+
+  button{padding:10px 15px;border:none;border-radius:8px;font-weight:700;font-size:13px;cursor:pointer;background:var(--blue);color:#fff;}
+  button:hover{background:var(--blue-dark);}
+  button.mini{padding:6px 11px;font-size:12px;}
+  button.grey{background:#6b7280;} button.grey:hover{background:#565d68;}
+  .backbar{margin-bottom:10px;}
+
+  .filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;align-items:end;}
+  .filters .act{display:flex;gap:8px;}
+
+  .loading,.empty{font-size:12.5px;color:var(--muted);padding:6px 0;}
+  table{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px;}
+  th,td{border-bottom:1px solid var(--line);padding:9px 10px;text-align:left;vertical-align:top;}
+  thead th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.3px;border-bottom:2px solid var(--line);}
+  tbody tr:hover td{background:var(--bg);}
+  .clickrow{cursor:pointer;}
+  .num{text-align:right;white-space:nowrap;}
+
+  .tag{display:inline-block;padding:2px 9px;border-radius:10px;font-size:11px;font-weight:700;color:#fff;white-space:nowrap;}
+  .tag.blue{background:var(--blue);}
+  .tag.amber{background:var(--amber);}
+  .tag.green{background:var(--green);}
+  .tag.red{background:var(--red);}
+  .tag.grey{background:#6b7280;}
+  .muted{color:var(--muted);font-size:12px;}
+  .infobox{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:13px;line-height:1.7;}
+  .roview{background:#fff8e1;border:1px solid #f0d38a;color:#8a6d1a;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:700;margin-bottom:12px;}
+  :root:not([data-theme="light"]) .roview{background:rgba(240,211,138,.12);}
+  .noaccess{color:var(--red);font-weight:bold;text-align:center;padding:30px;}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<div id="connStatus">Loading…</div>
+
+<div class="form-head">
+  <div class="co">RUMBU INDUSTRIES GROUP</div>
+  <div class="ti">Manage Overtime</div>
+</div>
+
+<div id="appArea" style="display:none;">
+
+  <!-- ============ LIST ============ -->
+  <div id="listView">
+    <div class="card">
+      <h3>All Overtime</h3>
+      <p class="sub">Every overtime request and the step it has reached. View only, no editing.</p>
+      <div class="filters">
+        <div><label>Branch</label><select id="fBranch" onchange="loadList()"><option value="all">All allowed</option></select></div>
+        <div><label>From (overtime date)</label><input type="date" id="fFrom" onchange="loadList()"></div>
+        <div><label>To (overtime date)</label><input type="date" id="fTo" onchange="loadList()"></div>
+        <div><label>Step</label>
+          <select id="fStep" onchange="renderList()">
+            <option value="all">All</option>
+            <option value="2">Step 2 · Filling</option>
+            <option value="3">Step 3 · Staff Approval</option>
+            <option value="4">Step 4 · HR Review</option>
+            <option value="5">Step 5 · HR Payment</option>
+            <option value="6">Step 6 · Accounting</option>
+            <option value="done">Completed</option>
+            <option value="returned">Returned</option>
+          </select>
+        </div>
+        <div><label>Search form / initiator</label><input type="text" id="fSearch" placeholder="Form no. or name" oninput="renderList()"></div>
+        <div class="act"><button class="mini grey" onclick="loadList()">Refresh</button></div>
+      </div>
+      <div id="scopeNote" class="muted" style="margin-top:8px;"></div>
+      <div id="listWrap"></div>
+    </div>
+  </div>
+
+  <!-- ============ DEPARTMENTS OF ONE FORM ============ -->
+  <div id="deptView" style="display:none;">
+    <div class="backbar"><button class="mini grey" onclick="backToList()">← Back to list</button></div>
+    <div class="card">
+      <div class="roview">View only — this page does not change any overtime.</div>
+      <h3 id="deptTitle">Form</h3>
+      <div id="deptInfo"></div>
+      <h4>Departments &amp; units on this form</h4>
+      <p class="sub">Click a department to see its units and staff.</p>
+      <div id="deptWrap"></div>
+    </div>
+  </div>
+
+  <!-- ============ UNITS + STAFF OF ONE DEPARTMENT ============ -->
+  <div id="unitView" style="display:none;">
+    <div class="backbar"><button class="mini grey" onclick="backToDept()">← Back to departments</button></div>
+    <div class="card">
+      <div class="roview">View only — this page does not change any overtime.</div>
+      <h3 id="unitTitle">Department</h3>
+      <div id="unitInfo"></div>
+      <div id="unitWrap"></div>
+    </div>
+  </div>
+
+</div>
+
+<div id="noAccess" class="noaccess" style="display:none;">
+  You do not have permission to view Manage Overtime.
+</div>
+</div>
+
+<script>
+let ME = null;
+let IS_SUPER = false;
+let ALLOWED_BRANCHES = null;   // null = all (super admin); else array of branch names
+let SCOPE_ROWS = null;         // null = no fine scope (branch-only); else [{section, department, unit}]
+let LIST_ROWS = [];            // computed initiation rows for the list
+let CUR = null;                // { initiation, entries:[] }
+
+// ---------- helpers ----------
+function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+function fmtDate(iso){
+  if(!iso) return "";
+  const p = String(iso).split("T")[0].split("-"); if(p.length !== 3) return iso;
+  const m=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return p[2] + " " + (m[parseInt(p[1],10)-1] || p[1]) + " " + p[0];
+}
+
+const STEP_OF = { awaiting_step2:2, awaiting_step3:3, awaiting_step4:4, awaiting_step5:5, awaiting_step6:6,
+                  rejected_to_step2:2, rejected_to_step3:3, rejected_to_step4:4, rejected_to_step5:5, completed:99 };
+const STEP_LABEL = {
+  awaiting_step2:"Step 2 · Filling", awaiting_step3:"Step 3 · Staff Approval", awaiting_step4:"Step 4 · HR Review",
+  awaiting_step5:"Step 5 · HR Payment", awaiting_step6:"Step 6 · Accounting", completed:"Completed",
+  rejected_to_step2:"Returned to Step 2", rejected_to_step3:"Returned to Step 3",
+  rejected_to_step4:"Returned to Step 4", rejected_to_step5:"Returned to Step 5"
+};
+function stepTag(status){
+  if(status === "completed") return "<span class='tag green'>Completed</span>";
+  if(String(status).indexOf("rejected") === 0) return "<span class='tag red'>" + esc(STEP_LABEL[status]||status) + "</span>";
+  return "<span class='tag amber'>" + esc(STEP_LABEL[status]||status) + "</span>";
+}
+
+// ---------- scope ----------
+function branchAllowed(section){
+  if(IS_SUPER) return true;
+  if(SCOPE_ROWS && SCOPE_ROWS.length) return SCOPE_ROWS.some(r => r.section === section);
+  return (ALLOWED_BRANCHES || []).indexOf(section) !== -1;
+}
+function deptAllowed(section, dept){
+  if(IS_SUPER) return true;
+  if(SCOPE_ROWS && SCOPE_ROWS.length)
+    return SCOPE_ROWS.some(r => r.section === section && (!r.department || r.department === dept));
+  return branchAllowed(section);
+}
+function unitAllowed(section, dept, unit){
+  if(IS_SUPER) return true;
+  if(SCOPE_ROWS && SCOPE_ROWS.length)
+    return SCOPE_ROWS.some(r => r.section === section && (!r.department || r.department === dept) && (!r.unit || r.unit === unit));
+  return branchAllowed(section);
+}
+
+async function computeScope(){
+  if(IS_SUPER){
+    const { data } = await sb.from("app_sections").select("name").order("name");
+    ALLOWED_BRANCHES = (data||[]).map(s=>s.name);
+    SCOPE_ROWS = null;
+    return;
+  }
+  ALLOWED_BRANCHES = (ME.sectionNames || []).slice();
+  // Optional fine-grained scope table. If it is missing, silently fall back to branch-only.
+  try{
+    const { data, error } = await sb.from("overtime_view_scope").select("section, department, unit").eq("profile_id", ME.id);
+    if(!error && data && data.length){
+      SCOPE_ROWS = data.map(r => ({ section: r.section, department: r.department || "", unit: r.unit || "" }));
+      ALLOWED_BRANCHES = [...new Set(SCOPE_ROWS.map(r=>r.section))];
+    } else {
+      SCOPE_ROWS = null;
+    }
+  }catch(e){ SCOPE_ROWS = null; }
+}
+
+// ---------- init ----------
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    IS_SUPER = (ME.role === "super_admin");
+    if(ME.role !== "super_admin" && ME.role !== "admin"){
+      status.style.color = "var(--green)"; status.textContent = "Connected.";
+      document.getElementById("noAccess").style.display = "block";
+      return;
+    }
+    document.getElementById("appArea").style.display = "block";
+    await computeScope();
+    populateBranchFilter();
+    document.getElementById("scopeNote").textContent = IS_SUPER
+      ? "You can see every branch."
+      : "You can see: " + ((ALLOWED_BRANCHES||[]).join(", ") || "no branch assigned") + (SCOPE_ROWS ? " (department/unit limited)" : "");
+    await loadList();
+    status.style.color = "var(--green)"; status.textContent = "Connected.";
+  }catch(e){
+    status.style.color = "var(--red)"; status.textContent = "❌ " + e.message; console.error(e);
+  }
+}
+
+function populateBranchFilter(){
+  const sel = document.getElementById("fBranch");
+  const opts = (ALLOWED_BRANCHES||[]).map(b => "<option value=\"" + esc(b) + "\">" + esc(b) + "</option>").join("");
+  sel.innerHTML = "<option value=\"all\">All allowed</option>" + opts;
+}
+
+function showView(id){
+  ["listView","deptView","unitView"].forEach(v=>{
+    const el = document.getElementById(v); if(el) el.style.display = (v===id) ? "block" : "none";
+  });
+  try{ window.scrollTo(0,0); }catch(e){}
+}
+
+// ---------- LIST ----------
+async function loadList(){
+  const wrap = document.getElementById("listWrap");
+  wrap.innerHTML = "<p class='loading'>Loading…</p>";
+  try{
+    const branch = document.getElementById("fBranch").value;
+    const from = document.getElementById("fFrom").value;
+    const to = document.getElementById("fTo").value;
+
+    let q = sb.from("overtime_initiations").select("id, form_number, form_date, overtime_date, section, initiator_username").order("overtime_date", { ascending:false });
+    // Branch scope
+    if(branch !== "all"){ q = q.eq("section", branch); }
+    else if(!IS_SUPER){ q = q.in("section", (ALLOWED_BRANCHES||[""])); }
+    if(from) q = q.gte("overtime_date", from);
+    if(to) q = q.lte("overtime_date", to);
+
+    const { data: inits, error } = await q;
+    if(error) throw error;
+    const initList = (inits||[]).filter(i => branchAllowed(i.section));
+    const ids = initList.map(i=>i.id);
+
+    let entries = [];
+    if(ids.length){
+      const { data: de } = await sb.from("overtime_department_entries").select("id, initiation_id, section, department, units, status, cycle").in("initiation_id", ids);
+      entries = (de||[]).filter(e => deptAllowed(e.section, e.department));
+    }
+    const entriesByInit = {};
+    entries.forEach(e=>{ (entriesByInit[e.initiation_id] = entriesByInit[e.initiation_id] || []).push(e); });
+
+    // staff counts per department entry
+    let counts = {};
+    const entryIds = entries.map(e=>e.id);
+    if(entryIds.length){
+      const { data: oe } = await sb.from("overtime_employees").select("department_entry_id").in("department_entry_id", entryIds);
+      (oe||[]).forEach(r=>{ counts[r.department_entry_id] = (counts[r.department_entry_id]||0) + 1; });
+    }
+
+    LIST_ROWS = initList.map(i=>{
+      const es = entriesByInit[i.id] || [];
+      const total = es.length;
+      const done = es.filter(e=>e.status==="completed").length;
+      let minStep = 100;
+      es.forEach(e=>{ const s = STEP_OF[e.status] != null ? STEP_OF[e.status] : 50; if(s < minStep) minStep = s; });
+      const anyReturned = es.some(e=>String(e.status).indexOf("rejected")===0);
+      let head;
+      if(!total) head = "grey|No departments";
+      else if(done === total) head = "done|Completed";
+      else if(anyReturned) head = "returned|Needs correction";
+      else head = String(minStep) + "|" + (STEP_LABEL["awaiting_step"+minStep] || ("Step "+minStep));
+      return {
+        id:i.id, form_number:i.form_number||"", form_date:i.form_date, overtime_date:i.overtime_date,
+        section:i.section, initiator:i.initiator_username||"", total, done, minStep, anyReturned, head,
+        _staff: es.reduce((a,e)=>a+(counts[e.id]||0),0)
+      };
+    }).filter(r => r.total > 0 || IS_SUPER);   // hide empty-after-scope forms for admins
+
+    renderList();
+  }catch(e){ wrap.innerHTML = "<p class='status err' style='color:var(--red)'>❌ " + esc(e.message) + "</p>"; }
+}
+
+function renderList(){
+  const wrap = document.getElementById("listWrap");
+  const stepF = document.getElementById("fStep").value;
+  const term = (document.getElementById("fSearch").value||"").trim().toLowerCase();
+  let rows = LIST_ROWS.slice();
+  if(stepF !== "all"){
+    rows = rows.filter(r=>{
+      if(stepF === "done") return r.done === r.total && r.total > 0;
+      if(stepF === "returned") return r.anyReturned;
+      return String(r.minStep) === stepF && r.done < r.total;
+    });
+  }
+  if(term){ rows = rows.filter(r => (r.form_number + " " + r.initiator).toLowerCase().indexOf(term) !== -1); }
+  if(!rows.length){ wrap.innerHTML = "<p class='empty'>No overtime matches these filters.</p>"; return; }
+
+  let html = "<table><thead><tr><th>Form No.</th><th>Branch</th><th>Overtime Date</th><th>Initiator</th><th class='num'>Depts</th><th class='num'>Staff</th><th>Current Step</th><th></th></tr></thead><tbody>";
+  rows.forEach(r=>{
+    const [cls, txt] = r.head.split("|");
+    const tag = cls==="done" ? "green" : cls==="returned" ? "red" : cls==="grey" ? "grey" : "amber";
+    const prog = r.total ? (" <span class='muted'>(" + r.done + "/" + r.total + ")</span>") : "";
+    html += "<tr class='clickrow' onclick=\"openInitiation(" + r.id + ")\">" +
+      "<td><b>" + esc(r.form_number) + "</b></td>" +
+      "<td>" + esc(r.section) + "</td>" +
+      "<td>" + fmtDate(r.overtime_date) + "</td>" +
+      "<td>" + esc(r.initiator) + "</td>" +
+      "<td class='num'>" + r.total + "</td>" +
+      "<td class='num'>" + r._staff + "</td>" +
+      "<td><span class='tag " + tag + "'>" + esc(txt) + "</span>" + prog + "</td>" +
+      "<td><button class='mini' onclick=\"event.stopPropagation();openInitiation(" + r.id + ")\">View</button></td></tr>";
+  });
+  html += "</tbody></table>";
+  wrap.innerHTML = html;
+}
+
+// ---------- DEPARTMENTS ----------
+async function openInitiation(id){
+  showView("deptView");
+  const wrap = document.getElementById("deptWrap");
+  wrap.innerHTML = "<p class='loading'>Loading…</p>";
+  try{
+    const { data: init } = await sb.from("overtime_initiations").select("id, form_number, form_date, overtime_date, section, initiator_username, propose_hours").eq("id", id).single();
+    const { data: de } = await sb.from("overtime_department_entries").select("id, section, department, units, status, cycle").eq("initiation_id", id);
+    const entries = (de||[]).filter(e => deptAllowed(e.section, e.department));
+    CUR = { initiation: init, entries };
+
+    document.getElementById("deptTitle").textContent = "Form " + (init.form_number||"");
+    document.getElementById("deptInfo").innerHTML = "<div class='infobox'>" +
+      "<b>Form No.:</b> " + esc(init.form_number||"") + " &nbsp;|&nbsp; <b>Branch:</b> " + esc(init.section||"") + " &nbsp;|&nbsp; " +
+      "<b>Overtime Date:</b> " + fmtDate(init.overtime_date) + " &nbsp;|&nbsp; <b>Initiated by:</b> " + esc(init.initiator_username||"") + "</div>";
+
+    if(!entries.length){ wrap.innerHTML = "<p class='empty'>No departments visible to you on this form.</p>"; return; }
+
+    const entryIds = entries.map(e=>e.id);
+    let counts = {};
+    if(entryIds.length){
+      const { data: oe } = await sb.from("overtime_employees").select("department_entry_id").in("department_entry_id", entryIds);
+      (oe||[]).forEach(r=>{ counts[r.department_entry_id] = (counts[r.department_entry_id]||0)+1; });
+    }
+
+    let html = "<table><thead><tr><th>Department</th><th>Units</th><th class='num'>Staff</th><th>Cycle</th><th>Status</th><th></th></tr></thead><tbody>";
+    entries.sort((a,b)=>String(a.department).localeCompare(String(b.department))).forEach(e=>{
+      const units = (!e.units || e.units === "ALL") ? "All units" : e.units;
+      html += "<tr class='clickrow' onclick=\"openDept(" + e.id + ")\">" +
+        "<td><b>" + esc(e.department) + "</b></td>" +
+        "<td>" + esc(units) + "</td>" +
+        "<td class='num'>" + (counts[e.id]||0) + "</td>" +
+        "<td>" + (e.cycle!=null?esc(e.cycle):"-") + "</td>" +
+        "<td>" + stepTag(e.status) + "</td>" +
+        "<td><button class='mini' onclick=\"event.stopPropagation();openDept(" + e.id + ")\">View</button></td></tr>";
+    });
+    html += "</tbody></table>";
+    wrap.innerHTML = html;
+  }catch(e){ wrap.innerHTML = "<p class='empty' style='color:var(--red)'>❌ " + esc(e.message) + "</p>"; }
+}
+function backToList(){ showView("listView"); }
+
+// ---------- UNITS + STAFF ----------
+async function openDept(deptEntryId){
+  showView("unitView");
+  const wrap = document.getElementById("unitWrap");
+  wrap.innerHTML = "<p class='loading'>Loading…</p>";
+  try{
+    const entry = (CUR && CUR.entries || []).find(e=>String(e.id)===String(deptEntryId));
+    const dept = entry ? entry.department : "";
+    const section = entry ? entry.section : (CUR && CUR.initiation ? CUR.initiation.section : "");
+
+    const { data: oe } = await sb.from("overtime_employees").select("employee_id, employee_code, employee_name, reason_for_overtime, hours_worked").eq("department_entry_id", deptEntryId).order("employee_name");
+    const rows = oe||[];
+    const internalIds = [...new Set(rows.map(r=>r.employee_id).filter(Boolean))];
+    let umap = {};
+    if(internalIds.length){
+      const { data: emps } = await sb.from("employees").select("id, employee_id, full_name, unit").in("id", internalIds);
+      (emps||[]).forEach(s=>{ umap[s.id] = s; });
+    }
+
+    document.getElementById("unitTitle").textContent = dept + (section ? " — " + section : "");
+    document.getElementById("unitInfo").innerHTML = "<div class='infobox'>" +
+      "<b>Department:</b> " + esc(dept) + " &nbsp;|&nbsp; <b>Branch:</b> " + esc(section) + " &nbsp;|&nbsp; <b>Status:</b> " + (entry ? stepTag(entry.status) : "-") + "</div>";
+
+    // group staff by their real unit, honouring unit scope
+    const groups = {};
+    rows.forEach(r=>{
+      const s = umap[r.employee_id] || {};
+      const unit = (s.unit && String(s.unit).trim()) ? s.unit : "(no unit)";
+      if(!unitAllowed(section, dept, unit === "(no unit)" ? "" : unit)) return;
+      (groups[unit] = groups[unit] || []).push({
+        code: r.employee_code || s.employee_id || "",
+        name: r.employee_name || s.full_name || "",
+        reason: r.reason_for_overtime || "",
+        hours: r.hours_worked
+      });
+    });
+    const unitNames = Object.keys(groups).sort();
+    if(!unitNames.length){ wrap.innerHTML = "<p class='empty'>No staff visible to you in this department.</p>"; return; }
+
+    let html = "";
+    unitNames.forEach(u=>{
+      const list = groups[u];
+      html += "<h4>" + esc(u) + " <span class='muted'>(" + list.length + " staff)</span></h4>";
+      html += "<table><thead><tr><th>Staff ID</th><th>Name</th><th>Reason</th><th class='num'>Hours</th></tr></thead><tbody>";
+      list.forEach(p=>{
+        html += "<tr><td>" + esc(p.code) + "</td><td>" + esc(p.name) + "</td><td>" + esc(p.reason) + "</td>" +
+          "<td class='num'>" + (p.hours!=null?esc(p.hours):"") + "</td></tr>";
+      });
+      html += "</tbody></table>";
+    });
+    wrap.innerHTML = html;
+  }catch(e){ wrap.innerHTML = "<p class='empty' style='color:var(--red)'>❌ " + esc(e.message) + "</p>"; }
+}
+function backToDept(){ if(CUR && CUR.initiation) openInitiation(CUR.initiation.id); else showView("listView"); }
+
+init();
+</script>
+<script src="../../assets/letterhead.js"></script>
+</body>
+</html>

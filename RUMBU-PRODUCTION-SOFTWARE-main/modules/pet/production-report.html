@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Production Report — PET Collection</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme")||"navy"); }catch(e){} })();
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) document.documentElement.setAttribute("data-theme",e.data.rumbuTheme); });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1100px;margin:0 auto;}
+  label{font-size:12px;font-weight:700;display:block;margin:10px 0 4px;color:var(--muted);}
+  input,select{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  .card-panel{border:1px solid var(--line);border-radius:10px;padding:18px;margin-bottom:16px;background:var(--card);}
+  .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;justify-content:center;align-items:flex-start;padding:30px 12px;overflow-y:auto;}
+  .modal-overlay.open{display:flex;}
+  .modal{background:var(--card);border-radius:12px;padding:20px;max-width:760px;width:100%;}
+  .log-row{padding:8px 0;border-bottom:1px solid var(--line);font-size:12px;display:flex;gap:10px;align-items:flex-start;}
+  .log-row:last-child{border-bottom:none;}
+  .log-ts{color:var(--muted);white-space:nowrap;min-width:130px;}
+  .log-action{font-weight:700;color:var(--heading);min-width:120px;}
+  .log-note{color:var(--muted);}
+  @media print{
+    body *{visibility:hidden;}
+    .modal, .modal *{visibility:visible;}
+    .modal{position:absolute;top:0;left:0;width:100%;}
+    .no-print{display:none!important;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back</button>
+  <div id="connStatus" style="font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);">Loading...</div>
+
+  <div class="card-panel">
+    <div style="font-weight:700;font-size:14px;color:var(--heading);margin:0 0 10px;">Production Report</div>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Browse every production entry. Filter by date range, agent, or branch. Click a row to see the full record from initiation through to production.</p>
+    <div class="grid3">
+      <div><label>From Date</label><input type="date" id="prFrom" onchange="loadProductionReport()"></div>
+      <div><label>To Date</label><input type="date" id="prTo" onchange="loadProductionReport()"></div>
+      <div><label>Branch</label>
+        <select id="prSection" onchange="loadProductionReport()"><option value="">All</option></select>
+      </div>
+    </div>
+    <div class="grid2" style="margin-top:6px;">
+      <div><label>Agent</label><input type="text" id="prAgent" placeholder="Search by agent name or code" oninput="loadProductionReport()"></div>
+      <div style="display:flex;align-items:flex-end;gap:8px;">
+        <button class="btn-ghost" onclick="clearProductionFilters()" style="width:100%;">Clear Filters</button>
+        <button onclick="downloadProductionReportPdf()" style="width:100%;">⬇ Download PDF</button>
+      </div>
+    </div>
+    <div id="productionReportWrap" style="margin-top:14px;overflow-x:auto;"></div>
+  </div>
+</div>
+
+<!-- Full Stage 1-4 detail modal, same pattern as collections.html -->
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;" class="no-print">
+      <h3 id="modalTitle" style="margin:0;">Collection Detail</h3>
+      <div style="display:flex;gap:8px;">
+        <button onclick="window.print()" style="padding:7px 14px;font-size:12px;">Print / PDF</button>
+        <button class="btn-ghost" onclick="closeModal()" style="padding:7px 14px;font-size:12px;">Close</button>
+      </div>
+    </div>
+    <div id="modalDetail"></div>
+    <h4 style="color:var(--heading);margin:16px 0 8px;">Activity Log</h4>
+    <div id="modalLog">Loading...</div>
+  </div>
+</div>
+
+<script>
+let ME=null, PROD_REPORT_ROWS=[];
+
+// PET collection currently only happens at these two sites — matches the
+// same restriction applied at Initiation.
+const ACTIVE_PET_BRANCHES = ["LagosWash", "KanoWash"];
+
+const STATUS_LABELS={
+  submitted:'Awaiting Quality Control Fill',
+  stage2_approval:'Quality Control Approval Pending',
+  rejected_to_stage1:'Returned to Initiator',
+  stage3p1_filling:'Payment Phase 1 Fill',
+  stage3p1_approval:'Payment Phase 1 Approval',
+  rejected_to_stage2:'Returned to Quality Control',
+  stage4_filling:'Production Fill',
+  stage4_approval:'Production Approval',
+  rejected_to_stage3p1:'Returned to Payment Ph.1',
+  stage3p2_filling:'Payment Phase 2 Fill',
+  stage3p2_approval:'Payment Phase 2 Approval',
+  rejected_to_stage4:'Returned to Production',
+  completed:'Completed'
+};
+
+async function init(){
+  const cs=document.getElementById("connStatus");
+  try{
+    ME=await requireAuth("../../login.html");
+    if(!ME) return;
+
+    const prSel = document.getElementById("prSection");
+    prSel.innerHTML = '<option value="">All</option>' + ACTIVE_PET_BRANCHES.map(s=>`<option value="${s}">${s}</option>`).join("");
+    await loadProductionReport();
+
+    cs.style.color="var(--ok)"; cs.textContent="Connected.";
+  }catch(e){ cs.style.color="var(--bad)"; cs.textContent="Error: "+e.message; }
+}
+
+function clearProductionFilters(){
+  document.getElementById("prFrom").value = "";
+  document.getElementById("prTo").value = "";
+  document.getElementById("prSection").value = "";
+  document.getElementById("prAgent").value = "";
+  loadProductionReport();
+}
+
+async function loadProductionReport(){
+  const from = document.getElementById("prFrom").value;
+  const to = document.getElementById("prTo").value;
+  const section = document.getElementById("prSection").value;
+  const agentQ = document.getElementById("prAgent").value.trim().toLowerCase();
+  const wrap = document.getElementById("productionReportWrap");
+
+  let query = sb.from("pet_stage4_production")
+    .select("id,production_start,production_end,colored_flex_kg,non_colored_flex_kg,total_production_kg,total_waste_kg,total_production_plus_waste_kg,labels_pdf_url,pet_collections(id,form_number,agent_name,agent_code,section)")
+    .order("production_start",{ascending:false});
+  if(from) query = query.gte("production_start", from+"T00:00:00");
+  if(to)   query = query.lte("production_start", to+"T23:59:59");
+
+  const { data, error } = await query;
+  if(error){ wrap.innerHTML = `<p style="color:var(--bad);font-size:13px;">Error loading report: ${error.message}</p>`; return; }
+
+  let rows = data||[];
+  rows = rows.filter(r=>{
+    const c = r.pet_collections||{};
+    if(section && c.section !== section) return false;
+    if(agentQ && !((c.agent_name||"")+(c.agent_code||"")).toLowerCase().includes(agentQ)) return false;
+    return true;
+  });
+  PROD_REPORT_ROWS = rows;
+
+  if(!rows.length){ wrap.innerHTML = `<p style="font-size:13px;color:var(--muted);">No production records match these filters.</p>`; return; }
+
+  wrap.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:12px;">
+    <thead><tr style="text-align:left;border-bottom:2px solid var(--line);">
+      <th style="padding:6px;">Form #</th><th style="padding:6px;">Agent</th><th style="padding:6px;">Branch</th>
+      <th style="padding:6px;">Start</th><th style="padding:6px;">End</th>
+      <th style="padding:6px;">Colored Flex</th><th style="padding:6px;">Non-Colored Flex</th><th style="padding:6px;">Total Production</th>
+      <th style="padding:6px;">Total Waste</th><th style="padding:6px;">Production + Waste</th><th style="padding:6px;">Labels</th><th style="padding:6px;"></th>
+    </tr></thead>
+    <tbody>${rows.map(r=>{
+      const c=r.pet_collections||{};
+      return `<tr style="border-bottom:1px solid var(--line);cursor:pointer;" onclick="openDetail(${c.id})">
+        <td style="padding:6px;"><b>${c.form_number||"—"}</b></td>
+        <td style="padding:6px;">${c.agent_name||"—"} ${c.agent_code?"("+c.agent_code+")":""}</td>
+        <td style="padding:6px;">${c.section||"—"}</td>
+        <td style="padding:6px;">${r.production_start?new Date(r.production_start).toLocaleString("en-GB"):"—"}</td>
+        <td style="padding:6px;">${r.production_end?new Date(r.production_end).toLocaleString("en-GB"):"—"}</td>
+        <td style="padding:6px;">${r.colored_flex_kg||0}</td>
+        <td style="padding:6px;">${r.non_colored_flex_kg||0}</td>
+        <td style="padding:6px;">${r.total_production_kg||0}</td>
+        <td style="padding:6px;">${r.total_waste_kg||0}</td>
+        <td style="padding:6px;">${r.total_production_plus_waste_kg||0}</td>
+        <td style="padding:6px;">${r.labels_pdf_url?`<a href="${r.labels_pdf_url}" target="_blank" onclick="event.stopPropagation()" style="color:var(--accent);font-weight:700;">PDF &darr;</a>`:"—"}</td>
+        <td style="padding:6px;color:var(--accent);font-weight:700;">View &rarr;</td>
+      </tr>`;
+    }).join("")}</tbody>
+  </table>`;
+}
+
+function downloadProductionReportPdf(){
+  if(!PROD_REPORT_ROWS.length){ alert("Nothing to export — no records match the current filters."); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
+  const navy = [31, 56, 100]; // #1F3864 — Rumbu house style heading colour
+
+  doc.setFillColor(navy[0], navy[1], navy[2]);
+  doc.rect(0, 0, doc.internal.pageSize.getWidth(), 56, "F");
+  doc.setTextColor(255,255,255);
+  doc.setFont("helvetica","bold"); doc.setFontSize(13);
+  doc.text("RUMBU INDUSTRIES GROUP", 30, 24);
+  doc.setFont("helvetica","normal"); doc.setFontSize(10);
+  doc.text("PET Collection — Production Report", 30, 40);
+  doc.text("Printed " + new Date().toLocaleString("en-GB"), doc.internal.pageSize.getWidth()-30, 24, { align: "right" });
+
+  doc.setTextColor(60,60,60); doc.setFontSize(9);
+  const from = document.getElementById("prFrom").value || "—";
+  const to = document.getElementById("prTo").value || "—";
+  const section = document.getElementById("prSection").value || "All";
+  const agent = document.getElementById("prAgent").value || "—";
+  doc.text(`Date range: ${from} to ${to}   |   Branch: ${section}   |   Agent: ${agent}   |   ${PROD_REPORT_ROWS.length} records`, 30, 72);
+
+  const body = PROD_REPORT_ROWS.map(r=>{
+    const c = r.pet_collections||{};
+    return [
+      c.form_number||"—",
+      (c.agent_name||"—") + (c.agent_code?" ("+c.agent_code+")":""),
+      c.section||"—",
+      r.production_start?new Date(r.production_start).toLocaleString("en-GB"):"—",
+      r.production_end?new Date(r.production_end).toLocaleString("en-GB"):"—",
+      r.colored_flex_kg||0, r.non_colored_flex_kg||0, r.total_production_kg||0,
+      r.total_waste_kg||0, r.total_production_plus_waste_kg||0
+    ];
+  });
+
+  doc.autoTable({
+    startY: 84,
+    head: [["Form #","Agent","Branch","Start","End","Colored Flex","Non-Colored Flex","Total Production","Total Waste","Production + Waste"]],
+    body,
+    styles: { fontSize: 7.5, cellPadding: 4 },
+    headStyles: { fillColor: navy, textColor: 255, fontStyle: "bold" },
+    alternateRowStyles: { fillColor: [240, 244, 249] },
+    margin: { left: 30, right: 30 },
+    didDrawPage: function(){
+      const pageCount = doc.internal.getNumberOfPages();
+      doc.setFontSize(8); doc.setTextColor(120,120,120);
+      doc.text("CONFIDENTIAL", 30, doc.internal.pageSize.getHeight()-16);
+      doc.text("Page " + doc.internal.getCurrentPageInfo().pageNumber + " of " + pageCount,
+        doc.internal.pageSize.getWidth()-30, doc.internal.pageSize.getHeight()-16, { align: "right" });
+    }
+  });
+
+  doc.save("PET_Production_Report_" + new Date().toISOString().slice(0,10) + ".pdf");
+}
+
+// ---------- Full Stage 1-4 detail view, replicated from collections.html ----------
+async function openDetail(id){
+  if(!id) return;
+  document.getElementById("modalDetail").innerHTML="Loading...";
+  document.getElementById("modalLog").innerHTML="Loading...";
+  document.getElementById("modal").classList.add("open");
+
+  const [{ data:c },{ data:qc },{ data:pay },{ data:prod },{ data:log }]=await Promise.all([
+    sb.from("pet_collections").select("*").eq("id",id).single(),
+    sb.from("pet_stage2_qc").select("*").eq("collection_id",id).single(),
+    sb.from("pet_stage3_payment").select("*").eq("collection_id",id).single(),
+    sb.from("pet_stage4_production").select("*").eq("collection_id",id).single(),
+    sb.from("pet_activity_log").select("*").eq("collection_id",id).order("created_at",{ascending:true})
+  ]);
+
+  document.getElementById("modalTitle").textContent="Collection — "+(c?.form_number||id);
+
+  let html=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px;margin-top:12px;">`;
+  function row(l,v){ return `<div style="padding:5px 0;border-bottom:1px solid var(--line);"><span style="font-size:11px;color:var(--muted);">${l}</span><br><b>${v||"—"}</b></div>`; }
+  if(c){
+    html+=row("Form Number",c.form_number)+row("Form Date",c.form_date)+row("Status",STATUS_LABELS[c.status]||c.status)+row("Section",c.section)+row("Agent",`${c.agent_name} (${c.agent_code})`)+row("Waybill Weight",c.agent_waybill_weight+" kg")+row("Rumbu Weight",c.rumbu_weighbridge_weight+" kg")+row("Initiated by",c.initiator_username);
+  }
+  html+="</div>";
+  if(qc){
+    html+=`<h4 style="color:var(--heading);margin:14px 0 6px;">Stage 2 — Quality Control</h4><div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:12px;">`;
+    html+=row("Grade",qc.bottle_grade)+row("LOT",qc.offload_location)+row("Bales",qc.number_of_bales)+row("Avg Bale Weight",qc.avg_bale_weight_kg+" kg")+row("Avg Bale Volume",qc.avg_bale_volume)+row("Bale Density",qc.bale_density);
+    html+="</div>";
+  }
+  if(pay){
+    html+=`<h4 style="color:var(--heading);margin:14px 0 6px;">Stage 3 — Payments</h4><div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px;">`;
+    html+=row("Odoo PO",pay.odoo_po_number)+row("Deduction %",pay.deduction_pct?pay.deduction_pct+"% ("+pay.deduction_amount+" NGN)":"—")+row("90% Receipt",pay.payment_90pct_attachment?`<a href="${pay.payment_90pct_attachment}" target="_blank">View</a>`:"—")+row("10% Receipt",pay.payment_10pct_attachment?`<a href="${pay.payment_10pct_attachment}" target="_blank">View</a>`:"—");
+    html+="</div>";
+  }
+  if(prod){
+    html+=`<h4 style="color:var(--heading);margin:14px 0 6px;">Stage 4 — Production</h4><div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:12px;">`;
+    html+=row("Start",prod.production_start?new Date(prod.production_start).toLocaleString("en-GB"):"—")+row("End",prod.production_end?new Date(prod.production_end).toLocaleString("en-GB"):"—")+row("Total Colored Flex",prod.colored_flex_kg+" kg")+row("Total Non-Colored Flex",prod.non_colored_flex_kg+" kg")+row("Total Production",prod.total_production_kg+" kg");
+    html+="</div>";
+    html+=`<div style="font-size:11px;color:var(--muted);margin:10px 0 4px;">Waste Breakdown (kg)</div><div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;font-size:12px;">`;
+    html+=row("Coloured PET",prod.waste_coloured_kg)+row("Labelled Bottles",prod.waste_labels_kg)+row("Caps & Rings",prod.waste_caps_rings_kg)+row("Non-Food Contact",prod.waste_non_food_kg)+row("Non-PET Product",prod.waste_non_pet_kg)+row("Aged PET Bottles",prod.waste_aged_kg)+row("Oily PET Bottles",prod.waste_oily_kg)+row("Metal Ring",prod.waste_metal_kg);
+    html+="</div>";
+    html+=`<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:12px;margin-top:6px;">`;
+    html+=row("Total Waste",prod.total_waste_kg+" kg")+row("Accepted Waste",prod.accepted_waste_kg+" kg")+row("Unacceptable Waste",prod.unacceptable_waste_kg+" kg")+row("Unacceptable Waste Value",prod.unacceptable_waste_value+" kg")+row("Weight Difference",prod.weight_difference_kg+" kg")+row("Total Production + Waste",prod.total_production_plus_waste_kg+" kg")+row("LOT Freed","After approval")+row("Bag Labels PDF",prod.labels_pdf_url?`<a href="${prod.labels_pdf_url}" target="_blank">Download</a>`:"—");
+    html+="</div>";
+  }
+  document.getElementById("modalDetail").innerHTML=html;
+
+  const logRows=log||[];
+  if(!logRows.length){ document.getElementById("modalLog").innerHTML=`<p style="font-size:12px;color:var(--muted);">No activity recorded yet.</p>`; return; }
+  document.getElementById("modalLog").innerHTML=logRows.map(r=>`<div class="log-row">
+    <span class="log-ts">${new Date(r.created_at).toLocaleString("en-GB",{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"})}</span>
+    <span class="log-action">${r.action.replace(/_/g," ")}</span>
+    <span style="color:var(--muted);font-size:11px;">Stage: ${r.stage||"—"} | By: ${r.actor_username||"—"}</span>
+    ${r.note?`<span class="log-note">— ${r.note}</span>`:""}
+  </div>`).join("");
+}
+
+function closeModal(){ document.getElementById("modal").classList.remove("open"); }
+document.getElementById("modal").addEventListener("click",function(e){ if(e.target===this) closeModal(); });
+
+init();
+</script>
+</body>
+</html>

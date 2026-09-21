@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Extruder Production Report</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+  :root{ --navy:var(--heading); --blue:var(--accent); }
+  *{box-sizing:border-box;}
+  body{background:var(--bg);margin:0;padding:0;color:var(--text);}
+  .wrap{max-width:980px;margin:0 auto;padding:18px;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;box-shadow:var(--shadow);}
+  .card h3{color:var(--heading);margin:0 0 4px;font-size:16px;}
+  .card .sub{color:var(--accent);font-size:12px;margin:0 0 14px;}
+  .grid-4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;}
+  .field{margin-bottom:4px;}
+  .check{display:flex;gap:8px;align-items:center;margin:6px 0;}
+  .check input{width:18px;height:18px;}
+  .check label{margin:0;font-weight:normal;}
+  .btn-row{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap;}
+  button{flex:1 1 160px;}
+  #status{margin-top:12px;font-weight:bold;font-size:14px;min-height:18px;}
+  #status.ok{color:#1d8a4e;} #status.err{color:#c0392b;}
+  .table-scroll{overflow-x:auto;}
+  table{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px;}
+  th,td{border:1px solid var(--line);padding:7px 9px;text-align:center;white-space:nowrap;}
+  th:first-child, td:first-child{text-align:left;}
+  thead th{background:var(--th-bg);color:var(--th-fg);font-size:12px;}
+  tbody tr:nth-child(even){background:rgba(127,127,127,.04);}
+  h3.section{color:var(--heading);font-size:15px;margin:18px 0 6px;}
+  @media (max-width:700px){ .grid-4{grid-template-columns:1fr 1fr;} }
+  @media print { body{background:#fff;} .no-print{display:none !important;} .card{border:none;padding:0;box-shadow:none;} }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+</head>
+<body>
+
+<div class="wrap">
+
+  <div class="card no-print">
+    <h3>Extruder Production Report</h3>
+    <p class="sub">Live from Supabase &middot; read only</p>
+    <div id="status">Connecting to Supabase...</div>
+
+    <div class="grid-4" style="margin-top:12px;">
+      <div class="field"><label>From Date</label><input type="date" id="from"></div>
+      <div class="field"><label>To Date</label><input type="date" id="to"></div>
+      <div class="field">
+        <label>Shift</label>
+        <select id="shift"><option value="">All</option><option>Morning</option><option>Night</option></select>
+      </div>
+      <div class="field">
+        <label>Section</label>
+        <select id="section"><option value="">All</option></select>
+      </div>
+    </div>
+
+    <label style="margin-top:10px;">Report Type</label>
+    <div class="check"><input type="checkbox" id="byName" checked><label>By Extruder Name</label></div>
+    <div class="check"><input type="checkbox" id="byType"><label>By Type</label></div>
+    <div class="check"><input type="checkbox" id="byBoth"><label>By Extruder + Type</label></div>
+
+    <div class="btn-row">
+      <button class="primary" id="genBtn" onclick="generate()">GENERATE REPORT</button>
+      <button class="primary" onclick="window.print()" style="background:#1d8a4e;">PRINT / SAVE AS PDF</button>
+    </div>
+  </div>
+
+  <div id="reportArea"></div>
+
+</div>
+
+<script>
+const TABLE_NAME = "extruder_new";
+const SECTION_DISPLAY_MAP = { "Rumbu": "Rumbu", "MamaSannu": "Mama Sannu" };
+
+let ALL_ROWS = [];
+
+// ---- Carried over exactly from the original Apps Script ----
+function R(n){ return Math.round(Number(n||0)); }
+
+function getShiftMinutes(shift){
+  // Original always returns 720 regardless of which shift; kept identical.
+  return 720;
+}
+
+function getRPM(type){
+  const map = {
+    "No.1": { rpm: 170, denier: 0.39/1000 },
+    "No.2": { rpm: 130, denier: 0.50/1000 },
+    "No.3": { rpm: 110, denier: 0.63/1000 },
+    "No.4": { rpm: 110, denier: 0.81/1000 }
+  };
+  return map[type] || { rpm: 0, denier: 0 };
+}
+
+async function loadData(){
+  const status = document.getElementById("status");
+  try{
+    const me = await requireAuth("../../login.html");
+    if(!me) return;
+
+    const mySections = (me.sectionNames && me.sectionNames.length)
+      ? me.sectionNames.map(s => SECTION_DISPLAY_MAP[s] || s)
+      : ["Rumbu","Mama Sannu"];
+    const sectionSelect = document.getElementById("section");
+    sectionSelect.innerHTML = '<option value="">All</option>' + mySections.map(s=>`<option>${s}</option>`).join("");
+    if(mySections.length === 1){ sectionSelect.value = mySections[0]; sectionSelect.disabled = true; }
+
+    const url = SUPABASE_URL + "/rest/v1/" + TABLE_NAME + "?select=*";
+    const res = await fetch(url, { headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }});
+    if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
+    ALL_ROWS = await res.json();
+    status.className = "ok";
+    status.textContent = "Connected. Rows available: " + ALL_ROWS.length;
+  }catch(e){
+    status.className = "err";
+    status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+function generate(){
+  const from = document.getElementById("from").value;
+  const to = document.getElementById("to").value;
+  const shift = document.getElementById("shift").value;
+  const section = document.getElementById("section").value;
+  const byName = document.getElementById("byName").checked;
+  const byType = document.getElementById("byType").checked;
+  const byBoth = document.getElementById("byBoth").checked;
+
+  if(!from || !to){ alert("Please choose both From and To dates."); return; }
+  if(!byName && !byType && !byBoth){ alert("Please tick at least one report type."); return; }
+
+  // ---- filter rows (mirrors the WHERE clause in the original query) ----
+  const data = ALL_ROWS.filter(r=>{
+    if(r.date_col < from || r.date_col > to) return false;
+    if(shift && r.shift !== shift) return false;
+    if(section && r.section !== section) return false;
+    return true;
+  }).map(r=>({
+    date: r.date_col,
+    extruder: r.extruder_name,
+    type: r.type_col,
+    machines: Number(r.number_of_machine||0),
+    A: Number(r.a||0),
+    B: Number(r.b||0),
+    total: Number(r.total||0)
+  }));
+
+  const reportArea = document.getElementById("reportArea");
+  if(!data.length){
+    reportArea.innerHTML = "<div class='card'><p>❌ No record found for the selected filters.</p></div>";
+    return;
+  }
+
+  const minutes = getShiftMinutes(shift);
+
+  // ---- group by extruder ----
+  const byNameData = {};
+  data.forEach(d=>{
+    if(!byNameData[d.extruder]) byNameData[d.extruder] = { extruder:d.extruder, machines:0, A:0, B:0, total:0 };
+    byNameData[d.extruder].machines += d.machines;
+    byNameData[d.extruder].A += d.A;
+    byNameData[d.extruder].B += d.B;
+    byNameData[d.extruder].total += d.total;
+  });
+
+  // ---- group by type ----
+  const byTypeData = {};
+  data.forEach(d=>{
+    if(!byTypeData[d.type]) byTypeData[d.type] = { type:d.type, machines:0, A:0, B:0, total:0 };
+    byTypeData[d.type].machines += d.machines;
+    byTypeData[d.type].A += d.A;
+    byTypeData[d.type].B += d.B;
+    byTypeData[d.type].total += d.total;
+  });
+
+  // ---- group by extruder + type ----
+  const byBothData = {};
+  data.forEach(d=>{
+    const key = d.extruder + "||" + d.type;
+    if(!byBothData[key]) byBothData[key] = { extruder:d.extruder, type:d.type, machines:0, A:0, B:0, total:0 };
+    byBothData[key].machines += d.machines;
+    byBothData[key].A += d.A;
+    byBothData[key].B += d.B;
+    byBothData[key].total += d.total;
+  });
+
+  function buildTable(title, dataset, mode){
+    let html = `<h3 class="section">${title}</h3><div class="table-scroll"><table><tr>`;
+    html += mode === "type" ? "<th>Type</th>" : "<th>Extruder</th>";
+    if(mode === "both") html += "<th>Type</th>";
+    html += "<th>Machines</th><th>A</th><th>B</th><th>Total</th><th>Target</th><th>%A</th><th>%B</th><th>%P</th></tr>";
+
+    Object.values(dataset).forEach(r=>{
+      let target = 0;
+      if(mode === "type" || mode === "both"){
+        const rpm = getRPM(r.type);
+        target = r.machines * rpm.rpm * rpm.denier * minutes;
+      } else {
+        // BY EXTRUDER: sum target across all rows for that extruder, per its own type
+        target = 0;
+        data.forEach(d=>{
+          if(d.extruder === r.extruder){
+            const rpm = getRPM(d.type);
+            target += d.machines * rpm.rpm * rpm.denier * minutes;
+          }
+        });
+      }
+      const percentA = r.total ? (r.A/r.total)*100 : 0;
+      const percentB = r.total ? (r.B/r.total)*100 : 0;
+      const percentP = target ? (r.total/target)*100 : 0;
+
+      html += "<tr>";
+      html += mode === "type" ? `<td>${r.type}</td>` : `<td>${r.extruder}</td>`;
+      if(mode === "both") html += `<td>${r.type}</td>`;
+      html += `<td>${R(r.machines)}</td><td>${R(r.A)}</td><td>${R(r.B)}</td><td>${R(r.total)}</td>`;
+      html += `<td>${R(target)}</td><td>${R(percentA)}%</td><td>${R(percentB)}%</td><td>${R(percentP)}%</td>`;
+      html += "</tr>";
+    });
+    html += "</table></div>";
+    return html;
+  }
+
+  let out = `<div class="card"><h2 style="color:var(--navy)">Extruder Production Report</h2>
+    <p><b>From:</b> ${from} &nbsp; <b>To:</b> ${to}</p><hr>`;
+  if(byName) out += buildTable("By Extruder Name", byNameData, "name");
+  if(byType) out += buildTable("By Type", byTypeData, "type");
+  if(byBoth) out += buildTable("By Extruder + Type", byBothData, "both");
+  out += "</div>";
+  reportArea.innerHTML = out;
+}
+
+loadData();
+</script>
+<script src="../../assets/letterhead.js"></script>
+</body>
+</html>

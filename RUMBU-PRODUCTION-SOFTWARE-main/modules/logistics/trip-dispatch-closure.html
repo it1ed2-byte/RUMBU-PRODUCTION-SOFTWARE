@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Trip Dispatch &amp; Closure — Logistics</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme")||"navy"); }catch(e){} })();
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) document.documentElement.setAttribute("data-theme",e.data.rumbuTheme); });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="review-modal.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<style>
+  body{padding:18px;}
+  .wrap{max-width:900px;margin:0 auto;}
+  label{font-size:12px;font-weight:700;display:block;margin:10px 0 4px;color:var(--muted);}
+  input,select,textarea{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);}
+  input[readonly]{background:var(--bg);color:var(--muted);}
+  .form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  .queue-row{border:1px solid var(--line);border-radius:var(--radius-sm);padding:12px;margin-bottom:10px;}
+  .hidden{display:none;}
+  .btn-ghost{background:var(--bg);color:var(--heading);border:1px solid var(--line);}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back</button>
+  <div id="connStatus" style="font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);">Loading...</div>
+
+  <div class="card-panel">
+    <h3 style="color:var(--heading);margin:0 0 4px;">Dispatch Queue — Submitted Trips</h3>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 16px;">Enter the Expected Distance — Fuel to Issue is calculated automatically from the vehicle's known consumption rate.</p>
+    <div id="dispatchQueue"></div>
+  </div>
+
+  <div class="card-panel">
+    <h3 style="color:var(--heading);margin:0 0 4px;">Closure Queue — Dispatched Trips</h3>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 16px;">Record how the trip ended and confirm the fuel cost to close it out.</p>
+    <div id="closureQueue"></div>
+  </div>
+
+  <!-- Dispatch form -->
+  <div class="card-panel hidden" id="dispatchFormPanel">
+    <h4 style="margin-top:0;" id="dispatchFormTitle">Dispatch Trip</h4>
+    <input type="hidden" id="disp_trip_id">
+    <div class="form-row">
+      <div><label>Expected Distance (km) *</label><input type="number" step="0.1" id="disp_distance" oninput="computeFuelToIssue()"></div>
+      <div><label>Fuel to Issue (litres)</label><input type="number" id="disp_fuel" readonly></div>
+    </div>
+    <p style="font-size:12px;color:var(--muted);margin:4px 0 0;" id="dispatchConsumptionNote"></p>
+    <button onclick="submitDispatch()" style="margin-top:10px;">Confirm Dispatch</button>
+    <button class="btn-ghost" onclick="document.getElementById('dispatchFormPanel').classList.add('hidden');">Cancel</button>
+    <div class="status" id="dispatchFormStatus"></div>
+  </div>
+
+  <!-- Closure form -->
+  <div class="card-panel hidden" id="closureFormPanel">
+    <h4 style="margin-top:0;" id="closureFormTitle">Close Out Trip</h4>
+    <input type="hidden" id="clos_trip_id">
+    <label>Return Status *</label>
+    <select id="clos_return_status" onchange="onReturnStatusChange()">
+      <option value="">— Select —</option>
+      <option value="returned_safely">Returned Safely</option>
+      <option value="had_crash">Had a Crash</option>
+      <option value="vehicle_spoilt">Vehicle Spoilt / Broke Down</option>
+      <option value="other">Other (specify)</option>
+    </select>
+    <div class="hidden" id="clos_detail_wrap">
+      <label>Please Specify *</label><input id="clos_detail">
+    </div>
+
+    <div class="form-row" style="margin-top:10px;">
+      <div><label>Fuel Issued (litres)</label><input type="text" id="clos_fuel_issued" readonly></div>
+      <div><label>Trip Expenses (NGN) *</label><input type="number" step="0.01" id="clos_expenses"></div>
+    </div>
+    <p style="font-size:12px;color:var(--muted);margin:4px 0 0;" id="clos_price_note"></p>
+
+    <button onclick="submitClosure()" style="margin-top:10px;">Confirm Closure</button>
+    <button class="btn-ghost" onclick="document.getElementById('closureFormPanel').classList.add('hidden');">Cancel</button>
+    <div class="status" id="closureFormStatus"></div>
+  </div>
+
+  <div class="card-panel">
+    <h3 style="color:var(--heading);margin:0 0 4px;">Dispatch &amp; Closure Report</h3>
+    <div class="form-row">
+      <div><label>From Date</label><input type="date" id="rFrom" onchange="loadReport()"></div>
+      <div><label>To Date</label><input type="date" id="rTo" onchange="loadReport()"></div>
+    </div>
+    <div style="margin-top:8px;"><label>Status</label>
+      <select id="rStatus" onchange="loadReport()">
+        <option value="">All (Submitted, Dispatched, Completed)</option>
+        <option value="submitted">Submitted (awaiting dispatch)</option>
+        <option value="dispatched">Dispatched</option>
+        <option value="completed">Completed</option>
+      </select>
+    </div>
+    <div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap;">
+      <button class="btn-ghost" onclick="clearReportFilters()">Clear Filters</button>
+      <button onclick="downloadPdf()">⬇ Download PDF</button>
+    </div>
+    <div id="reportWrap" style="margin-top:14px;overflow-x:auto;"></div>
+    <div class="status" id="reportStatus"></div>
+  </div>
+</div>
+
+<script>
+let ME = null;
+let DISPATCH_DATA = [];
+let CLOSURE_DATA = [];
+let VEHICLES = [];
+let CURRENT_PRICE = null;
+let REPORT_ROWS = [];
+
+const RETURN_STATUS_LABELS = {
+  returned_safely: "Returned Safely", had_crash: "Had a Crash",
+  vehicle_spoilt: "Vehicle Spoilt / Broke Down", other: "Other"
+};
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    const [{ data: vData }, { data: priceData }] = await Promise.all([
+      sb.from("logistics_vehicles").select("id,registration_number,expected_consumption_km_per_litre"),
+      sb.from("logistics_fuel_price").select("price_per_litre").eq("id",1).maybeSingle()
+    ]);
+    VEHICLES = vData||[];
+    CURRENT_PRICE = priceData ? priceData.price_per_litre : null;
+    const today = new Date().toISOString().slice(0,10);
+    const monthAgo = new Date(Date.now() - 30*86400000).toISOString().slice(0,10);
+    document.getElementById("rFrom").value = monthAgo;
+    document.getElementById("rTo").value = today;
+    await Promise.all([loadDispatchQueue(), loadClosureQueue(), loadReport()]);
+    status.style.color="var(--ok)"; status.textContent="Connected.";
+  }catch(e){
+    status.style.color="var(--bad)"; status.textContent="Error: "+e.message;
+  }
+}
+
+async function loadDispatchQueue(){
+  const { data, error } = await sb.from("logistics_trips")
+    .select("*, logistics_vehicles(registration_number), logistics_drivers(employees(full_name))")
+    .eq("status","submitted").order("trip_date");
+  const wrap = document.getElementById("dispatchQueue");
+  if(error){ wrap.innerHTML = "Error: " + error.message; return; }
+  if(!data || !data.length){ wrap.innerHTML = "<p style='color:var(--muted);font-size:13px;'>No trips awaiting dispatch.</p>"; return; }
+  DISPATCH_DATA = data;
+  wrap.innerHTML = data.map(t=>{
+    const veh = t.logistics_vehicles ? t.logistics_vehicles.registration_number : "—";
+    const drv = (t.logistics_drivers && t.logistics_drivers.employees) ? t.logistics_drivers.employees.full_name : "—";
+    return `<div class="queue-row">
+      <b>${t.destination}</b> — ${t.requesting_department}
+      <div style="font-size:12px;color:var(--muted);">${t.trip_date} | Vehicle: ${veh} | Driver: ${drv}</div>
+      <button style="margin-top:8px;" onclick="openDispatchForm(${t.id})">Dispatch</button>
+    </div>`;
+  }).join("");
+}
+
+async function loadClosureQueue(){
+  const { data, error } = await sb.from("logistics_trips")
+    .select("*, logistics_vehicles(registration_number), logistics_drivers(employees(full_name))")
+    .eq("status","dispatched").order("trip_date");
+  const wrap = document.getElementById("closureQueue");
+  if(error){ wrap.innerHTML = "Error: " + error.message; return; }
+  if(!data || !data.length){ wrap.innerHTML = "<p style='color:var(--muted);font-size:13px;'>No dispatched trips awaiting closure.</p>"; return; }
+  CLOSURE_DATA = data;
+  wrap.innerHTML = data.map(t=>{
+    const veh = t.logistics_vehicles ? t.logistics_vehicles.registration_number : "—";
+    const drv = (t.logistics_drivers && t.logistics_drivers.employees) ? t.logistics_drivers.employees.full_name : "—";
+    return `<div class="queue-row">
+      <b>${t.destination}</b> — ${t.requesting_department}
+      <div style="font-size:12px;color:var(--muted);">${t.trip_date} | Vehicle: ${veh} | Driver: ${drv} | Fuel Issued: ${t.calculated_fuel_litres!=null?t.calculated_fuel_litres.toFixed(2):"—"}L</div>
+      <button style="margin-top:8px;" onclick="openClosureForm(${t.id})">Close Out</button>
+    </div>`;
+  }).join("");
+}
+
+function computeFuelToIssue(){
+  const tripId = Number(document.getElementById("disp_trip_id").value);
+  const t = DISPATCH_DATA.find(x=>x.id===tripId);
+  const veh = t ? VEHICLES.find(v=>v.id===t.vehicle_id) : null;
+  const distance = parseFloat(document.getElementById("disp_distance").value);
+  const note = document.getElementById("dispatchConsumptionNote");
+
+  if(!veh || !veh.expected_consumption_km_per_litre){
+    document.getElementById("disp_fuel").value = "";
+    note.textContent = "⚠️ This vehicle has no Expected Fuel Consumption set on its profile — set it in Vehicle Profiles before dispatching.";
+    note.style.color = "var(--bad)";
+    return;
+  }
+  note.style.color = "var(--muted)";
+  note.textContent = "Based on " + veh.registration_number + "'s expected consumption: " + veh.expected_consumption_km_per_litre + " km/litre.";
+  if(isNaN(distance)){ document.getElementById("disp_fuel").value = ""; return; }
+  document.getElementById("disp_fuel").value = (distance / veh.expected_consumption_km_per_litre).toFixed(2);
+}
+
+function openDispatchForm(tripId){
+  const t = DISPATCH_DATA.find(x=>x.id===tripId);
+  if(!t) return;
+  document.getElementById("dispatchFormPanel").classList.remove("hidden");
+  document.getElementById("dispatchFormTitle").textContent = "Dispatch — " + t.destination;
+  document.getElementById("disp_trip_id").value = t.id;
+  document.getElementById("disp_distance").value = "";
+  document.getElementById("disp_fuel").value = "";
+  document.getElementById("dispatchConsumptionNote").textContent = "";
+  document.getElementById("dispatchFormStatus").textContent = "";
+  document.getElementById("dispatchFormPanel").scrollIntoView({behavior:"smooth"});
+}
+
+function submitDispatch(){
+  const status = document.getElementById("dispatchFormStatus");
+  const tripId = document.getElementById("disp_trip_id").value;
+  const distance = document.getElementById("disp_distance").value;
+  const fuel = document.getElementById("disp_fuel").value;
+  if(distance===""){ status.className="status err"; status.textContent="Expected Distance is required."; return; }
+  if(fuel===""){ status.className="status err"; status.textContent="Fuel to Issue could not be calculated — check the vehicle has an Expected Fuel Consumption set."; return; }
+
+  const t = DISPATCH_DATA.find(x=>x.id===Number(tripId));
+  status.textContent = "";
+  showReviewModal({
+    title: "Review Before Dispatching",
+    subtitle: (t ? t.destination + " — " + t.requesting_department : ""),
+    mode: "submit",
+    sections: [{ rows: [
+      ["Expected Distance (km)", distance],
+      ["Fuel to Issue (litres)", fuel],
+    ]}],
+    onConfirm: proceedWithDispatch
+  });
+}
+
+async function proceedWithDispatch(){
+  const status = document.getElementById("dispatchFormStatus");
+  const tripId = document.getElementById("disp_trip_id").value;
+  const distance = document.getElementById("disp_distance").value;
+  const fuel = document.getElementById("disp_fuel").value;
+  const t = DISPATCH_DATA.find(x=>x.id===Number(tripId));
+
+  status.className="status"; status.textContent="Saving...";
+  try{
+    const { error } = await sb.from("logistics_trips").update({
+      expected_distance_km: Number(distance),
+      calculated_fuel_litres: Number(fuel),
+      status: "dispatched",
+      dispatched_at: new Date().toISOString(),
+      dispatched_by: ME.id
+    }).eq("id", tripId);
+    if(error) throw error;
+    await sb.from("logistics_activity_log").insert({
+      entity_type:"trip", entity_id:tripId, action:"dispatched",
+      actor_profile_id: ME.id, actor_username: ME.username,
+      description: ME.username + " dispatched trip to " + (t?t.destination:"") + " (" + fuel + "L calculated)"
+    });
+    status.className="status ok"; status.textContent="✅ Trip dispatched.";
+    await Promise.all([loadDispatchQueue(), loadClosureQueue()]);
+    setTimeout(()=>{ document.getElementById("dispatchFormPanel").classList.add("hidden"); }, 700);
+  }catch(e){
+    status.className="status err"; status.textContent="❌ " + e.message;
+  }
+}
+
+function onReturnStatusChange(){
+  const wrap = document.getElementById("clos_detail_wrap");
+  wrap.classList.toggle("hidden", document.getElementById("clos_return_status").value !== "other");
+}
+
+async function openClosureForm(tripId){
+  const t = CLOSURE_DATA.find(x=>x.id===tripId);
+  if(!t) return;
+  document.getElementById("closureFormPanel").classList.remove("hidden");
+  document.getElementById("closureFormTitle").textContent = "Close Out — " + t.destination;
+  document.getElementById("clos_trip_id").value = t.id;
+  document.getElementById("clos_return_status").value = "";
+  document.getElementById("clos_detail").value = "";
+  document.getElementById("clos_detail_wrap").classList.add("hidden");
+  document.getElementById("clos_fuel_issued").value = t.calculated_fuel_litres!=null ? t.calculated_fuel_litres.toFixed(2) + " L" : "—";
+  document.getElementById("clos_expenses").value = "";
+  document.getElementById("closureFormStatus").textContent = "";
+  document.getElementById("closureFormPanel").scrollIntoView({behavior:"smooth"});
+
+  // Trip Expenses = litres this trip actually needed × the ACTUAL price
+  // this vehicle's fuel was bought at (its most recent real purchase in
+  // Fuel Management) — not the generic Current Price, since that's just
+  // an estimate. Only falls back to Current Price if this vehicle has no
+  // purchase history yet at all.
+  const priceNote = document.getElementById("clos_price_note");
+  if(t.calculated_fuel_litres==null){ priceNote.textContent = ""; return; }
+
+  const { data: lastPurchase } = await sb.from("logistics_fuel_records")
+    .select("price_per_litre,fuelled_at").eq("vehicle_id", t.vehicle_id)
+    .order("fuelled_at",{ascending:false}).limit(1).maybeSingle();
+
+  if(lastPurchase){
+    const cost = t.calculated_fuel_litres * lastPurchase.price_per_litre;
+    document.getElementById("clos_expenses").value = cost.toFixed(2);
+    priceNote.textContent = "Based on this vehicle's last actual fuel purchase: ₦" + lastPurchase.price_per_litre + "/litre on " + new Date(lastPurchase.fuelled_at).toLocaleDateString("en-GB") + ".";
+  } else if(CURRENT_PRICE!=null){
+    document.getElementById("clos_expenses").value = (t.calculated_fuel_litres * CURRENT_PRICE).toFixed(2);
+    priceNote.textContent = "No fuel purchase on record yet for this vehicle — using the general Current Fuel Price (₦" + CURRENT_PRICE + "/litre) instead.";
+  } else {
+    priceNote.textContent = "⚠️ No fuel purchase on record for this vehicle, and no Current Fuel Price set — enter Trip Expenses manually.";
+  }
+}
+
+function submitClosure(){
+  const status = document.getElementById("closureFormStatus");
+  const tripId = document.getElementById("clos_trip_id").value;
+  const t = CLOSURE_DATA.find(x=>x.id===Number(tripId));
+  const returnStatus = document.getElementById("clos_return_status").value;
+  const detail = document.getElementById("clos_detail").value.trim();
+  const expenses = document.getElementById("clos_expenses").value;
+
+  if(!returnStatus){ status.className="status err"; status.textContent="Return Status is required."; return; }
+  if(returnStatus==="other" && !detail){ status.className="status err"; status.textContent="Please specify the issue."; return; }
+  if(expenses===""){ status.className="status err"; status.textContent="Trip Expenses is required (enter 0 if none)."; return; }
+
+  status.textContent = "";
+  showReviewModal({
+    title: "Review Before Closing Out",
+    subtitle: (t ? t.destination + " — " + t.requesting_department : ""),
+    mode: "submit",
+    sections: [{ rows: [
+      ["Return Status", RETURN_STATUS_LABELS[returnStatus] + (returnStatus==="other" ? " — " + detail : "")],
+      ["Fuel Issued (litres)", t.calculated_fuel_litres!=null ? t.calculated_fuel_litres.toFixed(2) : "—"],
+      ["Trip Expenses (NGN)", expenses],
+    ]}],
+    onConfirm: proceedWithClosure
+  });
+}
+
+async function proceedWithClosure(){
+  const status = document.getElementById("closureFormStatus");
+  const tripId = document.getElementById("clos_trip_id").value;
+  const t = CLOSURE_DATA.find(x=>x.id===Number(tripId));
+  const returnStatus = document.getElementById("clos_return_status").value;
+  const detail = document.getElementById("clos_detail").value.trim();
+  const expenses = document.getElementById("clos_expenses").value;
+
+  status.className="status"; status.textContent="Saving...";
+  try{
+    const { error } = await sb.from("logistics_trips").update({
+      return_status: returnStatus,
+      return_status_detail: returnStatus==="other" ? detail : null,
+      trip_expenses: Number(expenses),
+      status: "completed",
+      closed_at: new Date().toISOString(),
+      closed_by: ME.id
+    }).eq("id", tripId);
+    if(error) throw error;
+    await sb.from("logistics_activity_log").insert({
+      entity_type:"trip", entity_id:tripId, action:"closed",
+      actor_profile_id: ME.id, actor_username: ME.username,
+      description: ME.username + " closed out trip to " + (t?t.destination:"") + " — " + RETURN_STATUS_LABELS[returnStatus]
+    });
+    status.className="status ok"; status.textContent="✅ Trip closed out.";
+    await loadClosureQueue();
+    setTimeout(()=>{ document.getElementById("closureFormPanel").classList.add("hidden"); }, 700);
+  }catch(e){
+    status.className="status err"; status.textContent="❌ " + e.message;
+  }
+}
+
+function clearReportFilters(){
+  document.getElementById("rFrom").value = "";
+  document.getElementById("rTo").value = "";
+  document.getElementById("rStatus").value = "";
+  loadReport();
+}
+
+const REPORT_STATUS_LABELS = { submitted:"Submitted", dispatched:"Dispatched", completed:"Completed" };
+
+async function loadReport(){
+  const from = document.getElementById("rFrom").value;
+  const to = document.getElementById("rTo").value;
+  const statusF = document.getElementById("rStatus").value;
+  const wrap = document.getElementById("reportWrap");
+  const status = document.getElementById("reportStatus");
+
+  let q = sb.from("logistics_trips")
+    .select("*, logistics_vehicles(registration_number), logistics_drivers(employees(full_name))")
+    .order("trip_date",{ascending:false});
+  if(from) q = q.gte("trip_date", from);
+  if(to) q = q.lte("trip_date", to);
+  if(statusF) q = q.eq("status", statusF);
+
+  const { data, error } = await q;
+  if(error){ wrap.innerHTML = "Error: " + error.message; return; }
+  REPORT_ROWS = data||[];
+  status.className=""; status.textContent = REPORT_ROWS.length + " trip(s) match these filters.";
+
+  if(!REPORT_ROWS.length){ wrap.innerHTML = "<p style='color:var(--muted);font-size:13px;'>No trips match.</p>"; return; }
+  wrap.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+    <thead><tr>
+      <th style="text-align:left;padding:7px 8px;border-bottom:2px solid var(--line);">Date</th>
+      <th style="text-align:left;padding:7px 8px;border-bottom:2px solid var(--line);">Destination</th>
+      <th style="text-align:left;padding:7px 8px;border-bottom:2px solid var(--line);">Vehicle</th>
+      <th style="text-align:left;padding:7px 8px;border-bottom:2px solid var(--line);">Driver</th>
+      <th style="text-align:left;padding:7px 8px;border-bottom:2px solid var(--line);">Expected Distance</th>
+      <th style="text-align:left;padding:7px 8px;border-bottom:2px solid var(--line);">Fuel Issued</th>
+      <th style="text-align:left;padding:7px 8px;border-bottom:2px solid var(--line);">Return Status</th>
+      <th style="text-align:left;padding:7px 8px;border-bottom:2px solid var(--line);">Trip Expenses</th>
+      <th style="text-align:left;padding:7px 8px;border-bottom:2px solid var(--line);">Status</th>
+    </tr></thead>
+    <tbody>${REPORT_ROWS.map(t=>{
+      const veh = t.logistics_vehicles ? t.logistics_vehicles.registration_number : "—";
+      const drv = (t.logistics_drivers && t.logistics_drivers.employees) ? t.logistics_drivers.employees.full_name : "—";
+      const ret = t.return_status ? (RETURN_STATUS_LABELS[t.return_status] + (t.return_status_detail ? " — "+t.return_status_detail : "")) : "—";
+      return `<tr>
+        <td style="padding:7px 8px;border-bottom:1px solid var(--line);">${t.trip_date||"—"}</td>
+        <td style="padding:7px 8px;border-bottom:1px solid var(--line);">${t.destination||"—"}</td>
+        <td style="padding:7px 8px;border-bottom:1px solid var(--line);">${veh}</td>
+        <td style="padding:7px 8px;border-bottom:1px solid var(--line);">${drv}</td>
+        <td style="padding:7px 8px;border-bottom:1px solid var(--line);">${t.expected_distance_km!=null?t.expected_distance_km+" km":"—"}</td>
+        <td style="padding:7px 8px;border-bottom:1px solid var(--line);">${t.calculated_fuel_litres!=null?t.calculated_fuel_litres.toFixed(2)+" L":"—"}</td>
+        <td style="padding:7px 8px;border-bottom:1px solid var(--line);">${ret}</td>
+        <td style="padding:7px 8px;border-bottom:1px solid var(--line);">${t.trip_expenses!=null?t.trip_expenses:"—"}</td>
+        <td style="padding:7px 8px;border-bottom:1px solid var(--line);">${REPORT_STATUS_LABELS[t.status]||t.status}</td>
+      </tr>`;
+    }).join("")}</tbody>
+  </table>`;
+}
+
+function downloadPdf(){
+  if(!REPORT_ROWS.length){ alert("Nothing to export — no rows match the current filters."); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
+  const navy = [31, 56, 100];
+
+  doc.setFillColor(navy[0], navy[1], navy[2]);
+  doc.rect(0, 0, doc.internal.pageSize.getWidth(), 56, "F");
+  doc.setTextColor(255,255,255);
+  doc.setFont("helvetica","bold"); doc.setFontSize(13);
+  doc.text("RUMBU INDUSTRIES GROUP", 30, 24);
+  doc.setFont("helvetica","normal"); doc.setFontSize(10);
+  doc.text("Logistics — Dispatch & Closure Report", 30, 40);
+  doc.text("Printed " + new Date().toLocaleString("en-GB"), doc.internal.pageSize.getWidth()-30, 24, { align: "right" });
+
+  doc.setTextColor(60,60,60); doc.setFontSize(9);
+  const from = document.getElementById("rFrom").value || "—";
+  const to = document.getElementById("rTo").value || "—";
+  const statusF = document.getElementById("rStatus").value ? (REPORT_STATUS_LABELS[document.getElementById("rStatus").value]) : "All";
+  doc.text(`Date range: ${from} to ${to}   |   Status: ${statusF}   |   ${REPORT_ROWS.length} trip(s)`, 30, 72);
+
+  const body = REPORT_ROWS.map(t=>{
+    const veh = t.logistics_vehicles ? t.logistics_vehicles.registration_number : "—";
+    const drv = (t.logistics_drivers && t.logistics_drivers.employees) ? t.logistics_drivers.employees.full_name : "—";
+    const ret = t.return_status ? (RETURN_STATUS_LABELS[t.return_status] + (t.return_status_detail ? " — "+t.return_status_detail : "")) : "—";
+    return [
+      t.trip_date||"—", t.destination||"—", veh, drv,
+      t.expected_distance_km!=null?t.expected_distance_km+" km":"—",
+      t.calculated_fuel_litres!=null?t.calculated_fuel_litres.toFixed(2)+" L":"—",
+      ret, t.trip_expenses!=null?t.trip_expenses:"—",
+      REPORT_STATUS_LABELS[t.status]||t.status||"—"
+    ];
+  });
+
+  doc.autoTable({
+    startY: 84,
+    head: [["Date","Destination","Vehicle","Driver","Expected Distance","Fuel Issued","Return Status","Trip Expenses","Status"]],
+    body,
+    styles: { fontSize: 7.5, cellPadding: 4 },
+    headStyles: { fillColor: navy, textColor: 255, fontStyle: "bold" },
+    alternateRowStyles: { fillColor: [240, 244, 249] },
+    margin: { left: 30, right: 30 },
+    didDrawPage: function(){
+      const pageCount = doc.internal.getNumberOfPages();
+      doc.setFontSize(8); doc.setTextColor(120,120,120);
+      doc.text("CONFIDENTIAL", 30, doc.internal.pageSize.getHeight()-16);
+      doc.text("Page " + doc.internal.getCurrentPageInfo().pageNumber + " of " + pageCount,
+        doc.internal.pageSize.getWidth()-30, doc.internal.pageSize.getHeight()-16, { align: "right" });
+    }
+  });
+
+  doc.save("Logistics_Dispatch_Closure_Report_" + new Date().toISOString().slice(0,10) + ".pdf");
+}
+
+init();
+</script>
+</body>
+</html>

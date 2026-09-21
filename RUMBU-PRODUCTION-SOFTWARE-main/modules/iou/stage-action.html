@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Loan / IOU Application — Stage Action</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1000px;margin:0 auto;}
+  #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);}
+  .empty-note{background:var(--bg);border:1px dashed var(--line-2);border-radius:var(--radius);padding:24px;text-align:center;color:var(--muted);font-size:13px;}
+  .req-card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px;margin-bottom:16px;box-shadow:var(--shadow);}
+  .rc-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:10px;flex-wrap:wrap;}
+  .rc-ref{font-weight:800;color:var(--heading);font-size:14.5px;}
+  .rc-stage{background:var(--bg);border:1px solid var(--line-2);border-radius:20px;padding:4px 12px;font-size:11.5px;font-weight:700;color:var(--muted);}
+  .rc-meta{display:grid;grid-template-columns:1fr 1fr;gap:6px 20px;font-size:13px;color:var(--text);margin-bottom:12px;}
+  .rc-meta .m-label{color:var(--muted);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.3px;}
+  table.appl{width:100%;border-collapse:collapse;margin:6px 0 8px;font-size:13px;}
+  table.appl th,table.appl td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;}
+  table.appl thead th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.3px;}
+  .paybar{display:flex;justify-content:space-between;font-weight:800;color:var(--heading);padding:8px 10px;background:var(--bg);border:1px solid var(--line-2);border-radius:var(--radius);margin-bottom:12px;}
+  .section-h{font-size:11px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--accent);margin:14px 0 6px;}
+  .att-list{display:flex;flex-wrap:wrap;gap:8px;margin:2px 0 10px;}
+  .att-list a{font-size:12px;background:var(--bg);border:1px solid var(--line-2);border-radius:16px;padding:3px 10px;color:var(--primary);text-decoration:none;font-weight:600;}
+  .dropzone{background:var(--bg);border:1px dashed var(--line-2);border-radius:var(--radius);padding:14px 12px;text-align:center;cursor:pointer;}
+  .dropzone:hover,.dropzone.drag{border-color:var(--accent);}
+  .dropzone .dz-action{color:var(--primary);font-weight:700;font-size:13px;}
+  .dropzone .dz-hint{font-size:11px;color:var(--muted);margin-top:2px;}
+  .dropzone input[type=file]{display:none;}
+  .file-list{margin-top:6px;display:flex;flex-direction:column;gap:6px;}
+  .file-chip{display:flex;align-items:center;justify-content:space-between;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:7px;padding:5px 10px;font-size:12px;}
+  .file-chip .fc-remove{color:var(--bad);cursor:pointer;font-weight:700;background:none;border:0;padding:0 4px;font-size:14px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<button class="no-print" onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:240px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back to Dashboard</button>
+<div id="connStatus">Loading...</div>
+
+<div class="card-panel">
+  <h3>Pending My Action — Loan / IOU Application</h3>
+  <p class="sub">Requests waiting at a stage you're assigned to. Any one approver on a stage can approve to move it on; a decline sends it back to the initiator.</p>
+</div>
+
+<div id="topStatus" class="status" style="display:none;"></div>
+<div id="listWrap"></div>
+</div>
+
+<script>
+let ME = null, MY_EMPLOYEE_REF_ID = null;
+let STAGES = [], STAGES_BY_ID = {}, MY_STAGE_IDS = new Set();
+let ALLOWED_SB = new Set();        // "stageId|branch" the approver may act on
+let ALLOWED_ALLBRANCH = new Set(); // stageIds where the approver has a null-branch (all branches) assignment
+let DIV_NAME = {}, LOAN_NAME = {}, EMP_NAME = {}, BANKS = [], PAYTYPES = [];
+const STAGED = {}; // requestId -> { field_key: [File] }
+
+function esc(s){ return (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c])); }
+function ngn(n){ return "NGN " + (Number(n)||0).toLocaleString(); }
+function stageKind(name){ const n=(name||"").toLowerCase(); return { isAccounts:n.indexOf("account")!==-1, isHrm:n.indexOf("hrm")!==-1 }; }
+function isTerminalName(name){ return (name||"").toLowerCase().indexOf("complete") !== -1; }
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    const { data: emp, error: empErr } = await sb.from("employees").select("id").eq("linked_profile_id", ME.id).maybeSingle();
+    if(empErr) throw empErr;
+    if(!emp){ throw new Error("No employee record is linked to your account."); }
+    MY_EMPLOYEE_REF_ID = emp.id;
+
+    const { data: stages } = await sb.from("iou_workflow_stages").select("*").order("sequence_order");
+    STAGES = stages || []; STAGES.forEach(s => STAGES_BY_ID[s.id] = s);
+
+    const { data: assigns } = await sb.from("iou_workflow_stage_assignees").select("stage_id, branch").eq("employee_ref_id", MY_EMPLOYEE_REF_ID);
+    MY_STAGE_IDS = new Set((assigns||[]).map(a => a.stage_id));
+    (assigns||[]).forEach(a => {
+      if(a.branch) ALLOWED_SB.add(String(a.stage_id) + "|" + String(a.branch));
+      else ALLOWED_ALLBRANCH.add(String(a.stage_id)); // null branch = all branches at this stage
+    });
+
+    const [{ data: divs }, { data: loans }, { data: banks }, { data: ptypes }, { data: emps }] = await Promise.all([
+      sb.from("iou_divisions").select("id,name"),
+      sb.from("iou_loan_types").select("id,name"),
+      sb.from("iou_banks").select("id,name").eq("is_active", true).order("name"),
+      sb.from("iou_payment_types").select("id,name").eq("is_active", true).order("name"),
+      sb.from("employees").select("id,full_name")
+    ]);
+    (divs||[]).forEach(d => DIV_NAME[d.id] = d.name);
+    (loans||[]).forEach(l => LOAN_NAME[l.id] = l.name);
+    BANKS = banks || []; PAYTYPES = ptypes || [];
+    (emps||[]).forEach(e => EMP_NAME[String(e.id)] = e.full_name);
+
+    status.style.color = "#1d8a4e"; status.textContent = "Connected.";
+    await loadPending();
+  }catch(e){ status.style.color = "#c0392b"; status.textContent = "❌ " + e.message; console.error(e); }
+}
+
+async function loadPending(){
+  const wrap = document.getElementById("listWrap");
+  if(!MY_STAGE_IDS.size){ wrap.innerHTML = "<div class='empty-note'>You aren't assigned to any workflow stage yet.</div>"; return; }
+
+  const { data: requests, error } = await sb.from("iou_requests")
+    .select("*, employees:submitted_by(full_name)")
+    .eq("status", "in_progress").in("current_stage_id", Array.from(MY_STAGE_IDS))
+    .order("request_date", { ascending: true });
+  if(error){ wrap.innerHTML = "<div class='empty-note'>Error: " + esc(error.message) + "</div>"; return; }
+  if(!requests || !requests.length){ wrap.innerHTML = "<div class='empty-note'>Nothing pending your action right now.</div>"; return; }
+
+  const ids = requests.map(r => r.id);
+  const [{ data: myActions }, { data: appl }, { data: guar }, { data: atts }] = await Promise.all([
+    sb.from("iou_request_stage_actions").select("request_id, stage_id, cycle").eq("employee_ref_id", MY_EMPLOYEE_REF_ID).in("request_id", ids),
+    sb.from("iou_applicants").select("request_id, applicant_name, staff_id_value, iou_amount").in("request_id", ids),
+    sb.from("iou_guarantors").select("request_id, guarantor_name, staff_id_value").in("request_id", ids),
+    sb.from("iou_request_attachments").select("request_id, field_key, file_name, file_url").in("request_id", ids)
+  ]);
+  const acted = new Set((myActions||[]).map(a => a.request_id + ":" + a.stage_id + ":" + a.cycle));
+  const applByReq = {}; (appl||[]).forEach(a => (applByReq[a.request_id] = applByReq[a.request_id] || []).push(a));
+  const guarByReq = {}; (guar||[]).forEach(a => (guarByReq[a.request_id] = guarByReq[a.request_id] || []).push(a));
+  const attByReq = {}; (atts||[]).forEach(a => (attByReq[a.request_id] = attByReq[a.request_id] || []).push(a));
+
+  wrap.innerHTML = "";
+  requests.forEach(r => {
+    if(acted.has(r.id + ":" + r.current_stage_id + ":" + r.cycle)) return;
+    // Branch scope: only act on this request if assigned to its stage for its branch (or for all branches).
+    const allowed = ALLOWED_ALLBRANCH.has(String(r.current_stage_id)) || ALLOWED_SB.has(String(r.current_stage_id) + "|" + String(r.branch));
+    if(!allowed) return;
+    wrap.appendChild(renderCard(r, applByReq[r.id] || [], guarByReq[r.id] || [], attByReq[r.id] || []));
+  });
+  if(!wrap.children.length){ wrap.innerHTML = "<div class='empty-note'>Nothing pending your action right now.</div>"; }
+}
+window.loadPending = loadPending;
+
+function renderCard(r, applicants, guarantors, atts){
+  const stage = STAGES_BY_ID[r.current_stage_id];
+  const kind = stageKind(stage ? stage.stage_name : "");
+  STAGED[r.id] = { outstanding_iou: [], attachment: [] };
+  const el = document.createElement("div"); el.className = "req-card";
+
+  const total = applicants.reduce((s,a)=> s + (Number(a.iou_amount)||0), 0);
+  const guarText = (guarantors||[]).map(g => g.guarantor_name + (g.staff_id_value ? " (" + g.staff_id_value + ")" : "")).join(", ") || "—";
+  const applRows = applicants.map((a,i)=> "<tr><td>" + (i+1) + "</td><td>" + esc(a.applicant_name||"") + "</td><td>" + esc(a.staff_id_value||"") + "</td><td>" + ngn(a.iou_amount) + "</td></tr>").join("");
+  const attHtml = atts.length ? "<div class='att-list'>" + atts.map(a => "<a href='" + esc(a.file_url) + "' target='_blank'>" + esc(a.field_key) + ": " + esc(a.file_name) + "</a>").join("") + "</div>" : "";
+
+  let stageFields = "";
+  if(kind.isAccounts){
+    stageFields =
+      "<div class='section-h'>Verification</div>" +
+      "<div class='form-row'>" +
+        "<div class='field'><label>Staff has no outstanding loan *</label><select id='snol-" + r.id + "'><option value=''>— Select —</option><option value='Yes'>Yes</option><option value='No'>No</option></select></div>" +
+        "<div class='field'><label>Outstanding I.O.U (do not pay if staff has one)</label>" + fieldUpload(r.id, "outstanding_iou", "Upload evidence") + "</div>" +
+      "</div>" +
+      "<div class='section-h'>Accounts</div>" +
+      "<div class='form-row'>" +
+        "<div class='field'><label>Bank *</label><select id='bank-" + r.id + "'><option value=''>— Select —</option>" + BANKS.map(b=>"<option value='" + b.id + "'>" + esc(b.name) + "</option>").join("") + "</select></div>" +
+        "<div class='field'><label>Payment Type *</label><select id='ptype-" + r.id + "'><option value=''>— Select —</option>" + PAYTYPES.map(p=>"<option value='" + p.id + "'>" + esc(p.name) + "</option>").join("") + "</select></div>" +
+      "</div>" +
+      "<div class='form-row'>" +
+        "<div class='field'><label>Palladium Document No. *</label><input id='pall-" + r.id + "' placeholder='Document number'></div>" +
+        "<div class='field'><label>Payment Date *</label><input type='date' id='pdate-" + r.id + "'></div>" +
+      "</div>";
+  } else if(kind.isHrm){
+    stageFields =
+      "<div class='section-h'>Update in HRM</div>" +
+      "<div class='form-row'>" +
+        "<div class='field'><label>HRM Updated *</label><select id='hrm-" + r.id + "'><option value=''>— Select —</option><option value='Yes'>Yes</option><option value='No'>No</option></select></div>" +
+        "<div class='field'><label>Attachment</label>" + fieldUpload(r.id, "attachment", "Upload file") + "</div>" +
+      "</div>";
+  }
+
+  el.innerHTML =
+    "<div class='rc-head'><span class='rc-ref'>" + esc(r.reference_no) + (r.form_no ? " · Form " + esc(r.form_no) : "") + "</span><span class='rc-stage'>" + (stage ? esc(stage.stage_name) : "—") + "</span></div>" +
+    "<div class='rc-meta'>" +
+      "<div><span class='m-label'>Submitted by</span><br>" + esc(r.employees ? r.employees.full_name : "—") + "</div>" +
+      "<div><span class='m-label'>Date</span><br>" + esc(r.request_date || "—") + "</div>" +
+      "<div><span class='m-label'>Division</span><br>" + esc(DIV_NAME[r.division_id] || "—") + "</div>" +
+      "<div><span class='m-label'>Loan Type</span><br>" + esc(LOAN_NAME[r.loan_type_id] || "—") + "</div>" +
+      "<div><span class='m-label'>Branch / Dept / Unit</span><br>" + esc([r.branch, r.department, r.unit].filter(Boolean).join(" · ") || "—") + "</div>" +
+      "<div style='grid-column:1 / -1;'><span class='m-label'>Guarantors</span><br>" + esc(guarText) + "</div>" +
+    "</div>" +
+    "<table class='appl'><thead><tr><th>#</th><th>Applicant</th><th>Staff ID</th><th>IOU Amount</th></tr></thead><tbody>" + applRows + "</tbody></table>" +
+    "<div class='paybar'><span>Payment Value (total)</span><span>" + ngn(total) + "</span></div>" +
+    attHtml + stageFields +
+    "<div class='field'><label>Comment *</label><textarea id='comment-" + r.id + "' placeholder='Required'></textarea></div>" +
+    "<div class='form-row'>" +
+      "<div class='field'><label>Action *</label><select id='action-" + r.id + "'><option value=''>— Select —</option><option value='approve'>Approve</option><option value='decline'>Decline</option></select></div>" +
+      "<div class='field'><label>Action Date</label><input type='datetime-local' id='adate-" + r.id + "'></div>" +
+    "</div>" +
+    "<button onclick=\"submitAction('" + r.id + "')\">Submit</button>" +
+    "<div class='status' id='status-" + r.id + "' style='display:none;'></div>";
+
+  wireDropzonesFor(el, r.id);
+  setTimeout(()=>{ const d = document.getElementById("adate-" + r.id); if(d) d.value = new Date().toISOString().slice(0,16); }, 0);
+  return el;
+}
+
+function fieldUpload(reqId, key, label){
+  return "<div class='dropzone' data-req='" + reqId + "' data-target='" + key + "'><div class='dz-action'>" + esc(label) + "</div><div class='dz-hint'>Drag and drop or paste</div><input type='file'></div>" +
+    "<div class='file-list' data-list='" + reqId + "-" + key + "'></div>";
+}
+function wireDropzonesFor(container, requestId){
+  container.querySelectorAll(".dropzone").forEach(zone=>{
+    const key = zone.getAttribute("data-target");
+    const input = zone.querySelector("input[type=file]");
+    zone.addEventListener("click", ()=>input.click());
+    input.addEventListener("change", e => stageFiles(requestId, key, e.target.files));
+    zone.addEventListener("dragover", e => { e.preventDefault(); zone.classList.add("drag"); });
+    zone.addEventListener("dragleave", () => zone.classList.remove("drag"));
+    zone.addEventListener("drop", e => { e.preventDefault(); zone.classList.remove("drag"); stageFiles(requestId, key, e.dataTransfer.files); });
+    zone.addEventListener("paste", e => { const items = (e.clipboardData||{}).files; if(items && items.length) stageFiles(requestId, key, items); });
+  });
+}
+function stageFiles(requestId, key, fileList){ const files = Array.from(fileList||[]); if(!files.length) return; STAGED[requestId][key] = [files[0]]; renderFileList(requestId, key); }
+function renderFileList(requestId, key){
+  const wrap = document.querySelector(`.file-list[data-list="${requestId}-${key}"]`); if(!wrap) return;
+  wrap.innerHTML = (STAGED[requestId][key]||[]).map((f,i)=>`<div class="file-chip"><span>${esc(f.name)}</span><button class="fc-remove" onclick="removeStagedFile('${requestId}','${key}',${i})">&times;</button></div>`).join("");
+}
+function removeStagedFile(requestId, key, idx){ STAGED[requestId][key].splice(idx,1); renderFileList(requestId, key); }
+window.removeStagedFile = removeStagedFile;
+
+async function submitAction(requestId){
+  const status = document.getElementById("status-" + requestId);
+  const show = (cls, msg) => { status.style.display = "inline-block"; status.className = "status " + cls; status.textContent = msg; };
+  const action = document.getElementById("action-" + requestId).value;
+  const comment = document.getElementById("comment-" + requestId).value.trim();
+  const actionDate = document.getElementById("adate-" + requestId).value || new Date().toISOString();
+  if(!action){ return show("err", "Select Approve or Decline."); }
+  if(!comment){ return show("err", "A comment is required before you submit."); }
+
+  show("", "Submitting...");
+  try{
+    const { data: reqRow, error: reqErr } = await sb.from("iou_requests").select("cycle, current_stage_id").eq("id", requestId).single();
+    if(reqErr) throw reqErr;
+    const stage = STAGES_BY_ID[reqRow.current_stage_id];
+    const kind = stageKind(stage ? stage.stage_name : "");
+
+    let headerPatch = {};
+    if(action === "approve" && kind.isAccounts){
+      const snol = document.getElementById("snol-" + requestId).value;
+      const bank = document.getElementById("bank-" + requestId).value;
+      const ptype = document.getElementById("ptype-" + requestId).value;
+      const pall = document.getElementById("pall-" + requestId).value.trim();
+      const pdate = document.getElementById("pdate-" + requestId).value;
+      if(!snol) return show("err", "Select whether the staff has no outstanding loan.");
+      if(!bank) return show("err", "Select a Bank.");
+      if(!ptype) return show("err", "Select a Payment Type.");
+      if(!pall) return show("err", "Palladium Document No. is required.");
+      if(!pdate) return show("err", "Payment Date is required.");
+      const { data: appl } = await sb.from("iou_applicants").select("iou_amount").eq("request_id", requestId);
+      const total = (appl||[]).reduce((s,a)=> s + (Number(a.iou_amount)||0), 0);
+      headerPatch = { staff_no_outstanding_loan: snol, bank_id: bank, payment_type_id: ptype, palladium_document_no: pall, payment_date: pdate, payment_value: total };
+    }
+    if(action === "approve" && kind.isHrm){
+      const hrm = document.getElementById("hrm-" + requestId).value;
+      if(!hrm) return show("err", "Select whether HRM has been updated.");
+      headerPatch = { hrm_updated: hrm };
+    }
+
+    // upload any staged files for this stage
+    for(const key of Object.keys(STAGED[requestId])){
+      for(const file of STAGED[requestId][key]){
+        const path = `iou/${requestId}/${key}/${Date.now()}_${file.name}`;
+        const { error: upErr } = await sb.storage.from("request-attachments").upload(path, file);
+        if(upErr) throw upErr;
+        const { data: pub } = sb.storage.from("request-attachments").getPublicUrl(path);
+        await sb.from("iou_request_attachments").insert({ request_id: requestId, field_key: key, file_name: file.name, file_url: pub.publicUrl, uploaded_by: MY_EMPLOYEE_REF_ID });
+      }
+    }
+
+    if(Object.keys(headerPatch).length){
+      const { error: hpErr } = await sb.from("iou_requests").update(headerPatch).eq("id", requestId);
+      if(hpErr) throw hpErr;
+    }
+
+    const { error: actErr } = await sb.from("iou_request_stage_actions").insert({
+      request_id: requestId, stage_id: reqRow.current_stage_id, employee_ref_id: MY_EMPLOYEE_REF_ID,
+      action, comment, action_date: actionDate, cycle: reqRow.cycle
+    });
+    if(actErr) throw actErr;
+
+    let outcome = "";
+    if(action === "decline"){
+      const { error } = await sb.from("iou_requests").update({ status: "rejected" }).eq("id", requestId);
+      if(error) throw error;
+      outcome = "Declined — sent back to the initiator.";
+    } else {
+      const idx = STAGES.findIndex(s => String(s.id) === String(reqRow.current_stage_id));
+      const next = (idx >= 0 && idx < STAGES.length - 1) ? STAGES[idx + 1] : null;
+      if(next){
+        const done = isTerminalName(next.stage_name);
+        const { error: advErr } = await sb.from("iou_requests").update({ current_stage_id: next.id, status: done ? "completed" : "in_progress" }).eq("id", requestId);
+        if(advErr) throw advErr;
+        const { data: after } = await sb.from("iou_requests").select("current_stage_id, status").eq("id", requestId).single();
+        if(after && String(after.current_stage_id) === String(reqRow.current_stage_id) && after.status !== "completed"){
+          outcome = "Approved, but the request did not move. This is usually a row-level-security block on updating iou_requests — add an UPDATE policy for authenticated users.";
+        } else { outcome = done ? "Approved — IOU Completed." : ("Approved — moved to " + next.stage_name + "."); }
+      } else {
+        await sb.from("iou_requests").update({ status: "completed" }).eq("id", requestId);
+        outcome = "Approved — IOU Completed.";
+      }
+    }
+
+    show("ok", "✅ " + outcome);
+    const top = document.getElementById("topStatus");
+    top.style.display = "block"; top.className = action === "decline" ? "status err" : "status ok";
+    top.textContent = "✅ " + outcome + " Refreshing...";
+    setTimeout(()=>{ top.style.display = "none"; }, 7000);
+    setTimeout(loadPending, 900);
+  }catch(e){ show("err", "❌ " + (e.message || e)); }
+}
+window.submitAction = submitAction;
+
+init();
+</script>
+</body>
+</html>

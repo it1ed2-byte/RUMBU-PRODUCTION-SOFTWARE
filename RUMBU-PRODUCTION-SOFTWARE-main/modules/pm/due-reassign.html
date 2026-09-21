@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>PM Due & Reassign</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="../../assets/letterhead.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1150px;margin:0 auto;}
+  #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);}
+  .toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px;}
+  .toolbar .f{flex:1;min-width:180px;}
+  .toolbar .f.min{flex:0 0 auto;min-width:0;}
+  .count{font-size:12.5px;color:var(--muted);margin-left:auto;align-self:center;}
+  .readonly-field{background:var(--bg);border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:10px 12px;font-size:14px;color:var(--muted);}
+  .name-ok{color:var(--ok)!important;font-weight:700;}
+  .name-bad{color:var(--bad)!important;font-weight:700;}
+
+  .state{display:inline-block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;padding:3px 10px;border-radius:20px;white-space:nowrap;}
+  .state.due{background:rgba(154,107,0,.16);color:var(--warn);}
+  .state.overdue{background:rgba(176,42,55,.16);color:var(--bad);}
+  .state.inprogress{background:rgba(46,117,182,.14);color:var(--primary);}
+  .state.done{background:rgba(30,125,52,.14);color:var(--ok);}
+
+  .btn-link{background:transparent;border:1px solid var(--line-2);color:var(--heading);border-radius:7px;padding:5px 10px;font-size:12.5px;font-weight:600;cursor:pointer;}
+  .btn-link:hover{border-color:var(--accent);}
+  .btn-primary{background:var(--accent);color:var(--logo-fg);border:0;border-radius:7px;padding:8px 14px;font-size:13px;font-weight:700;cursor:pointer;}
+  .empty{padding:24px;text-align:center;color:var(--muted);}
+
+  .ra-box{background:var(--bg);border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:12px 14px;}
+  .ra-fields{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;}
+  .ra-fields > div{flex:1;min-width:170px;}
+  .ra-fields label{display:block;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;margin-bottom:4px;}
+  tr.reassign-row td{background:var(--card);}
+</style>
+</head>
+<body>
+<div class="wrap">
+<button class="no-print" onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:240px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back to Dashboard</button>
+<div id="connStatus">Loading...</div>
+
+<div class="card-panel">
+  <h3>PM Due &amp; Reassign</h3>
+  <p class="sub">Every asset that has a PM policy running, how many days until each is due, and its current status. You can reassign any policy to a specialist to start a fresh checklist, even before its due date.</p>
+
+  <div class="toolbar no-print">
+    <div class="f"><label>Search (policy, asset, specialist)</label><input type="text" id="q" oninput="render()" placeholder="Type to filter..."></div>
+    <div class="f min"><label>Branch</label><select id="fSection" onchange="render()"><option value="">All</option></select></div>
+    <div class="f min"><label>Show</label>
+      <select id="fState" onchange="render()">
+        <option value="action">Needs attention (due &amp; overdue)</option>
+        <option value="all">All</option>
+        <option value="due">Due for renewal</option>
+        <option value="overdue">Overdue (not filled)</option>
+        <option value="inprogress">In progress</option>
+        <option value="done">Done (not yet due)</option>
+      </select>
+    </div>
+    <span class="count" id="count"></span>
+  </div>
+
+  <div class="table-wrap"><div class="table-scroll">
+    <table>
+      <thead><tr>
+        <th>Policy</th><th>Asset</th><th>Unit / Branch</th><th>Current Specialist</th>
+        <th>Initiated</th><th>Due</th><th>Status</th><th class="no-print"></th>
+      </tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div></div>
+  <div class="empty" id="emptyMsg" style="display:none;">Nothing matches these filters.</div>
+</div>
+</div>
+
+<script>
+let ME = null;
+let ROWS = [];                // latest job per (policy_id + asset), with computed state
+const RA = {};                // jobId -> resolved specialist for the reassign box
+
+async function logActivity(actionType, description){
+  try{
+    await sb.from("activity_log").insert({
+      actor_id: ME.id, actor_username: ME.username, actor_role: ME.role,
+      section_id: ME.sectionId, action_type: actionType, description: description
+    });
+  }catch(e){ console.warn("Activity log write failed (non-fatal):", e); }
+}
+
+function esc(s){ return (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c])); }
+function fmtDate(s){ if(!s) return "—"; try{ return new Date(s).toLocaleDateString(); }catch(e){ return s; } }
+function todayStr(){ const d=new Date(); const p=x=>String(x).padStart(2,"0"); return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate()); }
+function addDays(n){ const d=new Date(); d.setDate(d.getDate()+(parseInt(n,10)||0)); const p=x=>String(x).padStart(2,"0"); return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate()); }
+function daysToDue(due){ if(!due) return null; const t=new Date(todayStr()+"T00:00:00"); const d=new Date(due+"T00:00:00"); return Math.round((d - t)/86400000); }
+function dueCountdown(due){
+  const n = daysToDue(due);
+  if(n===null) return "";
+  if(n>0) return "in " + n + " day" + (n===1?"":"s");
+  if(n===0) return "due today";
+  const a = Math.abs(n);
+  return "overdue by " + a + " day" + (a===1?"":"s");
+}
+
+const STATE_LABEL = { due:"Due for renewal", overdue:"Overdue — not filled", inprogress:"In progress", done:"Done" };
+function stateOf(j){
+  const t = todayStr();
+  const due = j.due_date || "";
+  if(j.status === "Completed") return (due && due <= t) ? "due" : "done";
+  return (due && due < t) ? "overdue" : "inprogress";   // Pending
+}
+function actionable(state){ return state === "due" || state === "overdue"; }
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    await load();
+    status.style.color = "var(--ok)"; status.textContent = "Connected.";
+  }catch(e){
+    status.style.color = "var(--bad)"; status.textContent = "Could not load: " + e.message;
+  }
+}
+
+async function load(){
+  const { data, error } = await sb.from("pm_initiations").select("*").order("initiated_at", { ascending: false });
+  if(error) throw error;
+  const all = data || [];
+
+  // Keep only the latest job per (policy + asset) — that is the current PM status.
+  const seen = new Set();
+  ROWS = [];
+  all.forEach(j => {
+    const key = j.policy_id + "||" + (j.asset || "");
+    if(seen.has(key)) return;
+    seen.add(key);
+    ROWS.push(Object.assign({}, j, { _state: stateOf(j) }));
+  });
+
+  const sections = Array.from(new Set(ROWS.map(r => r.section).filter(Boolean))).sort();
+  document.getElementById("fSection").innerHTML = '<option value="">All</option>' + sections.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join("");
+
+  render();
+}
+
+function filtered(){
+  const q = document.getElementById("q").value.trim().toLowerCase();
+  const sec = document.getElementById("fSection").value;
+  const state = document.getElementById("fState").value;
+  return ROWS.filter(r => {
+    if(sec && r.section !== sec) return false;
+    if(state === "action" && !actionable(r._state)) return false;
+    if(state !== "action" && state !== "all" && r._state !== state) return false;
+    if(!q) return true;
+    return [r.policy_number, r.policy_name, r.asset, r.specialist_name, r.specialist_employee_id]
+      .some(v => (v || "").toString().toLowerCase().includes(q));
+  });
+}
+
+function render(){
+  const rows = filtered();
+  const tbody = document.getElementById("tbody");
+  const dueCount = ROWS.filter(r => actionable(r._state)).length;
+  document.getElementById("count").textContent = rows.length + " shown · " + dueCount + " need attention";
+  document.getElementById("emptyMsg").style.display = rows.length ? "none" : "block";
+
+  tbody.innerHTML = rows.map(r => {
+    const canReassign = true;   // any policy can be reassigned, even before it is due
+    const n = daysToDue(r.due_date);
+    const cd = dueCountdown(r.due_date);
+    const cdColor = (n===null) ? "var(--muted)" : (n<0 ? "var(--bad)" : (n===0 ? "var(--warn)" : "var(--muted)"));
+    let html = "<tr>" +
+      "<td><b>" + esc(r.policy_number) + "</b><br><span style='color:var(--muted);font-size:12px;'>" + esc(r.policy_name) + "</span></td>" +
+      "<td>" + esc(r.asset) + "</td>" +
+      "<td>" + esc(r.unit_name || "—") + "<br><span style='color:var(--muted);font-size:12px;'>" + esc(r.section || "—") + "</span></td>" +
+      "<td>" + esc(r.specialist_name || "—") + "<br><span style='color:var(--muted);font-size:12px;'>ID " + esc(r.specialist_employee_id || "—") + "</span></td>" +
+      "<td>" + fmtDate(r.initiated_at) + "</td>" +
+      "<td>" + fmtDate(r.due_date) + "<br><span style='font-size:12px;font-weight:700;color:" + cdColor + ";'>" + esc(cd) + "</span></td>" +
+      "<td><span class='state " + r._state + "'>" + esc(STATE_LABEL[r._state]) + "</span></td>" +
+      "<td class='no-print'><button class='btn-link' onclick='toggleReassign(" + r.id + ")'>Reassign</button></td>" +
+      "</tr>";
+    if(canReassign){
+      html += "<tr class='reassign-row' id='ra_" + r.id + "' style='display:none;'><td colspan='8'>" +
+        "<div class='ra-box'>" +
+          "<div class='ra-fields'>" +
+            "<div><label>New specialist ID</label><input id='raid_" + r.id + "' placeholder='Type staff ID, then Tab' onchange='lookupSpec(" + r.id + ")'></div>" +
+            "<div><label>Specialist name</label><div class='readonly-field' id='raname_" + r.id + "'>—</div></div>" +
+            "<button class='btn-primary' onclick='confirmReassign(" + r.id + ")'>Confirm reassign</button>" +
+          "</div>" +
+          "<div class='status' id='rast_" + r.id + "' style='display:none;margin-top:8px;'></div>" +
+        "</div>" +
+      "</td></tr>";
+    }
+    return html;
+  }).join("");
+}
+
+function toggleReassign(jobId){
+  const row = document.getElementById("ra_" + jobId);
+  if(row) row.style.display = (row.style.display === "none" ? "table-row" : "none");
+}
+
+async function lookupSpec(jobId){
+  const code = (document.getElementById("raid_" + jobId).value || "").trim();
+  const nameEl = document.getElementById("raname_" + jobId);
+  RA[jobId] = null;
+  if(!code){ nameEl.className = "readonly-field"; nameEl.textContent = "—"; return; }
+  try{
+    const { data, error } = await sb.from("employees")
+      .select("id, employee_id, full_name, linked_profile_id").eq("employee_id", code).maybeSingle();
+    if(error) throw error;
+    if(!data){ nameEl.className = "readonly-field name-bad"; nameEl.textContent = "No employee with ID " + code; return; }
+    RA[jobId] = data;
+    nameEl.className = "readonly-field name-ok";
+    nameEl.textContent = data.full_name + (data.linked_profile_id ? "" : "  (no login linked yet)");
+  }catch(e){
+    nameEl.className = "readonly-field name-bad"; nameEl.textContent = "Lookup failed: " + (e.message || e);
+  }
+}
+
+async function confirmReassign(jobId){
+  const st = document.getElementById("rast_" + jobId);
+  const show = (cls, msg) => { st.style.display = "block"; st.className = "status " + cls; st.textContent = msg; };
+  const job = ROWS.find(r => r.id === jobId);
+  const spec = RA[jobId];
+  if(!job){ return; }
+  if(!spec){ return show("bad", "Enter a valid Specialist ID Number (the name must resolve)."); }
+
+  show("warn", "Reassigning...");
+  try{
+    // Fresh copy of the policy's current checklist for the new cycle.
+    const { data: items, error: iErr } = await sb.from("pm_policy_items")
+      .select("item_no, checklist_item").eq("policy_id", job.policy_id).order("item_no");
+    if(iErr) throw iErr;
+    if(!items || !items.length){ return show("bad", "This policy has no checklist items to reassign."); }
+
+    const { data: newJob, error: jErr } = await sb.from("pm_initiations").insert({
+      policy_id: job.policy_id,
+      policy_number: job.policy_number,
+      policy_name: job.policy_name,
+      unit_name: job.unit_name,
+      section: job.section,
+      asset: job.asset,
+      specialist_emp_pk: spec.id,
+      specialist_employee_id: spec.employee_id,
+      specialist_name: spec.full_name,
+      pm_next_days: job.pm_next_days,
+      due_date: addDays(job.pm_next_days),
+      status: "Pending",
+      initiated_by: ME.username
+    }).select("id").single();
+    if(jErr) throw jErr;
+
+    const rows = items.map(it => ({ initiation_id: newJob.id, item_no: it.item_no, checklist_item: it.checklist_item }));
+    const { error: riErr } = await sb.from("pm_initiation_items").insert(rows);
+    if(riErr) throw riErr;
+
+    await logActivity("pm_reassign", "Reassigned PM " + job.policy_number + " on asset '" + job.asset + "' to " + spec.full_name + " (ID " + spec.employee_id + "); new checklist due " + addDays(job.pm_next_days) + ".");
+
+    show("ok", "Reassigned to " + spec.full_name + ". New checklist due " + fmtDate(addDays(job.pm_next_days)) + ".");
+    setTimeout(load, 700);
+  }catch(e){
+    show("bad", "Could not reassign: " + (e.message || e));
+  }
+}
+
+init();
+</script>
+</body>
+</html>

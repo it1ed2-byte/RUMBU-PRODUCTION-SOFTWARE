@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Extruder — Dashboard</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  /* Dashboard uses shared theme tokens so it follows Navy/Dark. */
+  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;--amber:#d97706;--teal:#0f766e;--purple:#6d28d9;}
+  *{box-sizing:border-box;}
+  body{background:var(--bg);margin:0;padding:18px;color:var(--text);}
+  .wrap{max-width:1250px;margin:0 auto;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;box-shadow:var(--shadow);}
+  .card h3{color:var(--heading);margin:0 0 12px;font-size:15px;}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;color:var(--muted);}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;}
+  .row > div{flex:1;min-width:150px;}
+  button.print{background:var(--muted);}
+  .quickbar{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;}
+  .qbtn{background:var(--bg);color:var(--heading);padding:6px 11px;border:1px solid var(--line-2);border-radius:8px;font-size:12px;font-weight:bold;cursor:pointer;}
+  .qbtn.active{background:var(--accent);color:var(--logo-fg,#fff);border-color:var(--accent);}
+  .status{margin-top:8px;font-weight:bold;font-size:13px;min-height:14px;}
+  .status.err{color:var(--red);} .status.ok{color:var(--green);}
+
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px;}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;text-align:center;box-shadow:var(--shadow);}
+  .kpi .n{font-size:23px;font-weight:800;color:var(--heading);line-height:1.1;}
+  .kpi .l{font-size:11px;color:var(--muted);margin-top:4px;font-weight:bold;text-transform:uppercase;letter-spacing:.4px;}
+  .kpi.good .n{color:var(--green);} .kpi.warn .n{color:var(--amber);} .kpi.teal .n{color:var(--teal);} .kpi.purple .n{color:var(--purple);}
+  .kpi .subv{font-size:11px;color:var(--muted);margin-top:2px;}
+
+  .bests{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;}
+  .best{border:1px solid var(--line);border-radius:10px;padding:12px;background:var(--bg);}
+  .best .t{font-size:11px;color:var(--muted);font-weight:bold;text-transform:uppercase;}
+  .best .v{font-size:16px;font-weight:800;color:var(--heading);margin-top:3px;word-break:break-word;}
+  .best .e{font-size:12px;color:var(--green);font-weight:bold;margin-top:2px;}
+
+  .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px;}
+  .bar-row{display:flex;align-items:center;gap:10px;margin:7px 0;font-size:13px;}
+  .bar-row .lbl{width:40%;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .bar-row .track{flex:1;background:var(--bg);border-radius:6px;height:16px;overflow:hidden;}
+  .bar-row .fill{height:100%;background:var(--accent);}
+  .bar-row .fill.a{background:var(--green);} .bar-row .fill.b{background:var(--amber);}
+  .bar-row .fill.c{background:var(--red);}
+  .bar-row .fill.t{background:#94a3b8;} .bar-row .fill.teal{background:var(--teal);} .bar-row .fill.purple{background:var(--purple);}
+  .bar-row .val{width:70px;text-align:right;font-weight:bold;color:var(--heading);font-size:12px;}
+  svg{width:100%;height:auto;display:block;}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;margin-top:8px;color:var(--muted);}
+  .legend span{display:inline-flex;align-items:center;gap:5px;}
+  .dot{width:11px;height:11px;border-radius:3px;display:inline-block;}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<div id="connStatus">Loading...</div>
+
+<div id="appArea" style="display:none;">
+  <div class="card">
+    <h3>Filters</h3>
+    <div class="quickbar" id="quickbar">
+      <button class="qbtn" data-range="week" onclick="setRange('week',this)">This Week</button>
+      <button class="qbtn active" data-range="month" onclick="setRange('month',this)">This Month</button>
+      <button class="qbtn" data-range="quarter" onclick="setRange('quarter',this)">Last 3 Months</button>
+      <button class="qbtn" data-range="year" onclick="setRange('year',this)">This Year</button>
+      <button class="qbtn" data-range="custom" onclick="setRange('custom',this)">Custom</button>
+    </div>
+    <div class="row">
+      <div><label>From</label><input type="date" id="fromDate"></div>
+      <div><label>To</label><input type="date" id="toDate"></div>
+      <div><label>Section</label><select id="section"></select></div>
+      <div><label>Shift</label><select id="shift"><option value="All">All</option><option value="Morning">Morning</option><option value="Night">Night</option></select></div>
+      <div style="flex:0 0 auto;"><label>&nbsp;</label><button onclick="runDashboard()">Run</button></div>
+    </div>
+    <div class="status" id="status"></div>
+  </div>
+
+  <div id="dash" style="display:none;">
+    <div class="kpis" id="kpis"></div>
+
+    <div class="card">
+      <h3>Best Performers (by efficiency)</h3>
+      <div class="bests" id="bests"></div>
+      <div style="font-size:11px;color:#6b7280;margin-top:10px;">Efficiency = Total ÷ Target × 100. Target = machines × rpm × denier × 720 (per type). "Best" excludes very small samples so a single lucky row cannot top the list.</div>
+    </div>
+
+    <div class="grid2">
+      <div class="card"><h3>Morning vs Night — Production</h3><div id="chartShift"></div></div>
+      <div class="card"><h3>Production vs A / B / C / Target</h3><div id="chartGrade"></div></div>
+      <div class="card"><h3>Production by Type</h3><div id="chartType"></div></div>
+      <div class="card"><h3>Top 10 Extruders (by production)</h3><div id="chartExtruders"></div></div>
+      <div class="card"><h3>Efficiency by Extruder (%)</h3><div id="chartEff"></div></div>
+      <div class="card" id="cmpCard"><h3>Rumbu vs Mama Sannu — Efficiency</h3><div id="chartCompare"></div></div>
+    </div>
+
+    <div class="card"><h3>Daily Production Trend</h3><div id="chartTrend"></div></div>
+  </div>
+</div>
+</div>
+
+<script>
+const SECTION_LABEL = { "Rumbu":"Rumbu", "MamaSannu":"Mama Sannu" };
+let ME = null, MY_SECTIONS = [], ROWS = [];
+
+// ---- production target model (copied from production-report) ----
+function getRPM(type){
+  const map = {
+    "No.1": { rpm: 170, denier: 0.39/1000 },
+    "No.2": { rpm: 130, denier: 0.50/1000 },
+    "No.3": { rpm: 110, denier: 0.63/1000 },
+    "No.4": { rpm: 110, denier: 0.81/1000 }
+  };
+  return map[type] || { rpm: 0, denier: 0 };
+}
+const SHIFT_MINUTES = 720;
+function rowTarget(r){ const rpm=getRPM(r.type_col); return num(r.number_of_machine)*rpm.rpm*rpm.denier*SHIFT_MINUTES; }
+
+function num(v){ const x=parseFloat(v); return isNaN(x)?0:x; }
+function fmt(v){ return Math.round(v).toLocaleString(); }
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    MY_SECTIONS = (ME.sectionNames && ME.sectionNames.length) ? ME.sectionNames.filter(s=>["Rumbu","MamaSannu"].includes(s)) : [];
+    if(ME.role === "super_admin" && !MY_SECTIONS.length) MY_SECTIONS = ["Rumbu","MamaSannu"];
+    if(!MY_SECTIONS.length) MY_SECTIONS = ["Rumbu","MamaSannu"];
+
+    const sel = document.getElementById("section");
+    let opts = "";
+    if(MY_SECTIONS.length > 1) opts += '<option value="All">All (comparison)</option>';
+    opts += MY_SECTIONS.map(s=>`<option value="${s}">${SECTION_LABEL[s]||s}</option>`).join("");
+    sel.innerHTML = opts;
+    if(MY_SECTIONS.length === 1){ sel.value = MY_SECTIONS[0]; sel.disabled = true; }
+
+    setRange("month", document.querySelector('.qbtn[data-range="month"]'));
+    status.style.color = "#1d8a4e"; status.textContent = "Connected.";
+    document.getElementById("appArea").style.display = "block";
+    runDashboard();
+  }catch(e){
+    status.style.color = "#c0392b"; status.textContent = "❌ " + e.message; console.error(e);
+  }
+}
+
+function iso(d){ return d.toISOString().slice(0,10); }
+function setRange(range, btn){
+  document.querySelectorAll(".qbtn").forEach(b=>b.classList.remove("active"));
+  if(btn) btn.classList.add("active");
+  const t=new Date(); let from, to=new Date(t);
+  if(range==="week"){ const day=(t.getDay()+6)%7; from=new Date(t); from.setDate(t.getDate()-day); }
+  else if(range==="month"){ from=new Date(t.getFullYear(), t.getMonth(), 1); }
+  else if(range==="quarter"){ from=new Date(t); from.setMonth(t.getMonth()-3); }
+  else if(range==="year"){ from=new Date(t.getFullYear(),0,1); }
+  else return;
+  document.getElementById("fromDate").value=iso(from);
+  document.getElementById("toDate").value=iso(to);
+}
+
+async function fetchRows(fromDate, toDate, sectionFilter){
+  let all=[], offset=0; const pageSize=1000;
+  let sectionClause;
+  if(sectionFilter && sectionFilter!=="All"){ sectionClause="&section=eq."+encodeURIComponent(sectionFilter); }
+  else { const list=MY_SECTIONS.map(s=>`"${s}"`).join(","); sectionClause="&section=in.("+encodeURIComponent(list)+")"; }
+  const cols="date_col,section,shift,extruder_name,type_col,number_of_machine,a,b,c,total";
+  const base=SUPABASE_URL+"/rest/v1/extruder_new?select="+cols
+    +"&date_col=gte."+fromDate+"&date_col=lte."+toDate+sectionClause+"&order=date_col.asc";
+  for(let guard=0; guard<400; guard++){
+    const headers=Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset+"-"+(offset+pageSize-1) });
+    const res=await fetch(base,{headers});
+    if(!res.ok) throw new Error("extruder_new: HTTP "+res.status);
+    const batch=await res.json();
+    all=all.concat(batch);
+    if(batch.length<pageSize) break;
+    offset+=pageSize;
+  }
+  return all;
+}
+
+function totals(rows){
+  let a=0,b=0,c=0,tot=0,tg=0;
+  rows.forEach(r=>{ a+=num(r.a); b+=num(r.b); c+=num(r.c); tot+=num(r.total); tg+=rowTarget(r); });
+  return {a,b,c,tot,tg, eff: tg>0?tot/tg*100:0};
+}
+function eff(tot,tg){ return tg>0?tot/tg*100:0; }
+
+function bestByEfficiency(rows, keyFn){
+  const g={};
+  rows.forEach(r=>{ const k=keyFn(r); if(k==null||k==="") return; if(!g[k]) g[k]={tot:0,tg:0}; g[k].tot+=num(r.total); g[k].tg+=rowTarget(r); });
+  const arr=Object.entries(g).map(([k,v])=>({k,tot:v.tot,tg:v.tg,e:eff(v.tot,v.tg)}));
+  if(!arr.length) return null;
+  const maxTot=Math.max.apply(null, arr.map(x=>x.tot));
+  const thr=maxTot*0.10;
+  const eligible=arr.filter(x=>x.tg>0 && x.tot>=thr);
+  const pool=eligible.length?eligible:arr.filter(x=>x.tg>0);
+  if(!pool.length) return null;
+  pool.sort((a,b)=>b.e-a.e);
+  return pool[0];
+}
+
+async function runDashboard(){
+  const status=document.getElementById("status");
+  const from=document.getElementById("fromDate").value;
+  const to=document.getElementById("toDate").value;
+  const section=document.getElementById("section").value;
+  const shift=document.getElementById("shift").value;
+  if(!from||!to){ status.className="status err"; status.textContent="Select a date range."; return; }
+
+  status.className="status"; status.textContent="Loading data...";
+  try{
+    let rows=await fetchRows(from,to,section);
+    if(shift!=="All") rows=rows.filter(r=>r.shift===shift);
+    ROWS=rows;
+    status.className="status ok"; status.textContent="";
+    if(!rows.length){ document.getElementById("dash").style.display="none"; status.textContent="No data for these filters."; return; }
+    document.getElementById("dash").style.display="block";
+    renderKPIs(rows); renderBests(rows); renderCharts(rows, section);
+  }catch(e){
+    status.className="status err"; status.textContent="❌ "+e.message;
+  }
+}
+
+function renderKPIs(rows){
+  const t=totals(rows);
+  const pctA = t.tot? t.a/t.tot*100:0;
+  const cards=[
+    {n:fmt(t.tot), l:"Total Production"},
+    {n:fmt(t.a), l:"Total A", cls:"good"},
+    {n:fmt(t.b), l:"Total B", cls:"warn"},
+    {n:fmt(t.c), l:"Total C"},
+    {n:fmt(t.tg), l:"Total Target"},
+    {n:t.eff.toFixed(1)+"%", l:"Efficiency", cls: t.eff>=90?"good":(t.eff>=75?"teal":"warn")},
+    {n:pctA.toFixed(1)+"%", l:"A Grade %", cls:"teal"}
+  ];
+  document.getElementById("kpis").innerHTML=cards.map(k=>
+    `<div class="kpi ${k.cls||''}"><div class="n">${k.n}</div><div class="l">${k.l}</div></div>`).join("");
+}
+
+function renderBests(rows){
+  const defs=[
+    {t:"Best Extruder", key:r=>r.extruder_name},
+    {t:"Best Type", key:r=>r.type_col},
+    {t:"Best Shift", key:r=>r.shift}
+  ];
+  document.getElementById("bests").innerHTML=defs.map(d=>{
+    const best=bestByEfficiency(rows,d.key);
+    if(!best) return `<div class="best"><div class="t">${d.t}</div><div class="v">—</div></div>`;
+    return `<div class="best"><div class="t">${d.t}</div><div class="v">${best.k}</div>`+
+           `<div class="e">${best.e.toFixed(1)}% eff · ${fmt(best.tot)} produced</div></div>`;
+  }).join("");
+}
+
+function sumBy(rows, keyFn, valFn){ const m={}; rows.forEach(r=>{ const k=keyFn(r); if(k==null||k==="") return; m[k]=(m[k]||0)+valFn(r); }); return m; }
+
+function hbars(containerId, entries, cls, asPct){
+  const wrap=document.getElementById(containerId);
+  if(!entries.length){ wrap.innerHTML="<p style='color:#6b7280;font-size:13px;'>No data.</p>"; return; }
+  const max=Math.max.apply(null, entries.map(e=>e[1]))||1;
+  wrap.innerHTML=entries.map(([label,val,extra])=>{
+    const pct=Math.round(val/max*100);
+    const shown = extra!=null?extra:(asPct?val.toFixed(1)+"%":fmt(val));
+    return `<div class="bar-row"><div class="lbl" title="${label}">${label}</div>`+
+           `<div class="track"><div class="fill ${cls||''}" style="width:${pct}%"></div></div>`+
+           `<div class="val">${shown}</div></div>`;
+  }).join("");
+}
+
+function renderCharts(rows, section){
+  const t=totals(rows);
+
+  // Morning vs Night
+  const shiftMap=sumBy(rows, r=>r.shift, r=>num(r.total));
+  hbars("chartShift", Object.entries(shiftMap).sort((a,b)=>b[1]-a[1]), "teal");
+
+  // Production vs A/B/C/Target
+  hbars("chartGrade", [["A Grade", t.a],["B Grade", t.b],["C Grade", t.c],["Target", t.tg]], null);
+  const gf=document.querySelectorAll("#chartGrade .fill");
+  if(gf[0]) gf[0].classList.add("a"); if(gf[1]) gf[1].classList.add("b"); if(gf[2]) gf[2].classList.add("c"); if(gf[3]) gf[3].classList.add("t");
+
+  // By type
+  const typeMap=sumBy(rows, r=>r.type_col, r=>num(r.total));
+  hbars("chartType", Object.entries(typeMap).sort((a,b)=>b[1]-a[1]));
+
+  // Top 10 extruders by production
+  const exMap=sumBy(rows, r=>r.extruder_name, r=>num(r.total));
+  hbars("chartExtruders", Object.entries(exMap).sort((a,b)=>b[1]-a[1]).slice(0,10));
+
+  // Efficiency by extruder
+  const exTot=sumBy(rows, r=>r.extruder_name, r=>num(r.total));
+  const exTg=sumBy(rows, r=>r.extruder_name, r=>rowTarget(r));
+  const effEntries=Object.keys(exTot).map(k=>[k, eff(exTot[k], exTg[k])]).filter(e=>e[1]>0).sort((a,b)=>b[1]-a[1]).slice(0,10);
+  hbars("chartEff", effEntries, "teal", true);
+
+  // Rumbu vs MamaSannu
+  const cmpCard=document.getElementById("cmpCard");
+  if(section==="All" && MY_SECTIONS.length>1){
+    cmpCard.style.display="block";
+    const secTot=sumBy(rows, r=>SECTION_LABEL[r.section]||r.section, r=>num(r.total));
+    const secTg=sumBy(rows, r=>SECTION_LABEL[r.section]||r.section, r=>rowTarget(r));
+    const entries=Object.keys(secTot).map(k=>[k, eff(secTot[k], secTg[k])]).sort((a,b)=>b[1]-a[1]);
+    hbars("chartCompare", entries, "teal", true);
+  } else { cmpCard.style.display="none"; }
+
+  // Daily trend
+  const dayMap=sumBy(rows, r=>r.date_col, r=>num(r.total));
+  lineChart("chartTrend", Object.entries(dayMap).sort((a,b)=>a[0]<b[0]?-1:1));
+}
+
+function lineChart(containerId, series){
+  const wrap=document.getElementById(containerId);
+  if(!series.length){ wrap.innerHTML="<p style='color:#6b7280;font-size:13px;'>No data.</p>"; return; }
+  const W=1000,H=260,pad=44;
+  const xs=series.map((_,i)=> pad + i*((W-2*pad)/Math.max(1,series.length-1)));
+  const maxV=Math.max.apply(null, series.map(s=>s[1]))||1;
+  const ys=series.map(s=> H-pad-(s[1]/maxV)*(H-2*pad));
+  let path=""; xs.forEach((x,i)=>{ path+=(i===0?"M":"L")+x.toFixed(1)+" "+ys[i].toFixed(1)+" "; });
+  const step=Math.max(1, Math.floor(series.length/8));
+  let labels=""; for(let i=0;i<series.length;i+=step){ labels+=`<text x="${xs[i].toFixed(1)}" y="${H-pad+16}" font-size="10" fill="#6b7280" text-anchor="middle">${series[i][0].slice(5)}</text>`; }
+  const area=`M ${xs[0].toFixed(1)} ${(H-pad)} `+series.map((s,i)=>`L ${xs[i].toFixed(1)} ${ys[i].toFixed(1)}`).join(" ")+` L ${xs[xs.length-1].toFixed(1)} ${(H-pad)} Z`;
+  wrap.innerHTML=
+    `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+      <line x1="${pad}" y1="${H-pad}" x2="${W-pad}" y2="${H-pad}" stroke="#cbd5e1"/>
+      <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${H-pad}" stroke="#cbd5e1"/>
+      <path d="${area}" fill="#2E75B6" opacity="0.10"/>
+      <path d="${path}" fill="none" stroke="#2E75B6" stroke-width="2"/>
+      ${xs.map((x,i)=>`<circle cx="${x.toFixed(1)}" cy="${ys[i].toFixed(1)}" r="2.5" fill="#1F3864"/>`).join("")}
+      <text x="${pad-6}" y="${pad}" font-size="10" fill="#6b7280" text-anchor="end">${fmt(maxV)}</text>
+      <text x="${pad-6}" y="${H-pad}" font-size="10" fill="#6b7280" text-anchor="end">0</text>
+      ${labels}
+    </svg>
+    <div class="legend"><span><span class="dot" style="background:#2E75B6"></span>Total production per day</span></div>`;
+}
+
+init();
+</script>
+</body>
+</html>

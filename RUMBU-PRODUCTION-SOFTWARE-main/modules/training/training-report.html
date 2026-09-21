@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Training Report</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:var(--sans);background:var(--bg);min-height:100vh;display:flex;justify-content:center;align-items:flex-start;padding:20px;}
+.container{width:100%;max-width:520px;background:var(--card);border-radius:18px;padding:35px 30px;box-shadow:0 10px 30px rgba(0,0,0,.08);border:1px solid #dfe7f2;}
+.header{text-align:center;margin-bottom:30px;}
+.header h2{color:var(--heading);font-size:28px;margin-bottom:8px;}
+.header p{color:#6c757d;font-size:14px;}
+.form-group{margin-bottom:18px;}
+label{display:block;margin-bottom:8px;font-weight:600;color:var(--heading);font-size:14px;}
+input,select{width:100%;padding:13px 14px;border:1px solid var(--line);border-radius:10px;outline:none;font-size:15px;background:var(--card);box-sizing:border-box;}
+input:focus,select:focus{border-color:#2d6cdf;background:var(--card);box-shadow:0 0 0 3px rgba(45,108,223,.15);}
+button{width:100%;padding:14px;margin-top:10px;border:none;border-radius:10px;background:linear-gradient(135deg,#2d6cdf,#1746a2);color:#fff;font-size:16px;font-weight:bold;cursor:pointer;}
+#status{margin-top:18px;text-align:center;font-size:14px;font-weight:600;color:var(--heading);}
+.footer{text-align:center;margin-top:25px;font-size:12px;color:#8a8f98;}
+@media(max-width:600px){.container{padding:25px 20px;}.header h2{font-size:24px;}}
+@media print{ .no-print{display:none !important;} }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+</head>
+<body>
+
+<div class="container no-print">
+  <div class="header">
+    <h2>Training Report</h2>
+    <p>Generate and view department training performance report</p>
+  </div>
+
+  <div id="connStatus" style="font-size:12px;text-align:center;font-weight:bold;margin-bottom:10px;">Checking your session...</div>
+
+  <div class="form-group">
+    <label>Start Date</label>
+    <input type="date" id="start">
+  </div>
+  <div class="form-group">
+    <label>End Date</label>
+    <input type="date" id="end">
+  </div>
+  <div class="form-group">
+    <label>Section</label>
+    <select id="section"><option value="All">All</option></select>
+  </div>
+
+  <button onclick="generate()">Generate Report</button>
+  <button onclick="window.print()" style="background:#38761d;background-image:none;">Print / Save as PDF</button>
+  <div id="status"></div>
+  <div class="footer">Rumbu Industries Limited</div>
+</div>
+
+<div id="reportArea"></div>
+
+<script>
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
+
+let STAFF_ROWS = [], CODE_ROWS = [], TABLE_ROWS = [], APPROVED_ROWS = [], TREATED_ROWS = [];
+
+// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
+async function fetchAllRows(table, query){
+  let all = [], offset = 0; const pageSize = 1000;
+  const q = query || "";
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=*" + q, { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    const me = await requireAuth("../../login.html");
+    if(!me) return;
+
+    const mySections = (me.sectionNames && me.sectionNames.length) ? me.sectionNames : ["Rumbu","MamaSannu"];
+    const sectionSelect = document.getElementById("section");
+    sectionSelect.innerHTML = '<option value="All">All</option>' +
+      mySections.map(s=>`<option value="${s === "MamaSannu" ? "Mama Sannu" : s}">${s === "MamaSannu" ? "Mama Sannu" : s}</option>`).join("");
+
+    const [s,c,t,ap,tr] = await Promise.all([
+      fetchAllRows("staff_list",""),
+      fetchAllRows("training_code",""),
+      fetchAllRows("training_table",""),
+      fetchAllRows("training_approved",""),
+      fetchAllRows("treated_training","")
+    ]);
+    STAFF_ROWS = s;
+    CODE_ROWS = c;
+    TABLE_ROWS = t;
+    APPROVED_ROWS = ap;
+    TREATED_ROWS = tr;
+    status.style.color = "#1d8a4e";
+    status.textContent = "Connected. staff: " + STAFF_ROWS.length + ", training records: " + TABLE_ROWS.length + ".";
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+function generate(){
+  const startDate = document.getElementById("start").value;
+  const endDate = document.getElementById("end").value;
+  const section = document.getElementById("section").value;
+  const status = document.getElementById("status");
+
+  if(!startDate || !endDate){ status.style.color="#c0392b"; status.textContent = "Select both dates."; return; }
+  status.style.color = "#1746a2"; status.textContent = "Generating report...";
+
+  // ---- required (total code per Department+Rank) ----
+  const requiredMap = {};
+  CODE_ROWS.forEach(r=>{
+    const key = r.department + "||" + r.rank;
+    if(!requiredMap[key]) requiredMap[key] = new Set();
+    requiredMap[key].add(r.code);
+  });
+
+  // ---- done (distinct code_id per Staff+Department+Rank), scoped by Section ----
+  const trainingBySection = section === "All" ? TABLE_ROWS : TABLE_ROWS; // section lives on staff, applied via join below
+  const doneMap = {};
+  const lastDateMap = {};
+  TABLE_ROWS.forEach(r=>{
+    const staffRow = STAFF_ROWS.find(s=>s.staff_id === r.staff_id);
+    const rowSection = staffRow ? staffRow.section : null;
+    if(section !== "All" && rowSection !== section) return;
+    const key = r.staff_id + "||" + r.department + "||" + r.rank;
+    if(!doneMap[key]) doneMap[key] = new Set();
+    doneMap[key].add(r.code_id);
+    if(!lastDateMap[key] || (r.date_col||"") > lastDateMap[key]) lastDateMap[key] = r.date_col;
+  });
+
+  const completed = [], uncompleted = [];
+  Object.keys(doneMap).forEach(key=>{
+    const [staffId, dept, rank] = key.split("||");
+    const reqSet = requiredMap[dept + "||" + rank];
+    const totalCode = reqSet ? reqSet.size : 0;
+    const codeDone = doneMap[key].size;
+    const staffRow = STAFF_ROWS.find(s=>s.staff_id === staffId);
+    const trainRow = TABLE_ROWS.find(r=>r.staff_id===staffId && r.department===dept && r.rank===rank);
+    const name = (staffRow && staffRow.staff_name) || (trainRow && trainRow.staff_name) || "";
+    const entry = [staffId, name, dept, rank, codeDone, totalCode, lastDateMap[key]];
+    if(totalCode > 0 && codeDone === totalCode) completed.push(entry);
+    else uncompleted.push(entry);
+  });
+
+  // ---- absconded: training_table staff not present in staff_list ----
+  const abscondedMap = {};
+  TABLE_ROWS.forEach(r=>{
+    if(STAFF_ROWS.some(s=>s.staff_id===r.staff_id)) return;
+    const key = r.staff_id+"||"+r.department+"||"+r.rank;
+    if(!abscondedMap[key]) abscondedMap[key] = new Set();
+    abscondedMap[key].add(r.code_id);
+  });
+  const absconded = Object.keys(abscondedMap).map(key=>{
+    const [staffId, dept, rank] = key.split("||");
+    const trainRow = TABLE_ROWS.find(r=>r.staff_id===staffId && r.department===dept && r.rank===rank);
+    return [staffId, trainRow?trainRow.staff_name:"", dept, rank, abscondedMap[key].size];
+  });
+
+  // ---- approved / treated within range ----
+  const approved = APPROVED_ROWS.filter(r=> (r.recorded_at||"") >= startDate && (r.recorded_at||"") <= endDate + "T23:59:59")
+    .map(r=>{ const s = STAFF_ROWS.find(x=>x.staff_id===r.staff_id); return [r.staff_id, s?s.staff_name:"", r.department, r.rank, r.approved_by, r.recorded_at]; });
+  const treated = TREATED_ROWS.filter(r=> (r.treated_at||"") >= startDate && (r.treated_at||"") <= endDate + "T23:59:59")
+    .map(r=>{ const s = STAFF_ROWS.find(x=>x.staff_id===r.staff_id); return [r.staff_id, s?s.staff_name:"", r.department, r.rank, r.treated_by, r.treated_at]; });
+
+  // ---- new joiners ----
+  const newTraining = STAFF_ROWS.filter(s=> s.date_of_joining >= startDate && s.date_of_joining <= endDate)
+    .map(s=>[s.staff_id, s.staff_name, s.department, s.section, s.date_of_joining]);
+
+  buildReportHTML(completed, uncompleted, absconded, approved, treated, newTraining, { startDate, endDate, section });
+  status.style.color = "#1d8a4e"; status.textContent = "Report generated successfully";
+}
+
+function groupBy(arr, deptIdx, rankIdx){
+  const map = {};
+  arr.forEach(r=>{
+    const dept = r[deptIdx] || "UNKNOWN", rank = r[rankIdx] || "UNKNOWN";
+    if(!map[dept]) map[dept] = {};
+    if(!map[dept][rank]) map[dept][rank] = [];
+    map[dept][rank].push(r);
+  });
+  return map;
+}
+
+function buildReportHTML(completed, uncompleted, absconded, approved, treated, newTraining, filters){
+  const cMap = groupBy(completed,2,3), uMap = groupBy(uncompleted,2,3), aMap = groupBy(absconded,2,3),
+        apMap = groupBy(approved,2,3), tMap = groupBy(treated,2,3);
+
+  const allDepartments = new Set([...Object.keys(cMap),...Object.keys(uMap),...Object.keys(aMap),...Object.keys(apMap),...Object.keys(tMap)]);
+
+  let html = `<div style="font-family:var(--sans); padding:20px;">
+    <div style="text-align:center; border-bottom:2px solid #000; margin-bottom:15px;">
+      <h2>RUMBU INDUSTRIES LIMITED</h2><h3>TRAINING PERFORMANCE REPORT</h3>
+      <p>Section: <b>${filters.section}</b><br>${filters.startDate} &rarr; ${filters.endDate}</p>
+    </div>
+    <div style="margin-bottom:20px; padding:10px; border:1px solid #000;">
+      <h3>EXECUTIVE SUMMARY</h3>
+      <table style="width:100%;border-collapse:collapse;">
+        <tr><th>Total Completed</th><th>Total Incomplete</th><th>Total Absconded</th><th>Total Approved</th><th>Total Treated</th><th>New Joiners</th></tr>
+        <tr><td>${completed.length}</td><td>${uncompleted.length}</td><td>${absconded.length}</td><td>${approved.length}</td><td>${treated.length}</td><td>${newTraining.length}</td></tr>
+      </table>
+    </div>
+    <style>
+      .dept{background:#111;color:#fff;padding:8px;margin-top:25px;font-size:16px;}
+      .rank{background:#f4f6f8;padding:6px;margin-top:10px;border-left:4px solid #000;}
+      table{width:100%;border-collapse:collapse;margin-bottom:15px;font-size:11px;}
+      th{background:#222;color:#fff;padding:5px;} td{border:1px solid #ccc;padding:4px;text-align:center;}
+    </style>`;
+
+  Array.from(allDepartments).forEach(dept=>{
+    html += `<div class="dept">DEPARTMENT: ${dept}</div>`;
+    const ranks = new Set([...Object.keys(cMap[dept]||{}),...Object.keys(uMap[dept]||{}),...Object.keys(aMap[dept]||{}),...Object.keys(apMap[dept]||{}),...Object.keys(tMap[dept]||{})]);
+    ranks.forEach(rank=>{
+      html += `<div class="rank">RANK: ${rank}</div>`;
+
+      html += `<h4>Completed</h4><table><tr><th>ID</th><th>Name</th><th>Dept</th><th>Rank</th><th>Done</th><th>Total</th><th>%</th></tr>`;
+      (cMap[dept]?.[rank]||[]).forEach(r=>{
+        const done=Number(r[4])||0, total=Number(r[5])||0, pct= total?((done/total)*100).toFixed(1):"0.0";
+        html += `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td>${r[3]}</td><td>${done}</td><td>${total}</td><td>${pct}%</td></tr>`;
+      });
+      html += `</table>`;
+
+      html += `<h4>Incomplete</h4><table><tr><th>ID</th><th>Name</th><th>Dept</th><th>Rank</th><th>Done</th><th>Total</th><th>%</th></tr>`;
+      (uMap[dept]?.[rank]||[]).forEach(r=>{
+        const done=Number(r[4])||0, total=Number(r[5])||0, pct= total?((done/total)*100).toFixed(1):"0.0";
+        html += `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td>${r[3]}</td><td>${done}</td><td>${total}</td><td>${pct}%</td></tr>`;
+      });
+      html += `</table>`;
+
+      html += `<h4>Absconded</h4><table><tr><th>ID</th><th>Name</th><th>Dept</th><th>Rank</th><th>Done</th></tr>`;
+      (aMap[dept]?.[rank]||[]).forEach(r=>{ html += `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td>${r[3]}</td><td>${r[4]}</td></tr>`; });
+      html += `</table>`;
+
+      html += `<h4>Approved</h4><table><tr><th>ID</th><th>Name</th><th>Dept</th><th>Rank</th><th>By</th><th>Date</th></tr>`;
+      (apMap[dept]?.[rank]||[]).forEach(r=>{ html += `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td>${r[3]}</td><td>${r[4]}</td><td>${r[5]}</td></tr>`; });
+      html += `</table>`;
+
+      html += `<h4>Treated</h4><table><tr><th>ID</th><th>Name</th><th>Dept</th><th>Rank</th><th>By</th><th>Date</th></tr>`;
+      (tMap[dept]?.[rank]||[]).forEach(r=>{ html += `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td>${r[3]}</td><td>${r[4]}</td><td>${r[5]}</td></tr>`; });
+      html += `</table>`;
+    });
+  });
+
+  html += `<h4>New Training (New Joiners)</h4><table><tr><th>ID</th><th>Name</th><th>Dept</th><th>Section</th><th>Date of Joining</th></tr>`;
+  newTraining.forEach(r=>{ html += `<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td>${r[3]}</td><td>${r[4]}</td></tr>`; });
+  html += `</table></div>`;
+
+  document.getElementById("reportArea").innerHTML = html;
+}
+
+init();
+</script>
+<script src="../../assets/letterhead.js"></script>
+</body>
+</html>

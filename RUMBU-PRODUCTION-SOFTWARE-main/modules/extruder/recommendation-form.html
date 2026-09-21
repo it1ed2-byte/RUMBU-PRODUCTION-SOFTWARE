@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Recommendation Form</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<link rel="stylesheet" href="../../styles.css">
+<style>
+  body{ padding:22px; }
+  .container{ max-width:1000px; margin:0 auto; }
+  #status{ text-align:center; font-size:13px; font-weight:700; margin-bottom:12px; }
+  .msg{ margin-top:12px; font-weight:700; text-align:center; }
+</style>
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+</head>
+<body>
+
+<div id="mainPage">
+<div class="container">
+
+  <div class="card-panel">
+    <h2>Recommendation Entry</h2>
+    <div id="status">Checking your session...</div>
+    <div class="field"><label>Recommendation</label><textarea id="recommendation" rows="4" placeholder="Enter recommendation"></textarea></div>
+    <div class="field"><label>Section</label><select id="section"></select></div>
+    <button id="saveBtn" onclick="saveData()">Submit</button>
+    <div class="msg" id="msg"></div>
+  </div>
+
+  <div class="card-panel">
+    <h3>Recent Recommendations (last 7 days)</h3>
+    <div class="table-wrap"><div class="table-scroll">
+      <table>
+        <thead><tr><th>Date</th><th>Recommendation</th><th>Section</th><th>Action</th></tr></thead>
+        <tbody id="tableBody"></tbody>
+      </table>
+    </div></div>
+  </div>
+
+</div>
+</div>
+
+<script>
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY, "Content-Type": "application/json" }; }
+const SECTION_DISPLAY_MAP = { "Rumbu": "Rumbu", "MamaSannu": "Mama Sannu" };
+
+async function init(){
+  const status = document.getElementById("status");
+  const me = await requireAuth("../../login.html");
+  if(!me) return;
+
+  const mySections = (me.sectionNames && me.sectionNames.length)
+    ? me.sectionNames.map(s => SECTION_DISPLAY_MAP[s] || s)
+    : ["Rumbu","Mama Sannu"];
+  const sectionSelect = document.getElementById("section");
+  sectionSelect.innerHTML = mySections.map(s=>`<option>${s}</option>`).join("");
+  if(mySections.length === 1) sectionSelect.disabled = true;
+
+  status.style.color = "#1d8a4e";
+  status.textContent = "Connecting to Supabase...";
+  await loadData();
+}
+
+function todayISO(){ return new Date().toISOString().slice(0,10); }
+function daysAgoISO(n){ const d=new Date(); d.setDate(d.getDate()-n); return d.toISOString().slice(0,10); }
+
+async function saveData(){
+  const btn = document.getElementById("saveBtn");
+  const msg = document.getElementById("msg");
+  btn.disabled = true; btn.innerText = "Submitting...";
+
+  const row = {
+    date_col: todayISO(),
+    recommendation: document.getElementById("recommendation").value,
+    section: document.getElementById("section").value,
+    recorded_at: new Date().toISOString()
+  };
+
+  try{
+    const res = await fetch(SUPABASE_URL + "/rest/v1/recommendation", {
+      method: "post", headers: authHeaders(), body: JSON.stringify(row)
+    });
+    if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
+    msg.style.color = "#1d8a4e";
+    msg.innerText = "Saved Successfully";
+    document.getElementById("recommendation").value = "";
+    await loadData();
+  }catch(e){
+    msg.style.color = "#c0392b";
+    msg.innerText = "Error: " + (e.message||e);
+  }finally{
+    btn.disabled = false; btn.innerText = "Submit";
+  }
+}
+
+async function loadData(){
+  const status = document.getElementById("status");
+  try{
+    const cutoff = daysAgoISO(7);
+    const url = SUPABASE_URL + "/rest/v1/recommendation?date_col=gte." + cutoff + "&order=recorded_at.desc&select=*";
+    const res = await fetch(url, { headers: authHeaders() });
+    if(!res.ok) throw new Error("HTTP " + res.status);
+    const rows = await res.json();
+    status.style.color = "#1d8a4e";
+    status.textContent = "Connected. " + rows.length + " record(s) in the last 7 days.";
+
+    let html = "";
+    rows.forEach(r=>{
+      html += `<tr><td>${r.date_col||""}</td><td>${r.recommendation||""}</td><td>${r.section||""}</td>` +
+        `<td><button class="btn-sm btn-danger" onclick="deleteRow(${r.id})">Delete</button></td></tr>`;
+    });
+    document.getElementById("tableBody").innerHTML = html;
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+async function deleteRow(id){
+  if(!confirm("Delete this recommendation?")) return;
+  try{
+    // Only allow deleting records within the last 7 days, matching the
+    // original script's own protection rule.
+    const cutoff = daysAgoISO(7);
+    const url = SUPABASE_URL + "/rest/v1/recommendation?id=eq." + id + "&date_col=gte." + cutoff;
+    const res = await fetch(url, { method: "delete", headers: authHeaders() });
+    if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
+    alert("Deleted Successfully");
+    await loadData();
+  }catch(e){
+    alert("Error: " + (e.message||e));
+  }
+}
+
+init();
+</script>
+</body>
+</html>

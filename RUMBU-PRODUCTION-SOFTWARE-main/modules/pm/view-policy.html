@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>View PM Policies</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme") || "navy"); }catch(e){} })();
+  window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme){ document.documentElement.setAttribute("data-theme", e.data.rumbuTheme); } });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="../../assets/letterhead.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1100px;margin:0 auto;}
+  #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);}
+  .toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px;}
+  .toolbar .f{flex:1;min-width:200px;}
+  .toolbar .f.min{flex:0 0 auto;min-width:0;}
+  .count{font-size:12.5px;color:var(--muted);margin-left:auto;align-self:center;}
+  tbody tr.clickable{cursor:pointer;}
+  tbody tr.clickable:hover{background:var(--bg);}
+  .pill{display:inline-block;background:var(--bg);border:1px solid var(--line-2);border-radius:20px;padding:2px 10px;font-size:12px;font-weight:600;color:var(--heading);}
+  .btn-del{background:var(--bad);color:#fff;border:0;border-radius:7px;padding:5px 10px;font-size:12.5px;font-weight:600;cursor:pointer;}
+  .btn-link{background:transparent;border:1px solid var(--line-2);color:var(--heading);border-radius:7px;padding:5px 10px;font-size:12.5px;font-weight:600;cursor:pointer;}
+  .btn-link:hover{border-color:var(--accent);}
+  .empty{padding:24px;text-align:center;color:var(--muted);}
+
+  /* Full-page detail view */
+  #detailView{display:none;}
+  .detail-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px;}
+  .detail-bar .spacer{flex:1;}
+  .detail-title{font-size:22px;font-weight:800;color:var(--heading);margin:0;}
+  .detail-title small{display:block;font-size:13px;font-weight:600;color:var(--muted);margin-top:3px;}
+  .meta-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:4px 0 4px;}
+  .meta-cell{background:var(--bg);border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:11px 13px;}
+  .meta-cell .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);font-weight:700;}
+  .meta-cell .v{font-size:15px;color:var(--heading);font-weight:600;margin-top:3px;}
+  .desc-box{margin-top:14px;background:var(--bg);border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:13px 15px;color:var(--text);font-size:14px;}
+  .sec-label{margin:22px 0 8px;font-size:13px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;color:var(--muted);}
+</style>
+</head>
+<body>
+<div class="wrap">
+<button class="no-print" id="topBack" onclick="onTopBack()" style="max-width:240px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back to Dashboard</button>
+<div id="connStatus">Loading...</div>
+
+<!-- ============ LIST VIEW ============ -->
+<div class="card-panel" id="listView">
+  <h3>PM Policies</h3>
+  <p class="sub">All preventive-maintenance policies. Click any policy to open it in full.</p>
+
+  <div class="toolbar no-print">
+    <div class="f"><label>Search (number, name, unit)</label><input type="text" id="q" oninput="render()" placeholder="Type to filter..."></div>
+    <div class="f min"><label>Branch</label><select id="fSection" onchange="render()"><option value="">All</option></select></div>
+    <span class="count" id="count"></span>
+  </div>
+
+  <div class="table-wrap">
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Policy No.</th><th>Policy Name</th><th>Unit</th><th>Branch</th>
+            <th>PM Next (days)</th><th>Items</th><th>Created By</th><th>Created</th><th class="no-print"></th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="empty" id="emptyMsg" style="display:none;">No policies match your filters yet.</div>
+</div>
+
+<!-- ============ DETAIL VIEW (full page) ============ -->
+<div class="card-panel" id="detailView">
+  <div class="detail-bar no-print">
+    <button class="btn-link" onclick="backToList()">&larr; Back to list</button>
+    <span class="spacer"></span>
+    <button class="btn-link" onclick="window.print()">Print / Save PDF</button>
+    <button class="btn-del" id="detailDelete" style="display:none;" onclick="delFromDetail()">Delete</button>
+  </div>
+  <div id="detailBody"></div>
+</div>
+
+</div>
+
+<script>
+let ME = null;
+let POLICIES = [];
+let ITEMS_BY_POLICY = {};
+let CURRENT_ID = null;
+
+function canDelete(){ return ME && (ME.role === "admin" || ME.role === "super_admin"); }
+
+async function logActivity(actionType, description){
+  try{
+    await sb.from("activity_log").insert({
+      actor_id: ME.id, actor_username: ME.username, actor_role: ME.role,
+      section_id: ME.sectionId, action_type: actionType, description: description
+    });
+  }catch(e){ console.warn("Activity log write failed (non-fatal):", e); }
+}
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    await load();
+    status.style.color = "var(--ok)"; status.textContent = "Connected.";
+  }catch(e){
+    status.style.color = "var(--bad)"; status.textContent = "Could not load: " + e.message;
+  }
+}
+
+async function load(){
+  const { data: pols, error: pErr } = await sb.from("pm_policies").select("*").order("created_at", { ascending: false });
+  if(pErr) throw pErr;
+  POLICIES = pols || [];
+
+  ITEMS_BY_POLICY = {};
+  const { data: items, error: iErr } = await sb.from("pm_policy_items").select("policy_id, item_no, checklist_item").order("item_no");
+  if(iErr) throw iErr;
+  (items || []).forEach(it => { (ITEMS_BY_POLICY[it.policy_id] = ITEMS_BY_POLICY[it.policy_id] || []).push(it); });
+
+  const sections = Array.from(new Set(POLICIES.map(p => p.section).filter(Boolean))).sort();
+  document.getElementById("fSection").innerHTML = '<option value="">All</option>' + sections.map(s => `<option value="${s}">${s}</option>`).join("");
+
+  render();
+}
+
+function esc(s){ return (s == null ? "" : String(s)).replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;" }[c])); }
+function fmtDate(s){ if(!s) return "—"; try{ return new Date(s).toLocaleDateString(); }catch(e){ return s; } }
+
+function filtered(){
+  const q = document.getElementById("q").value.trim().toLowerCase();
+  const sec = document.getElementById("fSection").value;
+  return POLICIES.filter(p => {
+    if(sec && p.section !== sec) return false;
+    if(!q) return true;
+    return [p.policy_number, p.policy_name, p.unit_name].some(v => (v || "").toLowerCase().includes(q));
+  });
+}
+
+function render(){
+  const rows = filtered();
+  const tbody = document.getElementById("tbody");
+  document.getElementById("count").textContent = rows.length + " of " + POLICIES.length + " policies";
+  document.getElementById("emptyMsg").style.display = rows.length ? "none" : "block";
+
+  tbody.innerHTML = rows.map(p => {
+    const items = ITEMS_BY_POLICY[p.id] || [];
+    return "<tr class='clickable' onclick='openDetail(" + p.id + ")'>" +
+      "<td><b>" + esc(p.policy_number) + "</b></td>" +
+      "<td>" + esc(p.policy_name) + "</td>" +
+      "<td>" + esc(p.unit_name || "—") + "</td>" +
+      "<td>" + esc(p.section || "—") + "</td>" +
+      "<td style='text-align:center;'>" + esc(p.pm_next_days) + "</td>" +
+      "<td><span class='pill'>" + items.length + "</span></td>" +
+      "<td>" + esc(p.created_by || "—") + "</td>" +
+      "<td>" + fmtDate(p.created_at) + "</td>" +
+      "<td class='no-print' onclick='event.stopPropagation();'>" +
+        "<button class='btn-link' onclick='openDetail(" + p.id + ")'>Open</button>" +
+        (canDelete() ? " <button class='btn-del' onclick='del(" + p.id + ",\"" + esc(p.policy_number).replace(/"/g,"&quot;") + "\")'>Delete</button>" : "") +
+      "</td>" +
+      "</tr>";
+  }).join("");
+}
+
+// ---- Full-page detail ----
+function openDetail(id){
+  const p = POLICIES.find(x => String(x.id) === String(id));
+  if(!p) return;
+  CURRENT_ID = p.id;
+  const items = ITEMS_BY_POLICY[p.id] || [];
+
+  document.getElementById("detailBody").innerHTML =
+    "<div class='detail-bar' style='border:0;margin-bottom:6px;'>" +
+      "<h2 class='detail-title'>" + esc(p.policy_number) + " — " + esc(p.policy_name) +
+        "<small>" + esc(p.unit_name || "—") + (p.section ? " · " + esc(p.section) : "") + "</small></h2>" +
+    "</div>" +
+    "<div class='meta-grid'>" +
+      metaCell("Unit", p.unit_name || "—") +
+      metaCell("Branch", p.section || "—") +
+      metaCell("PM Next (days)", p.pm_next_days) +
+      metaCell("Checklist Items", items.length) +
+      metaCell("Created By", p.created_by || "—") +
+      metaCell("Created", fmtDate(p.created_at)) +
+    "</div>" +
+    (p.description ? "<div class='desc-box'><b>Description:</b> " + esc(p.description) + "</div>" : "") +
+    "<div class='sec-label'>Checklist</div>" +
+    (items.length
+      ? "<div class='table-wrap'><div class='table-scroll'><table><thead><tr><th style='width:60px;'>#</th><th>Checklist Item</th></tr></thead><tbody>" +
+        items.map(it => "<tr><td style='text-align:center;'><b>" + esc(it.item_no) + "</b></td><td>" + esc(it.checklist_item) + "</td></tr>").join("") +
+        "</tbody></table></div></div>"
+      : "<div class='empty'>No checklist items recorded for this policy.</div>");
+
+  document.getElementById("detailDelete").style.display = canDelete() ? "" : "none";
+  document.getElementById("listView").style.display = "none";
+  document.getElementById("detailView").style.display = "block";
+  document.getElementById("topBack").textContent = "← Back to Dashboard";
+  window.scrollTo(0, 0);
+}
+
+function metaCell(k, v){ return "<div class='meta-cell'><div class='k'>" + esc(k) + "</div><div class='v'>" + esc(v) + "</div></div>"; }
+
+function backToList(){
+  CURRENT_ID = null;
+  document.getElementById("detailView").style.display = "none";
+  document.getElementById("listView").style.display = "block";
+}
+
+// Top button: from detail go back to list; from list go back to dashboard.
+function onTopBack(){
+  if(document.getElementById("detailView").style.display === "block"){ backToList(); return; }
+  if(window.parent && window.parent.closeModule) window.parent.closeModule();
+  else window.location.href = "../../index.html";
+}
+
+async function del(id, number){
+  if(!canDelete()) return;
+  if(!confirm("Delete policy " + number + " and all its checklist items? This cannot be undone.")) return;
+  try{
+    await sb.from("pm_policy_items").delete().eq("policy_id", id);
+    const { error } = await sb.from("pm_policies").delete().eq("id", id);
+    if(error) throw error;
+    await logActivity("pm_policy_delete", "Deleted PM policy " + number + ".");
+    await load();
+  }catch(e){
+    alert("Could not delete: " + (e.message || e));
+  }
+}
+
+async function delFromDetail(){
+  const p = POLICIES.find(x => String(x.id) === String(CURRENT_ID));
+  if(!p) return;
+  await del(p.id, p.policy_number);
+  backToList();
+}
+
+init();
+</script>
+</body>
+</html>

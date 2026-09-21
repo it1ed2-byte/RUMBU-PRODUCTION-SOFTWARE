@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>View Completed Tasks</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;--amber:#b7791f;}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;color:var(--text);}
+  .wrap{max-width:900px;margin:0 auto;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;}
+  .card h3{color:var(--navy);margin:0 0 4px;font-size:16px;}
+  .card .sub{color:var(--blue);font-size:12px;margin:0 0 14px;}
+  label{display:block;font-size:12px;font-weight:bold;color:var(--text);margin:10px 0 4px;}
+  input,textarea,select{width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;}
+  textarea{resize:vertical;min-height:55px;}
+  button{padding:9px 14px;border:none;border-radius:8px;font-weight:bold;font-size:13px;cursor:pointer;background:var(--blue);color:#fff;margin-top:8px;}
+  button:hover{background:var(--blue-dark);}
+  button.success{background:var(--green);}
+  .status{margin-top:8px;font-weight:bold;font-size:12px;min-height:14px;}
+  .status.ok{color:var(--green);} .status.err{color:var(--red);}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;}
+  .hidden{display:none;}
+  .badge{display:inline-block;padding:3px 9px;border-radius:5px;font-size:11px;font-weight:bold;color:#fff;}
+  .badge.pending{background:var(--muted);} .badge.in_progress{background:var(--amber);} .badge.completed{background:var(--green);}
+  .badge.approved{background:var(--navy);}
+  .todo-block{border:1px solid var(--line);border-radius:10px;padding:12px;margin-top:12px;background:#fafbfd;}
+  .subtodo-row{display:flex;align-items:flex-start;gap:8px;padding:8px 0;border-bottom:1px solid #eee;}
+  .subtodo-row:last-child{border-bottom:none;}
+  .subtodo-row .info{flex:1;}
+  table{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px;}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;}
+  thead th{background:var(--navy);color:#fff;font-size:12px;}
+  tbody tr:nth-child(even){background:#f6f8fb;}
+  tbody tr{cursor:pointer;}
+  tbody tr:hover{background:#eaf0f8;}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<div id="connStatus">Checking your session...</div>
+
+<div class="card hidden" id="listCard">
+  <h3>View Completed Tasks</h3>
+  <p class="sub">Click any row to review its full breakdown and reports</p>
+  <div id="tableWrap"></div>
+</div>
+
+<div id="taskDetail"></div>
+</div>
+
+<script>
+let ME = null;
+
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c])); }
+function fmtDate(d){ return d || "-"; }
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+
+    const { data, error } = await sb.from("tasks").select("id, title, due_date, status, approved").eq("status", "completed").order("due_date");
+    if(error) throw error;
+
+    const wrap = document.getElementById("tableWrap");
+    if(!data || !data.length){
+      wrap.innerHTML = "<p class='sub'>No completed Tasks yet.</p>";
+    } else {
+      let html = "<table><tr><th>Title</th><th>Due</th><th>Approved</th></tr>";
+      data.forEach(t=>{
+        html += `<tr onclick="renderTask(${t.id})"><td>${esc(t.title)}</td><td>${fmtDate(t.due_date)}</td><td>${t.approved ? "✅ Yes" : "Not yet"}</td></tr>`;
+      });
+      html += "</table>";
+      wrap.innerHTML = html;
+    }
+
+    status.classList.add("hidden");
+    document.getElementById("listCard").classList.remove("hidden");
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "Could not load: " + (e.message||e);
+  }
+}
+
+async function canManageThisTask(task){
+  if(ME.role === "super_admin") return true;
+  if(task.created_by === ME.id) return true;
+  if(ME.canSelfManageTodos){
+    const { data } = await sb.from("task_assignees").select("profile_id").eq("task_id", task.id).eq("profile_id", ME.id);
+    if(data && data.length) return true;
+  }
+  return false;
+}
+
+async function renderTask(taskId){
+  const detail = document.getElementById("taskDetail");
+  detail.innerHTML = "Loading...";
+
+  const { data: task, error: taskErr } = await sb.from("tasks").select("*").eq("id", taskId).single();
+  if(taskErr){ detail.innerHTML = "Error: " + taskErr.message; return; }
+
+  const { data: assignees } = await sb.from("task_assignees").select("profiles(username, role)").eq("task_id", taskId);
+  const assigneeNames = (assignees||[]).map(a=>a.profiles ? a.profiles.username + " (" + a.profiles.role + ")" : "").filter(Boolean).join(", ");
+
+  const { data: todos } = await sb.from("todos").select("*").eq("task_id", taskId).order("created_at");
+  const todoIds = (todos||[]).map(t=>t.id);
+  let subtodosByTodo = {};
+  if(todoIds.length){
+    const { data: subs } = await sb.from("subtodos").select("*").in("todo_id", todoIds).order("created_at");
+    (subs||[]).forEach(s=>{ if(!subtodosByTodo[s.todo_id]) subtodosByTodo[s.todo_id]=[]; subtodosByTodo[s.todo_id].push(s); });
+  }
+
+  const canManage = await canManageThisTask(task);
+
+  let html = `
+    <div class="card">
+      <h3>${esc(task.title)} <span class="badge ${task.status}">${task.status}</span> ${task.approved ? '<span class="badge approved">APPROVED</span>' : ''}</h3>
+      <p class="sub">Assigned to: ${assigneeNames || "(none)"}</p>
+      <p>${esc(task.description||"")}</p>
+      <p style="font-size:12px;color:#6b7280;">Start: ${fmtDate(task.start_date)} &nbsp;|&nbsp; Due: ${fmtDate(task.due_date)}</p>
+
+      <label>Task Report</label>
+      <textarea id="task_report_text" ${canManage?"":"readonly"}>${esc(task.report_text||"")}</textarea>
+      ${canManage ? `<input type="file" id="task_report_file"><button onclick="saveReport('task', ${task.id}, ${task.id})">SAVE TASK REPORT</button>` : ""}
+      ${task.report_file_path ? `<button onclick="downloadReport('${task.report_file_path}')">DOWNLOAD ATTACHED FILE</button>` : ""}
+      <div class="status" id="status_task_${task.id}"></div>
+
+      ${(!task.approved) ? `<button class="success" onclick="approveTask(${task.id})">APPROVE TASK</button>` : ""}
+    </div>
+  `;
+
+  html += `<div class="card"><h3>Todos</h3>`;
+  if(!todos || !todos.length){
+    html += `<p class="sub">No Todos on this Task.</p>`;
+  } else {
+    todos.forEach(todo=>{
+      const subs = subtodosByTodo[todo.id] || [];
+      html += `<div class="todo-block">
+        <b>${esc(todo.title)}</b> <span class="badge ${todo.status}">${todo.status}</span>
+        <p style="font-size:13px;">${esc(todo.description||"")}</p>
+        <label>Todo Report</label>
+        <textarea readonly>${esc(todo.report_text||"")}</textarea>
+        ${todo.report_file_path ? `<button onclick="downloadReport('${todo.report_file_path}')">DOWNLOAD FILE</button>` : ""}
+      `;
+      if(!subs.length){
+        html += `<p class="sub">No Sub-todos.</p>`;
+      } else {
+        subs.forEach(s=>{
+          html += `<div class="subtodo-row">
+            <div class="info">
+              <b>${esc(s.title)}</b> <span class="badge ${s.status}">${s.status}</span>
+              <p style="font-size:12px;">${esc(s.description||"")}</p>
+              <label>Sub-todo Report</label>
+              <textarea readonly>${esc(s.report_text||"")}</textarea>
+              ${s.report_file_path ? `<button onclick="downloadReport('${s.report_file_path}')">DOWNLOAD FILE</button>` : ""}
+            </div>
+          </div>`;
+        });
+      }
+      html += `</div>`;
+    });
+  }
+  html += `</div>`;
+
+  detail.innerHTML = html;
+}
+
+async function saveReport(level, id, taskId){
+  const status = document.getElementById("status_" + level + "_" + id);
+  const textEl = document.getElementById("task_report_text");
+  const fileEl = document.getElementById("task_report_file");
+  const text = textEl.value;
+  const file = fileEl ? fileEl.files[0] : null;
+
+  status.className = "status"; status.textContent = "Saving...";
+  try{
+    const update = { report_text: text };
+    if(file){
+      const path = "task_" + taskId + "/" + level + "_" + id + "_" + Date.now() + "_" + file.name;
+      const { error: upErr } = await sb.storage.from("task-reports").upload(path, file);
+      if(upErr) throw upErr;
+      update.report_file_path = path;
+    }
+    const { error } = await sb.from("tasks").update(update).eq("id", id);
+    if(error) throw error;
+    status.className = "status ok"; status.textContent = "✅ Report saved.";
+    if(file) await renderTask(taskId);
+  }catch(e){
+    status.className = "status err"; status.textContent = "❌ " + e.message;
+  }
+}
+
+async function downloadReport(path){
+  const { data, error } = await sb.storage.from("task-reports").createSignedUrl(path, 3600);
+  if(error){ alert("Could not open file: " + error.message); return; }
+  window.open(data.signedUrl, "_blank");
+}
+
+async function approveTask(taskId){
+  if(!confirm("Approve this Task? This confirms you've reviewed its reports.")) return;
+  try{
+    const { error } = await sb.from("tasks").update({
+      approved: true, approved_by: ME.id, approved_at: new Date().toISOString()
+    }).eq("id", taskId);
+    if(error) throw error;
+    await renderTask(taskId);
+  }catch(e){
+    alert("❌ " + e.message);
+  }
+}
+
+init();
+</script>
+</body>
+</html>

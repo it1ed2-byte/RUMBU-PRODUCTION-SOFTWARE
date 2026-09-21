@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Abuja Office Express Payment Request — My Requests</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="../../assets/letterhead.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1000px;margin:0 auto;}
+  #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);}
+  .empty-note{background:var(--bg);border:1px dashed var(--line-2);border-radius:var(--radius);padding:24px;text-align:center;color:var(--muted);font-size:13px;}
+
+  .filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;align-items:end;}
+  .filters .field{margin-bottom:0;}
+  .filters label{display:block;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;margin-bottom:4px;}
+  .filters input,.filters select{width:100%;}
+
+  .req-row{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;margin-bottom:12px;box-shadow:var(--shadow);}
+  .rr-head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;}
+  .rr-ref{font-weight:800;color:var(--heading);font-size:14px;}
+  .rr-title{color:var(--text);font-size:13px;margin-top:2px;}
+  .rr-badge{border-radius:20px;padding:4px 12px;font-size:11px;font-weight:700;color:#fff;white-space:nowrap;}
+  .rr-badge.draft{background:var(--muted);}
+  .rr-badge.in_progress{background:var(--warn);}
+  .rr-badge.completed{background:var(--ok);}
+  .rr-badge.withdrawn{background:var(--muted);}
+  .rr-badge.rejected{background:var(--bad);}
+  .rr-sub{font-size:12px;color:var(--muted);margin-top:4px;}
+  .rr-decline{background:rgba(176,42,55,.08);border:1px solid var(--bad);border-radius:var(--radius-sm);padding:10px 12px;font-size:12.5px;color:var(--text);margin-top:10px;}
+  .rr-decline b{color:var(--bad);}
+  .rr-actions{display:flex;gap:8px;margin-top:10px;}
+
+  .edit-panel{margin-top:14px;border-top:1px solid var(--line);padding-top:14px;display:none;}
+  .edit-panel.show{display:block;}
+  .amount-row{display:flex;gap:8px;}
+  .amount-row input{flex:1;}
+  .amount-row select{flex:0 0 100px;}
+
+  .dropzone{background:var(--bg);border:1px dashed var(--line-2);border-radius:var(--radius);padding:18px 12px;text-align:center;cursor:pointer;}
+  .dropzone:hover,.dropzone.drag{border-color:var(--accent);}
+  .dropzone .dz-action{color:var(--primary);font-weight:700;font-size:13px;}
+  .dropzone .dz-hint{font-size:11px;color:var(--muted);margin-top:2px;}
+  .dropzone input[type=file]{display:none;}
+  .file-list{margin-top:8px;display:flex;flex-direction:column;gap:6px;}
+  .file-chip{display:flex;align-items:center;justify-content:space-between;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:7px;padding:5px 10px;font-size:12px;}
+  .file-chip .fc-remove{color:var(--bad);cursor:pointer;font-weight:700;background:none;border:0;padding:0 4px;font-size:14px;}
+
+  .btn-trail{background:var(--bg);border:1px solid var(--line-2);color:var(--primary);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;}
+  .btn-trail:hover{border-color:var(--accent);}
+  .trail-panel{margin-top:14px;border-top:1px solid var(--line);padding-top:14px;display:none;}
+  .trail-panel.show{display:block;}
+  .trail-load{font-size:12.5px;color:var(--muted);}
+  .trail{position:relative;margin-top:6px;}
+  .trail-stage{display:flex;gap:12px;padding-bottom:14px;position:relative;}
+  .trail-stage:not(:last-child)::before{content:"";position:absolute;left:7px;top:18px;bottom:0;width:2px;background:var(--line-2);}
+  .ts-dot{flex:0 0 16px;width:16px;height:16px;border-radius:50%;margin-top:2px;background:var(--line-2);border:2px solid var(--card);box-shadow:0 0 0 1px var(--line-2);}
+  .trail-stage.done .ts-dot{background:var(--ok);box-shadow:0 0 0 1px var(--ok);}
+  .trail-stage.current .ts-dot{background:var(--warn);box-shadow:0 0 0 1px var(--warn);}
+  .trail-stage.declined .ts-dot{background:var(--bad);box-shadow:0 0 0 1px var(--bad);}
+  .ts-body{flex:1;min-width:0;}
+  .ts-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;}
+  .ts-name{font-weight:800;color:var(--heading);font-size:13px;}
+  .ts-badge{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;border-radius:12px;padding:2px 9px;background:var(--bg);border:1px solid var(--line-2);color:var(--muted);white-space:nowrap;}
+  .ts-badge.done{color:var(--ok);border-color:var(--ok);}
+  .ts-badge.current{color:var(--warn);border-color:var(--warn);}
+  .ts-badge.declined{color:var(--bad);border-color:var(--bad);}
+  .ts-people{margin-top:6px;display:flex;flex-direction:column;gap:5px;}
+  .ts-person{font-size:12.5px;color:var(--text);display:flex;flex-wrap:wrap;gap:4px 8px;align-items:baseline;}
+  .tp-name{font-weight:700;}
+  .tp-state{font-size:11.5px;font-weight:700;}
+  .tp-state.approve{color:var(--ok);}
+  .tp-state.decline{color:var(--bad);}
+  .tp-state.wait{color:var(--warn);}
+  .tp-state.idle{color:var(--muted);}
+  .tp-when{font-size:11px;color:var(--muted);}
+  .tp-comment{flex-basis:100%;font-size:12px;color:var(--muted);margin-left:2px;padding:2px 0 2px 8px;border-left:2px solid var(--line-2);}
+  .ts-none{font-size:12px;color:var(--muted);font-style:italic;}
+  .detail-meta{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px;font-size:13px;color:var(--text);margin-top:12px;}
+  .detail-meta .m-label{color:var(--muted);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.3px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<button class="no-print" onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:240px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back to Dashboard</button>
+<div id="connStatus">Loading...</div>
+
+<div class="card-panel">
+  <h3 id="pageTitle">My Requests — Abuja Office Express Payment Request</h3>
+  <p class="sub" id="pageSub">Everything you've submitted, its current stage, and — for anything declined or withdrawn — an edit-and-resubmit option.</p>
+</div>
+
+<div class="card-panel" id="filterPanel">
+  <div class="filters">
+    <div class="field" id="scopeWrap" style="display:none;">
+      <label>Show</label>
+      <select id="fScope" onchange="loadRequests()">
+        <option value="all">All requests</option>
+        <option value="mine">My requests only</option>
+      </select>
+    </div>
+    <div class="field"><label>Stage / Step</label><select id="fStage" onchange="renderList()"><option value="all">All</option></select></div>
+    <div class="field"><label>Status</label>
+      <select id="fStatus" onchange="renderList()">
+        <option value="all">All</option>
+        <option value="draft">Draft</option>
+        <option value="in_progress">In progress</option>
+        <option value="completed">Completed</option>
+        <option value="rejected">Declined</option>
+        <option value="withdrawn">Withdrawn</option>
+      </select>
+    </div>
+    <div class="field"><label>From</label><input type="date" id="fFrom" onchange="renderList()"></div>
+    <div class="field"><label>To</label><input type="date" id="fTo" onchange="renderList()"></div>
+    <div class="field" style="grid-column:span 2;"><label>Search</label><input type="text" id="fSearch" placeholder="Reference, title or submitter" oninput="renderList()" autocomplete="off"></div>
+  </div>
+</div>
+
+<div id="listWrap"></div>
+
+<div id="detailView" style="display:none;">
+  <button class="btn-ghost" style="margin-bottom:12px;" onclick="backToList()">&larr; Back to list</button>
+  <div class="card-panel">
+    <div id="detailSummary"></div>
+    <h4 style="margin:18px 0 2px;color:var(--heading);font-size:13px;">Approval progress</h4>
+    <p class="sub" style="margin-top:0;">Who has approved, who declined, and who the request is waiting on.</p>
+    <div id="detailTrail"></div>
+  </div>
+</div>
+</div>
+
+<script>
+let ME = null;
+let MY_EMPLOYEE_REF_ID = null;
+let STAGES_BY_ID = {};
+let STAGES = [];
+let IS_APPROVER = false;
+let SCOPE = "mine";
+let ALL_ROWS = [];
+let ASSIGNEES_BY_STAGE = {}, EMP_NAME = {};
+const STAGED_FILES = {}; // requestId -> { field_key: [File,...] }
+
+function esc(s){ return (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c])); }
+function fmtDate(s){ if(!s) return "—"; try{ return new Date(s).toLocaleDateString(); }catch(e){ return s; } }
+function fmtWhen(s){ if(!s) return ""; try{ return new Date(s).toLocaleString(); }catch(e){ return s; } }
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+
+    const { data: emp, error: empErr } = await sb.from("employees").select("id").eq("linked_profile_id", ME.id).maybeSingle();
+    if(empErr) throw empErr;
+    if(!emp){ throw new Error("No employee record is linked to your account."); }
+    MY_EMPLOYEE_REF_ID = emp.id;
+
+    const { data: stages, error: stErr } = await sb.from("abuja_workflow_stages").select("*").order("sequence_order");
+    if(stErr) throw stErr;
+    STAGES = stages || [];
+    STAGES.forEach(s => STAGES_BY_ID[s.id] = s);
+    document.getElementById("fStage").innerHTML = "<option value=\"all\">All</option>" +
+      STAGES.map(s => `<option value="${s.id}">${esc(s.stage_name)}</option>`).join("");
+
+    // Anyone assigned to any workflow stage may view all requests.
+    const { data: myAssign } = await sb.from("abuja_workflow_stage_assignees")
+      .select("stage_id").eq("employee_ref_id", MY_EMPLOYEE_REF_ID).limit(1);
+    IS_APPROVER = !!(myAssign && myAssign.length);
+    if(IS_APPROVER){
+      SCOPE = "all";
+      document.getElementById("scopeWrap").style.display = "block";
+      document.getElementById("fScope").value = "all";
+      document.getElementById("pageTitle").textContent = "Requests — Abuja Office Express Payment Request";
+      document.getElementById("pageSub").textContent = "As an approver you can view every request and the step it has reached. Use the filters to narrow the list. Edit, resubmit and withdraw are available only on your own requests.";
+    }
+
+    const { data: allAssign } = await sb.from("abuja_workflow_stage_assignees").select("stage_id, employee_ref_id");
+    (allAssign || []).forEach(a => { const k = String(a.stage_id); (ASSIGNEES_BY_STAGE[k] = ASSIGNEES_BY_STAGE[k] || []).push(String(a.employee_ref_id)); });
+    const assignIds = Array.from(new Set((allAssign || []).map(a => String(a.employee_ref_id))));
+    if(assignIds.length){
+      const { data: emps } = await sb.from("employees").select("id, full_name").in("id", assignIds);
+      (emps || []).forEach(e => EMP_NAME[String(e.id)] = e.full_name);
+    }
+
+    status.style.color = "#1d8a4e"; status.textContent = "Connected.";
+    await loadRequests();
+  }catch(e){
+    status.style.color = "#c0392b"; status.textContent = "❌ " + e.message; console.error(e);
+  }
+}
+
+async function loadRequests(){
+  const wrap = document.getElementById("listWrap");
+  wrap.innerHTML = "<div class='empty-note'>Loading…</div>";
+  SCOPE = IS_APPROVER ? (document.getElementById("fScope").value || "all") : "mine";
+
+  let q = sb.from("abuja_requests")
+    .select("*, abuja_payees(id,name,account_number,bank), employees:submitted_by(full_name)")
+    .order("created_at", { ascending: false });
+  if(SCOPE === "mine") q = q.eq("submitted_by", MY_EMPLOYEE_REF_ID);
+
+  const { data: requests, error } = await q;
+  if(error){ wrap.innerHTML = "<div class='empty-note'>Error: " + esc(error.message) + "</div>"; return; }
+  ALL_ROWS = requests || [];
+  renderList();
+}
+window.loadRequests = loadRequests;
+
+function renderList(){
+  const wrap = document.getElementById("listWrap");
+  const stageF = document.getElementById("fStage").value;
+  const statusF = document.getElementById("fStatus").value;
+  const from = document.getElementById("fFrom").value;
+  const to = document.getElementById("fTo").value;
+  const term = (document.getElementById("fSearch").value || "").trim().toLowerCase();
+
+  let rows = ALL_ROWS.slice();
+  if(stageF !== "all") rows = rows.filter(r => String(r.current_stage_id) === stageF);
+  if(statusF !== "all") rows = rows.filter(r => r.status === statusF);
+  if(from) rows = rows.filter(r => String(r.request_date || r.created_at || "").slice(0,10) >= from);
+  if(to) rows = rows.filter(r => String(r.request_date || r.created_at || "").slice(0,10) <= to);
+  if(term) rows = rows.filter(r => {
+    const sub = r.employees ? r.employees.full_name : "";
+    return ((r.reference_no||"") + " " + (r.title||"") + " " + sub).toLowerCase().indexOf(term) !== -1;
+  });
+
+  if(!rows.length){ wrap.innerHTML = "<div class='empty-note'>No requests match these filters.</div>"; return; }
+  wrap.innerHTML = "";
+  (async ()=>{ for(const r of rows){ wrap.appendChild(await renderRequestRow(r)); } })();
+}
+window.renderList = renderList;
+
+async function renderRequestRow(r){
+  const stage = STAGES_BY_ID[r.current_stage_id];
+  const mine = String(r.submitted_by) === String(MY_EMPLOYEE_REF_ID);
+  const el = document.createElement("div");
+  el.className = "req-row";
+
+  let noteHtml = "";
+  if(r.status === "rejected" || r.status === "draft"){
+    const { data: lastAction } = await sb.from("abuja_request_stage_actions")
+      .select("comment, action_date, stage_id, action")
+      .eq("request_id", r.id).eq("cycle", r.cycle)
+      .in("action", ["decline","withdraw"])
+      .order("action_date", { ascending: false }).limit(1).maybeSingle();
+    if(lastAction){
+      const aStage = STAGES_BY_ID[lastAction.stage_id];
+      const label = lastAction.action === "decline" ? "Declined at" : "Withdrawn at";
+      noteHtml = `<div class="rr-decline"><b>${label} ${aStage ? esc(aStage.stage_name) : "—"}:</b> ${esc(lastAction.comment || "No comment given.")}</div>`;
+    }
+  }
+
+  const canResubmit = mine && (r.status === "rejected" || r.status === "draft");
+  const canWithdraw = mine && r.status === "in_progress";
+  const submitter = r.employees ? r.employees.full_name : "—";
+  const badgeText = r.status === "completed" ? "Completed"
+    : r.status === "withdrawn" ? "Withdrawn"
+    : r.status === "draft" ? "Draft"
+    : r.status === "rejected" ? ("Declined" + (stage ? " · " + stage.stage_name : ""))
+    : (stage ? stage.stage_name : r.status);
+
+  el.innerHTML = `
+    <div class="rr-head">
+      <div style="cursor:pointer;" onclick="openDetail('${r.id}')">
+        <div class="rr-ref">${esc(r.reference_no)}</div>
+        <div class="rr-title">${esc(r.title)}</div>
+        <div class="rr-sub">${esc(r.currency)} ${Number(r.total_amount).toLocaleString()} · ${esc(r.project_duration_days)} day(s) · ${new Date(r.request_date).toLocaleDateString()} · by ${esc(submitter)}${r.cycle > 1 ? " · Resubmission #" + (r.cycle - 1) : ""}</div>
+      </div>
+      <span class="rr-badge ${r.status}">${esc(badgeText)}</span>
+    </div>
+    ${noteHtml}
+    <div class="rr-actions">
+      <button class="btn-trail" onclick="openDetail('${r.id}')">View details</button>
+      ${canResubmit ? `<button class="btn-ghost" onclick="toggleEdit('${r.id}')">Edit &amp; Resubmit</button>` : ""}
+      ${canWithdraw ? `<button class="btn-bad btn-sm" onclick="withdraw('${r.id}')">Withdraw</button>` : ""}
+    </div>
+    ${canResubmit ? `<div class="edit-panel" id="edit-${r.id}"></div>` : ""}
+  `;
+
+  if(canResubmit){ renderEditPanel(el.querySelector(`#edit-${r.id}`), r); }
+  return el;
+}
+
+function toggleEdit(requestId){ const panel = document.getElementById(`edit-${requestId}`); if(panel) panel.classList.toggle("show"); }
+window.toggleEdit = toggleEdit;
+
+async function openDetail(requestId){
+  const r = ALL_ROWS.find(x => String(x.id) === String(requestId));
+  if(!r) return;
+  const stage = STAGES_BY_ID[r.current_stage_id];
+  const submitter = r.employees ? r.employees.full_name : "—";
+  const recipient = r.abuja_payees ? (r.abuja_payees.name + (r.abuja_payees.account_number ? " — " + r.abuja_payees.account_number : "")) : "—";
+  const badgeText = r.status === "completed" ? "Completed"
+    : r.status === "withdrawn" ? "Withdrawn"
+    : r.status === "draft" ? "Draft"
+    : r.status === "rejected" ? ("Declined" + (stage ? " · " + stage.stage_name : ""))
+    : (stage ? stage.stage_name : r.status);
+
+  document.getElementById("detailSummary").innerHTML =
+    "<div class='rr-head'>" +
+      "<div><div class='rr-ref'>" + esc(r.reference_no) + "</div><div class='rr-title'>" + esc(r.title) + "</div></div>" +
+      "<span class='rr-badge " + r.status + "'>" + esc(badgeText) + "</span>" +
+    "</div>" +
+    "<div class='detail-meta'>" +
+      metaCell("Amount", esc(r.currency) + " " + Number(r.total_amount).toLocaleString()) +
+      metaCell("Duration", esc(r.project_duration_days) + " day(s)") +
+      metaCell("Request date", new Date(r.request_date).toLocaleDateString()) +
+      metaCell("Submitted by", esc(submitter)) +
+      metaCell("Current stage", stage ? esc(stage.stage_name) : "—") +
+      metaCell("Recipient", esc(recipient)) +
+      (r.description ? metaCell("Description", esc(r.description)) : "") +
+    "</div>";
+
+  const trailBox = document.getElementById("detailTrail");
+  trailBox.innerHTML = "<div class='trail-load'>Loading progress…</div>";
+  document.getElementById("filterPanel").style.display = "none";
+  document.getElementById("listWrap").style.display = "none";
+  document.getElementById("detailView").style.display = "block";
+  try{ window.scrollTo(0,0); }catch(e){}
+  await renderTrail(trailBox, r);
+}
+window.openDetail = openDetail;
+
+function backToList(){
+  document.getElementById("detailView").style.display = "none";
+  document.getElementById("filterPanel").style.display = "";
+  document.getElementById("listWrap").style.display = "";
+  try{ window.scrollTo(0,0); }catch(e){}
+}
+window.backToList = backToList;
+
+function metaCell(label, value){ return "<div><span class='m-label'>" + label + "</span><br>" + value + "</div>"; }
+
+async function renderTrail(panel, r){
+  const { data: actions, error } = await sb.from("abuja_request_stage_actions")
+    .select("stage_id, employee_ref_id, action, comment, action_date")
+    .eq("request_id", r.id).eq("cycle", r.cycle)
+    .order("action_date", { ascending: true });
+  if(error){ panel.innerHTML = "<div class='trail-load'>Could not load progress: " + esc(error.message) + "</div>"; return; }
+
+  const actByStageEmp = {};
+  (actions || []).forEach(a => { actByStageEmp[String(a.stage_id) + ":" + String(a.employee_ref_id)] = a; });
+
+  const currentIdx = STAGES.findIndex(s => String(s.id) === String(r.current_stage_id));
+  const completed = r.status === "completed";
+  const rejected = r.status === "rejected";
+  const withdrawn = r.status === "withdrawn";
+
+  let html = "<div class='trail'>";
+  STAGES.forEach((s, idx) => {
+    const isTerminal = (s.stage_name || "").toLowerCase().indexOf("complete") !== -1;
+    let cls = "", badge = "Waiting", badgeCls = "";
+    if(completed){ cls = "done"; badge = "Done"; badgeCls = "done"; }
+    else if(rejected && idx === currentIdx){ cls = "declined"; badge = "Declined"; badgeCls = "declined"; }
+    else if(idx < currentIdx){ cls = "done"; badge = "Approved"; badgeCls = "done"; }
+    else if(idx === currentIdx){
+      if(withdrawn){ cls = ""; badge = "Withdrawn"; badgeCls = ""; }
+      else { cls = "current"; badge = "In progress"; badgeCls = "current"; }
+    }
+
+    const assignees = ASSIGNEES_BY_STAGE[String(s.id)] || [];
+    let peopleHtml = "";
+    if(!assignees.length){
+      peopleHtml = "<div class='ts-none'>" + (isTerminal ? "Final stage — the request ends here." : "No approver assigned to this stage.") + "</div>";
+    } else {
+      peopleHtml = assignees.map(empId => {
+        const act = actByStageEmp[String(s.id) + ":" + String(empId)];
+        const name = EMP_NAME[String(empId)] || ("#" + empId);
+        let stateCls = "idle", stateTxt = "", when = "", comment = "";
+        if(act && act.action === "approve"){ stateCls = "approve"; stateTxt = "✓ Approved"; when = fmtWhen(act.action_date); comment = act.comment; }
+        else if(act && act.action === "decline"){ stateCls = "decline"; stateTxt = "✕ Declined"; when = fmtWhen(act.action_date); comment = act.comment; }
+        else if(act && act.action === "withdraw"){ stateCls = "idle"; stateTxt = "Withdrawn"; when = fmtWhen(act.action_date); comment = act.comment; }
+        else if(completed || idx < currentIdx){ stateCls = "idle"; stateTxt = "Did not act"; }
+        else if(idx === currentIdx){
+          if(rejected){ stateCls = "idle"; stateTxt = "Did not act"; }
+          else if(withdrawn){ stateCls = "idle"; stateTxt = "—"; }
+          else { stateCls = "wait"; stateTxt = "⏳ Waiting"; }
+        }
+        else { stateCls = "idle"; stateTxt = "Not reached yet"; }
+        return "<div class='ts-person'>" +
+          "<span class='tp-name'>" + esc(name) + "</span>" +
+          "<span class='tp-state " + stateCls + "'>" + stateTxt + "</span>" +
+          (when ? "<span class='tp-when'>" + esc(when) + "</span>" : "") +
+          (comment ? "<span class='tp-comment'>" + esc(comment) + "</span>" : "") +
+        "</div>";
+      }).join("");
+    }
+
+    html += "<div class='trail-stage " + cls + "'>" +
+      "<div class='ts-dot'></div>" +
+      "<div class='ts-body'>" +
+        "<div class='ts-head'><span class='ts-name'>Stage " + (idx + 1) + " · " + esc(s.stage_name) + "</span>" +
+          "<span class='ts-badge " + badgeCls + "'>" + esc(badge) + "</span></div>" +
+        "<div class='ts-people'>" + peopleHtml + "</div>" +
+      "</div>" +
+    "</div>";
+  });
+  html += "</div>";
+  panel.innerHTML = html;
+}
+window.renderTrail = renderTrail;
+
+async function withdraw(requestId){
+  if(!confirm("Withdraw this request? It will move back to draft for you to edit and resubmit.")) return;
+  try{
+    const { error } = await sb.rpc("abuja_withdraw_request", { p_request_id: requestId, p_reason: null });
+    if(error) throw error;
+    await loadRequests();
+  }catch(e){ alert("Could not withdraw: " + (e.message || e)); }
+}
+window.withdraw = withdraw;
+
+function renderEditPanel(panel, r){
+  if(!panel) return;
+  STAGED_FILES[r.id] = { request_form: [], other_document: [], pre_former_invoice: [], pre_former_invoice2: [] };
+  panel.innerHTML = `
+    <div class="field"><label>Title *</label><input id="et-title-${r.id}" value="${(r.title||"").replace(/"/g,'&quot;')}"></div>
+    <div class="field"><label>Description</label><textarea id="et-desc-${r.id}">${r.description || ""}</textarea></div>
+    <div class="form-row">
+      <div class="field">
+        <label>Total Amount *</label>
+        <div class="amount-row">
+          <input type="number" step="0.01" id="et-amount-${r.id}" value="${r.total_amount}">
+          <select id="et-currency-${r.id}">
+            <option value="NGN" ${r.currency === "NGN" ? "selected" : ""}>NGN</option>
+            <option value="USD" ${r.currency === "USD" ? "selected" : ""}>USD</option>
+          </select>
+        </div>
+      </div>
+      <div class="field"><label>Project Duration in Days *</label><input type="number" min="1" id="et-duration-${r.id}" value="${r.project_duration_days}"></div>
+    </div>
+    <div class="field">
+      <label>Add / Replace Attachments (optional — leave blank to keep what you already submitted)</label>
+      <div class="dropzone" data-req="${r.id}" data-target="request_form" data-multi="false">
+        <div class="dz-action">Upload file — Request form</div>
+        <div class="dz-hint">Drag and drop file or paste from clipboard</div>
+        <input type="file">
+      </div>
+      <div class="file-list" data-list="${r.id}-request_form"></div>
+      <div class="dropzone" style="margin-top:8px;" data-req="${r.id}" data-target="other_document" data-multi="true">
+        <div class="dz-action">Upload files — Other Relevant Document</div>
+        <div class="dz-hint">Drag and drop files or paste from clipboard</div>
+        <input type="file" multiple>
+      </div>
+      <div class="file-list" data-list="${r.id}-other_document"></div>
+      <div class="dropzone" style="margin-top:8px;" data-req="${r.id}" data-target="pre_former_invoice" data-multi="false">
+        <div class="dz-action">Upload file — Pre-former Invoice</div>
+        <div class="dz-hint">Drag and drop file or paste from clipboard</div>
+        <input type="file">
+      </div>
+      <div class="file-list" data-list="${r.id}-pre_former_invoice"></div>
+    </div>
+    <button onclick="resubmit('${r.id}')">Resubmit Request</button>
+    <div class="status" id="et-status-${r.id}"></div>
+  `;
+  wireDropzonesFor(panel, r.id);
+}
+
+function wireDropzonesFor(container, requestId){
+  container.querySelectorAll(".dropzone").forEach(zone=>{
+    const key = zone.getAttribute("data-target");
+    const multi = zone.getAttribute("data-multi") === "true";
+    const input = zone.querySelector("input[type=file]");
+    zone.addEventListener("click", ()=>input.click());
+    input.addEventListener("change", e => stageFiles(requestId, key, multi, e.target.files));
+    zone.addEventListener("dragover", e => { e.preventDefault(); zone.classList.add("drag"); });
+    zone.addEventListener("dragleave", () => zone.classList.remove("drag"));
+    zone.addEventListener("drop", e => { e.preventDefault(); zone.classList.remove("drag"); stageFiles(requestId, key, multi, e.dataTransfer.files); });
+    zone.addEventListener("paste", e => { const items = (e.clipboardData || {}).files; if(items && items.length) stageFiles(requestId, key, multi, items); });
+  });
+}
+function stageFiles(requestId, key, multi, fileList){
+  const files = Array.from(fileList || []);
+  if(!files.length) return;
+  if(multi) STAGED_FILES[requestId][key].push(...files); else STAGED_FILES[requestId][key] = [files[0]];
+  renderFileList(requestId, key);
+}
+function renderFileList(requestId, key){
+  const wrap = document.querySelector(`.file-list[data-list="${requestId}-${key}"]`);
+  if(!wrap) return;
+  wrap.innerHTML = STAGED_FILES[requestId][key].map((f, i) =>
+    `<div class="file-chip"><span>${esc(f.name)}</span><button class="fc-remove" onclick="removeStagedFile('${requestId}','${key}',${i})">&times;</button></div>`).join("");
+}
+function removeStagedFile(requestId, key, idx){ STAGED_FILES[requestId][key].splice(idx, 1); renderFileList(requestId, key); }
+window.removeStagedFile = removeStagedFile;
+
+async function resubmit(requestId){
+  const status = document.getElementById(`et-status-${requestId}`);
+  const title = document.getElementById(`et-title-${requestId}`).value.trim();
+  const description = document.getElementById(`et-desc-${requestId}`).value.trim() || null;
+  const amount = document.getElementById(`et-amount-${requestId}`).value;
+  const currency = document.getElementById(`et-currency-${requestId}`).value;
+  const duration = document.getElementById(`et-duration-${requestId}`).value;
+
+  if(!title || amount === "" || !duration){
+    status.className = "status err"; status.textContent = "Title, Total Amount and Project Duration are required."; return;
+  }
+  const requiresRequestForm = !STAGED_FILES[requestId].request_form.length;
+  if(requiresRequestForm){
+    const { count } = await sb.from("abuja_request_attachments").select("id", { count:"exact", head:true }).eq("request_id", requestId).eq("field_key", "request_form");
+    if(!count){ status.className = "status err"; status.textContent = "Request form is required — upload one before resubmitting."; return; }
+  }
+
+  status.className = "status"; status.textContent = "Resubmitting...";
+  try{
+    for(const key of Object.keys(STAGED_FILES[requestId])){
+      for(const file of STAGED_FILES[requestId][key]){
+        const path = `abuja/${requestId}/${key}/${Date.now()}_${file.name}`;
+        const { error: upErr } = await sb.storage.from("request-attachments").upload(path, file);
+        if(upErr) throw upErr;
+        const { data: pub } = sb.storage.from("request-attachments").getPublicUrl(path);
+        await sb.from("abuja_request_attachments").insert({ request_id: requestId, field_key: key, file_name: file.name, file_url: pub.publicUrl, uploaded_by: MY_EMPLOYEE_REF_ID });
+      }
+    }
+    const { error: updErr } = await sb.from("abuja_requests").update({ title, description, total_amount: Number(amount), currency, project_duration_days: Number(duration) }).eq("id", requestId);
+    if(updErr) throw updErr;
+    const { error: rpcErr } = await sb.rpc("abuja_resubmit_request", { p_request_id: requestId });
+    if(rpcErr) throw rpcErr;
+    status.className = "status ok"; status.textContent = "✅ Resubmitted — back at Task-Force Check.";
+    setTimeout(loadRequests, 700);
+  }catch(e){ status.className = "status err"; status.textContent = "❌ " + (e.message || e); }
+}
+window.resubmit = resubmit;
+
+init();
+</script>
+</body>
+</html>

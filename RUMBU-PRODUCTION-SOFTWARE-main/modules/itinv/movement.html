@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>IT Inventory — Movement</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;color:var(--text);}
+  .wrap{max-width:1150px;margin:0 auto;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;}
+  .card h3{color:var(--navy);margin:0 0 4px;font-size:16px;}
+  .card .sub{color:var(--blue);font-size:12px;margin:0 0 14px;}
+  label{display:block;font-size:12px;font-weight:bold;color:var(--text);margin:10px 0 4px;}
+  input,textarea,select{width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;}
+  textarea{resize:vertical;min-height:50px;}
+  .row{display:flex;gap:12px;flex-wrap:wrap;}
+  .row > div{flex:1;min-width:170px;}
+  button{padding:10px 14px;border:none;border-radius:8px;font-weight:bold;font-size:13px;cursor:pointer;background:var(--blue);color:#fff;}
+  button:hover{background:var(--blue-dark);}
+  .status{margin-top:10px;font-weight:bold;font-size:13px;min-height:16px;}
+  .status.ok{color:var(--green);} .status.err{color:var(--red);}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;}
+  table{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px;}
+  th,td{border:1px solid var(--line);padding:7px 9px;text-align:left;vertical-align:top;}
+  thead th{background:var(--navy);color:#fff;font-size:12px;}
+  tbody tr:nth-child(even){background:#f6f8fb;}
+  .fromto{font-size:12px;} .fromto b{color:var(--navy);}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<div id="connStatus">Loading...</div>
+
+<div id="appArea" style="display:none;">
+  <div class="card">
+    <h3>Log a Device Movement</h3>
+    <p class="sub">Moving a device updates its current branch, department, unit and location on the register.</p>
+    <div class="row">
+      <div><label>Device</label><select id="device" onchange="onDeviceChange()"></select></div>
+      <div><label>Reason</label><input type="text" id="reason" placeholder="e.g. Office relocation"></div>
+    </div>
+    <div id="currentBox" style="font-size:12px;color:#6b7280;margin-top:6px;"></div>
+
+    <h3 style="margin-top:16px;">Move To</h3>
+    <div class="row">
+      <div><label>Branch</label><select id="toBranch" onchange="onToBranchChange()"></select></div>
+      <div><label>Department</label><select id="toDept" onchange="onToDeptChange()"></select></div>
+      <div><label>Unit</label><select id="toUnit"></select></div>
+      <div><label>Location detail</label><input type="text" id="toLocation" placeholder="e.g. Room 12"></div>
+    </div>
+    <div class="row">
+      <div><label>Moved by</label><input type="text" id="movedBy"></div>
+      <div><label>Authorised by</label><input type="text" id="authBy"></div>
+    </div>
+    <label>Notes</label>
+    <textarea id="notes"></textarea>
+    <div style="margin-top:12px;"><button onclick="saveMove()">Record Movement</button></div>
+    <div class="status" id="formStatus"></div>
+  </div>
+
+  <div class="card">
+    <h3>Movement History</h3>
+    <div class="row">
+      <div><label>Search (device / branch / person)</label><input type="text" id="search" placeholder="Type to filter" oninput="applyFilters()"></div>
+      <div style="flex:0 0 auto;"><label>&nbsp;</label><button onclick="loadHistory()">Refresh</button></div>
+    </div>
+    <div class="status" id="listStatus"></div>
+    <div id="tableWrap"></div>
+  </div>
+</div>
+</div>
+
+<script>
+let ME = null;
+let DEVICES = [], DEPTS = [], UNITS = [], BRANCHES = [], MOVES = [];
+
+async function logActivity(actionType, description){
+  try{
+    await sb.from("activity_log").insert({
+      actor_id: ME.id, actor_username: ME.username, actor_role: ME.role,
+      section_id: ME.sectionId, action_type: actionType, description: description
+    });
+  }catch(e){ console.warn("Activity log write failed (non-fatal):", e); }
+}
+function myBranches(){
+  if(ME.role === "super_admin") return BRANCHES.slice();
+  return (ME.sectionNames || []).filter(b => BRANCHES.indexOf(b) !== -1);
+}
+function deviceLabel(d){ return d.device_code + " — " + [d.make,d.model].filter(Boolean).join(" ") + (d.serial_number?(" ("+d.serial_number+")"):""); }
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    status.style.color = "#1d8a4e"; status.textContent = "Connected.";
+    document.getElementById("appArea").style.display = "block";
+    await loadRef();
+    await loadDevices();
+    await loadHistory();
+  }catch(e){
+    status.style.color = "#c0392b"; status.textContent = "❌ " + e.message; console.error(e);
+  }
+}
+
+async function loadRef(){
+  const [sec, dep, un] = await Promise.all([
+    sb.from("app_sections").select("name").order("name"),
+    sb.from("it_ref_departments").select("*").order("name"),
+    sb.from("it_ref_units").select("*").order("name")
+  ]);
+  BRANCHES = (sec.data||[]).map(s=>s.name);
+  DEPTS = dep.data||[]; UNITS = un.data||[];
+  fillSelect("toBranch", myBranches(), false);
+  onToBranchChange();
+}
+
+async function loadDevices(){
+  let q = sb.from("it_devices").select("*").order("device_code");
+  if(ME.role !== "super_admin"){
+    if(ME.sectionNames && ME.sectionNames.length){ q = q.in("branch", ME.sectionNames); }
+    else { q = q.eq("branch","___none___"); }
+  }
+  const { data } = await q;
+  DEVICES = data||[];
+  const sel = document.getElementById("device");
+  sel.innerHTML = "";
+  DEVICES.forEach(d=>{ const o=document.createElement("option"); o.value=d.id; o.textContent=deviceLabel(d); sel.appendChild(o); });
+  onDeviceChange();
+}
+
+function fillSelect(id, values, allowBlank){
+  const sel = document.getElementById(id);
+  const prev = sel.value;
+  sel.innerHTML = "";
+  if(allowBlank){ const o=document.createElement("option"); o.value=""; o.textContent="—"; sel.appendChild(o); }
+  values.forEach(v=>{ const o=document.createElement("option"); o.value=v; o.textContent=v; sel.appendChild(o); });
+  if(prev && values.indexOf(prev)!==-1) sel.value = prev;
+}
+
+function currentDevice(){ return DEVICES.find(d=>String(d.id)===document.getElementById("device").value); }
+
+function onDeviceChange(){
+  const d = currentDevice();
+  const box = document.getElementById("currentBox");
+  if(!d){ box.textContent=""; return; }
+  box.innerHTML = "Currently at: <b>"+[d.branch,d.department,d.unit,d.location_detail].filter(Boolean).join(" › ")+"</b>";
+}
+
+function onToBranchChange(){
+  const b = document.getElementById("toBranch").value;
+  fillSelect("toDept", DEPTS.filter(d=>d.branch===b).map(d=>d.name), true);
+  onToDeptChange();
+}
+function onToDeptChange(){
+  const b = document.getElementById("toBranch").value;
+  const dp = document.getElementById("toDept").value;
+  fillSelect("toUnit", UNITS.filter(u=>u.branch===b && u.department===dp).map(u=>u.name), true);
+}
+
+async function nextCode(){
+  const { data, error } = await sb.from("it_movement").select("move_code").like("move_code","MOV-%").order("move_code",{ascending:false}).limit(1);
+  if(error) throw error;
+  let seq=1; if(data&&data.length){ seq=parseInt(data[0].move_code.slice(4),10)+1; }
+  return "MOV-"+String(seq).padStart(5,"0");
+}
+
+async function saveMove(){
+  const status = document.getElementById("formStatus");
+  const d = currentDevice();
+  if(!d){ status.className="status err"; status.textContent="Select a device."; return; }
+  const g=id=>document.getElementById(id).value.trim();
+  const toBranch = g("toBranch");
+  if(!toBranch){ status.className="status err"; status.textContent="Destination branch is required."; return; }
+  if(ME.role!=="super_admin" && (ME.sectionNames||[]).indexOf(toBranch)===-1){
+    status.className="status err"; status.textContent="You cannot move a device to a branch you are not assigned to."; return;
+  }
+
+  status.className="status"; status.textContent="Saving...";
+  try{
+    const code = await nextCode();
+    const move = {
+      move_code: code, device_id: d.id, device_label: deviceLabel(d),
+      branch: toBranch,
+      from_branch: d.branch, from_department: d.department, from_unit: d.unit, from_location: d.location_detail,
+      to_branch: toBranch, to_department: g("toDept")||null, to_unit: g("toUnit")||null, to_location: g("toLocation")||null,
+      moved_by: g("movedBy")||null, authorised_by: g("authBy")||null, reason: g("reason")||null, notes: g("notes")||null
+    };
+    const { error: mErr } = await sb.from("it_movement").insert(move);
+    if(mErr) throw mErr;
+
+    // update device current location
+    const { error: dErr } = await sb.from("it_devices").update({
+      branch: toBranch, department: g("toDept")||null, unit: g("toUnit")||null, location_detail: g("toLocation")||null
+    }).eq("id", d.id);
+    if(dErr) throw dErr;
+
+    await logActivity("it_device_moved", ME.username+" moved "+d.device_code+" to "+[toBranch,g("toDept"),g("toUnit")].filter(Boolean).join(" › "));
+    status.className="status ok"; status.textContent="✅ Movement "+code+" recorded and device location updated.";
+    ["reason","toLocation","movedBy","authBy","notes"].forEach(id=>document.getElementById(id).value="");
+    await loadDevices();
+    await loadHistory();
+  }catch(e){
+    status.className="status err"; status.textContent="❌ "+e.message;
+  }
+}
+
+async function loadHistory(){
+  const status = document.getElementById("listStatus");
+  status.className="status"; status.textContent="Loading...";
+  try{
+    let q = sb.from("it_movement").select("*").order("move_date",{ascending:false});
+    if(ME.role!=="super_admin"){
+      if(ME.sectionNames && ME.sectionNames.length){ q = q.in("branch", ME.sectionNames); }
+      else { q = q.eq("branch","___none___"); }
+    }
+    const { data, error } = await q;
+    if(error) throw error;
+    MOVES = data||[];
+    status.className="status ok"; status.textContent=MOVES.length+" movement(s).";
+    applyFilters();
+  }catch(e){ status.className="status err"; status.textContent="❌ "+e.message; }
+}
+
+function applyFilters(){
+  const s = document.getElementById("search").value.trim().toLowerCase();
+  let rows = MOVES.slice();
+  if(s){
+    rows = rows.filter(r =>
+      (r.device_label||"").toLowerCase().includes(s) ||
+      (r.to_branch||"").toLowerCase().includes(s) ||
+      (r.from_branch||"").toLowerCase().includes(s) ||
+      (r.moved_by||"").toLowerCase().includes(s));
+  }
+  render(rows);
+}
+
+function loc(b,d,u,l){ return [b,d,u,l].filter(Boolean).join(" › ") || "—"; }
+
+function render(rows){
+  const wrap = document.getElementById("tableWrap");
+  if(!rows.length){ wrap.innerHTML="<p>No movements match.</p>"; return; }
+  let html = "<table><thead><tr><th>Code</th><th>Date</th><th>Device</th><th>From → To</th><th>Reason</th><th>By</th></tr></thead><tbody>";
+  rows.forEach(r=>{
+    html += "<tr>" +
+      `<td>${r.move_code||""}</td>` +
+      `<td>${r.move_date?new Date(r.move_date).toLocaleDateString():""}</td>` +
+      `<td>${r.device_label||""}</td>` +
+      `<td class="fromto">${loc(r.from_branch,r.from_department,r.from_unit,r.from_location)}<br>→ <b>${loc(r.to_branch,r.to_department,r.to_unit,r.to_location)}</b></td>` +
+      `<td>${r.reason||""}</td>` +
+      `<td>${r.moved_by||""}</td>` +
+    "</tr>";
+  });
+  html += "</tbody></table>";
+  wrap.innerHTML = html;
+}
+
+init();
+</script>
+</body>
+</html>

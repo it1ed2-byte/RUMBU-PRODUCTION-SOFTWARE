@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Training Form</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+body { font-family:var(--sans); background: linear-gradient(135deg,#eef2f9,#f7f9fc); margin:0; padding:15px; display:flex; justify-content:center; min-height:100vh; }
+.box { width:100%; max-width:480px; background:var(--card); padding:22px; border-radius:14px; box-shadow:0 10px 25px rgba(0,0,0,.08); }
+h3 { text-align:center; }
+label { font-size:13px; font-weight:600; margin-top:10px; display:block; }
+input, select { width:100%; padding:12px; margin-top:5px; border-radius:10px; border:1px solid var(--line); box-sizing:border-box; }
+input.readonly { background:var(--bg); }
+button { width:100%; padding:14px; margin-top:18px; border:none; border-radius:10px; background:green; color:#fff; font-weight:bold; cursor:pointer; }
+button:disabled { opacity:.6; cursor:not-allowed; }
+.gate-note { text-align:center; font-size:12px; color:#888; margin-top:10px; }
+.hidden { display:none; }
+#status { font-size:12px; text-align:center; font-weight:bold; margin-bottom:8px; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+</head>
+<body>
+
+<div class="box" id="statusBox"><div id="status">Checking your session...</div></div>
+
+<div class="box hidden" id="formBox">
+<h3>Training Form</h3>
+
+<label>Staff ID</label>
+<input id="staffId" onblur="loadStaff()">
+<label>Staff Name</label>
+<input id="staffName" class="readonly" readonly>
+<label>Department</label>
+<input id="department" class="readonly" readonly>
+<label>Rank</label>
+<select id="rank" onchange="handleRankChange()"></select>
+<label>Section</label>
+<input id="section" class="readonly" readonly>
+<label>Training Code</label>
+<input id="trainingCode" class="readonly" readonly>
+<label>Description</label>
+<input id="description" class="readonly" readonly>
+<label>Date</label>
+<input id="date" class="readonly" readonly>
+
+<button id="submitBtn" onclick="submitForm()">SUBMIT</button>
+</div>
+
+<script>
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY, "Content-Type": "application/json" }; }
+
+let STAFF_ROWS = [], TRAINING_CODE_ROWS = [], TRAINING_TABLE_ROWS = [];
+
+// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
+async function fetchAllRows(table, query){
+  let all = [], offset = 0; const pageSize = 1000;
+  const q = query || "";
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=*" + q, { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+
+
+async function init(){
+  const status = document.getElementById("status");
+  try{
+    const me = await requireAuth("../../login.html");
+    if(!me) return;
+
+    const [staffRes, codeRes, trainRes] = await Promise.all([
+      fetchAllRows("staff_list",""),
+      fetchAllRows("training_code",""),
+      fetchAllRows("training_table","")
+    ]);
+    STAFF_ROWS = staffRes;
+    TRAINING_CODE_ROWS = codeRes;
+    TRAINING_TABLE_ROWS = trainRes;
+    document.getElementById("statusBox").classList.add("hidden");
+    document.getElementById("formBox").classList.remove("hidden");
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+function lockButton(){ const b=document.getElementById("submitBtn"); b.disabled=true; b.innerText="Saving..."; }
+function unlockButton(){ const b=document.getElementById("submitBtn"); b.disabled=false; b.innerText="SUBMIT"; }
+
+function getStaffDetails(staffId){
+  const row = STAFF_ROWS.find(r => String(r.staff_id||"").trim().toUpperCase() === String(staffId||"").trim().toUpperCase());
+  if(!row) return { status: "NOT_REGISTERED" };
+  return { status: "FOUND", Staff_Name: row.staff_name, Department: row.department, Section: row.section };
+}
+
+// Fixed UTC+1 (WAT) "today", matching the original's Africa/Lagos date.
+function nigeriaDateISO(){
+  const now = new Date();
+  const utcMs = now.getTime() + now.getTimezoneOffset()*60000;
+  const wat = new Date(utcMs + 1*3600000);
+  const y = wat.getFullYear(), m = String(wat.getMonth()+1).padStart(2,"0"), d = String(wat.getDate()).padStart(2,"0");
+  return y+"-"+m+"-"+d;
+}
+
+function loadStaff(){
+  const staffId = document.getElementById("staffId").value;
+  if(!staffId) return;
+  const staff = getStaffDetails(staffId);
+  if(!staff || staff.status === "NOT_REGISTERED"){ alert("Staff not found"); return; }
+
+  document.getElementById("staffName").value = staff.Staff_Name || "";
+  document.getElementById("department").value = staff.Department || "";
+  document.getElementById("section").value = staff.Section || "";
+  document.getElementById("date").value = nigeriaDateISO();
+  updateRankOptions(staff.Department);
+}
+
+function updateRankOptions(dept){
+  const rankSelect = document.getElementById("rank");
+  let options = [];
+  if(dept === "WEAVING") options = ["Junior Operator","Operator","Senior Operator"];
+  else if(dept === "EXTRUDER") options = ["Packer","Operator"];
+  else if(dept === "MAT FINISHING") options = ["Training Trimmer","Trimmer","Senior Trimmer","Training Folgers","Training sorters","Training tailors","Training Arrangers","Training packers","Training suppliers","Training Cutters","Cutter","Senior Cutter"];
+  else if(dept === "RECYCLING") options = ["Packer","Crusher","Operator"];
+  else if(dept === "PIPE FINISHING") options = ["Suppliers","Wrapper"];
+  else options = ["Level 1","Level 2","Level 3"];
+
+  rankSelect.innerHTML = '<option value="">Select Rank</option>';
+  options.forEach(r=>{ const o=document.createElement("option"); o.value=r; o.textContent=r; rankSelect.appendChild(o); });
+  document.getElementById("trainingCode").value = "";
+  document.getElementById("description").value = "";
+}
+
+function handleRankChange(){
+  const rank = document.getElementById("rank").value;
+  if(!rank) return;
+  loadTraining();
+}
+
+function getNextTrainingByRank(staffId, rank){
+  const staff = getStaffDetails(staffId);
+  if(!staff || staff.status === "NOT_REGISTERED") return { code:"", description:"Staff not found" };
+
+  const staffTrainings = TRAINING_TABLE_ROWS.filter(r =>
+    r.staff_id === staffId && r.department === staff.Department && r.rank === rank
+  );
+  const lastCodeId = staffTrainings.length
+    ? Math.max(...staffTrainings.map(r => Number(r.code_id) || 0))
+    : 0;
+
+  const candidates = TRAINING_CODE_ROWS
+    .filter(r => r.department === staff.Department && r.rank === rank && Number(r.id) > lastCodeId)
+    .sort((a,b) => Number(a.id) - Number(b.id));
+
+  if(!candidates.length) return { code: "TRAINING COMPLETED", description: "No more training for this rank" };
+  return { code: candidates[0].code, description: candidates[0].description };
+}
+
+function loadTraining(){
+  const staffId = document.getElementById("staffId").value;
+  const rank = document.getElementById("rank").value;
+  if(!staffId){ alert("Enter Staff ID first"); return; }
+  if(!rank) return;
+
+  const training = getNextTrainingByRank(staffId, rank);
+  if(!training || !training.code){ alert("No training found"); return; }
+  document.getElementById("trainingCode").value = training.code;
+  document.getElementById("description").value = training.description;
+}
+
+async function submitForm(){
+  const data = {
+    staffId: document.getElementById("staffId").value,
+    staffName: document.getElementById("staffName").value,
+    department: document.getElementById("department").value,
+    rank: document.getElementById("rank").value,
+    section: document.getElementById("section").value,
+    trainingCode: document.getElementById("trainingCode").value,
+    description: document.getElementById("description").value,
+    date: document.getElementById("date").value
+  };
+
+  if(!data.rank || !data.trainingCode){ alert("Fill all fields"); return; }
+
+  lockButton();
+  try{
+    const staff = getStaffDetails(data.staffId);
+    if(!staff || staff.status === "NOT_REGISTERED"){ alert("❌ Staff not found"); unlockButton(); return; }
+
+    const dup = TRAINING_TABLE_ROWS.some(r => r.staff_id === data.staffId && r.training_code === data.trainingCode);
+    if(dup){ alert("❌ Already recorded"); unlockButton(); return; }
+
+    const codeRow = TRAINING_CODE_ROWS.find(r => r.code === data.trainingCode);
+    if(!codeRow){ alert("❌ Invalid Code"); unlockButton(); return; }
+
+    const row = {
+      staff_id: data.staffId, staff_name: data.staffName, department: data.department,
+      section: data.section, rank: data.rank, training_code: data.trainingCode,
+      code_id: codeRow.id, descriptions: data.description, date_col: data.date,
+      created_at: new Date().toISOString()
+    };
+    const res = await fetch(SUPABASE_URL + "/rest/v1/training_table", {
+      method: "post", headers: authHeaders(), body: JSON.stringify(row)
+    });
+    if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
+
+    TRAINING_TABLE_ROWS.push(row);
+    alert("✅ Saved Successfully");
+    document.getElementById("trainingCode").value = "";
+    document.getElementById("description").value = "";
+  }catch(e){
+    alert("Error: " + (e.message||e));
+  }finally{
+    unlockButton();
+  }
+}
+
+init();
+</script>
+</body>
+</html>

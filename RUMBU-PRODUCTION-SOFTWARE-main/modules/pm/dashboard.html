@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>PM Dashboard</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="../../assets/letterhead.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1180px;margin:0 auto;}
+  #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);}
+  .toolbar{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px;}
+  .toolbar .f.min{flex:0 0 auto;min-width:160px;}
+  .muted{color:var(--muted);font-size:12px;}
+
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px;}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:15px 16px;box-shadow:0 1px 2px rgba(0,0,0,.04);cursor:default;}
+  .kpi.link{cursor:pointer;transition:.12s;}
+  .kpi.link:hover{border-color:var(--accent);box-shadow:0 2px 10px rgba(0,0,0,.06);}
+  .kpi .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);font-weight:700;}
+  .kpi .v{font-size:28px;font-weight:800;color:var(--heading);margin-top:4px;line-height:1;}
+  .kpi .s{font-size:12px;color:var(--muted);margin-top:4px;}
+  .kpi.good .v{color:var(--ok);} .kpi.warn .v{color:var(--warn);} .kpi.bad .v{color:var(--bad);}
+
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+  @media(max-width:820px){ .grid2{grid-template-columns:1fr;} }
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.04);}
+  .card h3{margin:0 0 2px;color:var(--heading);font-size:14px;font-weight:800;text-transform:uppercase;letter-spacing:.3px;}
+  .card .sub{color:var(--muted);font-size:12px;margin:0 0 12px;}
+
+  table.rep{width:100%;border-collapse:collapse;font-size:13px;}
+  table.rep th,table.rep td{padding:8px 9px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;}
+  table.rep th{font-size:10.5px;text-transform:uppercase;letter-spacing:.3px;color:var(--muted);}
+  table.rep td.num,table.rep th.num{text-align:center;white-space:nowrap;}
+
+  .tag{display:inline-block;font-size:11px;font-weight:700;padding:2px 9px;border-radius:20px;white-space:nowrap;}
+  .tag.overdue{background:rgba(176,42,55,.14);color:var(--bad);}
+  .tag.soon{background:rgba(154,107,0,.14);color:var(--warn);}
+  .tag.bad{background:rgba(176,42,55,.14);color:var(--bad);}
+  .days{font-weight:700;}
+  .days.over{color:var(--bad);} .days.soon{color:var(--warn);}
+
+  .ql-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;}
+  a.ql{display:block;text-decoration:none;background:var(--bg);border:1px solid var(--line-2);border-radius:10px;padding:12px 14px;color:var(--heading);font-weight:700;font-size:13px;transition:.12s;}
+  a.ql:hover{border-color:var(--accent);background:var(--card);}
+  a.ql small{display:block;font-weight:500;color:var(--muted);font-size:11.5px;margin-top:3px;}
+
+  .empty{padding:18px;text-align:center;color:var(--muted);font-size:12.5px;}
+  .noaccess{color:var(--bad);font-weight:bold;text-align:center;padding:30px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<button class="no-print" onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:240px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back to Dashboard</button>
+<div id="connStatus">Loading...</div>
+
+<div id="appArea" style="display:none;">
+  <div class="toolbar">
+    <div class="f min" id="branchWrap" style="display:none;"><label>Branch</label><select id="fBranch" onchange="renderDash()"><option value="">All allowed</option></select></div>
+    <div class="f min"><label>Due-soon window</label><select id="fWindow" onchange="renderDash()">
+      <option value="7">Next 7 days</option>
+      <option value="14">Next 14 days</option>
+      <option value="30" selected>Next 30 days</option>
+    </select></div>
+    <div class="muted" id="asOf" style="margin-left:auto;align-self:center;"></div>
+  </div>
+
+  <div class="kpis" id="kpis"></div>
+
+  <div class="grid2">
+    <div class="card">
+      <h3>Needs attention — due &amp; overdue</h3>
+      <p class="sub">PM jobs past due or coming due. Handle these from Due &amp; Reassign.</p>
+      <div id="attnWrap"></div>
+    </div>
+    <div class="card">
+      <h3>Recent issues — Bad recorded</h3>
+      <p class="sub">Latest completed checks where a part was marked Bad.</p>
+      <div id="issuesWrap"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>By branch</h3>
+    <p class="sub">PM workload and status across branches.</p>
+    <div id="branchWrapTbl"></div>
+  </div>
+
+  <div class="card">
+    <h3>Quick links</h3>
+    <div class="ql-grid">
+      <a class="ql" href="initiate-policy.html">Initiate Policy<small>Assign a PM to a specialist</small></a>
+      <a class="ql" href="due-reassign.html">Due &amp; Reassign<small>Renew due policies</small></a>
+      <a class="ql" href="fill-checklist.html">Fill Checklist<small>Specialists record results</small></a>
+      <a class="ql" href="pm-report.html">PM Report<small>Analyse an asset</small></a>
+      <a class="ql" href="specialists.html">Specialists<small>Who attended what</small></a>
+      <a class="ql" href="view-policy.html">View Policies<small>Policy library</small></a>
+      <a class="ql" href="add-policy.html">Add Policy<small>Create a new policy</small></a>
+    </div>
+  </div>
+</div>
+
+<div id="noAccess" class="noaccess" style="display:none;">You do not have a branch assigned, so the PM dashboard cannot be shown.</div>
+</div>
+
+<script>
+let ME = null, IS_SUPER = false, ALLOWED = null;
+let ALL_JOBS = [], ALL_POLS = [], ITEMS_BY_JOB = {};
+
+function esc(s){ return (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c])); }
+function fmtDate(s){ if(!s) return "—"; try{ return new Date(s).toLocaleDateString(); }catch(e){ return s; } }
+function todayStr(){ const d=new Date(); const p=x=>String(x).padStart(2,"0"); return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate()); }
+function addDaysStr(k){ const d=new Date(todayStr()+"T00:00:00"); d.setDate(d.getDate()+k); const p=x=>String(x).padStart(2,"0"); return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate()); }
+function daysTo(due){ if(!due) return null; const t=new Date(todayStr()+"T00:00:00"); const d=new Date(due+"T00:00:00"); return Math.round((d-t)/86400000); }
+function daysText(due){ const n=daysTo(due); if(n===null) return ""; if(n>0) return "in "+n+"d"; if(n===0) return "today"; return Math.abs(n)+"d late"; }
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    IS_SUPER = (ME.role === "super_admin");
+    ALLOWED = IS_SUPER ? null : (ME.sectionNames || []);
+    if(!IS_SUPER && (!ALLOWED || !ALLOWED.length)){
+      document.getElementById("noAccess").style.display = "block";
+      status.style.color = "var(--ok)"; status.textContent = "Connected."; return;
+    }
+    document.getElementById("appArea").style.display = "block";
+
+    const [{ data: jobs, error: jErr }, { data: pols, error: pErr }] = await Promise.all([
+      sb.from("pm_initiations").select("*").order("initiated_at", { ascending: false }),
+      sb.from("pm_policies").select("id, policy_number, section, unit_name")
+    ]);
+    if(jErr) throw jErr; if(pErr) throw pErr;
+    ALL_JOBS = (jobs||[]).filter(j => IS_SUPER || ALLOWED.indexOf(j.section) !== -1);
+    ALL_POLS = (pols||[]).filter(p => IS_SUPER || ALLOWED.indexOf(p.section) !== -1);
+
+    // Items for the most recent completed jobs (for health + issue flags).
+    const recentCompleted = ALL_JOBS.filter(j => j.status === "Completed")
+      .sort((a,b)=>String(b.completed_at||"").localeCompare(String(a.completed_at||""))).slice(0, 200);
+    if(recentCompleted.length){
+      const ids = recentCompleted.map(j => j.id);
+      const { data: items } = await sb.from("pm_initiation_items").select("initiation_id, result").in("initiation_id", ids);
+      (items||[]).forEach(it => { (ITEMS_BY_JOB[it.initiation_id] = ITEMS_BY_JOB[it.initiation_id] || []).push(it); });
+    }
+
+    const branches = Array.from(new Set(ALL_JOBS.map(j => j.section).filter(Boolean))).sort();
+    if(IS_SUPER || branches.length > 1){
+      document.getElementById("branchWrap").style.display = "";
+      document.getElementById("fBranch").innerHTML = "<option value=''>All allowed</option>" + branches.map(b => `<option value="${esc(b)}">${esc(b)}</option>`).join("");
+    }
+    document.getElementById("asOf").textContent = "As of " + fmtDate(todayStr());
+    renderDash();
+    status.style.color = "var(--ok)"; status.textContent = "Connected.";
+  }catch(e){
+    status.style.color = "var(--bad)"; status.textContent = "Could not load: " + e.message;
+  }
+}
+
+function scopedJobs(){
+  const b = document.getElementById("fBranch") ? document.getElementById("fBranch").value : "";
+  return b ? ALL_JOBS.filter(j => j.section === b) : ALL_JOBS;
+}
+function scopedPols(){
+  const b = document.getElementById("fBranch") ? document.getElementById("fBranch").value : "";
+  return b ? ALL_POLS.filter(p => p.section === b) : ALL_POLS;
+}
+
+function renderDash(){
+  const jobs = scopedJobs();
+  const pols = scopedPols();
+  const t = todayStr();
+  const win = parseInt(document.getElementById("fWindow").value, 10) || 30;
+  const limit = addDaysStr(win);
+
+  const pending = jobs.filter(j => j.status !== "Completed");
+  const overdue = pending.filter(j => j.due_date && j.due_date < t);
+  const dueSoon = pending.filter(j => j.due_date && j.due_date >= t && j.due_date <= limit);
+  const completed = jobs.filter(j => j.status === "Completed");
+  const assets = new Set(jobs.map(j => j.asset).filter(Boolean)).size;
+
+  // Health from recent completed items in scope.
+  let good = 0, bad = 0;
+  completed.forEach(j => (ITEMS_BY_JOB[j.id] || []).forEach(it => { if(it.result==="Good") good++; else if(it.result==="Bad") bad++; }));
+  const evald = good + bad;
+  const health = evald ? Math.round(good/evald*100) + "%" : "—";
+  const healthCls = !evald ? "" : (bad===0 ? "good" : (good/evald >= 0.7 ? "warn" : "bad"));
+
+  document.getElementById("kpis").innerHTML =
+    kpi("Policies", pols.length, "defined", "", null) +
+    kpi("Active jobs", pending.length, "not completed", "", null) +
+    kpi("Due (≤" + win + "d)", dueSoon.length, "coming due", dueSoon.length?"warn":"", "attnWrap") +
+    kpi("Overdue", overdue.length, "past due", overdue.length?"bad":"", "attnWrap") +
+    kpi("Completed", completed.length, "checklists done", "good", null) +
+    kpi("Assets", assets, "under PM", "", null) +
+    kpi("Health", health, evald? (good+" good / "+bad+" bad") : "no data yet", healthCls, null);
+
+  // Needs attention: overdue first, then due-soon, by days-to-due asc.
+  const attn = overdue.concat(dueSoon).sort((a,b) => (daysTo(a.due_date)) - (daysTo(b.due_date)));
+  const aw = document.getElementById("attnWrap");
+  if(!attn.length){ aw.innerHTML = "<div class='empty'>Nothing due or overdue in this window. 👍</div>"; }
+  else {
+    aw.innerHTML = "<div class='table-wrap'><div class='table-scroll'><table class='rep'><thead><tr>" +
+      "<th>Asset</th><th>Policy</th><th>Specialist</th><th>Due</th><th class='num'>When</th><th></th>" +
+      "</tr></thead><tbody>" +
+      attn.slice(0, 30).map(j => {
+        const over = j.due_date && j.due_date < t;
+        return "<tr>" +
+          "<td>" + esc(j.asset) + "<br><span class='muted'>" + esc(j.section||"") + "</span></td>" +
+          "<td>" + esc(j.policy_number) + "</td>" +
+          "<td>" + esc(j.specialist_name || "—") + "</td>" +
+          "<td>" + fmtDate(j.due_date) + "</td>" +
+          "<td class='num'><span class='days " + (over?"over":"soon") + "'>" + daysText(j.due_date) + "</span></td>" +
+          "<td><a class='ql' style='padding:4px 9px;font-size:11.5px;display:inline-block;' href='due-reassign.html'>" + (over?"Reassign":"View") + "</a></td>" +
+          "</tr>";
+      }).join("") +
+      "</tbody></table></div></div>" +
+      (attn.length > 30 ? "<div class='muted' style='margin-top:6px;'>Showing 30 of " + attn.length + ". Open Due &amp; Reassign for the rest.</div>" : "");
+  }
+
+  // Recent issues: completed jobs (with items loaded) that recorded Bad.
+  const issues = completed.filter(j => (ITEMS_BY_JOB[j.id] || []).some(it => it.result === "Bad"))
+    .map(j => ({ j, bad: (ITEMS_BY_JOB[j.id]||[]).filter(it=>it.result==="Bad").length }))
+    .sort((a,b) => String(b.j.completed_at||"").localeCompare(String(a.j.completed_at||"")));
+  const iw = document.getElementById("issuesWrap");
+  if(!issues.length){ iw.innerHTML = "<div class='empty'>No Bad conditions recorded recently. 👍</div>"; }
+  else {
+    iw.innerHTML = "<div class='table-wrap'><div class='table-scroll'><table class='rep'><thead><tr>" +
+      "<th>Asset</th><th>Policy</th><th>Specialist</th><th>Done</th><th class='num'>Bad</th><th></th>" +
+      "</tr></thead><tbody>" +
+      issues.slice(0, 20).map(o => "<tr>" +
+        "<td>" + esc(o.j.asset) + "<br><span class='muted'>" + esc(o.j.section||"") + "</span></td>" +
+        "<td>" + esc(o.j.policy_number) + "</td>" +
+        "<td>" + esc(o.j.specialist_name || "—") + "</td>" +
+        "<td>" + fmtDate(o.j.completed_at) + "</td>" +
+        "<td class='num'><span class='tag bad'>" + o.bad + "</span></td>" +
+        "<td><a class='ql' style='padding:4px 9px;font-size:11.5px;display:inline-block;' href='pm-report.html'>Report</a></td>" +
+        "</tr>").join("") +
+      "</tbody></table></div></div>";
+  }
+
+  // By branch summary.
+  const byB = {};
+  jobs.forEach(j => {
+    const b = j.section || "—";
+    const g = byB[b] || (byB[b] = { branch:b, active:0, due:0, overdue:0, completed:0, assets:new Set() });
+    if(j.status === "Completed") g.completed++; else {
+      g.active++;
+      if(j.due_date && j.due_date < t) g.overdue++;
+      else if(j.due_date && j.due_date <= limit) g.due++;
+    }
+    if(j.asset) g.assets.add(j.asset);
+  });
+  const brows = Object.values(byB).sort((a,b)=> (b.overdue-a.overdue) || (b.due-a.due) || a.branch.localeCompare(b.branch));
+  const bw = document.getElementById("branchWrapTbl");
+  bw.innerHTML = !brows.length ? "<div class='empty'>No PM jobs yet.</div>" :
+    "<div class='table-wrap'><div class='table-scroll'><table class='rep'><thead><tr>" +
+    "<th>Branch</th><th class='num'>Assets</th><th class='num'>Active</th><th class='num'>Due (≤" + win + "d)</th><th class='num'>Overdue</th><th class='num'>Completed</th>" +
+    "</tr></thead><tbody>" +
+    brows.map(g => "<tr>" +
+      "<td><b>" + esc(g.branch) + "</b></td>" +
+      "<td class='num'>" + g.assets.size + "</td>" +
+      "<td class='num'>" + g.active + "</td>" +
+      "<td class='num'>" + (g.due ? "<span class='tag soon'>" + g.due + "</span>" : "0") + "</td>" +
+      "<td class='num'>" + (g.overdue ? "<span class='tag overdue'>" + g.overdue + "</span>" : "0") + "</td>" +
+      "<td class='num'>" + g.completed + "</td>" +
+      "</tr>").join("") +
+    "</tbody></table></div></div>";
+}
+
+function kpi(k, v, s, cls, scrollTo){
+  const linkCls = scrollTo ? " link" : "";
+  const onclick = scrollTo ? " onclick=\"document.getElementById('" + scrollTo + "').scrollIntoView({behavior:'smooth',block:'center'})\"" : "";
+  return "<div class='kpi " + (cls||"") + linkCls + "'" + onclick + "><div class='k'>" + esc(k) + "</div><div class='v'>" + esc(v) + "</div><div class='s'>" + esc(s||"") + "</div></div>";
+}
+
+init();
+</script>
+</body>
+</html>

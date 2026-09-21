@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Overtime — Fill</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;--amber:#d97706;}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:22px 18px;color:var(--text);}
+  .wrap{max-width:920px;margin:0 auto;}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:14px;color:var(--muted);}
+
+  .form-head{text-align:center;margin-bottom:16px;}
+  .form-head .co{font-size:15px;font-weight:800;letter-spacing:.4px;color:var(--navy);}
+  .form-head .ti{font-size:12px;font-weight:700;letter-spacing:2px;color:var(--blue);margin-top:2px;text-transform:uppercase;}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 22px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.04);}
+  .card > h3{color:var(--navy);margin:0 0 2px;font-size:14px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;}
+  .card > .sub{color:var(--muted);font-size:12px;margin:0 0 16px;}
+  h4{color:var(--navy);margin:18px 0 6px;font-size:13px;}
+
+  label{display:block;font-size:11.5px;font-weight:700;color:var(--text);margin:0 0 5px;}
+  input,select,textarea{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;background:var(--card);color:var(--text);}
+  input:focus,select:focus,textarea:focus{outline:2px solid var(--blue);border-color:var(--blue);}
+  input:disabled{background:var(--bg);}
+  textarea{resize:vertical;min-height:60px;}
+  .row{display:flex;gap:12px;flex-wrap:wrap;}
+  .row > div{flex:1;min-width:160px;}
+
+  button{padding:10px 15px;border:none;border-radius:8px;font-weight:700;font-size:13px;cursor:pointer;background:var(--blue);color:#fff;}
+  button:hover{background:var(--blue-dark);}
+  button.mini{padding:6px 11px;font-size:12px;}
+  button.green{background:var(--green);} button.green:hover{background:#166a2c;}
+  button.red{background:var(--red);} button.red:hover{background:#96242e;}
+  button.grey{background:#6b7280;} button.grey:hover{background:#565d68;}
+  .link-btn{background:none;border:none;color:var(--blue);font-weight:700;cursor:pointer;font-size:13px;padding:0;text-decoration:underline;}
+  .toolbar{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:6px;}
+  .toolbar .grow{flex:1;min-width:200px;}
+  .btnbar{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px;}
+  .backbar{margin-bottom:10px;}
+
+  .status{margin-top:10px;font-weight:700;font-size:13px;min-height:16px;}
+  .status.ok{color:var(--green);} .status.err{color:var(--red);}
+  .loading,.empty{font-size:12.5px;color:var(--muted);}
+
+  table{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px;}
+  th,td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top;}
+  thead th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.3px;border-bottom:2px solid var(--line);}
+  tbody tr:hover td{background:var(--bg);}
+  .clickrow{cursor:pointer;}
+
+  .tag{display:inline-block;padding:2px 9px;border-radius:10px;font-size:11px;font-weight:700;color:#fff;}
+  .tag.new{background:var(--amber);}
+  .tag.progress{background:var(--blue);}
+  .tag.rejected{background:var(--red);}
+  .tag.done{background:var(--green);}
+  .tag.mid{background:var(--blue);}
+  .noaccess{color:var(--red);font-weight:bold;text-align:center;padding:30px;}
+  .rejbox{background:#fdecea;border:1px solid var(--red);border-radius:8px;padding:10px 14px;margin-bottom:14px;color:#7a1f1f;font-size:13px;}
+  .infobox{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:13px;line-height:1.7;}
+  .found-name{color:var(--green)!important;font-weight:700;}
+  .not-found{color:var(--red)!important;font-weight:700;}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<div id="connStatus">Loading…</div>
+
+<div class="form-head">
+  <div class="co">Rumbu Industries Limited</div>
+  <div class="ti">Overtime Fill &bull; Step 2</div>
+</div>
+
+<div id="appArea" style="display:none;">
+
+  <!-- ============ QUEUE: incomplete entries only ============ -->
+  <div id="queueView">
+    <div class="card">
+      <h3>Overtime to Fill</h3>
+      <p class="sub" id="scopeNote"></p>
+      <div class="toolbar">
+        <div class="grow"><label>Scope</label><select id="scopeFilter" onchange="loadQueue()"><option value="all">All my assigned scopes</option></select></div>
+        <div style="flex:0 0 auto;"><button class="mini grey" onclick="loadQueue()">Refresh</button></div>
+        <div style="flex:0 0 auto;padding-bottom:8px;"><button class="link-btn" onclick="openCompletedList()">View completed forms →</button></div>
+      </div>
+      <div id="queueWrap"></div>
+    </div>
+  </div>
+
+  <!-- ============ FILL: work on one entry ============ -->
+  <div id="fillView" style="display:none;">
+    <div class="backbar"><button class="mini grey" onclick="backToQueue()">← Back to list</button></div>
+    <div class="card">
+      <h3 id="workTitle">Fill Overtime</h3>
+      <div id="rejBanner"></div>
+      <div id="entryInfo"></div>
+
+      <h4>Employees on this request</h4>
+      <div id="employeesListWrap"></div>
+
+      <h4>Add an Employee</h4>
+      <div class="row">
+        <div><label>Employee ID</label><input type="text" id="empIdInput" placeholder="Type employee ID" oninput="lookupEmployee()"></div>
+        <div><label>Name of Employee</label><input type="text" id="empNameDisplay" disabled></div>
+      </div>
+      <label style="margin-top:10px;">Reason for Overtime</label>
+      <textarea id="reasonInput" placeholder="Why this employee is doing overtime"></textarea>
+      <button class="mini" style="margin-top:10px;" onclick="addEmployeeToEntry()">+ Add Employee</button>
+      <div class="status" id="addStatus"></div>
+
+      <div id="responseNoteWrap" style="display:none;margin-top:8px;">
+        <label>Response to Rejection <span style="color:var(--red);">*</span></label>
+        <textarea id="responseNoteInput" placeholder="Explain what was corrected before resubmitting"></textarea>
+      </div>
+
+      <div class="btnbar">
+        <button class="green" onclick="submitEntry()">Submit for Approval</button>
+        <button onclick="saveAndContinueLater()">Save &amp; Continue Later</button>
+        <button class="grey" onclick="backToQueue()">Cancel</button>
+      </div>
+      <div class="status" id="submitStatus"></div>
+    </div>
+  </div>
+
+  <!-- ============ COMPLETED LIST ============ -->
+  <div id="completedView" style="display:none;">
+    <div class="backbar"><button class="mini grey" onclick="backToQueue()">← Back to Fill list</button></div>
+    <div class="card">
+      <h3>Completed Forms</h3>
+      <p class="sub">Forms you have already submitted. Click any row to view it.</p>
+      <div class="toolbar">
+        <div><label>From Date</label><input type="date" id="fromDate"></div>
+        <div><label>To Date</label><input type="date" id="toDate"></div>
+        <div style="flex:0 0 auto;"><button class="mini grey" onclick="loadCompleted()">Refresh</button></div>
+      </div>
+      <div id="completedWrap"></div>
+    </div>
+  </div>
+
+  <!-- ============ COMPLETED DETAIL (read-only) ============ -->
+  <div id="completedDetailView" style="display:none;">
+    <div class="backbar"><button class="mini grey" onclick="openCompletedList()">← Back to Completed</button></div>
+    <div class="card">
+      <div id="completedDetailBody"></div>
+      <div class="btnbar"><button class="mini" onclick="printCurrentCompleted()">Print / PDF</button></div>
+    </div>
+  </div>
+
+</div>
+
+<div id="noAccess" class="noaccess" style="display:none;">
+  You are not assigned as a Step 2 filler for any Branch/Department. Ask your Super Admin to assign you in Overtime Approver Setup.
+</div>
+</div>
+
+<script>
+let ME = null;
+let MY_SCOPES = [];
+let IS_SUPER_ADMIN_BLANKET = false;
+let EMPLOYEES = [];
+let CURRENT_ENTRY = null;
+let CURRENT_EMPLOYEES = [];
+let COMPLETED_ROWS = [];
+let CURRENT_COMPLETED = null;
+const COMPANY = "Rumbu Industries Limited";
+const INCOMPLETE = ["awaiting_step2","rejected_to_step2"];
+
+function esc(s){
+  if(s === null || s === undefined) return "";
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+}
+function fmtDate(iso){
+  if(!iso) return "";
+  const p = String(iso).split("-"); if(p.length !== 3) return iso;
+  const months=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return p[2] + " " + (months[parseInt(p[1],10)-1] || p[1]) + " " + p[0];
+}
+function prettyStatus(s){
+  const map = {
+    awaiting_step2:"Awaiting Fill", awaiting_step3:"Awaiting Step 3 Approval",
+    awaiting_step4:"Awaiting Step 4 Review", awaiting_step5:"Awaiting Step 5 Disbursement",
+    awaiting_step6:"Awaiting ED1", completed:"Completed",
+    rejected_to_step2:"Needs Correction", rejected_to_step3:"Rejected to Step 3",
+    rejected_to_step4:"Rejected to Step 4", rejected_to_step5:"Rejected to Step 5"
+  };
+  return map[s] || s;
+}
+function statusTagClass(s){
+  if(s === "completed") return "done";
+  if(s.indexOf("rejected") === 0) return "rejected";
+  return "mid";
+}
+
+async function logActivity(actionType, description){
+  try{
+    await sb.from("activity_log").insert({
+      actor_id: ME.id, actor_username: ME.username, actor_role: ME.role,
+      section_id: ME.sectionId, action_type: actionType, description: description
+    });
+  }catch(e){ console.warn("Activity log write failed (non-fatal):", e); }
+}
+
+function showView(id){
+  ["queueView","fillView","completedView","completedDetailView"].forEach(v=>{
+    const el = document.getElementById(v); if(el) el.style.display = (v === id) ? "block" : "none";
+  });
+  try{ window.scrollTo({ top:0, behavior:"smooth" }); }catch(e){}
+}
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    await loadEmployees();
+    await loadMyScopes();
+
+    if(!MY_SCOPES.length && !IS_SUPER_ADMIN_BLANKET){
+      status.textContent = "Connected.";
+      document.getElementById("noAccess").style.display = "block";
+      return;
+    }
+    document.getElementById("appArea").style.display = "block";
+    document.getElementById("scopeNote").textContent = IS_SUPER_ADMIN_BLANKET
+      ? "Super Admin — showing every Branch/Department."
+      : "Your assigned scope(s): " + MY_SCOPES.map(s=>s.section+" / "+s.department).join(", ");
+    populateScopeFilter();
+    status.textContent = "Connected.";
+    await loadQueue();
+  }catch(e){
+    status.style.color = "#c0392b"; status.textContent = "❌ " + e.message;
+    console.error(e);
+  }
+}
+
+async function loadEmployees(){
+  const { data } = await sb.from("employees").select("id, employee_id, full_name, department, branch, unit");
+  EMPLOYEES = data || [];
+}
+
+// True only when an employee actually belongs to the current entry's scope:
+// same Branch + Department, and (when specific Units were chosen at
+// initiation) one of those Units. This is what restricts the ID lookup so a
+// staff member outside the unit is treated as "not found".
+function empInEntryScope(emp){
+  if(!CURRENT_ENTRY || !emp) return false;
+  if((emp.branch||"") !== (CURRENT_ENTRY.section||"")) return false;
+  if((emp.department||"") !== (CURRENT_ENTRY.department||"")) return false;
+  const units = CURRENT_ENTRY.units;
+  if(units && units !== "ALL"){
+    const set = new Set(String(units).split(",").map(x=>x.trim()).filter(Boolean));
+    if(!set.has(emp.unit||"")) return false;
+  }
+  return true;
+}
+
+async function loadMyScopes(){
+  MY_SCOPES = [];
+  if(ME.role === "super_admin"){ IS_SUPER_ADMIN_BLANKET = true; return; }
+  const { data: emp } = await sb.from("employees").select("id").eq("linked_profile_id", ME.id).maybeSingle();
+  if(!emp) return;
+  const { data: scopes } = await sb.from("overtime_step2_fillers").select("section, department").eq("employee_id", emp.id);
+  MY_SCOPES = scopes || [];
+}
+
+function populateScopeFilter(){
+  const sel = document.getElementById("scopeFilter");
+  sel.innerHTML = '<option value="all">All my assigned scopes</option>' +
+    MY_SCOPES.map(s => `<option value="${esc(s.section)}||${esc(s.department)}">${esc(s.section)} / ${esc(s.department)}</option>`).join("");
+}
+
+function scopeNarrow(rows){
+  if(IS_SUPER_ADMIN_BLANKET) return rows;
+  const allowed = new Set(MY_SCOPES.map(s => s.section + "||" + s.department));
+  return rows.filter(r => allowed.has(r.section + "||" + r.department));
+}
+
+// ─────────── QUEUE: incomplete entries only ───────────
+async function loadQueue(){
+  showView("queueView");
+  const wrap = document.getElementById("queueWrap");
+  wrap.innerHTML = "<p class='loading'>Loading…</p>";
+  try{
+    let q = sb.from("overtime_department_entries")
+      .select("*, overtime_initiations(form_number, overtime_date, propose_hours)")
+      .in("status", INCOMPLETE)
+      .order("created_at", { ascending: false });
+
+    if(!IS_SUPER_ADMIN_BLANKET){
+      const scopeFilter = document.getElementById("scopeFilter").value;
+      if(scopeFilter !== "all"){
+        const [sec, dept] = scopeFilter.split("||");
+        q = q.eq("section", sec).eq("department", dept);
+      } else if(MY_SCOPES.length){
+        q = q.in("section", [...new Set(MY_SCOPES.map(s=>s.section))]);
+      }
+    }
+    const { data, error } = await q;
+    if(error) throw error;
+    const rows = scopeNarrow(data || []);
+
+    if(!rows.length){ wrap.innerHTML = "<p class='empty'>Nothing to fill right now. New requests and any sent back for correction will appear here.</p>"; return; }
+
+    // Count employees already added per entry, so a form that has been started
+    // (and possibly "Saved & continue later") shows as INCOMPLETE, not NEW.
+    const ids = rows.map(r=>r.id);
+    let countByEntry = {};
+    if(ids.length){
+      const { data: emps } = await sb.from("overtime_employees").select("department_entry_id").in("department_entry_id", ids);
+      (emps||[]).forEach(e=>{ countByEntry[e.department_entry_id] = (countByEntry[e.department_entry_id]||0) + 1; });
+    }
+
+    let html = "<table><thead><tr><th>Form No.</th><th>Department</th><th>Units</th><th>Overtime Date</th><th>Staff</th><th>Status</th><th></th></tr></thead><tbody>";
+    rows.forEach(r=>{
+      const count = countByEntry[r.id] || 0;
+      let tagClass, tagText;
+      if(r.status === "rejected_to_step2"){ tagClass = "rejected"; tagText = "NEEDS CORRECTION"; }
+      else if(count > 0){ tagClass = "progress"; tagText = "INCOMPLETE"; }
+      else { tagClass = "new"; tagText = "NEW"; }
+      html += "<tr class=\"clickrow\" onclick=\"openEntry(" + r.id + ")\">" +
+        "<td><b>" + esc(r.overtime_initiations?.form_number||"") + "</b></td>" +
+        "<td>" + esc(r.department) + "</td>" +
+        "<td>" + esc(r.units || "ALL") + "</td>" +
+        "<td>" + fmtDate(r.overtime_initiations?.overtime_date||"") + "</td>" +
+        "<td>" + count + "</td>" +
+        "<td><span class=\"tag " + tagClass + "\">" + tagText + "</span></td>" +
+        "<td><button class=\"mini\" onclick=\"event.stopPropagation();openEntry(" + r.id + ")\">Open</button></td>" +
+        "</tr>";
+    });
+    html += "</tbody></table>";
+    wrap.innerHTML = html;
+  }catch(e){
+    wrap.innerHTML = "<p class='status err'>❌ " + esc(e.message) + "</p>";
+  }
+}
+
+// ─────────── FILL an entry ───────────
+async function openEntry(entryId){
+  const { data: entry, error } = await sb.from("overtime_department_entries")
+    .select("*, overtime_initiations(form_number, form_date, overtime_date, propose_hours, section)")
+    .eq("id", entryId).single();
+  if(error){ alert("Could not open entry: " + error.message); return; }
+
+  CURRENT_ENTRY = entry;
+  showView("fillView");
+  document.getElementById("workTitle").textContent = "Fill " + (entry.overtime_initiations?.form_number||"") + " — " + entry.department;
+  document.getElementById("entryInfo").innerHTML = "<div class=\"infobox\">" +
+    "<b>Form No.:</b> " + esc(entry.overtime_initiations?.form_number||"") + " &nbsp;|&nbsp; " +
+    "<b>Department:</b> " + esc(entry.department) + " &nbsp;|&nbsp; " +
+    "<b>Units:</b> " + esc(entry.units || "ALL") + "<br>" +
+    "<b>Overtime Date:</b> " + fmtDate(entry.overtime_initiations?.overtime_date||"") + " &nbsp;|&nbsp; " +
+    "<b>Propose Hours:</b> " + esc(entry.overtime_initiations?.propose_hours||"") +
+  "</div>";
+
+  const rejBanner = document.getElementById("rejBanner");
+  const responseWrap = document.getElementById("responseNoteWrap");
+  if(entry.status === "rejected_to_step2"){
+    const { data: rej } = await sb.from("overtime_approvals").select("reason, approver_username, decided_at")
+      .eq("department_entry_id", entryId).eq("step", 3).eq("decision", "rejected")
+      .order("decided_at", { ascending: false }).limit(1).maybeSingle();
+    rejBanner.innerHTML = "<div class=\"rejbox\"><b>⚠ Sent back by " + esc(rej?.approver_username||"Step 3") + ":</b> " + esc(rej?.reason || "No reason given.") + "</div>";
+    responseWrap.style.display = "block";
+  } else {
+    rejBanner.innerHTML = "";
+    responseWrap.style.display = "none";
+  }
+  document.getElementById("responseNoteInput").value = "";
+  ["empIdInput","empNameDisplay","reasonInput"].forEach(id=>document.getElementById(id).value="");
+  document.getElementById("empNameDisplay").className = "";
+  document.getElementById("addStatus").textContent = "";
+  document.getElementById("submitStatus").textContent = "";
+
+  await loadEntryEmployees(entryId);
+}
+
+function backToQueue(){
+  CURRENT_ENTRY = null;
+  loadQueue();
+}
+
+async function loadEntryEmployees(entryId){
+  const { data, error } = await sb.from("overtime_employees").select("*").eq("department_entry_id", entryId).order("created_at");
+  const wrap = document.getElementById("employeesListWrap");
+  if(error){ wrap.innerHTML = "<p class='status err'>❌ " + esc(error.message) + "</p>"; return; }
+  CURRENT_EMPLOYEES = data || [];
+  if(!CURRENT_EMPLOYEES.length){ wrap.innerHTML = "<p class='empty'>No employees added yet.</p>"; return; }
+
+  let html = "<table><thead><tr><th>ID</th><th>Name</th><th>Reason</th><th></th></tr></thead><tbody>";
+  CURRENT_EMPLOYEES.forEach(e=>{
+    html += "<tr id=\"emprow_" + e.id + "\"><td>" + esc(e.employee_code) + "</td><td>" + esc(e.employee_name) + "</td>" +
+      "<td id=\"reasoncell_" + e.id + "\">" + esc(e.reason_for_overtime) + "</td>" +
+      "<td><button class=\"mini\" onclick=\"editReason(" + e.id + ")\">Edit</button> " +
+      "<button class=\"mini red\" onclick=\"removeEmployeeFromEntry(" + e.id + ")\">Remove</button></td></tr>";
+  });
+  html += "</tbody></table>";
+  wrap.innerHTML = html;
+}
+
+function editReason(rowId){
+  const emp = CURRENT_EMPLOYEES.find(e=>e.id===rowId);
+  if(!emp) return;
+  const cell = document.getElementById("reasoncell_" + rowId);
+  cell.innerHTML = "<textarea id=\"reasonEdit_" + rowId + "\" style=\"min-height:50px;\">" + esc(emp.reason_for_overtime) + "</textarea>" +
+    "<button class=\"mini green\" style=\"margin-top:6px;\" onclick=\"saveReason(" + rowId + ")\">Save</button> " +
+    "<button class=\"mini grey\" style=\"margin-top:6px;\" onclick=\"loadEntryEmployees(CURRENT_ENTRY.id)\">Cancel</button>";
+}
+
+async function saveReason(rowId){
+  const newReason = document.getElementById("reasonEdit_" + rowId).value.trim();
+  if(!newReason){ alert("Reason cannot be empty."); return; }
+  try{
+    const { error } = await sb.from("overtime_employees").update({ reason_for_overtime: newReason }).eq("id", rowId);
+    if(error) throw error;
+    await loadEntryEmployees(CURRENT_ENTRY.id);
+  }catch(e){ alert("Could not save: " + e.message); }
+}
+
+function lookupEmployee(){
+  const idVal = document.getElementById("empIdInput").value.trim();
+  const nameField = document.getElementById("empNameDisplay");
+  if(!idVal){ nameField.value = ""; nameField.className = ""; return; }
+  // Only match staff who belong to this entry's Department/Unit scope.
+  const match = EMPLOYEES.find(e => (e.employee_id||"").toLowerCase() === idVal.toLowerCase() && empInEntryScope(e));
+  if(match){ nameField.value = match.full_name; nameField.className = "found-name"; }
+  else { nameField.value = "No staff found"; nameField.className = "not-found"; }
+}
+
+async function addEmployeeToEntry(){
+  const status = document.getElementById("addStatus");
+  if(!CURRENT_ENTRY) return;
+  const idVal = document.getElementById("empIdInput").value.trim();
+  const reason = document.getElementById("reasonInput").value.trim();
+  const match = EMPLOYEES.find(e => (e.employee_id||"").toLowerCase() === idVal.toLowerCase() && empInEntryScope(e));
+
+  if(!idVal || !match){
+    const unitNote = (CURRENT_ENTRY && CURRENT_ENTRY.units && CURRENT_ENTRY.units !== "ALL") ? (" in unit " + CURRENT_ENTRY.units) : "";
+    status.className="status err"; status.textContent = "No staff found for that ID in " + (CURRENT_ENTRY ? CURRENT_ENTRY.department : "this department") + unitNote + ".";
+    return;
+  }
+  if(!reason){ status.className="status err"; status.textContent="Enter a Reason for Overtime."; return; }
+  if(CURRENT_EMPLOYEES.some(e => String(e.employee_id) === String(match.id))){
+    status.className="status err"; status.textContent = match.full_name + " is already on this request."; return;
+  }
+
+  status.className="status"; status.textContent="Adding…";
+  try{
+    const { error } = await sb.from("overtime_employees").insert({
+      department_entry_id: CURRENT_ENTRY.id,
+      employee_id: match.id, employee_code: match.employee_id,
+      employee_name: match.full_name, reason_for_overtime: reason
+    });
+    if(error) throw error;
+    status.className = "status ok"; status.textContent = "✅ Added.";
+    ["empIdInput","empNameDisplay","reasonInput"].forEach(id=>document.getElementById(id).value="");
+    document.getElementById("empNameDisplay").className = "";
+    await loadEntryEmployees(CURRENT_ENTRY.id);
+  }catch(e){
+    status.className = "status err"; status.textContent = "❌ " + e.message;
+  }
+}
+
+async function removeEmployeeFromEntry(rowId){
+  if(!confirm("Remove this employee from the overtime request?")) return;
+  try{
+    const { error } = await sb.from("overtime_employees").delete().eq("id", rowId);
+    if(error) throw error;
+    await loadEntryEmployees(CURRENT_ENTRY.id);
+  }catch(e){ alert("Could not remove: " + e.message); }
+}
+
+// Save & Continue Later — every employee is already persisted as it is added,
+// so this simply keeps the entry in the Fill queue (status unchanged) and
+// returns to the list. The person can reopen and finish any time.
+async function saveAndContinueLater(){
+  if(!CURRENT_ENTRY) return;
+  const status = document.getElementById("submitStatus");
+  status.className = "status ok";
+  status.textContent = "✅ Progress saved. This form is still in your Fill list to finish later.";
+  await logActivity("overtime_step2_saved", ME.username + " saved progress on overtime entry #" + CURRENT_ENTRY.id + " (" + CURRENT_ENTRY.section + " / " + CURRENT_ENTRY.department + ") — " + CURRENT_EMPLOYEES.length + " employee(s) so far");
+  setTimeout(backToQueue, 700);
+}
+
+async function submitEntry(){
+  const status = document.getElementById("submitStatus");
+  if(!CURRENT_ENTRY) return;
+  if(!CURRENT_EMPLOYEES.length){ status.className="status err"; status.textContent="Add at least one employee before submitting."; return; }
+
+  const isCorrection = CURRENT_ENTRY.status === "rejected_to_step2";
+  const responseNote = document.getElementById("responseNoteInput").value.trim();
+  if(isCorrection && !responseNote){ status.className="status err"; status.textContent="Enter a Response to Rejection before resubmitting."; return; }
+
+  status.className="status"; status.textContent="Submitting…";
+  try{
+    const updateFields = { status: "awaiting_step3", updated_at: new Date().toISOString() };
+    if(isCorrection) updateFields.correction_note = responseNote;
+    const { error } = await sb.from("overtime_department_entries").update(updateFields).eq("id", CURRENT_ENTRY.id);
+    if(error) throw error;
+
+    await logActivity("overtime_step2_submitted", ME.username + " submitted overtime entry #" + CURRENT_ENTRY.id + " (" + CURRENT_ENTRY.section + " / " + CURRENT_ENTRY.department + ") with " + CURRENT_EMPLOYEES.length + " employee(s)" + (isCorrection ? ". Response: " + responseNote : ""));
+    status.className = "status ok"; status.textContent = "✅ Submitted for Step 3 approval.";
+    setTimeout(backToQueue, 800);
+  }catch(e){
+    status.className = "status err"; status.textContent = "❌ " + e.message;
+  }
+}
+
+// ─────────── COMPLETED FORMS (already submitted) ───────────
+function openCompletedList(){
+  showView("completedView");
+  loadCompleted();
+}
+
+async function loadCompleted(){
+  const wrap = document.getElementById("completedWrap");
+  wrap.innerHTML = "<p class='loading'>Loading…</p>";
+  const from = document.getElementById("fromDate").value;
+  const to = document.getElementById("toDate").value;
+  try{
+    let q = sb.from("overtime_department_entries")
+      .select("*, overtime_initiations(form_number, form_date, overtime_date, propose_hours)")
+      .not("status", "in", "(" + INCOMPLETE.join(",") + ")")
+      .order("updated_at", { ascending: false });
+    if(!IS_SUPER_ADMIN_BLANKET && MY_SCOPES.length){
+      q = q.in("section", [...new Set(MY_SCOPES.map(s=>s.section))]);
+    }
+    const { data, error } = await q;
+    if(error) throw error;
+    let rows = scopeNarrow(data || []);
+    if(from) rows = rows.filter(r => (r.overtime_initiations?.overtime_date||"") >= from);
+    if(to)   rows = rows.filter(r => (r.overtime_initiations?.overtime_date||"") <= to);
+    COMPLETED_ROWS = rows;
+
+    if(!rows.length){ wrap.innerHTML = "<p class='empty'>No completed forms yet.</p>"; return; }
+
+    let html = "<table><thead><tr><th>Form No.</th><th>Department</th><th>Units</th><th>Overtime Date</th><th>Status</th><th></th></tr></thead><tbody>";
+    rows.forEach(r=>{
+      html += "<tr class=\"clickrow\" onclick=\"openCompletedDetail(" + r.id + ")\">" +
+        "<td><b>" + esc(r.overtime_initiations?.form_number||"") + "</b></td>" +
+        "<td>" + esc(r.department) + "</td>" +
+        "<td>" + esc(r.units || "ALL") + "</td>" +
+        "<td>" + fmtDate(r.overtime_initiations?.overtime_date||"") + "</td>" +
+        "<td><span class=\"tag " + statusTagClass(r.status) + "\">" + esc(prettyStatus(r.status)) + "</span></td>" +
+        "<td><button class=\"mini\" onclick=\"event.stopPropagation();openCompletedDetail(" + r.id + ")\">View</button></td>" +
+        "</tr>";
+    });
+    html += "</tbody></table>";
+    wrap.innerHTML = html;
+  }catch(e){
+    wrap.innerHTML = "<p class='status err'>❌ " + esc(e.message) + "</p>";
+  }
+}
+
+async function openCompletedDetail(entryId){
+  const r = COMPLETED_ROWS.find(x=>x.id===entryId);
+  if(!r) return;
+  CURRENT_COMPLETED = r;
+  showView("completedDetailView");
+  const body = document.getElementById("completedDetailBody");
+  body.innerHTML = "<p class='loading'>Loading…</p>";
+  const { data: emps } = await sb.from("overtime_employees").select("*").eq("department_entry_id", entryId).order("created_at");
+  const list = emps || [];
+  const showPay = list.some(e => e.actual_amount != null);
+
+  let html = "<h3>" + esc(r.overtime_initiations?.form_number||"") + " — " + esc(r.department) + "</h3>";
+  html += "<div class=\"infobox\">" +
+    "<b>Section:</b> " + esc(r.section) + " &nbsp;|&nbsp; <b>Department:</b> " + esc(r.department) + " &nbsp;|&nbsp; <b>Units:</b> " + esc(r.units || "ALL") + "<br>" +
+    "<b>Overtime Date:</b> " + fmtDate(r.overtime_initiations?.overtime_date||"") + " &nbsp;|&nbsp; " +
+    "<b>Propose Hours:</b> " + esc(r.overtime_initiations?.propose_hours||"") + " &nbsp;|&nbsp; " +
+    "<b>Status:</b> " + esc(prettyStatus(r.status)) +
+  "</div>";
+  html += "<table><thead><tr><th>ID</th><th>Name</th><th>Reason</th>" + (showPay ? "<th>Hours</th><th>Amount (₦)</th>" : "") + "</tr></thead><tbody>";
+  if(!list.length){
+    html += "<tr><td colspan=\"" + (showPay?5:3) + "\" class=\"empty\">No employees on this form.</td></tr>";
+  } else {
+    list.forEach(e=>{
+      html += "<tr><td>" + esc(e.employee_code) + "</td><td>" + esc(e.employee_name) + "</td><td>" + esc(e.reason_for_overtime) + "</td>" +
+        (showPay ? ("<td>" + esc(e.hours_worked ?? "") + "</td><td>" + (e.actual_amount != null ? Number(e.actual_amount).toLocaleString() : "") + "</td>") : "") +
+        "</tr>";
+    });
+  }
+  html += "</tbody></table>";
+  body.innerHTML = html;
+}
+
+function printCurrentCompleted(){
+  const r = CURRENT_COMPLETED;
+  if(!r) return;
+  sb.from("overtime_employees").select("*").eq("department_entry_id", r.id).order("created_at").then(({data})=>{
+    const list = data || [];
+    const showPay = list.some(e => e.actual_amount != null);
+    const rowsHtml = list.map(e=>"<tr><td>" + esc(e.employee_code) + "</td><td>" + esc(e.employee_name) + "</td><td>" + esc(e.reason_for_overtime) + "</td>" +
+      (showPay ? ("<td>" + esc(e.hours_worked ?? "") + "</td><td>" + (e.actual_amount != null ? Number(e.actual_amount).toLocaleString() : "") + "</td>") : "") + "</tr>").join("");
+    const html = "<html><head><style>" +
+      "@page{size:A4;margin:40pt 50pt;} body{font-family:'Times New Roman',serif;font-size:12pt;margin:0;padding:40px;color:#000;}" +
+      "h2{text-align:center;font-size:18pt;margin:0 0 4px;} h3{text-align:center;font-size:14pt;margin:0 0 20px;letter-spacing:2px;}" +
+      "table{width:100%;border-collapse:collapse;margin-top:10px;} td,th{padding:8px 10px;border:1px solid #000;text-align:left;vertical-align:top;}" +
+      "</style></head><body>" +
+      "<h2>" + esc(COMPANY) + "</h2><h3>OVERTIME — DEPARTMENT SUBMISSION</h3>" +
+      "<p><b>Form No.:</b> " + esc(r.overtime_initiations?.form_number||"") + " &nbsp; <b>Section:</b> " + esc(r.section) + " &nbsp; <b>Department:</b> " + esc(r.department) + " &nbsp; <b>Units:</b> " + esc(r.units||"ALL") + "</p>" +
+      "<p><b>Overtime Date:</b> " + fmtDate(r.overtime_initiations?.overtime_date||"") + " &nbsp; <b>Status:</b> " + esc(prettyStatus(r.status)) + "</p>" +
+      "<table><thead><tr><th>ID</th><th>Name</th><th>Reason</th>" + (showPay?"<th>Hours</th><th>Amount</th>":"") + "</tr></thead><tbody>" + rowsHtml + "</tbody></table>" +
+      "</body></html>";
+    const w = window.open("", "_blank");
+    if(!w){ alert("Please allow pop-ups to print."); return; }
+    w.document.write(html); w.document.close();
+    w.onload = function(){ w.focus(); w.print(); };
+  });
+}
+
+init();
+</script>
+<script src="../../assets/letterhead.js"></script>
+</body>
+</html>

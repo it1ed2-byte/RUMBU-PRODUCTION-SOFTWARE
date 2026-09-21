@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Training Summary Dashboard</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+body{font-family:var(--sans);background:var(--bg);padding:20px;margin:0;display:flex;justify-content:center;}
+.container{width:100%;max-width:1300px;background:var(--card);padding:20px;border-radius:14px;box-shadow:0 2px 10px rgba(0,0,0,.08);}
+h2{margin-top:0;margin-bottom:20px;}
+#status{font-size:12px;font-weight:bold;margin-bottom:10px;}
+.filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:15px;}
+select,button,input{width:100%;padding:12px;border-radius:8px;border:1px solid var(--line);font-size:14px;box-sizing:border-box;}
+button{background:black;color:#fff;cursor:pointer;font-weight:bold;border:none;}
+button:hover{background:#222;}
+button:disabled{background:#777;cursor:not-allowed;}
+.table-wrapper{overflow-x:auto;}
+table{width:100%;border-collapse:collapse;min-width:900px;}
+th{background:#111;color:#fff;padding:12px;font-size:13px;text-align:center;}
+td{padding:10px;border-bottom:1px solid var(--line);text-align:center;font-size:13px;}
+tr:hover{background:var(--card);}
+.completed{color:green;font-weight:bold;} .uncompleted{color:red;font-weight:bold;}
+.approve-btn{background:green;color:#fff;border:none;padding:7px 12px;border-radius:6px;cursor:pointer;font-size:12px;}
+.approve-btn:hover{background:#0a8a0a;}
+.treat-btn{background:orange;color:#fff;border:none;padding:7px 12px;border-radius:6px;cursor:pointer;font-size:12px;}
+.treat-btn:hover{background:#d98300;}
+.treated-label{color:purple;font-weight:bold;}
+.small-date{font-size:11px;color:#555;}
+.gate-row{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;}
+.gate-row input{flex:1 1 200px;}
+@media(max-width:700px){ body{padding:10px;} .container{padding:12px;} th,td{padding:8px;font-size:12px;} }
+</style>
+</head>
+<body>
+
+<div class="container">
+<h2>Training Summary Dashboard</h2>
+<div id="status">Connecting to Supabase...</div>
+
+<div class="gate-row">
+  <input id="approvePasscode" type="password" placeholder="Approve passcode (unlocks Approve button)">
+  <input id="treatPasscode" type="password" placeholder="Treat passcode (unlocks Treat button)">
+</div>
+
+<div class="filters">
+  <select id="department" onchange="loadRanks()"></select>
+  <select id="rank"><option value="ALL">ALL RANKS</option></select>
+  <select id="filter">
+    <option value="ALL">ALL</option><option value="UNCOMPLETED">UNCOMPLETED</option>
+    <option value="COMPLETED">COMPLETED</option><option value="APPROVED">APPROVED</option><option value="TREATED">TREATED</option>
+  </select>
+  <select id="section"><option value="ALL">ALL SECTION</option><option value="RUMBU">RUMBU</option><option value="MAMA SANNU">MAMA SANNU</option></select>
+</div>
+
+<div class="filters">
+  <button id="loadBtn" onclick="loadData()">LOAD DATA</button>
+  <button onclick="downloadPDF()">DOWNLOAD PDF</button>
+</div>
+
+<div class="table-wrapper">
+<table>
+  <thead><tr><th>Staff ID</th><th>Name</th><th>Department</th><th>Section</th><th>Rank</th><th>Done</th><th>Remaining</th><th>%</th><th>Status</th><th>Action</th></tr></thead>
+  <tbody id="data"><tr><td colspan="10">No Data Loaded</td></tr></tbody>
+</table>
+</div>
+</div>
+
+<script>
+const SUPABASE_URL = "https://betfhunzmhtdzgvufmfk.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp";
+const APPROVE_PASSCODE = "approve2026"; // substitutes the original's canApprove email list
+const TREAT_PASSCODE = "treat2026";     // substitutes the original's canTreat email list
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY, "Content-Type": "application/json" }; }
+
+let STAFF_ROWS=[], CODE_ROWS=[], TABLE_ROWS=[], APPROVED_ROWS=[], TREATED_ROWS=[];
+
+// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
+async function fetchAllRows(table, query){
+  let all = [], offset = 0; const pageSize = 1000;
+  const q = query || "";
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=*" + q, { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+
+
+async function init(){
+  const status = document.getElementById("status");
+  try{
+    const [s,c,t,ap,tr] = await Promise.all([
+      fetchAllRows("staff_list",""),
+      fetchAllRows("training_code",""),
+      fetchAllRows("training_table",""),
+      fetchAllRows("training_approved",""),
+      fetchAllRows("treated_training","")
+    ]);
+    STAFF_ROWS = s;
+    CODE_ROWS = c;
+    TABLE_ROWS = t;
+    APPROVED_ROWS = ap;
+    TREATED_ROWS = tr;
+    status.style.color = "#1d8a4e";
+    status.textContent = "Connected. staff: " + STAFF_ROWS.length + ", training records: " + TABLE_ROWS.length + ".";
+    loadDepartments();
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+function loadDepartments(){
+  const depts = [...new Set(STAFF_ROWS.map(r=>r.department).filter(Boolean))].sort();
+  const sel = document.getElementById("department");
+  sel.innerHTML = '<option value="ALL">ALL DEPARTMENTS</option>' + depts.map(d=>`<option value="${d}">${d}</option>`).join("");
+}
+
+function loadRanks(){
+  const dept = document.getElementById("department").value;
+  const rankSelect = document.getElementById("rank");
+  let options = [];
+  if(dept === "WEAVING") options = ["Junior Operator","Operator","Senior Operator"];
+  else if(dept === "EXTRUDER") options = ["Packer","Operator"];
+  else if(dept === "PIPE FINISHING") options = ["Supplier","Wrapper"];
+  else options = ["Level 1","Level 2","Level 3"];
+  rankSelect.innerHTML = '<option value="ALL">ALL RANKS</option>' + options.map(r=>`<option value="${r}">${r}</option>`).join("");
+}
+
+function getDepartmentStaff(department, filter, section, rank){
+  const totalCodes = {};
+  CODE_ROWS.forEach(r=>{ const k=r.department+"||"+r.rank; totalCodes[k]=(totalCodes[k]||0)+1; });
+
+  const completedCodes = {};
+  TABLE_ROWS.forEach(r=>{
+    const k = r.staff_id+"||"+r.department+"||"+r.rank;
+    completedCodes[k] = (completedCodes[k]||0) + 1;
+  });
+
+  const seen = new Set();
+  const allStaffRank = [];
+  TABLE_ROWS.forEach(r=>{
+    const key = r.staff_id+"||"+r.department+"||"+r.rank;
+    if(seen.has(key)) return;
+    seen.add(key);
+    const s = STAFF_ROWS.find(x=>x.staff_id===r.staff_id);
+    allStaffRank.push({ staffId:r.staff_id, department:r.department, rank:r.rank, name: s?s.staff_name:"", section: s?s.section:"" });
+  });
+
+  let result = allStaffRank.map(ar=>{
+    const doneKey = ar.staffId+"||"+ar.department+"||"+ar.rank;
+    const totalKey = ar.department+"||"+ar.rank;
+    const done = completedCodes[doneKey] || 0;
+    const total = totalCodes[totalKey] || 0;
+    const approved = APPROVED_ROWS.some(a=>a.staff_id===ar.staffId && a.department===ar.department && a.rank===ar.rank) ? 1 : 0;
+    const treatedRow = TREATED_ROWS.find(t=>t.staff_id===ar.staffId && t.department===ar.department && t.rank===ar.rank);
+    const treated = treatedRow ? 1 : 0;
+    const percent = total > 0 ? Number(((done/total)*100).toFixed(2)) : 0;
+    return {
+      staffId: ar.staffId, name: ar.name, department: ar.department, section: ar.section, rank: ar.rank,
+      done, remaining: Math.max(total-done,0), percent, approved, treated,
+      treatedAt: treatedRow ? treatedRow.treated_at : "",
+      status: percent >= 100 ? "COMPLETED" : "UNCOMPLETED"
+    };
+  });
+
+  if(department !== "ALL") result = result.filter(r=>r.department===department);
+  if(section !== "ALL") result = result.filter(r=>(r.section||"").toUpperCase()===section);
+  if(rank !== "ALL") result = result.filter(r=>r.rank===rank);
+
+  if(filter === "COMPLETED") result = result.filter(r=>r.percent>=100 && r.approved!==1);
+  else if(filter === "UNCOMPLETED") result = result.filter(r=>r.percent<100);
+  else if(filter === "APPROVED") result = result.filter(r=>r.approved===1 && r.treated!==1);
+  else if(filter === "TREATED") result = result.filter(r=>r.treated===1);
+
+  return result.sort((a,b)=> (a.name||"").localeCompare(b.name||"") || (a.rank||"").localeCompare(b.rank||""));
+}
+
+function loadData(){
+  const btn = document.getElementById("loadBtn");
+  btn.disabled = true; btn.innerText = "LOADING...";
+
+  const department = document.getElementById("department").value;
+  const filter = document.getElementById("filter").value;
+  const section = document.getElementById("section").value;
+  const rank = document.getElementById("rank").value;
+
+  const res = getDepartmentStaff(department, filter, section, rank);
+  btn.disabled = false; btn.innerText = "LOAD DATA";
+
+  if(!res.length){ document.getElementById("data").innerHTML = '<tr><td colspan="10">No Data Found</td></tr>'; return; }
+
+  let html = "";
+  res.forEach(r=>{
+    const statusClass = r.status === "COMPLETED" ? "completed" : "uncompleted";
+    let action = "";
+    if(r.treated == 1){
+      action = `<div><div class="treated-label">TREATED</div><div class="small-date">${r.treatedAt||""}</div></div>`;
+    } else if(r.approved == 1){
+      action = `<button class="treat-btn" onclick="treat('${r.staffId}','${r.department}','${r.rank}')">Treat</button>`;
+    } else if(r.percent >= 100){
+      action = `<button class="approve-btn" onclick="approve('${r.staffId}','${r.department}','${r.rank}')">Approve</button>`;
+    } else {
+      action = `<span style="color:red;font-weight:bold;">Pending</span>`;
+    }
+    html += `<tr><td>${r.staffId}</td><td>${r.name}</td><td>${r.department}</td><td>${r.section}</td>
+      <td><b>${r.rank}</b></td><td>${r.done}</td><td>${r.remaining}</td><td>${r.percent}%</td>
+      <td class="${statusClass}">${r.status}</td><td>${action}</td></tr>`;
+  });
+  document.getElementById("data").innerHTML = html;
+}
+
+async function approve(staffId, department, rank){
+  const pw = document.getElementById("approvePasscode").value;
+  if(pw !== APPROVE_PASSCODE){ alert("⛔ Not authorized to approve — enter the correct Approve passcode."); return; }
+  if(!confirm("Approve this training?")) return;
+
+  const dup = APPROVED_ROWS.some(a=>a.staff_id===staffId && a.department===department && a.rank===rank);
+  if(dup){ alert("⚠️ Already Approved"); return; }
+
+  try{
+    const row = { staff_id: staffId, department, rank, approved_by: "ADMIN", recorded_at: new Date().toISOString() };
+    const res = await fetch(SUPABASE_URL + "/rest/v1/training_approved", { method:"post", headers: authHeaders(), body: JSON.stringify(row) });
+    if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
+    APPROVED_ROWS.push(row);
+    alert("✅ Approved Successfully");
+    loadData();
+  }catch(e){ alert("Error: " + (e.message||e)); }
+}
+
+async function treat(staffId, department, rank){
+  const pw = document.getElementById("treatPasscode").value;
+  if(pw !== TREAT_PASSCODE){ alert("⛔ Not authorized to treat — enter the correct Treat passcode."); return; }
+  if(!confirm("Mark as treated?")) return;
+
+  const dup = TREATED_ROWS.some(t=>t.staff_id===staffId && t.department===department && t.rank===rank);
+  if(dup){ alert("⚠️ Already Treated"); return; }
+
+  try{
+    const row = { staff_id: staffId, department, rank, treated_by: "ADMIN", treated_at: new Date().toISOString() };
+    const res = await fetch(SUPABASE_URL + "/rest/v1/treated_training", { method:"post", headers: authHeaders(), body: JSON.stringify(row) });
+    if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
+    TREATED_ROWS.push(row);
+    alert("✅ Treated Successfully");
+    loadData();
+  }catch(e){ alert("Error: " + (e.message||e)); }
+}
+
+function downloadPDF(){
+  const table = document.querySelector("table").outerHTML;
+  const win = window.open("");
+  win.document.write(`<html><head><title>Training Report</title><style>
+    body{font-family:var(--sans);padding:20px;} table{width:100%;border-collapse:collapse;}
+    th,td{border:1px solid #ccc;padding:8px;text-align:center;font-size:12px;} th{background:#111;color:#fff;}
+  </style></head><body><h2>Training Summary Report</h2>${table}</body></html>`);
+  win.document.close();
+  win.print();
+}
+
+init();
+</script>
+</body>
+</html>

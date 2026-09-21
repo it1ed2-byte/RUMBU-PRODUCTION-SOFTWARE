@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Complaint Form</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:linear-gradient(135deg,#1e3c72,#2a5298);
+    display:flex;justify-content:center;align-items:flex-start;min-height:100vh;padding:20px;margin:0;}
+  .form-box{background:var(--card);padding:22px 28px;width:600px;max-width:100%;border-radius:10px;box-shadow:0 10px 25px rgba(0,0,0,.3);}
+  h2{text-align:center;color:var(--heading);margin:0 0 14px;}
+  label{font-weight:bold;font-size:12.5px;display:block;margin-top:2px;}
+  select,input,textarea{width:100%;padding:9px;margin:4px 0 10px 0;border-radius:6px;border:1px solid var(--line);font-size:14px;box-sizing:border-box;}
+  textarea{height:60px;resize:none;}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  button{width:100%;padding:11px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:bold;margin-top:4px;}
+  button:hover{background:#1e3c72;}
+  button:disabled{opacity:.6;cursor:not-allowed;}
+  .msg{display:none;margin-top:10px;padding:8px;background:#4CAF50;color:#fff;text-align:center;border-radius:6px;}
+  .error{display:none;margin-top:10px;padding:8px;background:#f44336;color:#fff;text-align:center;border-radius:6px;}
+  .hint{font-size:11px;color:#eee;text-align:center;margin-top:8px;}
+  .hidden{display:none;}
+  @media (max-width:560px){ .row{grid-template-columns:1fr;} }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+</head>
+<body>
+<div class="form-box">
+<h2>📢 Complaint Form</h2>
+<div id="statusBox">Checking your session...</div>
+<form id="complaintForm" class="hidden">
+  <label>Section</label>
+  <div class="row">
+    <div>
+      <select id="sectionSelect" required onchange="onSectionOrDeptChanged()"></select>
+    </div>
+    <div>
+      <select id="departmentSelect" required onchange="onSectionOrDeptChanged()">
+        <option value="">Select Department</option>
+        <option>Weaving</option><option>Technical</option><option>Quality Control</option>
+        <option>Extruder 1</option><option>Extruder 2</option><option>Extruder</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <label>Shift</label>
+      <select id="shift" required>
+        <option value="">Select</option><option>Morning</option><option>Night</option>
+      </select>
+    </div>
+    <div>
+      <label>Date</label>
+      <input type="date" id="date" required>
+    </div>
+  </div>
+
+  <label>Complaint Type</label>
+  <select id="complaintType" onchange="toggleManual()" required>
+    <option value="">Select</option>
+  </select>
+  <input type="text" id="manualType" placeholder="Enter manually" style="display:none;">
+
+  <div class="row">
+    <div>
+      <label>From Time</label>
+      <input type="time" id="fromTime" required>
+    </div>
+    <div>
+      <label>To Time</label>
+      <input type="time" id="toTime" required>
+    </div>
+  </div>
+
+  <label>Description</label>
+  <textarea id="description" required></textarea>
+
+  <button type="submit" id="submitBtn">Submit Complaint</button>
+</form>
+<div class="msg" id="responseMsg"></div>
+<div class="error" id="errorMsg"></div>
+<p class="hint">Writes live to Supabase. Date must be today or within the last 2 days.</p>
+</div>
+
+<script>
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY, "Content-Type": "application/json" }; }
+const SECTION_DISPLAY_MAP = { "Rumbu": "Rumbu", "MamaSannu": "Mama Sannu" };
+
+// Complaint types by Department — exact list from the original script.
+const complaintTypes = {
+  "Weaving": ["Shortage of Pipe","Absent of Staff","Used of B Grade","Power Failure","Long Downtime","Other"],
+  "Technical": ["Power Failure","Equipment Maintenance","Calibration Issue","Other"],
+  "Quality Control": ["Defective Product","Inspection Delay","Non-compliance","Other"],
+  "Extruder 1": ["Pipe Jam","Temperature Issue","Material Shortage","Other"],
+  "Extruder 2": ["Pipe Jam","Temperature Issue","Material Shortage","Other"],
+  "Extruder": ["Pipe Jam","Temperature Issue","Material Shortage","Other"]
+};
+
+async function init(){
+  const me = await requireAuth("../../login.html");
+  if(!me) return;
+
+  const mySections = (me.sectionNames && me.sectionNames.length)
+    ? me.sectionNames.map(s => SECTION_DISPLAY_MAP[s] || s)
+    : ["Rumbu","Mama Sannu"];
+  document.getElementById("sectionSelect").innerHTML = mySections.map(s=>`<option>${s}</option>`).join("");
+  if(mySections.length === 1) document.getElementById("sectionSelect").disabled = true;
+
+  onSectionOrDeptChanged();
+
+  document.getElementById("statusBox").classList.add("hidden");
+  document.getElementById("complaintForm").classList.remove("hidden");
+}
+
+function onSectionOrDeptChanged(){
+  updateComplaintDropdown(document.getElementById("departmentSelect").value);
+}
+
+function toggleManual(){
+  const type = document.getElementById("complaintType").value;
+  const manual = document.getElementById("manualType");
+  if(type === "Other"){ manual.style.display = "block"; manual.required = true; }
+  else { manual.style.display = "none"; manual.required = false; }
+}
+
+function updateComplaintDropdown(dept){
+  const dropdown = document.getElementById("complaintType");
+  dropdown.innerHTML = '<option value="">Select</option>';
+  (complaintTypes[dept] || []).forEach(t=>{
+    const opt = document.createElement("option");
+    opt.value = t; opt.textContent = t;
+    dropdown.appendChild(opt);
+  });
+}
+
+
+
+// Date bounds: today (max) and 2 days ago (min) — same as the original.
+(function(){
+  const dateInput = document.getElementById("date");
+  const today = new Date();
+  const twoDaysAgo = new Date(); twoDaysAgo.setDate(today.getDate()-2);
+  dateInput.max = today.toISOString().split("T")[0];
+  dateInput.min = twoDaysAgo.toISOString().split("T")[0];
+})();
+
+async function generateComplaintID(complaintDateStr){
+  const today = new Date(); today.setHours(0,0,0,0);
+  const complaintDate = new Date(complaintDateStr); complaintDate.setHours(0,0,0,0);
+  const diffDays = (today - complaintDate) / (1000*60*60*24);
+  if(complaintDate > today) throw new Error("❌ You cannot enter a complaint for a future date.");
+  if(diffDays > 2) throw new Error("❌ Complaint cannot be entered for more than 2 days ago.");
+
+  const year = new Date().getFullYear();
+  const url = SUPABASE_URL + "/rest/v1/complaints?complaint_id=like.CMD-" + year + "-*&select=complaint_id&order=complaint_id.desc&limit=1";
+  const res = await fetch(url, { headers: authHeaders() });
+  let nextNumber = 1;
+  if(res.ok){
+    const rows = await res.json();
+    if(rows.length){
+      const lastNumber = parseInt(rows[0].complaint_id.split("-")[2], 10);
+      if(!isNaN(lastNumber)) nextNumber = lastNumber + 1;
+    }
+  }
+  const padded = ("000000" + nextNumber).slice(-6);
+  return "CMD-" + year + "-" + padded;
+}
+
+document.getElementById("complaintForm").addEventListener("submit", async function(e){
+  e.preventDefault();
+  const errorBox = document.getElementById("errorMsg");
+  const msgBox = document.getElementById("responseMsg");
+  const btn = document.getElementById("submitBtn");
+  errorBox.style.display = "none"; msgBox.style.display = "none";
+
+  const section = document.getElementById("sectionSelect").value;
+  const department = document.getElementById("departmentSelect").value;
+  if(!section || !department){ errorBox.textContent = "❌ Select a Section and Department!"; errorBox.style.display = "block"; return; }
+  const complaintTypeSel = document.getElementById("complaintType").value;
+  const complaintType = complaintTypeSel === "Other" ? document.getElementById("manualType").value : complaintTypeSel;
+  const date = document.getElementById("date").value;
+
+  btn.disabled = true; btn.textContent = "Saving...";
+  try{
+    const complaintID = await generateComplaintID(date);
+    const row = {
+      complaint_id: complaintID,
+      section: section,
+      department: department,
+      shift: document.getElementById("shift").value,
+      date_col: date,
+      complaint_type: complaintType,
+      from_time: document.getElementById("fromTime").value,
+      to_time: document.getElementById("toTime").value,
+      description: document.getElementById("description").value,
+      recorded_at: new Date().toISOString()
+    };
+
+    const res = await fetch(SUPABASE_URL + "/rest/v1/complaints", {
+      method: "post", headers: authHeaders(), body: JSON.stringify(row)
+    });
+    if(!res.ok) throw new Error("Save failed: HTTP " + res.status + " - " + await res.text());
+
+    msgBox.textContent = "✅ Complaint Saved Successfully! ID: " + complaintID;
+    msgBox.style.display = "block";
+    setTimeout(()=>{
+      msgBox.style.display = "none";
+      document.getElementById("shift").value = "";
+      document.getElementById("date").value = "";
+      document.getElementById("fromTime").value = "";
+      document.getElementById("toTime").value = "";
+      document.getElementById("description").value = "";
+      document.getElementById("manualType").value = "";
+      document.getElementById("manualType").style.display = "none";
+      updateComplaintDropdown(department);
+    }, 3000);
+  }catch(err){
+    errorBox.textContent = err.message || String(err);
+    errorBox.style.display = "block";
+  }finally{
+    btn.disabled = false; btn.textContent = "Submit Complaint";
+  }
+});
+
+init();
+</script>
+</body>
+</html>

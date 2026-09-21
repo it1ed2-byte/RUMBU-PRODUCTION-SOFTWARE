@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>KWP — Quality &amp; Downtime</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme") || "navy"); }catch(e){}
+  })();
+  window.addEventListener("message", function(e){
+    if(e.data && e.data.rumbuTheme){ document.documentElement.setAttribute("data-theme", e.data.rumbuTheme); }
+  });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1100px;margin:0 auto;}
+  .tab-bar{display:flex;gap:6px;flex-wrap:wrap;border-bottom:2px solid var(--line);margin-bottom:16px;}
+  .tab-btn{background:none;border:none;padding:10px 14px;font-weight:700;font-size:13px;color:var(--muted);cursor:pointer;margin:0;border-bottom:3px solid transparent;}
+  .tab-btn:hover{background:var(--bg);color:var(--heading);}
+  .tab-btn.active{color:var(--heading);border-bottom-color:var(--accent);}
+  .tab-content{display:none;}
+  .tab-content.active{display:block;}
+  .readonly-banner{background:rgba(154,107,0,.12);color:var(--warn);padding:10px 14px;border-radius:var(--radius-sm);font-size:13px;font-weight:600;margin-bottom:14px;}
+  .pending-note{background:rgba(154,107,0,.10);border:1px dashed var(--warn);color:var(--warn);border-radius:var(--radius-sm);padding:10px 14px;font-size:12.5px;margin-bottom:14px;}
+  #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);}
+  .toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px;}
+  .toolbar .f{min-width:150px;}
+  .toolbar label{display:block;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px;}
+  .badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;color:#fff;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div id="connStatus">Loading...</div>
+<div id="roBanner" class="readonly-banner" style="display:none;">You don't have an active KWP staff assignment, so this page is read-only for you.</div>
+
+<div class="tab-bar">
+  <button class="tab-btn active" data-tab="tab-downtime" onclick="showTab('tab-downtime')">Downtime</button>
+  <button class="tab-btn" data-tab="tab-quality" onclick="showTab('tab-quality')">Quality</button>
+</div>
+
+<!-- ============ DOWNTIME TAB ============ -->
+<div class="tab-content active" id="tab-downtime">
+  <div class="card-panel" id="dtFormPanel" style="display:none;">
+    <h3>Log Downtime</h3>
+    <p class="sub">Can be logged as soon as it happens — linking it to today's production entry is optional and can be done later once that entry exists.</p>
+    <div class="form-row-3">
+      <div class="field"><label>Date</label><input type="date" id="dt_date"></div>
+      <div class="field"><label>Shift</label><select id="dt_shift"><option>Morning</option><option>Night</option></select></div>
+      <div class="field"><label>Machine</label><select id="dt_machine"><option value="">— Unspecified —</option></select></div>
+    </div>
+    <div class="form-row-3">
+      <div class="field"><label>Category</label>
+        <select id="dt_category">
+          <option>Blades & Mechanical</option>
+          <option>Feedstock</option>
+          <option>Power & Utilities</option>
+          <option>Other</option>
+        </select>
+      </div>
+      <div class="field"><label>Status</label><select id="dt_status"><option>Open</option><option>In Progress</option><option>Resolved</option><option>Closed</option></select></div>
+      <div class="field"><label>Owner (responsible person/dept)</label><input id="dt_owner"></div>
+    </div>
+    <div class="form-row">
+      <div class="field"><label>Start Time</label><input type="time" id="dt_start"></div>
+      <div class="field"><label>End Time (leave blank if still ongoing)</label><input type="time" id="dt_end"></div>
+    </div>
+    <div class="field"><label>Reason</label><input id="dt_reason"></div>
+    <div class="field"><label>Description</label><textarea id="dt_description"></textarea></div>
+    <div class="field"><label>Action Taken</label><textarea id="dt_action"></textarea></div>
+    <div class="field"><label>Technical Reference (ticket #, if raised in Technical module)</label><input id="dt_techref"></div>
+    <button onclick="saveDowntime()">Save Downtime Event</button>
+    <button class="btn-ghost" onclick="document.getElementById('dtFormPanel').style.display='none';">Cancel</button>
+    <div class="status" id="dtFormStatus"></div>
+  </div>
+
+  <div class="toolbar">
+    <div class="f"><label>From</label><input type="date" id="dtFrom" onchange="loadDowntime()"></div>
+    <div class="f"><label>To</label><input type="date" id="dtTo" onchange="loadDowntime()"></div>
+    <div class="f" style="flex:0 0 auto;"><button id="addDtBtn" style="display:none;" onclick="openDowntimeForm()">+ Log Downtime</button></div>
+  </div>
+
+  <div class="table-wrap"><div class="table-scroll">
+    <table>
+      <thead><tr><th>Date</th><th>Shift</th><th>Category</th><th>Start</th><th>End</th><th>Duration (min)</th><th>Status</th><th>Owner</th></tr></thead>
+      <tbody id="dtTableBody"><tr><td colspan="8">Loading…</td></tr></tbody>
+    </table>
+  </div></div>
+</div>
+
+<!-- ============ QUALITY TAB ============ -->
+<div class="tab-content" id="tab-quality">
+  <div class="card-panel" id="qFormPanel" style="display:none;">
+    <h3>Log Quality Record</h3>
+    <p class="sub">Linked to a specific production entry — find it by Date, Shift and Machine below.</p>
+    <div class="form-row-3">
+      <div class="field"><label>Date</label><input type="date" id="q_date" onchange="findEntryForQuality()"></div>
+      <div class="field"><label>Shift</label><select id="q_shift" onchange="findEntryForQuality()"><option>Morning</option><option>Night</option></select></div>
+      <div class="field"><label>Machine</label><select id="q_machine" onchange="findEntryForQuality()"><option value="">— Select —</option></select></div>
+    </div>
+    <div class="pending-note" id="qNoEntryNote" style="display:none;">No production entry found for this Date/Shift/Machine yet — submit the Production Entry first, then log quality against it.</div>
+    <input type="hidden" id="q_entry_id">
+    <div id="qFieldsBlock" style="display:none;">
+      <div class="form-row-3">
+        <div class="field"><label>Quality Type</label><input id="q_type" placeholder="e.g. Input Quality, Contamination, Colour, Moisture"></div>
+        <div class="field"><label>Grade (optional)</label><select id="q_grade"><option value="">—</option><option value="A">A Grade</option><option value="B">B Grade</option></select></div>
+        <div class="field"><label>Result</label><select id="q_result"><option>Info</option><option>Pass</option><option>Warning</option><option>Fail</option></select></div>
+      </div>
+      <div class="form-row">
+        <div class="field"><label>Value (optional)</label><input type="number" step="0.01" id="q_value"></div>
+        <div class="field"><label>Unit (optional)</label><input id="q_unit" placeholder="%, ppm, etc."></div>
+      </div>
+      <div class="field"><label>Remarks</label><textarea id="q_remarks"></textarea></div>
+      <button onclick="saveQuality()">Save Quality Record</button>
+      <button class="btn-ghost" onclick="document.getElementById('qFormPanel').style.display='none';">Cancel</button>
+      <div class="status" id="qFormStatus"></div>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <div class="f" style="flex:0 0 auto;"><button id="addQBtn" style="display:none;" onclick="openQualityForm()">+ Log Quality Record</button></div>
+  </div>
+
+  <p class="sub">Showing recent quality records across all production entries.</p>
+  <div class="table-wrap"><div class="table-scroll">
+    <table>
+      <thead><tr><th>Date</th><th>Shift</th><th>Type</th><th>Grade</th><th>Value</th><th>Result</th><th>Remarks</th></tr></thead>
+      <tbody id="qTableBody"><tr><td colspan="7">Loading…</td></tr></tbody>
+    </table>
+  </div></div>
+</div>
+
+</div>
+
+<script>
+let ME = null;
+let CAN_ENTER = false;
+let MACHINES = [];
+
+function showTab(id){
+  document.querySelectorAll(".tab-content").forEach(el=>el.classList.toggle("active", el.id === id));
+  document.querySelectorAll(".tab-btn").forEach(el=>el.classList.toggle("active", el.getAttribute("data-tab") === id));
+}
+window.showTab = showTab;
+
+function badgeColor(status){
+  return { "Open":"var(--bad)","In Progress":"var(--warn)","Resolved":"var(--ok)","Closed":"var(--muted)",
+           "Pass":"var(--ok)","Fail":"var(--bad)","Warning":"var(--warn)","Info":"var(--muted)" }[status] || "var(--muted)";
+}
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+
+    const { data: canEnter, error: ceErr } = await sb.rpc("kwp_is_active_staff");
+    if(ceErr) throw new Error("Could not check permissions: " + ceErr.message);
+    CAN_ENTER = !!canEnter;
+
+    document.getElementById("roBanner").style.display = CAN_ENTER ? "none" : "block";
+    document.getElementById("addDtBtn").style.display = CAN_ENTER ? "inline-block" : "none";
+    document.getElementById("addQBtn").style.display = CAN_ENTER ? "inline-block" : "none";
+
+    status.style.color = "#1d8a4e"; status.textContent = "Connected.";
+
+    const today = new Date().toISOString().slice(0,10);
+    const weekAgo = new Date(Date.now() - 7*86400000).toISOString().slice(0,10);
+    document.getElementById("dtFrom").value = weekAgo;
+    document.getElementById("dtTo").value = today;
+    document.getElementById("dt_date").value = today;
+    document.getElementById("q_date").value = today;
+
+    await loadMachines();
+    await Promise.all([loadDowntime(), loadQuality()]);
+  }catch(e){
+    status.style.color = "#c0392b"; status.textContent = "❌ " + e.message;
+    console.error(e);
+  }
+}
+
+async function loadMachines(){
+  const { data } = await sb.from("kwp_machines").select("*").eq("status","Active").order("code");
+  MACHINES = data || [];
+  const opts = '<option value="">— Select —</option>' + MACHINES.map(m=>`<option value="${m.id}">${m.code}</option>`).join("");
+  document.getElementById("dt_machine").innerHTML = '<option value="">— Unspecified —</option>' + MACHINES.map(m=>`<option value="${m.id}">${m.code}</option>`).join("");
+  document.getElementById("q_machine").innerHTML = opts;
+}
+
+// ---------------- DOWNTIME ----------------
+function openDowntimeForm(){
+  document.getElementById("dtFormPanel").style.display = "block";
+  document.getElementById("dtFormStatus").textContent = "";
+}
+window.openDowntimeForm = openDowntimeForm;
+
+async function loadDowntime(){
+  const from = document.getElementById("dtFrom").value, to = document.getElementById("dtTo").value;
+  const body = document.getElementById("dtTableBody");
+  if(!from || !to) return;
+  const { data, error } = await sb.from("kwp_downtime_events")
+    .select("*").gte("production_date", from).lte("production_date", to)
+    .order("production_date", { ascending:false }).order("start_time", { ascending:false });
+  if(error){ body.innerHTML = "<tr><td colspan='8'>Error: " + error.message + "</td></tr>"; return; }
+  if(!data || !data.length){ body.innerHTML = "<tr><td colspan='8'>No downtime events in this range.</td></tr>"; return; }
+  body.innerHTML = data.map(d => `<tr>
+    <td>${d.production_date}</td><td>${d.shift}</td><td>${d.category}</td>
+    <td>${d.start_time}</td><td>${d.end_time||"—"}</td>
+    <td>${d.duration_minutes!=null?Math.round(d.duration_minutes):"—"}</td>
+    <td><span class="badge" style="background:${badgeColor(d.status)}">${d.status}</span></td>
+    <td>${d.owner||"—"}</td>
+  </tr>`).join("");
+}
+window.loadDowntime = loadDowntime;
+
+async function saveDowntime(){
+  const status = document.getElementById("dtFormStatus");
+  const payload = {
+    production_date: document.getElementById("dt_date").value,
+    shift: document.getElementById("dt_shift").value,
+    machine_id: document.getElementById("dt_machine").value || null,
+    category: document.getElementById("dt_category").value,
+    status: document.getElementById("dt_status").value,
+    owner: document.getElementById("dt_owner").value.trim() || null,
+    start_time: document.getElementById("dt_start").value,
+    end_time: document.getElementById("dt_end").value || null,
+    reason: document.getElementById("dt_reason").value.trim() || null,
+    description: document.getElementById("dt_description").value.trim() || null,
+    action_taken: document.getElementById("dt_action").value.trim() || null,
+    technical_reference: document.getElementById("dt_techref").value.trim() || null,
+    reported_by: ME.id
+  };
+  if(!payload.production_date || !payload.start_time){
+    status.className="status err"; status.textContent="Date and Start Time are required."; return;
+  }
+  status.className = "status"; status.textContent = "Saving...";
+  try{
+    const { data: inserted, error } = await sb.from("kwp_downtime_events").insert(payload).select("id").single();
+    if(error) throw error;
+
+    // Best-effort link to a matching production entry, if one exists.
+    const { data: entry } = await sb.from("kwp_production_entries")
+      .select("id").eq("production_date", payload.production_date).eq("shift", payload.shift)
+      .eq("machine_id", payload.machine_id).maybeSingle();
+    if(entry){
+      await sb.from("kwp_downtime_events").update({ production_entry_id: entry.id }).eq("id", inserted.id);
+    }
+
+    await sb.from("kwp_audit_log").insert({
+      actor_profile_id: ME.id, action: "downtime_logged", entity_type: "kwp_downtime_events",
+      entity_id: String(inserted.id), new_value: payload
+    });
+    status.className = "status ok"; status.textContent = "✅ Saved.";
+    await loadDowntime();
+    setTimeout(()=>{ document.getElementById("dtFormPanel").style.display="none"; }, 500);
+  }catch(e){
+    status.className = "status err"; status.textContent = "❌ " + e.message;
+  }
+}
+window.saveDowntime = saveDowntime;
+
+// ---------------- QUALITY ----------------
+function openQualityForm(){
+  document.getElementById("qFormPanel").style.display = "block";
+  document.getElementById("qFormStatus").textContent = "";
+  findEntryForQuality();
+}
+window.openQualityForm = openQualityForm;
+
+async function findEntryForQuality(){
+  const dateVal = document.getElementById("q_date").value;
+  const shiftVal = document.getElementById("q_shift").value;
+  const machineVal = document.getElementById("q_machine").value;
+  const note = document.getElementById("qNoEntryNote");
+  const fields = document.getElementById("qFieldsBlock");
+  document.getElementById("q_entry_id").value = "";
+  if(!dateVal || !machineVal){ note.style.display="none"; fields.style.display="none"; return; }
+
+  const { data: entry } = await sb.from("kwp_production_entries")
+    .select("id").eq("production_date", dateVal).eq("shift", shiftVal).eq("machine_id", machineVal).maybeSingle();
+  if(entry){
+    document.getElementById("q_entry_id").value = entry.id;
+    note.style.display = "none"; fields.style.display = "block";
+  } else {
+    note.style.display = "block"; fields.style.display = "none";
+  }
+}
+window.findEntryForQuality = findEntryForQuality;
+
+async function saveQuality(){
+  const status = document.getElementById("qFormStatus");
+  const entryId = document.getElementById("q_entry_id").value;
+  if(!entryId){ status.className="status err"; status.textContent="Find a matching production entry first."; return; }
+  const payload = {
+    production_entry_id: Number(entryId),
+    quality_type: document.getElementById("q_type").value.trim(),
+    grade: document.getElementById("q_grade").value || null,
+    result_status: document.getElementById("q_result").value,
+    value: document.getElementById("q_value").value || null,
+    unit: document.getElementById("q_unit").value.trim() || null,
+    remarks: document.getElementById("q_remarks").value.trim() || null,
+    checked_by: ME.id
+  };
+  if(!payload.quality_type){ status.className="status err"; status.textContent="Quality Type is required."; return; }
+  status.className = "status"; status.textContent = "Saving...";
+  try{
+    const { error } = await sb.from("kwp_quality_records").insert(payload);
+    if(error) throw error;
+    await sb.from("kwp_audit_log").insert({
+      actor_profile_id: ME.id, action: "quality_record_logged", entity_type: "kwp_quality_records",
+      entity_id: String(entryId), new_value: payload
+    });
+    status.className = "status ok"; status.textContent = "✅ Saved.";
+    await loadQuality();
+    setTimeout(()=>{ document.getElementById("qFormPanel").style.display="none"; }, 500);
+  }catch(e){
+    status.className = "status err"; status.textContent = "❌ " + e.message;
+  }
+}
+window.saveQuality = saveQuality;
+
+async function loadQuality(){
+  const body = document.getElementById("qTableBody");
+  const { data, error } = await sb.from("kwp_quality_records")
+    .select("*, kwp_production_entries(production_date, shift)")
+    .order("checked_at", { ascending:false }).limit(50);
+  if(error){ body.innerHTML = "<tr><td colspan='7'>Error: " + error.message + "</td></tr>"; return; }
+  if(!data || !data.length){ body.innerHTML = "<tr><td colspan='7'>No quality records yet.</td></tr>"; return; }
+  body.innerHTML = data.map(q => `<tr>
+    <td>${q.kwp_production_entries ? q.kwp_production_entries.production_date : "—"}</td>
+    <td>${q.kwp_production_entries ? q.kwp_production_entries.shift : "—"}</td>
+    <td>${q.quality_type}</td><td>${q.grade?q.grade+" Grade":"—"}</td>
+    <td>${q.value!=null?q.value+(q.unit?" "+q.unit:""):"—"}</td>
+    <td><span class="badge" style="background:${badgeColor(q.result_status)}">${q.result_status}</span></td>
+    <td>${q.remarks||"—"}</td>
+  </tr>`).join("");
+}
+
+init();
+</script>
+</body>
+</html>

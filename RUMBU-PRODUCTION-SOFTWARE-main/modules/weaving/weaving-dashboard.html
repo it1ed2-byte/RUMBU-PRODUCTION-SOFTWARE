@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Weaving — Dashboard</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="../../table-resolver.js"></script>
+<style>
+  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;--amber:#d97706;--teal:#0f766e;}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;color:var(--text);}
+  .wrap{max-width:1250px;margin:0 auto;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;}
+  .card h3{color:var(--navy);margin:0 0 12px;font-size:15px;}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;}
+  label{display:block;font-size:12px;font-weight:bold;color:var(--text);margin:0 0 4px;}
+  input,select{width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;}
+  .row > div{flex:1;min-width:150px;}
+  button{padding:10px 16px;border:none;border-radius:8px;font-weight:bold;font-size:13px;cursor:pointer;background:var(--blue);color:#fff;}
+  button:hover{background:var(--blue-dark);}
+  button.print{background:#6b7280;} button.print:hover{background:#4b5563;}
+  .quickbar{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;}
+  .qbtn{background:var(--bg);color:var(--navy);padding:6px 11px;border:1px solid var(--line);border-radius:8px;font-size:12px;font-weight:bold;cursor:pointer;}
+  .qbtn.active{background:var(--blue);color:#fff;border-color:var(--blue);}
+  .status{margin-top:8px;font-weight:bold;font-size:13px;min-height:14px;}
+  .status.err{color:var(--red);} .status.ok{color:var(--green);}
+
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:12px;margin-bottom:16px;}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;text-align:center;}
+  .kpi .n{font-size:24px;font-weight:800;color:var(--navy);line-height:1.1;}
+  .kpi .l{font-size:11px;color:var(--muted);margin-top:4px;font-weight:bold;text-transform:uppercase;letter-spacing:.4px;}
+  .kpi.good .n{color:var(--green);} .kpi.warn .n{color:var(--amber);} .kpi.teal .n{color:var(--teal);}
+  .kpi .subv{font-size:11px;color:var(--muted);margin-top:2px;}
+
+  .bests{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;}
+  .best{border:1px solid var(--line);border-radius:10px;padding:12px;background:#f9fbfd;}
+  .best .t{font-size:11px;color:var(--muted);font-weight:bold;text-transform:uppercase;}
+  .best .v{font-size:16px;font-weight:800;color:var(--navy);margin-top:3px;}
+  .best .e{font-size:12px;color:var(--teal);font-weight:bold;margin-top:2px;}
+
+  .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px;}
+  .bar-row{display:flex;align-items:center;gap:10px;margin:7px 0;font-size:13px;}
+  .bar-row .lbl{width:38%;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .bar-row .track{flex:1;background:#eef2f7;border-radius:6px;height:16px;overflow:hidden;position:relative;}
+  .bar-row .fill{height:100%;background:var(--blue);}
+  .bar-row .fill.a{background:var(--green);} .bar-row .fill.b{background:var(--amber);}
+  .bar-row .fill.c{background:var(--red);} .bar-row .fill.t{background:#94a3b8;}
+  .bar-row .fill.teal{background:var(--teal);}
+  .bar-row .val{width:64px;text-align:right;font-weight:bold;color:var(--navy);font-size:12px;}
+  svg{width:100%;height:auto;display:block;}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;margin-top:8px;}
+  .legend span{display:inline-flex;align-items:center;gap:5px;}
+  .dot{width:11px;height:11px;border-radius:3px;display:inline-block;}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<div id="connStatus">Loading...</div>
+
+<div id="appArea" style="display:none;">
+  <div class="card">
+    <h3>Filters</h3>
+    <div class="quickbar" id="quickbar">
+      <button class="qbtn" data-range="week" onclick="setRange('week',this)">This Week</button>
+      <button class="qbtn active" data-range="month" onclick="setRange('month',this)">This Month</button>
+      <button class="qbtn" data-range="quarter" onclick="setRange('quarter',this)">Last 3 Months</button>
+      <button class="qbtn" data-range="year" onclick="setRange('year',this)">This Year</button>
+      <button class="qbtn" data-range="custom" onclick="setRange('custom',this)">Custom</button>
+    </div>
+    <div class="row">
+      <div><label>From</label><input type="date" id="fromDate"></div>
+      <div><label>To</label><input type="date" id="toDate"></div>
+      <div><label>Section</label><select id="section"></select></div>
+      <div><label>Shift</label><select id="shift"><option value="All">All</option><option value="Morning">Morning</option><option value="Night">Night</option></select></div>
+      <div style="flex:0 0 auto;"><label>&nbsp;</label><button onclick="runDashboard()">Run</button></div>
+    </div>
+    <div class="status" id="status"></div>
+  </div>
+
+  <div id="dash" style="display:none;">
+    <div class="kpis" id="kpis"></div>
+
+    <div class="card">
+      <h3>Best Performers (by efficiency)</h3>
+      <div class="bests" id="bests"></div>
+      <div style="font-size:11px;color:#6b7280;margin-top:10px;">Efficiency = Total ÷ Target × 100. "Best" excludes very small samples so a single lucky row cannot top the list.</div>
+    </div>
+
+    <div class="grid2">
+      <div class="card"><h3>Morning vs Night — Total Production</h3><div id="chartShift"></div></div>
+      <div class="card"><h3>Production vs A / B / C / Target</h3><div id="chartGrade"></div></div>
+      <div class="card"><h3>Production by Mat Type</h3><div id="chartMat"></div></div>
+      <div class="card" id="cmpCard"><h3>Rumbu vs Mama Sannu — Efficiency</h3><div id="chartCompare"></div></div>
+      <div class="card"><h3>Top 10 Operators (by production)</h3><div id="chartOps"></div></div>
+      <div class="card"><h3>Top 10 Assets (by production)</h3><div id="chartAssets"></div></div>
+    </div>
+
+    <div class="card"><h3>Daily Production Trend</h3><div id="chartTrend"></div></div>
+  </div>
+</div>
+</div>
+
+<script>
+const SECTION_LABEL = { "Rumbu":"Rumbu", "MamaSannu":"Mama Sannu" };
+let ME = null, MY_SECTIONS = [], ROWS = [];
+let MW_TABLE = "mat_weaving"; // resolved properly in init() below
+
+function n(v){ const x = parseFloat(v); return isNaN(x)?0:x; }
+function fmt(v){ return Math.round(v).toLocaleString(); }
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
+
+// ---------- init ----------
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    MW_TABLE = await resolveWeavingTable();
+
+    MY_SECTIONS = (ME.sectionNames && ME.sectionNames.length) ? ME.sectionNames.filter(s=>["Rumbu","MamaSannu"].includes(s)) : [];
+    if(ME.role === "super_admin" && !MY_SECTIONS.length) MY_SECTIONS = ["Rumbu","MamaSannu"];
+    if(!MY_SECTIONS.length) MY_SECTIONS = ["Rumbu","MamaSannu"]; // fallback
+
+    // Build section dropdown. "All" only when >1 section available.
+    const sel = document.getElementById("section");
+    let opts = "";
+    if(MY_SECTIONS.length > 1) opts += '<option value="All">All (comparison)</option>';
+    opts += MY_SECTIONS.map(s=>`<option value="${s}">${SECTION_LABEL[s]||s}</option>`).join("");
+    sel.innerHTML = opts;
+    if(MY_SECTIONS.length === 1){ sel.value = MY_SECTIONS[0]; sel.disabled = true; }
+
+    setRange("month", document.querySelector('.qbtn[data-range="month"]'));
+    status.style.color = "#1d8a4e"; status.textContent = "Connected.";
+    document.getElementById("appArea").style.display = "block";
+    runDashboard();
+  }catch(e){
+    status.style.color = "#c0392b"; status.textContent = "❌ " + e.message; console.error(e);
+  }
+}
+
+// ---------- date range ----------
+function iso(d){ return d.toISOString().slice(0,10); }
+function setRange(range, btn){
+  document.querySelectorAll(".qbtn").forEach(b=>b.classList.remove("active"));
+  if(btn) btn.classList.add("active");
+  const t = new Date();
+  let from, to = new Date(t);
+  if(range==="week"){ const day=(t.getDay()+6)%7; from=new Date(t); from.setDate(t.getDate()-day); }
+  else if(range==="month"){ from=new Date(t.getFullYear(), t.getMonth(), 1); }
+  else if(range==="quarter"){ from=new Date(t); from.setMonth(t.getMonth()-3); }
+  else if(range==="year"){ from=new Date(t.getFullYear(),0,1); }
+  else { return; } // custom -> leave as is
+  document.getElementById("fromDate").value = iso(from);
+  document.getElementById("toDate").value = iso(to);
+}
+
+// ---------- data fetch (server-side date filter + pagination) ----------
+async function fetchRows(fromDate, toDate, sectionFilter){
+  let all = [];
+  const pageSize = 1000;
+  let offset = 0;
+  // Build section clause: if a single specific section, filter server-side; if All, restrict to MY_SECTIONS via 'in'
+  let sectionClause = "";
+  if(sectionFilter && sectionFilter !== "All"){
+    sectionClause = "&section=eq." + encodeURIComponent(sectionFilter);
+  } else {
+    // All: limit to sections the user is allowed to see
+    const list = MY_SECTIONS.map(s=>`"${s}"`).join(",");
+    sectionClause = "&section=in.(" + encodeURIComponent(list) + ")";
+  }
+  const base = SUPABASE_URL + "/rest/v1/" + MW_TABLE + "?select=date_col,shift,mat_type,group_name,assets,a_double,a_single,b,c,total,target,shed,units,section,operator_name,operator_id,rank"
+    + "&date_col=gte." + fromDate + "&date_col=lte." + toDate + sectionClause + "&order=date_col.asc";
+  for(let guard=0; guard<400; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(base, { headers });
+    if(!res.ok) throw new Error(MW_TABLE + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+// ---------- aggregation helpers ----------
+function sumBy(rows, keyFn, valFn){
+  const m = {};
+  rows.forEach(r=>{ const k=keyFn(r); if(k==null||k==="") return; m[k]=(m[k]||0)+valFn(r); });
+  return m;
+}
+function totals(rows){
+  let tot=0,ad=0,as=0,b=0,c=0,tg=0;
+  rows.forEach(r=>{ tot+=n(r.total); ad+=n(r.a_double); as+=n(r.a_single); b+=n(r.b); c+=n(r.c); tg+=n(r.target); });
+  return {tot,ad,as,b,c,tg, a:ad+as};
+}
+function eff(tot,tg){ return tg>0 ? (tot/tg*100) : 0; }
+
+// Best-by-efficiency with a minimum-output threshold (10% of the max group's output)
+function bestByEfficiency(rows, keyFn){
+  const grp = {};
+  rows.forEach(r=>{ const k=keyFn(r); if(k==null||k==="") return; if(!grp[k]) grp[k]={tot:0,tg:0}; grp[k].tot+=n(r.total); grp[k].tg+=n(r.target); });
+  const arr = Object.entries(grp).map(([k,v])=>({k, tot:v.tot, tg:v.tg, e:eff(v.tot,v.tg)}));
+  if(!arr.length) return null;
+  const maxTot = Math.max.apply(null, arr.map(x=>x.tot));
+  const threshold = maxTot * 0.10;
+  const eligible = arr.filter(x=>x.tg>0 && x.tot>=threshold);
+  const pool = eligible.length ? eligible : arr.filter(x=>x.tg>0);
+  if(!pool.length) return null;
+  pool.sort((a,b)=> b.e - a.e);
+  return pool[0];
+}
+
+// ---------- run ----------
+async function runDashboard(){
+  const status = document.getElementById("status");
+  const from = document.getElementById("fromDate").value;
+  const to = document.getElementById("toDate").value;
+  const section = document.getElementById("section").value;
+  const shift = document.getElementById("shift").value;
+  if(!from || !to){ status.className="status err"; status.textContent="Select a date range."; return; }
+
+  status.className="status"; status.textContent="Loading data...";
+  try{
+    let rows = await fetchRows(from, to, section);
+    if(shift !== "All") rows = rows.filter(r=>r.shift===shift);
+    ROWS = rows;
+    status.className="status ok"; status.textContent = "";
+    if(!rows.length){ document.getElementById("dash").style.display="none"; status.textContent="No data for these filters."; return; }
+    document.getElementById("dash").style.display="block";
+    renderKPIs(rows);
+    renderBests(rows);
+    renderCharts(rows, section);
+  }catch(e){
+    status.className="status err"; status.textContent="❌ "+e.message;
+  }
+}
+
+function renderKPIs(rows){
+  const t = totals(rows);
+  const e = eff(t.tot, t.tg);
+  const cards = [
+    {n: fmt(t.tot), l:"Total Mat"},
+    {n: fmt(t.a), l:"Total A Grade", cls:"good", sub:`Dbl ${fmt(t.ad)} · Sgl ${fmt(t.as)}`},
+    {n: fmt(t.b), l:"Total B Grade", cls:"warn"},
+    {n: fmt(t.c), l:"Total C Grade"},
+    {n: fmt(t.tg), l:"Total Target"},
+    {n: e.toFixed(1)+"%", l:"Efficiency", cls: e>=90?"good":(e>=75?"teal":"warn")}
+  ];
+  document.getElementById("kpis").innerHTML = cards.map(k=>
+    `<div class="kpi ${k.cls||''}"><div class="n">${k.n}</div><div class="l">${k.l}</div>${k.sub?`<div class="subv">${k.sub}</div>`:""}</div>`).join("");
+}
+
+function renderBests(rows){
+  const defs = [
+    {t:"Best Operator", key:r=>r.operator_name},
+    {t:"Best Asset", key:r=>r.assets},
+    {t:"Best Unit", key:r=>r.units},
+    {t:"Best Shed", key:r=>r.shed},
+    {t:"Best Shift", key:r=>r.shift}
+  ];
+  document.getElementById("bests").innerHTML = defs.map(d=>{
+    const best = bestByEfficiency(rows, d.key);
+    if(!best) return `<div class="best"><div class="t">${d.t}</div><div class="v">—</div></div>`;
+    return `<div class="best"><div class="t">${d.t}</div><div class="v">${best.k}</div>`+
+           `<div class="e">${best.e.toFixed(1)}% eff · ${fmt(best.tot)} mats</div></div>`;
+  }).join("");
+}
+
+// ---------- charts (SVG/HTML bar helpers) ----------
+function hbars(containerId, entries, cls){
+  const wrap = document.getElementById(containerId);
+  if(!entries.length){ wrap.innerHTML="<p style='color:#6b7280;font-size:13px;'>No data.</p>"; return; }
+  const max = Math.max.apply(null, entries.map(e=>e[1])) || 1;
+  wrap.innerHTML = entries.map(([label,val,extra])=>{
+    const pct = Math.round(val/max*100);
+    return `<div class="bar-row"><div class="lbl" title="${label}">${label}</div>`+
+           `<div class="track"><div class="fill ${cls||''}" style="width:${pct}%"></div></div>`+
+           `<div class="val">${extra||fmt(val)}</div></div>`;
+  }).join("");
+}
+
+function renderCharts(rows, section){
+  const t = totals(rows);
+
+  // Morning vs Night
+  const shiftMap = sumBy(rows, r=>r.shift, r=>n(r.total));
+  hbars("chartShift", Object.entries(shiftMap).sort((a,b)=>b[1]-a[1]), "teal");
+
+  // Grade vs Target
+  hbars("chartGrade", [["A Grade", t.a],["B Grade", t.b],["C Grade", t.c],["Target", t.tg]], null);
+  colorGradeBars();
+
+  // Mat type
+  const matMap = sumBy(rows, r=>r.mat_type, r=>n(r.total));
+  hbars("chartMat", Object.entries(matMap).sort((a,b)=>b[1]-a[1]));
+
+  // Rumbu vs MamaSannu efficiency (only when All + user has both)
+  const cmpCard = document.getElementById("cmpCard");
+  if(section === "All" && MY_SECTIONS.length > 1){
+    cmpCard.style.display = "block";
+    const secGrp = {};
+    rows.forEach(r=>{ const k=r.section; if(!secGrp[k]) secGrp[k]={tot:0,tg:0}; secGrp[k].tot+=n(r.total); secGrp[k].tg+=n(r.target); });
+    const entries = Object.entries(secGrp).map(([k,v])=>[SECTION_LABEL[k]||k, eff(v.tot,v.tg), eff(v.tot,v.tg).toFixed(1)+"%"]);
+    hbars("chartCompare", entries.sort((a,b)=>b[1]-a[1]), "teal");
+  } else {
+    cmpCard.style.display = "none";
+  }
+
+  // Top 10 operators
+  const opMap = sumBy(rows, r=>r.operator_name, r=>n(r.total));
+  hbars("chartOps", Object.entries(opMap).sort((a,b)=>b[1]-a[1]).slice(0,10));
+
+  // Top 10 assets
+  const asMap = sumBy(rows, r=>r.assets, r=>n(r.total));
+  hbars("chartAssets", Object.entries(asMap).sort((a,b)=>b[1]-a[1]).slice(0,10));
+
+  // Daily trend (line)
+  const dayMap = sumBy(rows, r=>r.date_col, r=>n(r.total));
+  lineChart("chartTrend", Object.entries(dayMap).sort((a,b)=>a[0]<b[0]?-1:1));
+}
+
+function colorGradeBars(){
+  const fills = document.querySelectorAll("#chartGrade .fill");
+  const classes = ["a","b","c","t"];
+  fills.forEach((f,i)=>{ if(classes[i]) f.classList.add(classes[i]); });
+}
+
+function lineChart(containerId, series){
+  const wrap = document.getElementById(containerId);
+  if(!series.length){ wrap.innerHTML="<p style='color:#6b7280;font-size:13px;'>No data.</p>"; return; }
+  const W=1000, H=260, pad=40;
+  const xs = series.map((_,i)=> pad + i*( (W-2*pad)/Math.max(1,series.length-1) ));
+  const maxV = Math.max.apply(null, series.map(s=>s[1])) || 1;
+  const ys = series.map(s=> H-pad - (s[1]/maxV)*(H-2*pad));
+  let path = "";
+  xs.forEach((x,i)=>{ path += (i===0?"M":"L") + x.toFixed(1) + " " + ys[i].toFixed(1) + " "; });
+  // x labels: show ~8 evenly spaced
+  const step = Math.max(1, Math.floor(series.length/8));
+  let labels = "";
+  for(let i=0;i<series.length;i+=step){
+    labels += `<text x="${xs[i].toFixed(1)}" y="${H-pad+16}" font-size="10" fill="#6b7280" text-anchor="middle">${series[i][0].slice(5)}</text>`;
+  }
+  const area = `M ${xs[0].toFixed(1)} ${(H-pad)} ` + series.map((s,i)=>`L ${xs[i].toFixed(1)} ${ys[i].toFixed(1)}`).join(" ") + ` L ${xs[xs.length-1].toFixed(1)} ${(H-pad)} Z`;
+  wrap.innerHTML =
+    `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+      <line x1="${pad}" y1="${H-pad}" x2="${W-pad}" y2="${H-pad}" stroke="#cbd5e1" stroke-width="1"/>
+      <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${H-pad}" stroke="#cbd5e1" stroke-width="1"/>
+      <path d="${area}" fill="#2E75B6" opacity="0.10"/>
+      <path d="${path}" fill="none" stroke="#2E75B6" stroke-width="2"/>
+      ${xs.map((x,i)=>`<circle cx="${x.toFixed(1)}" cy="${ys[i].toFixed(1)}" r="2.5" fill="#1F3864"/>`).join("")}
+      <text x="${pad-6}" y="${pad}" font-size="10" fill="#6b7280" text-anchor="end">${fmt(maxV)}</text>
+      <text x="${pad-6}" y="${H-pad}" font-size="10" fill="#6b7280" text-anchor="end">0</text>
+      ${labels}
+    </svg>
+    <div class="legend"><span><span class="dot" style="background:#2E75B6"></span>Total mats per day</span></div>`;
+}
+
+init();
+</script>
+</body>
+</html>

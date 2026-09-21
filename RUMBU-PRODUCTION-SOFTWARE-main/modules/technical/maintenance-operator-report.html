@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Maintenance Operator Report</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+  :root{--navy:var(--heading);}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);margin:0;padding:0;background:var(--bg);}
+  .container{max-width:1100px;margin:auto;padding:20px;}
+  .card{background:var(--card);padding:20px;border-radius:12px;box-shadow:0 2px 10px rgba(0,0,0,.1);margin-bottom:20px;}
+  label{font-weight:bold;margin-top:10px;display:block;}
+  input,select{width:100%;padding:10px;margin-top:6px;border-radius:8px;border:1px solid var(--line);}
+  button{background:var(--navy);color:#fff;padding:12px 18px;border:none;border-radius:8px;margin-top:15px;font-size:15px;cursor:pointer;margin-right:8px;}
+  button.alt{background:#38761d;}
+  button:hover{opacity:.9;}
+  table{width:100%;border-collapse:collapse;margin-top:15px;background:var(--card);}
+  th,td{padding:9px;border:1px solid var(--line);font-size:13px;text-align:center;}
+  th{background:var(--navy);color:#fff;}
+  .grand-box{background:#e9f2ff;padding:12px;border-radius:10px;margin-bottom:20px;}
+  #status{margin-top:10px;font-weight:bold;font-size:13px;}
+  @media print{ .no-print{display:none !important;} }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <div class="card no-print">
+    <h2>Maintenance Operator Report</h2>
+    <label>Start Date</label><input type="date" id="start" onchange="fetchNurses()">
+    <label>End Date</label><input type="date" id="end" onchange="fetchNurses()">
+    <label>Nurse / Operator Name</label>
+    <select id="nurse" onchange="fetchJobs()"><option value="">Select Date Range First</option></select>
+    <label>Job Code</label>
+    <select id="job"><option value="">Select Operator First</option></select>
+    <button onclick="viewReport()">VIEW</button>
+    <button class="alt" onclick="window.print()">PRINT / SAVE AS PDF</button>
+    <div id="status">Connecting to Supabase...</div>
+  </div>
+
+  <div id="grand"></div>
+  <div id="table"></div>
+
+</div>
+
+<script>
+const SUPABASE_URL = "https://betfhunzmhtdzgvufmfk.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp";
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
+function parseDT(v){ const d=new Date(v); return isNaN(d)?null:d; }
+function minutesBetween(a,b){ return (!a||!b)?0:Math.trunc((b-a)/60000); }
+function extractNumber(v){ if(v==null) return 0; const m=String(v).match(/\d+(\.\d+)?/); return m?Number(m[0]):0; }
+
+let CTRL_ROWS = []; CTRL_ROWS.forEach(normalizeControlRow);
+
+async function fetchAllControlRows(){
+  const pageSize = 1000;
+  let all = [], offset = 0;
+  while(true){
+    const res = await fetch(SUPABASE_URL + "/rest/v1/control?select=*&limit=" + pageSize + "&offset=" + offset, { headers: authHeaders() });
+    if(!res.ok) throw new Error("HTTP " + res.status);
+    const page = await res.json();
+    all = all.concat(page);
+    if(page.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+
+function normalizeControlRow(r){
+  if(r.date_col === undefined) r.date_col = r.date;
+  if(r.names === undefined) r.names = r.nurse_name;
+  if(r.stop_time === undefined) r.stop_time = r.mc_stoppage_time;
+  if(r.extimated_time === undefined) r.extimated_time = r.estimated_duration;
+  if(r.discription === undefined) r.discription = r.description;
+  return r;
+}
+
+async function init(){
+  const status = document.getElementById("status");
+  try{
+    // requireAuth is provided by auth.js on some deployments.
+    // Guard against it being absent so the module works in all environments.
+    if(typeof requireAuth === "function"){
+      const me = await requireAuth("../../login.html");
+      if(!me) return; // auth.js will redirect to login
+    }
+    // Confirm Supabase credentials are available from auth.js
+    if(typeof SUPABASE_URL === "undefined" || typeof SUPABASE_ANON_KEY === "undefined"){
+      throw new Error("Supabase credentials not found. Check that auth.js loaded correctly.");
+    }
+    status.style.color="#1d8a4e";
+    status.textContent = "Ready. Select a date range to load operators.";
+  }catch(e){
+    status.style.color="#c0392b";
+    status.textContent = "Connection error: " + (e.message||e);
+  }
+}
+
+async function fetchAllRows(table, select, query){
+  let all = [], offset = 0; const pageSize = 1000;
+  const q = query || "";
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=" + (select||"*") + q, { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+async function fetchNurses(){
+  const s = document.getElementById("start").value;
+  const e = document.getElementById("end").value;
+  if(!s || !e) return;
+  const status = document.getElementById("status");
+  status.style.color=""; status.textContent = "Loading operators…";
+  try{
+    CTRL_ROWS = await fetchAllRows("control","*", "&date=gte."+s+"&date=lte."+e);
+    CTRL_ROWS.forEach(normalizeControlRow);
+  }catch(err){
+    status.style.color="#c0392b"; status.textContent = "Could not read data: " + (err.message||err); return;
+  }
+  status.textContent = "";
+  const names = [...new Set(CTRL_ROWS.filter(r => r.date_col>=s && r.date_col<=e && r.names).map(r=>r.names))].sort();
+  const sel = document.getElementById("nurse");
+  sel.innerHTML = '<option value="">-- Select Nurse --</option>' + names.map(n=>`<option>${n}</option>`).join('');
+}
+
+function fetchJobs(){
+  const nurse = document.getElementById("nurse").value;
+  const s = document.getElementById("start").value;
+  const e = document.getElementById("end").value;
+  const sel = document.getElementById("job");
+  if(!nurse){ sel.innerHTML = '<option value="">Select Operator First</option>'; return; }
+  const codes = [...new Set(CTRL_ROWS.filter(r => r.date_col>=s && r.date_col<=e && r.names===nurse && r.job_code).map(r=>r.job_code))].sort();
+  sel.innerHTML = '<option>All</option>' + codes.map(j=>`<option>${j}</option>`).join('');
+}
+
+function getFilteredRows(){
+  const s = document.getElementById("start").value;
+  const e = document.getElementById("end").value;
+  const nurse = document.getElementById("nurse").value;
+  const job = document.getElementById("job").value;
+  return CTRL_ROWS.filter(r=>{
+    if(r.date_col < s || r.date_col > e) return false;
+    if(r.names !== nurse) return false;
+    if(job && job !== "All" && r.job_code !== job) return false;
+    return true;
+  });
+}
+
+function viewReport(){
+  if(!CTRL_ROWS.length){ alert("control returned 0 rows — check its read policy."); return; }
+  const nurse = document.getElementById("nurse").value;
+  if(!document.getElementById("start").value || !document.getElementById("end").value || !nurse){
+    alert("Please select date range and operator."); return;
+  }
+
+  const rows = getFilteredRows().map(r=>{
+    const stop=parseDT(r.stop_time), start=parseDT(r.starting_time), finish=parseDT(r.finish_time);
+    return {
+      assets: r.assets||"",
+      waiting: minutesBetween(stop, start),
+      repair: minutesBetween(start, finish),
+      down: minutesBetween(stop, finish),
+      est: extractNumber(r.extimated_time)
+    };
+  });
+
+  let totalDown=0, totalRep=0, totalEst=0, onTime=0, late=0;
+  rows.forEach(r=>{
+    totalDown+=r.down; totalRep+=r.repair; totalEst+=r.est;
+    if(r.est - r.repair >= 0) onTime++; else late++;
+  });
+
+  document.getElementById("grand").innerHTML = `<div class="grand-box">
+    <b>Grand Summary</b><br>
+    Total Repairs: ${rows.length}<br>
+    On Time: ${onTime}<br>
+    Late: ${late}<br>
+    Total Downtime: ${Math.round(totalDown)} mins<br>
+    Total Repair Time: ${Math.round(totalRep)} mins<br>
+    Total Estimated Time: ${Math.round(totalEst)} mins
+  </div>`;
+
+  let table = `<table><tr><th>Asset</th><th>Waiting</th><th>Repair</th><th>Downtime</th><th>Estimated</th><th>Difference</th></tr>`;
+  rows.forEach(r=>{
+    table += `<tr><td>${r.assets}</td><td>${r.waiting}</td><td>${r.repair}</td><td>${r.down}</td>` +
+      `<td>${r.est}</td><td>${Math.round(r.est - r.repair)}</td></tr>`;
+  });
+  table += "</table>";
+  document.getElementById("table").innerHTML = table;
+}
+
+init();
+</script>
+<script src="../../assets/letterhead.js"></script>
+</body>
+</html>

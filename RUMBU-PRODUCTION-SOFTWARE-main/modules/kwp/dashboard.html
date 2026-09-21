@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>KWP — Dashboard</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  :root{--kmuted:#6b7280;--kred:#c0392b;--kgreen:#1d8a4e;--kamber:#d97706;--kteal:#0f766e;}
+  *{box-sizing:border-box;}
+  body{padding:18px;}
+  .wrap{max-width:1250px;margin:0 auto;}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;}
+  .row > div{flex:1;min-width:140px;}
+  .quickbar{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;}
+  .qbtn{background:var(--bg);color:var(--heading);padding:6px 11px;border:1px solid var(--line);border-radius:8px;font-size:12px;font-weight:bold;cursor:pointer;}
+  .qbtn.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px;}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;text-align:center;}
+  .kpi .n{font-size:23px;font-weight:800;color:var(--heading);line-height:1.1;}
+  .kpi .l{font-size:10.5px;color:var(--kmuted);margin-top:4px;font-weight:bold;text-transform:uppercase;letter-spacing:.4px;}
+  .kpi.good .n{color:var(--kgreen);} .kpi.warn .n{color:var(--kamber);} .kpi.bad .n{color:var(--kred);}
+  .kpi-section-label{font-size:11px;font-weight:800;color:var(--kmuted);text-transform:uppercase;letter-spacing:.5px;margin:4px 0 8px;}
+
+  .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px;}
+  .bar-row{display:flex;align-items:center;gap:10px;margin:7px 0;font-size:13px;}
+  .bar-row .lbl{width:38%;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .bar-row .track{flex:1;background:var(--bg);border-radius:6px;height:16px;overflow:hidden;position:relative;}
+  .bar-row .fill{height:100%;background:var(--accent);}
+  .bar-row .fill.a{background:var(--kgreen);} .bar-row .fill.b{background:var(--kamber);}
+  .bar-row .fill.morning{background:var(--kteal);} .bar-row .fill.night{background:#1F3864;}
+  .bar-row .fill.target{background:#94a3b8;}
+  .bar-row .val{width:70px;text-align:right;font-weight:bold;color:var(--heading);font-size:12px;}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;margin-top:8px;}
+  .legend span{display:inline-flex;align-items:center;gap:5px;}
+  .dot{width:11px;height:11px;border-radius:3px;display:inline-block;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div id="connStatus">Loading...</div>
+
+<div id="appArea" style="display:none;">
+  <div class="card-panel">
+    <h3>Filters</h3>
+    <div class="quickbar" id="quickbar">
+      <button class="qbtn" data-range="today" onclick="setRange('today',this)">Today</button>
+      <button class="qbtn active" data-range="week" onclick="setRange('week',this)">This Week</button>
+      <button class="qbtn" data-range="month" onclick="setRange('month',this)">This Month</button>
+      <button class="qbtn" data-range="custom" onclick="setRange('custom',this)">Custom</button>
+    </div>
+    <div class="row">
+      <div><label>From</label><input type="date" id="fromDate"></div>
+      <div><label>To</label><input type="date" id="toDate"></div>
+      <div><label>Shift</label><select id="f_shift"><option value="">All</option><option>Morning</option><option>Night</option></select></div>
+      <div><label>Shift Team</label><select id="f_team"><option value="">All</option><option value="A">Shift A</option><option value="B">Shift B</option></select></div>
+      <div><label>Machine</label><select id="f_machine"><option value="">All</option></select></div>
+    </div>
+    <div class="row" style="margin-top:10px;">
+      <div><label>Product Grade Focus</label><select id="f_grade"><option value="">Both</option><option value="A">A Grade only</option><option value="B">B Grade only</option></select></div>
+      <div><label>Downtime Category</label><select id="f_dtcat"><option value="">All</option></select></div>
+      <div><label>Production Status</label><select id="f_status"><option value="std">Submitted + Approved</option><option value="all">All (incl. Draft)</option></select></div>
+      <div style="flex:0 0 auto;"><label>&nbsp;</label><button onclick="runDashboard()">Run</button></div>
+    </div>
+    <div class="status" id="dashStatus"></div>
+  </div>
+
+  <div id="dash" style="display:none;">
+    <div class="kpi-section-label">Always current (not affected by filters above)</div>
+    <div class="kpis" id="kpisFixed"></div>
+
+    <div class="kpi-section-label">For the selected filter period</div>
+    <div class="kpis" id="kpisFiltered"></div>
+
+    <div class="grid2">
+      <div class="card-panel"><h3>Daily Output Trend</h3><div id="chartTrend"></div></div>
+      <div class="card-panel"><h3>A Grade vs B Grade</h3><div id="chartGrade"></div></div>
+      <div class="card-panel"><h3>Morning vs Night Performance</h3><div id="chartShift"></div></div>
+      <div class="card-panel"><h3>Production Rate Trend (kg/hr)</h3><div id="chartRate"></div></div>
+      <div class="card-panel"><h3>Yield Trend</h3><div id="chartYield"></div></div>
+      <div class="card-panel"><h3>Downtime by Category (hrs)</h3><div id="chartDowntime"></div></div>
+      <div class="card-panel"><h3>Attendance Trend</h3><div id="chartAttendance"></div></div>
+      <div class="card-panel"><h3>Target vs Actual (Output, kg)</h3><div id="chartTarget"></div></div>
+    </div>
+  </div>
+</div>
+</div>
+
+<script>
+let ME = null;
+let MACHINES = [];
+
+function fmt(v){ return v==null ? "0" : (Math.abs(v)>=1000 ? (v/1000).toFixed(1)+"k" : Number(v).toFixed(0)); }
+function n2(v){ return v==null ? "—" : Number(v).toFixed(2); }
+function pct(v){ return v==null ? "—" : Number(v).toFixed(2)+"%"; }
+
+function setRange(range, btn){
+  document.querySelectorAll("#quickbar .qbtn").forEach(b=>b.classList.remove("active"));
+  if(btn) btn.classList.add("active");
+  const today = new Date();
+  const iso = d => d.toISOString().slice(0,10);
+  if(range === "today"){
+    document.getElementById("fromDate").value = iso(today);
+    document.getElementById("toDate").value = iso(today);
+  } else if(range === "week"){
+    const day = today.getDay() || 7;
+    const mon = new Date(today); mon.setDate(today.getDate()-day+1);
+    const sun = new Date(mon); sun.setDate(mon.getDate()+6);
+    document.getElementById("fromDate").value = iso(mon);
+    document.getElementById("toDate").value = iso(sun);
+  } else if(range === "month"){
+    document.getElementById("fromDate").value = iso(new Date(today.getFullYear(), today.getMonth(), 1));
+    document.getElementById("toDate").value = iso(new Date(today.getFullYear(), today.getMonth()+1, 0));
+  }
+  if(range !== "custom") runDashboard();
+}
+window.setRange = setRange;
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    status.style.display = "none";
+    document.getElementById("appArea").style.display = "block";
+
+    const { data: m } = await sb.from("kwp_machines").select("*").eq("status","Active").order("code");
+    MACHINES = m || [];
+    document.getElementById("f_machine").innerHTML += MACHINES.map(x=>`<option value="${x.id}">${x.code}</option>`).join("");
+    const categories = ["Blades & Mechanical","Feedstock","Power & Utilities","Other"];
+    document.getElementById("f_dtcat").innerHTML += categories.map(c=>`<option>${c}</option>`).join("");
+
+    setRange("week", document.querySelector('[data-range="week"]'));
+  }catch(e){
+    status.style.color = "#c0392b"; status.textContent = "❌ " + e.message;
+    console.error(e);
+  }
+}
+
+async function runDashboard(){
+  const dashStatus = document.getElementById("dashStatus");
+  dashStatus.className = "status"; dashStatus.textContent = "Loading…";
+  document.getElementById("dash").style.display = "none";
+
+  try{
+    const from = document.getElementById("fromDate").value;
+    const to = document.getElementById("toDate").value;
+    const shiftF = document.getElementById("f_shift").value;
+    const teamF = document.getElementById("f_team").value;
+    const machineF = document.getElementById("f_machine").value;
+    const dtCatF = document.getElementById("f_dtcat").value;
+    const gradeF = document.getElementById("f_grade").value;
+    const statusF = document.getElementById("f_status").value;
+    const statuses = statusF === "all" ? ["Draft","Submitted","Under Review","Approved"] : ["Submitted","Approved"];
+    if(!from || !to){ dashStatus.textContent = "Pick a From and To date."; return; }
+
+    await Promise.all([loadFixedKpis(), loadFilteredDashboard(from, to, shiftF, teamF, machineF, dtCatF, gradeF, statuses)]);
+
+    dashStatus.textContent = "";
+    document.getElementById("dash").style.display = "block";
+  }catch(e){
+    dashStatus.className = "status err"; dashStatus.textContent = "❌ " + e.message;
+    console.error(e);
+  }
+}
+window.runDashboard = runDashboard;
+
+// ---------------- FIXED KPIs (Today / This Week, unaffected by filters) ----------------
+async function loadFixedKpis(){
+  const today = new Date().toISOString().slice(0,10);
+  const day = new Date().getDay() || 7;
+  const mon = new Date(); mon.setDate(mon.getDate()-day+1);
+  const sun = new Date(mon); sun.setDate(mon.getDate()+6);
+  const weekFrom = mon.toISOString().slice(0,10), weekTo = sun.toISOString().slice(0,10);
+
+  const { data: todayRows } = await sb.from("kwp_production_entries").select("total_output_kg").eq("production_date", today).in("status",["Submitted","Approved"]);
+  const todayOutput = (todayRows||[]).reduce((s,r)=>s+Number(r.total_output_kg||0),0);
+
+  const { data: weekSummary } = await sb.rpc("kwp_period_summary", { p_from: weekFrom, p_to: weekTo, p_machine_id: null });
+  const w = (weekSummary && weekSummary[0]) || {};
+
+  document.getElementById("kpisFixed").innerHTML = `
+    <div class="kpi"><div class="n">${fmt(todayOutput)}</div><div class="l">Today's Output (kg)</div></div>
+    <div class="kpi"><div class="n">${fmt(w.total_output_kg)}</div><div class="l">This Week's Output (kg)</div></div>
+  `;
+}
+
+// ---------------- FILTERED dashboard ----------------
+async function loadFilteredDashboard(from, to, shiftF, teamF, machineF, dtCatF, gradeF, statuses){
+  let q = sb.from("kwp_production_entries_calculated").select("*").gte("production_date", from).lte("production_date", to).in("status", statuses);
+  if(shiftF) q = q.eq("shift", shiftF);
+  if(teamF) q = q.eq("shift_team", teamF);
+  if(machineF) q = q.eq("machine_id", machineF);
+  const { data: entries, error: eErr } = await q.order("production_date");
+  if(eErr) throw eErr;
+
+  let dtQ = sb.from("kwp_downtime_events").select("*").gte("production_date", from).lte("production_date", to);
+  if(shiftF) dtQ = dtQ.eq("shift", shiftF);
+  if(machineF) dtQ = dtQ.eq("machine_id", machineF);
+  if(dtCatF) dtQ = dtQ.eq("category", dtCatF);
+  const { data: downtime } = await dtQ;
+
+  let attQ = sb.from("kwp_attendance").select("*").gte("attendance_date", from).lte("attendance_date", to);
+  if(shiftF) attQ = attQ.eq("shift", shiftF);
+  const { data: attendance } = await attQ;
+
+  const targetRate = await sb.rpc("kwp_target_for", { p_type:"production_rate_kg_hr", p_date: from, p_shift: shiftF || null }).then(r=>r.data);
+
+  // ---- Filtered KPIs ----
+  const totInput = (entries||[]).reduce((s,e)=>s+Number(e.input_kg||0),0);
+  const totA = (entries||[]).reduce((s,e)=>s+Number(e.a_grade_kg||0),0);
+  const totB = (entries||[]).reduce((s,e)=>s+Number(e.b_grade_kg||0),0);
+  const totOutput = (entries||[]).reduce((s,e)=>s+Number(e.total_output_kg||0),0);
+  const totMinutes = (entries||[]).reduce((s,e)=>s+Number(e.production_minutes||0),0);
+  const totDowntime = (downtime||[]).reduce((s,d)=>s+Number(d.duration_minutes||0),0);
+  const rate = totMinutes>0 ? totOutput/(totMinutes/60) : null;
+  const yieldPct = totInput>0 ? totOutput/totInput*100 : null;
+  const loss = totInput - totOutput;
+  const targetOutput = (targetRate && totMinutes) ? targetRate*(totMinutes/60) : null;
+  const achievement = targetOutput ? totOutput/targetOutput*100 : null;
+  const attPresent = (attendance||[]).filter(a=>a.status==="Present"||a.status==="Late").length;
+  const attTotal = (attendance||[]).length;
+  const attPct = attTotal ? attPresent/attTotal*100 : null;
+
+  document.getElementById("kpisFiltered").innerHTML = `
+    <div class="kpi"><div class="n">${targetOutput?fmt(targetOutput):"—"}</div><div class="l">Target (kg)</div></div>
+    <div class="kpi ${achievement>=100?'good':achievement!=null&&achievement<80?'bad':'warn'}"><div class="n">${achievement!=null?achievement.toFixed(1)+"%":"—"}</div><div class="l">Achievement</div></div>
+    <div class="kpi"><div class="n">${fmt(totA)}</div><div class="l">A Grade (kg)</div></div>
+    <div class="kpi"><div class="n">${fmt(totB)}</div><div class="l">B Grade (kg)</div></div>
+    <div class="kpi ${yieldPct>=90?'good':yieldPct!=null&&yieldPct<80?'bad':'warn'}"><div class="n">${yieldPct!=null?yieldPct.toFixed(1)+"%":"—"}</div><div class="l">Yield</div></div>
+    <div class="kpi"><div class="n">${fmt(loss)}</div><div class="l">Loss (kg)</div></div>
+    <div class="kpi"><div class="n">${rate!=null?rate.toFixed(1):"—"}</div><div class="l">Production Rate (kg/hr)</div></div>
+    <div class="kpi ${totDowntime>0?'warn':''}"><div class="n">${(totDowntime/60).toFixed(1)}h</div><div class="l">Downtime</div></div>
+    <div class="kpi ${attPct>=90?'good':attPct!=null&&attPct<75?'bad':'warn'}"><div class="n">${attPct!=null?attPct.toFixed(1)+"%":"—"}</div><div class="l">Attendance</div></div>
+  `;
+
+  // ---- Charts ----
+  // Daily Output Trend
+  const dayMap = {};
+  (entries||[]).forEach(e=>{
+    const v = gradeF==="A" ? Number(e.a_grade_kg||0) : gradeF==="B" ? Number(e.b_grade_kg||0) : Number(e.total_output_kg||0);
+    dayMap[e.production_date] = (dayMap[e.production_date]||0) + v;
+  });
+  lineChart("chartTrend", Object.entries(dayMap).sort((a,b)=>a[0]<b[0]?-1:1), "#2E75B6", "Output (kg)");
+
+  // A vs B Grade
+  hbars("chartGrade", [["A Grade", totA],["B Grade", totB]], ["a","b"]);
+
+  // Morning vs Night
+  const byShift = {"Morning":{output:0,mins:0},"Night":{output:0,mins:0}};
+  (entries||[]).forEach(e=>{
+    const b = byShift[e.shift]; if(!b) return;
+    b.output += Number(e.total_output_kg||0); b.mins += Number(e.production_minutes||0);
+  });
+  hbars("chartShift", [
+    ["Morning Rate (kg/hr)", byShift.Morning.mins>0?byShift.Morning.output/(byShift.Morning.mins/60):0],
+    ["Night Rate (kg/hr)", byShift.Night.mins>0?byShift.Night.output/(byShift.Night.mins/60):0]
+  ], ["morning","night"]);
+
+  // Production Rate Trend
+  const rateMap = {};
+  (entries||[]).forEach(e=>{ if(e.production_rate_kg_hr!=null) rateMap[e.production_date] = e.production_rate_kg_hr; });
+  lineChart("chartRate", Object.entries(rateMap).sort((a,b)=>a[0]<b[0]?-1:1), "#0f766e", "kg/hr");
+
+  // Yield Trend
+  const yieldMap = {};
+  (entries||[]).forEach(e=>{ if(e.yield_percent!=null) yieldMap[e.production_date] = e.yield_percent; });
+  lineChart("chartYield", Object.entries(yieldMap).sort((a,b)=>a[0]<b[0]?-1:1), "#1d8a4e", "%");
+
+  // Downtime by Category
+  const dtByCategory = {};
+  (downtime||[]).forEach(d=>{ dtByCategory[d.category] = (dtByCategory[d.category]||0) + (Number(d.duration_minutes)||0)/60; });
+  hbars("chartDowntime", Object.entries(dtByCategory).sort((a,b)=>b[1]-a[1]));
+
+  // Attendance Trend
+  const attMap = {};
+  (attendance||[]).forEach(a=>{
+    if(!attMap[a.attendance_date]) attMap[a.attendance_date] = {p:0,t:0};
+    attMap[a.attendance_date].t++;
+    if(a.status==="Present"||a.status==="Late") attMap[a.attendance_date].p++;
+  });
+  const attSeries = Object.entries(attMap).map(([d,v])=>[d, v.t?v.p/v.t*100:0]).sort((a,b)=>a[0]<b[0]?-1:1);
+  lineChart("chartAttendance", attSeries, "#d97706", "%");
+
+  // Target vs Actual
+  hbars("chartTarget", [["Target", targetOutput||0],["Actual", totOutput]], ["target","a"]);
+}
+
+// ---------- chart helpers (same visual convention as Weaving Dashboard) ----------
+function hbars(containerId, entries, classes){
+  const wrap = document.getElementById(containerId);
+  if(!entries.length){ wrap.innerHTML="<p style='color:var(--muted);font-size:13px;'>No data.</p>"; return; }
+  const max = Math.max.apply(null, entries.map(e=>e[1])) || 1;
+  wrap.innerHTML = entries.map(([label,val],i)=>{
+    const p = Math.round((val/max)*100);
+    const cls = classes ? (classes[i]||"") : "";
+    return `<div class="bar-row"><div class="lbl" title="${label}">${label}</div>`+
+           `<div class="track"><div class="fill ${cls}" style="width:${p}%"></div></div>`+
+           `<div class="val">${fmt(val)}</div></div>`;
+  }).join("");
+}
+
+function lineChart(containerId, series, color, unitLabel){
+  const wrap = document.getElementById(containerId);
+  if(!series.length){ wrap.innerHTML="<p style='color:var(--muted);font-size:13px;'>No data.</p>"; return; }
+  const W=1000, H=240, pad=40;
+  const xs = series.map((_,i)=> pad + i*( (W-2*pad)/Math.max(1,series.length-1) ));
+  const maxV = Math.max.apply(null, series.map(s=>s[1])) || 1;
+  const ys = series.map(s=> H-pad - (s[1]/maxV)*(H-2*pad));
+  let path = "";
+  xs.forEach((x,i)=>{ path += (i===0?"M":"L") + x.toFixed(1) + " " + ys[i].toFixed(1) + " "; });
+  const step = Math.max(1, Math.floor(series.length/8));
+  let labels = "";
+  for(let i=0;i<series.length;i+=step){
+    labels += `<text x="${xs[i].toFixed(1)}" y="${H-pad+16}" font-size="10" fill="var(--kmuted)" text-anchor="middle">${series[i][0].slice(5)}</text>`;
+  }
+  const area = `M ${xs[0].toFixed(1)} ${(H-pad)} ` + series.map((s,i)=>`L ${xs[i].toFixed(1)} ${ys[i].toFixed(1)}`).join(" ") + ` L ${xs[xs.length-1].toFixed(1)} ${(H-pad)} Z`;
+  wrap.innerHTML =
+    `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+      <line x1="${pad}" y1="${H-pad}" x2="${W-pad}" y2="${H-pad}" stroke="#cbd5e1" stroke-width="1"/>
+      <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${H-pad}" stroke="#cbd5e1" stroke-width="1"/>
+      <path d="${area}" fill="${color}" opacity="0.10"/>
+      <path d="${path}" fill="none" stroke="${color}" stroke-width="2"/>
+      ${xs.map((x,i)=>`<circle cx="${x.toFixed(1)}" cy="${ys[i].toFixed(1)}" r="2.5" fill="${color}"/>`).join("")}
+      <text x="${pad-6}" y="${pad}" font-size="10" fill="var(--kmuted)" text-anchor="end">${fmt(maxV)}</text>
+      <text x="${pad-6}" y="${H-pad}" font-size="10" fill="var(--kmuted)" text-anchor="end">0</text>
+      ${labels}
+    </svg>
+    <div class="legend"><span><span class="dot" style="background:${color}"></span>${unitLabel||""}</span></div>`;
+}
+
+init();
+</script>
+</body>
+</html>

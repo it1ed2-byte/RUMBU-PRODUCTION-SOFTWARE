@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Tracking Table Viewer</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+  body { font-family:var(--sans); margin: 15px; color: #333; }
+  h3 { margin-bottom: 10px; }
+  input, select, button {
+    padding: 6px 8px; margin: 5px; font-size: 12px; border-radius: 5px; border:1px solid var(--line);
+  }
+  button { background-color: #4CAF50; color: white; font-weight: bold; cursor:pointer; }
+  button:hover { background-color: #45a049; }
+  form { display: flex; flex-wrap: wrap; align-items: center; }
+  label { margin-right: 10px; font-size: 12px; }
+  #status { font-size: 12px; font-weight: bold; margin: 6px 0; }
+  #tableContainer, #summaryLegend { margin-top: 15px; }
+  table { border-collapse: collapse; width: 100%; font-size: 10px; }
+  th, td { border:1px solid var(--line); padding: 4px 6px; text-align: center; }
+  th { background-color: #f2f2f2; }
+  tr:hover { background-color: #f1f1f1; }
+  #tableContainer { transition: opacity 0.5s ease-in-out; overflow-x:auto; }
+  @media screen and (max-width: 768px) {
+    form { flex-direction: column; }
+    label { margin-bottom: 5px; }
+    table { font-size: 9px; }
+  }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+</head>
+<body>
+
+<h3>Tracking Table Viewer</h3>
+<div id="status">Connecting to Supabase...</div>
+
+<form id="filterForm">
+  <label>Start Date: <input type="date" id="startDate" required></label>
+  <label>End Date: <input type="date" id="endDate" required></label>
+  <label>Shift:
+    <select id="shift"><option value="">All</option><option value="Morning">Morning</option><option value="Night">Night</option></select>
+  </label>
+  <label>Section:
+    <select id="section"><option value="">All</option></select>
+  </label>
+  <label>ID: <input type="text" id="id" placeholder="Leave empty for all"></label>
+  <label>Assets: <input type="text" id="assets" placeholder="Leave empty for all"></label>
+  <label>Job Code:
+    <select id="jobCode"><option value="">All</option><option value="No Repair">No Repair</option><option value="Bad Pipe">Bad Pipe</option><option value="Faulty">Faulty</option></select>
+  </label>
+  <button type="button" onclick="fetchData()">View Table</button>
+  <button type="button" onclick="fetchSummary()">View Summary</button>
+</form>
+
+<div id="summaryLegend"></div>
+<div id="tableContainer"></div>
+
+<script>
+const SECTION_DISPLAY_MAP = { "Rumbu": "Rumbu", "MamaSannu": "Mama Sannu" };
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
+function parseDT(v){
+  if(v === null || v === undefined || v === "") return null;
+  const d = new Date(v);
+  return isNaN(d) ? null : d;
+}
+function secondsBetween(a,b){ return (!a||!b)?0:Math.trunc((b-a)/1000); }
+function formatSeconds(sec){
+  sec = sec || 0;
+  const h = String(Math.floor(sec/3600)).padStart(2,"0");
+  const m = String(Math.floor((sec%3600)/60)).padStart(2,"0");
+  const s = String(sec%60).padStart(2,"0");
+  return h+":"+m+":"+s;
+}
+
+let MON_ROWS = [];
+
+// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
+// `query` may include extra params like "&order=col.desc" (no leading select).
+async function fetchAllRows(table, query){
+  let all = [], offset = 0; const pageSize = 1000;
+  const q = query || "";
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=*" + q, { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+
+
+async function init(){
+  const status = document.getElementById("status");
+  try{
+    const me = await requireAuth("../../login.html");
+    if(!me) return;
+
+    const mySectionKeys = (me.sectionNames && me.sectionNames.length)
+      ? me.sectionNames
+      : ["Rumbu","MamaSannu"];
+    document.getElementById("section").innerHTML = '<option value="">All</option>' +
+      mySectionKeys.map(s=>`<option value="${s}">${SECTION_DISPLAY_MAP[s] || s}</option>`).join("");
+
+    MON_ROWS = await fetchAllRows("monitoring", "");
+    status.style.color = "#1d8a4e";
+    status.textContent = "Connected. monitoring: " + MON_ROWS.length + " rows.";
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+function getFormData(){
+  return {
+    startDate: document.getElementById("startDate").value,
+    endDate: document.getElementById("endDate").value,
+    shift: document.getElementById("shift").value,
+    section: document.getElementById("section").value,
+    id: document.getElementById("id").value.trim(),
+    assets: document.getElementById("assets").value.trim(),
+    jobCode: document.getElementById("jobCode").value
+  };
+}
+
+function filteredRows(f){
+  if(!MON_ROWS.length) return [];
+  return MON_ROWS.filter(r=>{
+    if(!f.startDate || !f.endDate) return false;
+    if(r.date_col < f.startDate || r.date_col > f.endDate) return false;
+    if(f.shift && r.shift !== f.shift) return false;
+    // NOTE: preserved exactly as the original — Section is filtered against
+    // the RANK field, not a real Section column.
+    if(f.section && r.rank !== f.section) return false;
+    if(f.id && r.asset_id !== f.id) return false;
+    if(f.assets && r.assets !== f.assets) return false;
+    if(f.jobCode && r.job_code !== f.jobCode) return false;
+    return true;
+  });
+}
+
+// --- Detailed Table ---
+function fetchData(){
+  const form = getFormData();
+  const container = document.getElementById("tableContainer");
+  if(!form.startDate || !form.endDate){ alert("Please select Start and End dates"); return; }
+  container.style.opacity = 0.5;
+  container.innerHTML = "Loading...";
+
+  const rows = filteredRows(form).sort((a,b)=>(b.date_col||"").localeCompare(a.date_col||""));
+  const data = rows.map(r=>{
+    const stop=parseDT(r.m_c_stoppage_time), start=parseDT(r.starting_time), finish=parseDT(r.finish_time);
+    return {
+      Date: r.date_col, ID: r.asset_id, Assets: r.assets, Operator_Name: r.operator_name,
+      Downtime: formatSeconds(secondsBetween(stop, finish)),
+      Confirming_Time: formatSeconds(secondsBetween(start, finish)),
+      Waiting_Time: formatSeconds(secondsBetween(stop, start)),
+      Job_Code: r.job_code
+    };
+  }).slice(0, 1000);
+
+  renderTable(data);
+}
+
+function renderTable(data){
+  const container = document.getElementById("tableContainer");
+  document.getElementById("summaryLegend").innerHTML = "";
+  if(data.length === 0){ container.innerHTML = "<p>No records found.</p>"; return; }
+  let html = `<table><tr><th>Date</th><th>ID</th><th>Assets</th><th>Name</th>
+    <th>Downtime</th><th>Confirming Time</th><th>Waiting Time</th><th>Job Code</th></tr>`;
+  data.forEach(row=>{
+    html += `<tr><td>${row.Date}</td><td>${row.ID}</td><td>${row.Assets}</td><td>${row.Operator_Name}</td>` +
+      `<td>${row.Downtime}</td><td>${row.Confirming_Time}</td><td>${row.Waiting_Time}</td><td>${row.Job_Code}</td></tr>`;
+  });
+  html += "</table>";
+  container.innerHTML = html;
+  container.style.opacity = 1;
+}
+
+// --- Summary Table ---
+function fetchSummary(){
+  const form = getFormData();
+  const container = document.getElementById("tableContainer");
+  if(!form.startDate || !form.endDate){ alert("Please select Start and End dates"); return; }
+  container.style.opacity = 0.5;
+  container.innerHTML = "Loading summary...";
+
+  const rows = filteredRows(form);
+  const groups = {};
+  rows.forEach(r=>{
+    const key = [r.date_col, r.assets, r.asset_id, r.operator_name, r.shift].join("||");
+    if(!groups[key]) groups[key] = {
+      Date: r.date_col, Assets: r.assets, ID: r.asset_id, Operator_Name: r.operator_name, Shift: r.shift,
+      Frequency: 0, Total_Downtime: 0, Total_Confirming: 0, Total_Waiting: 0
+    };
+    const g = groups[key];
+    const stop=parseDT(r.m_c_stoppage_time), start=parseDT(r.starting_time), finish=parseDT(r.finish_time);
+    g.Frequency++;
+    g.Total_Downtime += secondsBetween(stop, finish);
+    g.Total_Confirming += secondsBetween(start, finish);
+    g.Total_Waiting += secondsBetween(stop, start);
+  });
+
+  const data = Object.values(groups)
+    .sort((a,b)=> (b.Frequency - a.Frequency) || (b.Date||"").localeCompare(a.Date||""))
+    .slice(0,1000);
+  renderSummary(data);
+}
+
+function renderSummary(data){
+  const container = document.getElementById("tableContainer");
+  const legend = document.getElementById("summaryLegend");
+
+  if(data.length === 0){
+    legend.innerHTML = ""; container.innerHTML = "<p>No summary records found.</p>"; return;
+  }
+  legend.innerHTML = '<span style="background-color:#ffcccc; padding:3px 6px; border-radius:3px;">High Frequency (&ge;3)</span>';
+
+  let html = `<table><tr><th>Date</th><th>Assets</th><th>ID</th><th>Operator</th><th>Shift</th>
+    <th>Frequency</th><th>Sum of Downtime</th><th>Sum of Confirming Time</th><th>Sum of Waiting Time</th></tr>`;
+  data.forEach(row=>{
+    const highlight = row.Frequency >= 3 ? 'style="background-color:#ffcccc; font-weight:bold;"' : '';
+    html += `<tr ${highlight}><td>${row.Date}</td><td>${row.Assets}</td><td>${row.ID}</td><td>${row.Operator_Name}</td>` +
+      `<td>${row.Shift}</td><td>${row.Frequency}</td><td>${formatSeconds(row.Total_Downtime)}</td>` +
+      `<td>${formatSeconds(row.Total_Confirming)}</td><td>${formatSeconds(row.Total_Waiting)}</td></tr>`;
+  });
+  html += "</table>";
+  container.innerHTML = html;
+  container.style.opacity = 1;
+}
+
+init();
+</script>
+</body>
+</html>

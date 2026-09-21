@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Rumbu Production System</title>
+<link rel="stylesheet" href="styles.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="auth.js"></script>
+<style>
+  html, body { height: 100%; overflow: hidden; }
+
+  /* ---- Auth loading gate ---- */
+  #authGate {
+    position: fixed; inset: 0; background: #101f3a; color: #dfe6f2;
+    display: flex; align-items: center; justify-content: center;
+    font-family:var(--sans); font-size: 14px; z-index: 100;
+  }
+  #authGate.err { color: #ffb4a8; }
+  body.ready #authGate { display: none; }
+
+  /* ---- User info bar ---- */
+  .user-box { display: flex; align-items: center; gap: 10px; font-size: 12px; color: #dfe6f2; }
+  .user-box .role-badge {
+    background: rgba(255,255,255,.14); padding: 3px 9px; border-radius: 5px;
+    font-weight: bold; letter-spacing: .3px; font-size: 11px;
+  }
+  .user-box button {
+    background: rgba(255,255,255,.14); border: none; color: #fff;
+    padding: 6px 10px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 600;
+  }
+  .user-box button:hover { background: rgba(255,255,255,.26); }
+
+  /* ---- Sidebar account link (Manage Accounts / Change Password) ---- */
+  .menu-link {
+    display: block; width: 100%; text-align: left; padding: 15px 20px;
+    background: none; border: none; color: #fff; font-weight: bold;
+    font-size: 13.5px; cursor: pointer; border-bottom: 1px solid #22385f;
+    font-family: inherit;
+  }
+  .menu-link:hover { background: #1d3357; }
+
+  /* ---- Top bar: slim, always visible ---- */
+  .app-header {
+    background: linear-gradient(135deg, var(--navy) 0%, #142a4d 100%);
+    display: flex; align-items: center; gap: 14px;
+    padding: 14px 18px; box-shadow: 0 2px 10px rgba(0,0,0,.15);
+    position: relative; z-index: 20;
+  }
+  .hamburger {
+    background: none; border: none; color: #fff; font-size: 22px;
+    cursor: pointer; padding: 4px 8px; border-radius: 6px; line-height: 1;
+    transition: background .15s;
+  }
+  .hamburger:hover { background: rgba(255,255,255,.12); }
+  .app-header .titles { flex: 1; }
+  .app-header h1 { font-size: 17px; letter-spacing: 1px; margin: 0; text-transform: uppercase; }
+  .app-header p { font-size: 11.5px; opacity: .85; margin: 2px 0 0; }
+
+  /* ---- Drawer (hidden by default, slides in) ---- */
+  .overlay {
+    position: fixed; inset: 0; background: rgba(10,20,40,.45);
+    opacity: 0; pointer-events: none; transition: opacity .25s; z-index: 30;
+  }
+  .overlay.show { opacity: 1; pointer-events: auto; }
+
+  .side {
+    position: fixed; top: 0; left: 0; bottom: 0; width: 290px; max-width: 85vw;
+    background: linear-gradient(180deg, #16294a 0%, #101f3a 100%);
+    color: #dfe6f2; padding: 18px 0; overflow-y: auto; z-index: 31;
+    transform: translateX(-100%); transition: transform .25s ease;
+    box-shadow: 4px 0 18px rgba(0,0,0,.3);
+  }
+  .side.show { transform: translateX(0); }
+
+  .side-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 18px 14px; border-bottom: 1px solid #26406e; margin-bottom: 8px;
+  }
+  .side-head .brandline { font-size: 11px; letter-spacing: 1.5px; opacity: .7; text-transform: uppercase; }
+  .side-close { background: none; border: none; color: #cdd8ea; font-size: 20px; cursor: pointer; padding: 2px 8px; }
+  .side-close:hover { color: #fff; }
+
+  .menu-group { border-bottom: 1px solid #22385f; }
+  .menu-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 15px 20px; cursor: pointer; font-weight: bold; font-size: 13.5px;
+    color: #fff; user-select: none; letter-spacing: .4px; transition: background .15s;
+  }
+  .menu-head::before { content: "🏭"; margin-right: 8px; font-size: 14px; opacity: .8; }
+  #grp-weaving .menu-head::before { content: "🧵"; }
+  #grp-technical .menu-head::before { content: "🛠️"; }
+  #grp-training .menu-head::before { content: "🎓"; }
+  #grp-waste .menu-head::before { content: "♻️"; }
+  #grp-controlroom .menu-head::before { content: "🖥️"; }
+  #grp-workshop .menu-head::before { content: "🔩"; }
+  #grp-hr .menu-head::before { content: "🧑‍💼"; }
+  #grp-todo .menu-head::before { content: "✅"; }
+  #grp-account .menu-head::before { content: "👤"; }
+  .menu-head:hover { background: #1d3357; }
+  .menu-head .arrow { transition: transform .2s; font-size: 11px; opacity: .7; }
+  .menu-group.open .menu-head .arrow { transform: rotate(90deg); }
+  .menu-group.open .menu-head { background: #1a2f56; }
+  .menu-items { display: none; padding: 6px 0 12px; }
+  .menu-group.open .menu-items { display: block; }
+  .menu-item {
+    display: block; padding: 10px 20px 10px 40px; font-size: 13px;
+    color: #cdd8ea; text-decoration: none; cursor: pointer; border: none;
+    background: none; width: 100%; text-align: left; border-left: 3px solid transparent;
+    transition: all .15s;
+  }
+  .menu-item:hover { background: #22406e; color: #fff; border-left-color: var(--blue); }
+  .menu-item.active { background: var(--blue); color: #fff; border-left-color: #fff; font-weight: 600; }
+  .menu-empty { padding: 8px 20px 8px 40px; font-size: 11.5px; opacity: .5; font-style: italic; }
+
+  /* ---- Content area (landing view) ---- */
+  .content { height: calc(100vh - 58px); overflow-y: auto; background: var(--bg); }
+  .content-inner { padding: 24px; max-width: var(--maxw); margin: 0 auto; }
+  .welcome-card {
+    background: #fff; border: 1px solid var(--line); border-radius: 12px;
+    padding: 34px 30px; margin-top: 10px; text-align: center;
+    box-shadow: 0 4px 18px rgba(31,56,100,.08); border-top: 5px solid var(--blue);
+  }
+  .welcome-card h2 { color: var(--navy); margin: 0 0 10px; font-size: 21px; }
+  .welcome-card p { color: var(--muted); margin: 6px auto; line-height: 1.6; max-width: 560px; }
+  .dept-chips { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; justify-content: center; }
+  .dept-chip {
+    background: #eef2f8; border: 1px solid var(--line); border-radius: 20px;
+    padding: 8px 16px; font-size: 13px; color: var(--navy); font-weight: 600;
+  }
+
+  /* ---- Full-screen module view ---- */
+  .module-view {
+    position: fixed; inset: 0; background: #fff; z-index: 25;
+    display: none; flex-direction: column;
+  }
+  .module-view.show { display: flex; }
+  .module-bar {
+    display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+    background: var(--navy); color: #fff; flex-shrink: 0;
+  }
+  .module-bar button {
+    background: rgba(255,255,255,.14); border: none; color: #fff;
+    padding: 7px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600;
+  }
+  .module-bar button:hover { background: rgba(255,255,255,.26); }
+  .module-bar .name { font-size: 13px; font-weight: 600; opacity: .95; }
+  .module-frame { flex: 1; width: 100%; border: none; background: #fff; }
+
+  @media (max-width: 480px) {
+    .app-header h1 { font-size: 15px; }
+    .app-header p { font-size: 10.5px; }
+  }
+</style>
+</head>
+<body>
+
+<div id="authGate">Checking your session...</div>
+
+<header class="app-header">
+  <button class="hamburger" onclick="openDrawer()" aria-label="Open menu">&#9776;</button>
+  <div class="titles">
+    <h1>RUMBU INDUSTRIES GROUP</h1>
+    <p>Production Reporting System &bull; Office of Oversight and IT (ED2)</p>
+  </div>
+  <div class="user-box" id="userBox"></div>
+</header>
+
+<div class="overlay" id="overlay" onclick="closeDrawer()"></div>
+
+<!-- DRAWER MENU -->
+<nav class="side" id="side">
+  <div class="side-head">
+    <span class="brandline">Departments</span>
+    <button class="side-close" onclick="closeDrawer()" aria-label="Close menu">&times;</button>
+  </div>
+
+  <div class="menu-group" id="grp-account">
+    <div class="menu-head" onclick="toggleGroup('grp-account')">
+      <span>MANAGE ACCOUNTS</span><span class="arrow">▶</span>
+    </div>
+    <div class="menu-items">
+      <button class="menu-item" id="subCreateUser" onclick="window.location.href='modules/admin/manage-accounts.html?section=create-user'">Create User</button>
+      <button class="menu-item" onclick="window.location.href='modules/admin/manage-accounts.html?section=change-password'">Change Password</button>
+      <button class="menu-item" id="subManageUser" onclick="window.location.href='modules/admin/manage-accounts.html?section=manage-user'">Manage User</button>
+      <button class="menu-item" onclick="window.location.href='modules/admin/manage-accounts.html?section=activity-log'">Activity Log</button>
+      <button class="menu-item" id="subSettings" onclick="window.location.href='modules/admin/manage-accounts.html?section=settings'">Settings</button>
+    </div>
+  </div>
+
+  <!-- EXTRUDER -->
+  <div class="menu-group" id="grp-extruder">
+    <div class="menu-head" onclick="toggleGroup('grp-extruder')">
+      <span>EXTRUDER DEPARTMENT</span><span class="arrow">▶</span>
+    </div>
+    <div class="menu-items">
+
+      <button class="menu-item" data-module-path="extruder/recommendation-form" onclick="openModule(this,'extruder','recommendation-form','Recommendation Form')">Recommendation Form</button>
+
+      <button class="menu-item" data-module-path="extruder/extruder-unified-report" onclick="openModule(this,'extruder','extruder-unified-report','Extruder Unified Report')">Extruder Unified Report</button>
+      <button class="menu-item" data-module-path="extruder/extruder-material-report" onclick="openModule(this,'extruder','extruder-material-report','Extruder Material Used Report')">Extruder Material Used Report</button>
+    </div>
+  </div>
+
+  <!-- WEAVING -->
+  <div class="menu-group" id="grp-weaving">
+    <div class="menu-head" onclick="toggleGroup('grp-weaving')">
+      <span>WEAVING DEPARTMENT</span><span class="arrow">▶</span>
+    </div>
+    <div class="menu-items">
+      <button class="menu-item" data-module-path="weaving/summary-report" onclick="openModule(this,'weaving','summary-report','Weaving Summary Report')">Weaving Summary Report</button>
+      <button class="menu-item" data-module-path="weaving/operator-report" onclick="openModule(this,'weaving','operator-report','Operator Report')">Operator Report</button>
+      <button class="menu-item" data-module-path="weaving/rank-daily-summary" onclick="openModule(this,'weaving','rank-daily-summary','Rank Daily Summary')">Rank Daily Summary</button>
+      <button class="menu-item" data-module-path="weaving/asset-summary" onclick="openModule(this,'weaving','asset-summary','Asset Summary')">Asset Summary</button>
+      <button class="menu-item" data-module-path="weaving/bale-report" onclick="openModule(this,'weaving','bale-report','Bale Report')">Bale Report</button>
+      <button class="menu-item" data-module-path="weaving/smart-asset-summary" onclick="openModule(this,'weaving','smart-asset-summary','Smart Asset Summary')">Smart Asset Summary</button>
+      <button class="menu-item" data-module-path="weaving/operator-production-report" onclick="openModule(this,'weaving','operator-production-report','Operator Production Report')">Operator Production Report</button>
+      <button class="menu-item" data-module-path="weaving/repair-by-assets" onclick="openModule(this,'weaving','repair-by-assets','Repair by Assets')">Repair by Assets</button>
+      <button class="menu-item" data-module-path="weaving/complaint-management" onclick="openModule(this,'weaving','complaint-management','Complaint Management')">Complaint Management</button>
+      <button class="menu-item" data-module-path="weaving/complaint-form" onclick="openModule(this,'weaving','complaint-form','Complaint Form')">Complaint Form</button>
+
+      <button class="menu-item" data-module-path="weaving/mat-weaving-editor" onclick="openModule(this,'weaving','mat-weaving-editor','Mat_Weaving Viewer &amp; Editor')">Mat_Weaving Viewer &amp; Editor</button>
+    </div>
+  </div>
+
+  <!-- TECHNICAL -->
+  <div class="menu-group" id="grp-technical">
+    <div class="menu-head" onclick="toggleGroup('grp-technical')">
+      <span>TECHNICAL DEPARTMENT</span><span class="arrow">▶</span>
+    </div>
+    <div class="menu-items">
+      <button class="menu-item" data-module-path="technical/weekly-downtime-report" onclick="openModule(this,'technical','weekly-downtime-report','Weekly Downtime Report')">Weekly Downtime Report</button>
+      <button class="menu-item" data-module-path="technical/downtime-report" onclick="openModule(this,'technical','downtime-report','Generate Downtime Report')">Generate Downtime Report</button>
+      <button class="menu-item" data-module-path="technical/maintenance-summary" onclick="openModule(this,'technical','maintenance-summary','Maintenance Summary')">Maintenance Summary</button>
+      <button class="menu-item" data-module-path="technical/staff-tracking-form" onclick="openModule(this,'technical','staff-tracking-form','Staff Tracking Form')">Staff Tracking Form</button>
+      <button class="menu-item" data-module-path="technical/nurse-evaluation-report" onclick="openModule(this,'technical','nurse-evaluation-report','Nurse Evaluation Report')">Nurse Evaluation Report</button>
+      <button class="menu-item" data-module-path="technical/downtime-by-assets" onclick="openModule(this,'technical','downtime-by-assets','Downtime by Assets')">Downtime by Assets</button>
+      <button class="menu-item" data-module-path="technical/grand-total-report" onclick="openModule(this,'technical','grand-total-report','Grand Total Report')">Grand Total Report</button>
+      <button class="menu-item" data-module-path="technical/maintenance-operator-report" onclick="openModule(this,'technical','maintenance-operator-report','Maintenance Operator Report')">Maintenance Operator Report</button>
+      <button class="menu-item" data-module-path="technical/persisting-repair-report" onclick="openModule(this,'technical','persisting-repair-report','Persisting Repair Report')">Persisting Repair Report</button>
+      <button class="menu-item" data-module-path="technical/stop-asset-report" onclick="openModule(this,'technical','stop-asset-report','Stop Asset Report')">Stop Asset Report</button>
+    </div>
+  </div>
+
+  <!-- TRAINING -->
+  <div class="menu-group" id="grp-training">
+    <div class="menu-head" onclick="toggleGroup('grp-training')">
+      <span>TRAINING DEPARTMENT</span><span class="arrow">▶</span>
+    </div>
+    <div class="menu-items">
+      <button class="menu-item" data-module-path="training/training-form" onclick="openModule(this,'training','training-form','Training Form')">Training Form</button>
+      <button class="menu-item" data-module-path="training/training-progress-dashboard" onclick="openModule(this,'training','training-progress-dashboard','Training Progress Dashboard')">Training Progress Dashboard</button>
+      <button class="menu-item" data-module-path="training/view-training-code" onclick="openModule(this,'training','view-training-code','View Training Code')">View Training Code</button>
+      <button class="menu-item" data-module-path="training/training-report" onclick="openModule(this,'training','training-report','Training Report')">Training Report</button>
+      <button class="menu-item" data-module-path="training/training-summary-dashboard" onclick="openModule(this,'training','training-summary-dashboard','Training Summary Dashboard')">Training Summary Dashboard</button>
+
+      <button class="menu-item" data-module-path="training/delete-training-record" onclick="openModule(this,'training','delete-training-record','Delete Training Record')">Delete Training Record</button>
+      <button class="menu-item" data-module-path="training/training-code-manager" onclick="openModule(this,'training','training-code-manager','Training Code Manager')">Training Code Manager</button>
+      <button class="menu-item" data-module-path="training/staff-management" onclick="openModule(this,'training','staff-management','Staff Management')">Staff Management</button>
+    </div>
+  </div>
+
+  <!-- WASTE -->
+  <div class="menu-group" id="grp-waste">
+    <div class="menu-head" onclick="toggleGroup('grp-waste')">
+      <span>WASTE DEPARTMENT</span><span class="arrow">▶</span>
+    </div>
+    <div class="menu-items">
+      <button class="menu-item" data-module-path="waste/waste-reporting-form" onclick="openModule(this,'waste','waste-reporting-form','Waste Reporting Form')">Waste Reporting Form</button>
+      <button class="menu-item" data-module-path="waste/manage-waste" onclick="openModule(this,'waste','manage-waste','Manage Waste')">Manage Waste</button>
+      <button class="menu-item" data-module-path="waste/waste-dashboard" onclick="openModule(this,'waste','waste-dashboard','Waste Dashboard')">Waste Dashboard</button>
+    </div>
+  </div>
+
+  <!-- CONTROL ROOM -->
+  <div class="menu-group" id="grp-controlroom">
+    <div class="menu-head" onclick="toggleGroup('grp-controlroom')">
+      <span>CONTROL ROOM</span><span class="arrow">▶</span>
+    </div>
+    <div class="menu-items">
+      <button class="menu-item" data-module-path="controlroom/monitoring-room" onclick="openModule(this,'controlroom','monitoring-room','Monitoring Room (Live TV)')">Monitoring Room (Live TV)</button>
+      <button class="menu-item" data-module-path="controlroom/tracking-table-viewer" onclick="openModule(this,'controlroom','tracking-table-viewer','Tracking Table Viewer')">Tracking Table Viewer</button>
+      <button class="menu-item" data-module-path="controlroom/technical-loss-live-board" onclick="openModule(this,'controlroom','technical-loss-live-board','Technical Loss Live Board')">Technical Loss Live Board</button>
+      <button class="menu-item" data-module-path="controlroom/secure-backup" onclick="openModule(this,'controlroom','secure-backup','Secure Backup')">Secure Backup</button>
+    </div>
+  </div>
+
+  <!-- WORKSHOP -->
+  <div class="menu-group" id="grp-workshop">
+    <div class="menu-head" onclick="toggleGroup('grp-workshop')">
+      <span>WORKSHOP</span><span class="arrow">▶</span>
+    </div>
+    <div class="menu-items">
+      <button class="menu-item" data-module-path="workshop/checklist-form" onclick="openModule(this,'workshop','checklist-form','Checklist Form')">Checklist Form</button>
+      <button class="menu-item" data-module-path="workshop/pm-schedule-dashboard" onclick="openModule(this,'workshop','pm-schedule-dashboard','PM Schedule Dashboard')">PM Schedule Dashboard</button>
+      <button class="menu-item" data-module-path="workshop/parts-store-manager" onclick="openModule(this,'workshop','parts-store-manager','Parts Store Manager')">Parts Store Manager</button>
+    </div>
+  </div>
+
+  <div class="menu-group" id="grp-hr">
+    <div class="menu-head" onclick="toggleGroup('grp-hr')">
+      <span>HR DEPARTMENT</span><span class="arrow">▶</span>
+    </div>
+    <div class="menu-items">
+      <button class="menu-item" data-module-path="hr/hr-demo" onclick="openModule(this,'hr','hr-demo','HR Department Daily Log')">Daily Log</button>
+      <button class="menu-item" data-module-path="hr/create-query" onclick="openModule(this,'hr','create-query','Create Query/Memo')">Create Query/Memo</button>
+      <button class="menu-item" data-module-path="hr/manage-query" onclick="openModule(this,'hr','manage-query','Manage Query/Memo')">Manage Query/Memo</button>
+      <button class="menu-item" data-module-path="hr/add-gatepass" onclick="openModule(this,'hr','add-gatepass','Add Gatepass')">Add Gatepass</button>
+      <button class="menu-item" data-module-path="hr/view-gatepass" onclick="openModule(this,'hr','view-gatepass','View Gatepass')">View Gatepass</button>
+      <button class="menu-item" data-module-path="hr/approve-gatepass" onclick="openModule(this,'hr','approve-gatepass','Approve Gatepass')">Approve Gatepass</button>
+    </div>
+  </div>
+
+  <div class="menu-group" id="grp-todo">
+    <div class="menu-head" onclick="toggleGroup('grp-todo')">
+      <span>TASK MANAGEMENT</span><span class="arrow">▶</span>
+    </div>
+    <div class="menu-items">
+      <button class="menu-item" data-module-path="todo/assign-task" onclick="openModule(this,'todo','assign-task','Assign Task')">Assign Task</button>
+      <button class="menu-item" data-module-path="todo/view-tasks" onclick="openModule(this,'todo','view-tasks','View Task')">View Task</button>
+      <button class="menu-item" data-module-path="todo/todo-settings" onclick="openModule(this,'todo','todo-settings','Task Settings')">Settings</button>
+      <button class="menu-item" data-module-path="todo/my-tasks" onclick="openModule(this,'todo','my-tasks','My Tasks')">My Tasks</button>
+    </div>
+  </div>
+</nav>
+
+<!-- LANDING CONTENT -->
+<main class="content" id="landing">
+  <div class="content-inner">
+    <div class="welcome-card">
+      <h2>Welcome to the Rumbu Production Reporting System</h2>
+      <p>Tap the <strong>&#9776;</strong> menu at the top left, choose a department, then a module.
+         Each report opens full screen for the clearest view.</p>
+      <p>All reports read live from the central database. The system works on office screens and on phones.</p>
+      <div class="dept-chips">
+        <span class="dept-chip">Extruder Department</span>
+        <span class="dept-chip">Weaving Department</span>
+        <span class="dept-chip">Technical Department</span>
+      </div>
+    </div>
+  </div>
+</main>
+
+<!-- FULL-SCREEN MODULE VIEW -->
+<div class="module-view" id="moduleView">
+  <div class="module-bar">
+    <button onclick="closeModule()">&larr; Back</button>
+    <button onclick="openDrawer()">&#9776; Menu</button>
+    <span class="name" id="moduleName"></span>
+  </div>
+  <iframe class="module-frame" id="moduleFrame" title="Module"></iframe>
+</div>
+
+<script>
+  function openDrawer(){
+    document.getElementById("side").classList.add("show");
+    document.getElementById("overlay").classList.add("show");
+  }
+  function closeDrawer(){
+    document.getElementById("side").classList.remove("show");
+    document.getElementById("overlay").classList.remove("show");
+  }
+  function toggleGroup(id) {
+    document.getElementById(id).classList.toggle("open");
+  }
+
+  // Modules that are actually built and ready to open.
+  // Add a line here each time a new module is wired in.
+  const READY_MODULES = {
+
+    "extruder/recommendation-form": true,
+
+    "extruder/extruder-unified-report": true,
+    "extruder/extruder-material-report": true,
+    "weaving/summary-report": true,
+    "weaving/operator-report": true,
+    "weaving/rank-daily-summary": true,
+    "weaving/asset-summary": true,
+    "weaving/bale-report": true,
+    "weaving/smart-asset-summary": true,
+    "weaving/operator-production-report": true,
+    "weaving/repair-by-assets": true,
+    "weaving/complaint-management": true,
+    "weaving/complaint-form": true,
+
+    "weaving/mat-weaving-editor": true,
+    "technical/weekly-downtime-report": true,
+    "technical/downtime-report": true,
+    "technical/maintenance-summary": true,
+    "technical/staff-tracking-form": true,
+    "technical/nurse-evaluation-report": true,
+    "technical/downtime-by-assets": true,
+    "technical/grand-total-report": true,
+    "technical/maintenance-operator-report": true,
+    "technical/persisting-repair-report": true,
+    "technical/stop-asset-report": true,
+    "controlroom/monitoring-room": true,
+    "controlroom/tracking-table-viewer": true,
+    "controlroom/technical-loss-live-board": true,
+    "controlroom/secure-backup": true,
+    "workshop/checklist-form": true,
+    "workshop/pm-schedule-dashboard": true,
+    "workshop/parts-store-manager": true,
+    "training/training-form": true,
+    "training/training-progress-dashboard": true,
+    "training/view-training-code": true,
+    "training/training-report": true,
+    "training/training-summary-dashboard": true,
+
+    "training/delete-training-record": true,
+    "training/training-code-manager": true,
+    "training/staff-management": true,
+    "waste/waste-reporting-form": true,
+    "waste/manage-waste": true,
+    "waste/waste-dashboard": true,
+    "hr/hr-demo": true,
+    "hr/create-query": true,
+    "hr/manage-query": true,
+    "hr/add-gatepass": true,
+    "hr/view-gatepass": true,
+    "hr/approve-gatepass": true,
+    "todo/assign-task": true,
+    "todo/view-tasks": true,
+    "todo/todo-settings": true,
+    "todo/my-tasks": true
+  };
+
+  function openModule(btn, dept, module, label) {
+    document.querySelectorAll(".menu-item").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+
+    const key = dept + "/" + module;
+    const view = document.getElementById("moduleView");
+    const frame = document.getElementById("moduleFrame");
+    const name = document.getElementById("moduleName");
+
+    if (READY_MODULES[key]) {
+      frame.src = "modules/" + dept + "/" + module + ".html";
+      name.textContent = label || "";
+      view.classList.add("show");
+      document.getElementById("landing").style.display = "none";
+    } else {
+      alert("This module has not been added yet.");
+    }
+    closeDrawer();
+  }
+
+  function closeModule(){
+    document.getElementById("moduleView").classList.remove("show");
+    document.getElementById("moduleFrame").src = "about:blank";
+    document.getElementById("landing").style.display = "";
+  }
+
+  // ---- Department menu-group id -> real app_departments name ----
+  let ME = null;
+
+  async function initAuth(){
+    const gate = document.getElementById("authGate");
+    try{
+      ME = await requireAuth("login.html");
+      if(!ME) return; // requireAuth already redirected to login
+
+      renderUserBox();
+      await filterMenuByAssignedPages();
+
+      document.body.classList.add("ready");
+    }catch(e){
+      gate.classList.add("err");
+      gate.textContent = "❌ " + e.message;
+      console.error(e);
+    }
+  }
+
+  function renderUserBox(){
+    const box = document.getElementById("userBox");
+    const roleLabel = ME.role === "super_admin"
+      ? "SUPER ADMIN" + (ME.superAdminType ? " (" + ME.superAdminType.toUpperCase() + ")" : "")
+      : ME.role.toUpperCase();
+
+    let html = `<span class="role-badge">${roleLabel}</span><span>${ME.username}</span>`;
+    if(ME.sectionName) html += `<span>&middot; ${ME.sectionName}</span>`;
+    html += `<button onclick="logout('login.html')">Log Out</button>`;
+    box.innerHTML = html;
+
+    // Account link now lives in the sidebar, not the header — label
+    // depends on role, same as before.
+    // Manage Accounts sidebar group: Create User and Manage User only make
+    // sense for Super Admin and Admin — a plain User only ever gets to
+    // Change Password and their own Activity Log.
+    if(ME.role === "user"){
+      document.getElementById("subCreateUser").style.display = "none";
+      document.getElementById("subManageUser").style.display = "none";
+    }
+    if(ME.role !== "super_admin"){
+      document.getElementById("subSettings").style.display = "none";
+    }
+  }
+
+  // ============================================================
+  // PAGE-LEVEL ACCESS MODEL — the real, permanent model now, for every
+  // Department and every role. Department itself grants nothing; it's
+  // purely a display folder.
+  //   Super Admin -> every page, unrestricted.
+  //   Admin       -> automatically every page that exists in any of the
+  //                  Section(s) they were assigned (bulk grant by Section).
+  //   User        -> only the specific pages individually assigned to them
+  //                  via assigned_pages (fine-grained, chosen by their Admin).
+  // ============================================================
+  async function filterMenuByAssignedPages(){
+    const pageButtons = document.querySelectorAll("[data-module-path]");
+    if(!pageButtons.length) return;
+
+    let allowedPaths = [];
+
+    if(ME.role === "super_admin"){
+      // Purely a personal display preference — Super Admin still has full
+      // access underneath regardless. If they've never customized (no
+      // rows), show everything, unrestricted, same as before.
+      const { data } = await sb
+        .from("assigned_pages")
+        .select("pages(module_path)")
+        .eq("profile_id", ME.id);
+      const customized = (data || []).map(r => r.pages ? r.pages.module_path : null).filter(Boolean);
+      if(!customized.length) return; // no customization yet — show everything
+      allowedPaths = customized;
+    } else if(ME.role === "admin"){
+      if(ME.sectionIds && ME.sectionIds.length){
+        const { data } = await sb
+          .from("page_sections")
+          .select("pages(module_path)")
+          .in("section_id", ME.sectionIds);
+        allowedPaths = (data || []).map(r => r.pages ? r.pages.module_path : null).filter(Boolean);
+      }
+    } else {
+      const { data } = await sb
+        .from("assigned_pages")
+        .select("pages(module_path)")
+        .eq("profile_id", ME.id);
+      allowedPaths = (data || []).map(r => r.pages ? r.pages.module_path : null).filter(Boolean);
+    }
+
+    pageButtons.forEach(btn=>{
+      const path = btn.getAttribute("data-module-path");
+      if(allowedPaths.indexOf(path) === -1){
+        btn.style.display = "none";
+      }
+    });
+
+    // TASK MANAGEMENT is universally available — every Admin gets the
+    // management pages, every User gets My Tasks — regardless of Section
+    // or individual page assignment. Super Admin already sees everything
+    // by default and can still deliberately hide it via their own Settings.
+    if(ME.role === "admin"){
+      ["todo/assign-task","todo/view-tasks","todo/todo-settings"].forEach(p=>{
+        const btn = document.querySelector('[data-module-path="'+p+'"]');
+        if(btn) btn.style.display = "";
+      });
+      const myTasksBtn = document.querySelector('[data-module-path="todo/my-tasks"]');
+      if(myTasksBtn) myTasksBtn.style.display = "none";
+    } else if(ME.role === "user"){
+      const myTasksBtn = document.querySelector('[data-module-path="todo/my-tasks"]');
+      if(myTasksBtn) myTasksBtn.style.display = "";
+      ["todo/assign-task","todo/view-tasks","todo/todo-settings"].forEach(p=>{
+        const btn = document.querySelector('[data-module-path="'+p+'"]');
+        if(btn) btn.style.display = "none";
+      });
+    }
+
+    // Hide a Department group entirely if none of its pages ended up visible.
+    document.querySelectorAll(".menu-group").forEach(group=>{
+      const anyVisiblePage = group.querySelector("[data-module-path]:not([style*='display: none'])");
+      const hasAnyPageButtons = group.querySelector("[data-module-path]");
+      if(hasAnyPageButtons && !anyVisiblePage){
+        group.style.display = "none";
+      }
+    });
+  }
+
+  initAuth();
+</script>
+
+</body>
+</html>

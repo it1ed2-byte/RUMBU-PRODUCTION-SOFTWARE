@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Training Progress Dashboard</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+body { font-family:var(--sans); background:var(--bg); padding: 20px; margin:0; display: flex; justify-content: center; }
+.container { width: 100%; max-width: 900px; background:var(--card); padding: 20px; border-radius: 12px; }
+input { width: 100%; padding: 12px; margin-bottom: 10px; border-radius: 8px; border: 1px solid var(--line); box-sizing:border-box; }
+button { width: 100%; padding: 12px; background: black; color: #fff; border: none; border-radius: 8px; cursor:pointer; }
+table { width: 100%; margin-top: 20px; border-collapse: collapse; }
+th, td { border: 1px solid var(--line); padding: 10px; font-size: 14px; }
+th { background:var(--bg); }
+.info { margin-top: 15px; padding: 10px; background:var(--card); border-radius: 8px; }
+.progress-box { margin-top: 5px; font-weight: bold; color: green; }
+#status { font-size:12px; font-weight:bold; text-align:center; margin-bottom:8px; }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <h2>Training Progress Dashboard</h2>
+  <div id="status">Connecting to Supabase...</div>
+  <input id="staffId" placeholder="Enter Staff ID">
+  <button onclick="load()">VIEW PROGRAM</button>
+  <div id="output"></div>
+</div>
+
+<script>
+const SUPABASE_URL = "https://betfhunzmhtdzgvufmfk.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp";
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
+
+let STAFF_ROWS = [], TRAINING_CODE_ROWS = [], TRAINING_TABLE_ROWS = [];
+
+// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
+async function fetchAllRows(table, query){
+  let all = [], offset = 0; const pageSize = 1000;
+  const q = query || "";
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=*" + q, { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+
+
+async function init(){
+  const status = document.getElementById("status");
+  try{
+    const [staffRes, codeRes, trainRes] = await Promise.all([
+      fetchAllRows("staff_list",""),
+      fetchAllRows("training_code",""),
+      fetchAllRows("training_table","")
+    ]);
+    STAFF_ROWS = staffRes;
+    TRAINING_CODE_ROWS = codeRes;
+    TRAINING_TABLE_ROWS = trainRes;
+    status.style.color = "#1d8a4e";
+    status.textContent = "";
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+function getStaffDetails(staffId){
+  const row = STAFF_ROWS.find(r => String(r.staff_id||"").trim().toUpperCase() === String(staffId||"").trim().toUpperCase());
+  if(!row) return { status: "NOT_FOUND" };
+  return { status: "FOUND", Staff_Name: row.staff_name, Department: row.department, Section: row.section, Date_of_Joining: row.date_of_joining };
+}
+
+function load(){
+  const staffId = document.getElementById("staffId").value;
+  if(!staffId){ alert("Enter Staff ID"); return; }
+
+  const staff = getStaffDetails(staffId);
+  if(!staff || staff.status === "NOT_FOUND"){
+    document.getElementById("output").innerHTML = "<p style='color:red'>Staff not found</p>";
+    return;
+  }
+
+  const records = TRAINING_TABLE_ROWS
+    .filter(r => String(r.staff_id||"").trim().toUpperCase() === String(staffId||"").trim().toUpperCase())
+    .sort((a,b) => (a.date_col||"").localeCompare(b.date_col||""));
+
+  const totalTraining = TRAINING_CODE_ROWS.filter(r => r.department === staff.Department).length || 1;
+
+  const joiningDate = staff.Date_of_Joining ? new Date(staff.Date_of_Joining) : null;
+  const days = joiningDate ? Math.floor((new Date() - joiningDate) / (1000*60*60*24)) : 0;
+
+  const progress = records.length > 0 ? ((records.length / totalTraining) * 100).toFixed(2) : "0.00";
+
+  const data = records.map(r => ({ date: r.date_col || "", code: r.training_code || "", description: r.descriptions || "" }));
+
+  let html = `<div class="info">
+    <p><b>Name:</b> ${staff.Staff_Name||""}</p>
+    <p><b>Department:</b> ${staff.Department||""}</p>
+    <p><b>Section:</b> ${staff.Section||""}</p>
+    <p><b>Date of Joining:</b> ${staff.Date_of_Joining||""}</p>
+    <p><b>Total Training:</b> ${totalTraining}</p>
+    <p><b>No of Days:</b> ${days}</p>
+    <div class="progress-box">Overall Progress: ${progress}%</div>
+  </div>
+  <table><tr><th>Date</th><th>Training Code</th><th>Description</th></tr>`;
+
+  data.forEach(r=>{
+    html += `<tr><td>${r.date}</td><td>${r.code}</td><td>${r.description}</td></tr>`;
+  });
+  html += `</table>`;
+
+  document.getElementById("output").innerHTML = html;
+}
+
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Complaint Management</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+  :root{--navy:var(--heading);}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:16px;}
+  h2{text-align:center;color:var(--navy);margin-bottom:16px;}
+  .filter-box{max-width:1100px;margin:0 auto 16px;background:var(--card);padding:15px;border-radius:10px;box-shadow:0 4px 10px rgba(0,0,0,.15);}
+  label{margin-right:5px;font-weight:bold;font-size:13px;}
+  select,input{padding:6px;margin-right:8px;margin-bottom:8px;border:1px solid var(--line);border-radius:6px;}
+  button{padding:8px 14px;background:var(--navy);color:#fff;border:none;border-radius:6px;cursor:pointer;margin-right:6px;font-weight:bold;}
+  button:hover{background:#1e3c72;}
+  .wide{max-width:1100px;margin:0 auto;}
+  table{border-collapse:collapse;width:100%;background:var(--card);box-shadow:0 2px 5px rgba(0,0,0,.12);font-size:12px;}
+  th,td{border:1px solid #ccc;padding:7px;}
+  th{background:var(--navy);color:#fff;}
+  .summary{margin-bottom:10px;font-size:13px;max-width:1100px;margin-left:auto;margin-right:auto;}
+  #status{text-align:center;font-weight:bold;font-size:13px;margin-bottom:10px;}
+  @media print{ .no-print{display:none !important;} }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+</head>
+<body>
+
+<h2 class="no-print">📊 Complaint Management</h2>
+<div id="status" class="no-print">Connecting to Supabase...</div>
+
+<div class="filter-box no-print">
+  <label>Section:</label>
+  <select id="filterSection" onchange="updateTypes()">
+    <option value="">All</option>
+  </select>
+
+  <label>Department:</label>
+  <select id="filterDepartment" onchange="updateTypes()">
+    <option value="">All</option><option>Weaving</option><option>Technical</option>
+    <option>Quality Control</option><option>Extruder 1</option><option>Extruder 2</option><option>Extruder</option>
+  </select>
+
+  <label>Shift:</label>
+  <select id="filterShift"><option value="">All</option><option>Morning</option><option>Night</option></select>
+
+  <label>From Date:</label><input type="date" id="filterFrom" onchange="updateTypes()">
+  <label>To Date:</label><input type="date" id="filterTo" onchange="updateTypes()">
+
+  <label>Type:</label>
+  <select id="filterType"><option value="">All</option></select>
+
+  <button onclick="applyFilter()">Filter</button>
+  <button onclick="window.print()">Print / Save as PDF</button>
+</div>
+
+<div class="summary" id="filterInfo"></div>
+<div class="wide" id="complaintTable"></div>
+
+<script>
+let ALL_COMPLAINTS = [];
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
+const SECTION_DISPLAY_MAP = { "Rumbu": "Rumbu", "MamaSannu": "Mama Sannu" };
+
+// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
+// `query` may include extra params like "&order=col.desc" (no leading select).
+async function fetchAllRows(table, query){
+  let all = [], offset = 0; const pageSize = 1000;
+  const q = query || "";
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=*" + q, { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+
+
+async function init(){
+  const status = document.getElementById("status");
+  try{
+    const me = await requireAuth("../../login.html");
+    if(!me) return;
+
+    const mySections = (me.sectionNames && me.sectionNames.length)
+      ? me.sectionNames.map(s => SECTION_DISPLAY_MAP[s] || s)
+      : ["Rumbu","Mama Sannu"];
+    const sectionSelect = document.getElementById("filterSection");
+    sectionSelect.innerHTML = '<option value="">All</option>' + mySections.map(s=>`<option>${s}</option>`).join("");
+    if(mySections.length === 1){ sectionSelect.value = mySections[0]; sectionSelect.disabled = true; }
+
+    ALL_COMPLAINTS = await fetchAllRows("complaints", "");
+    status.style.color="#1d8a4e";
+    status.textContent = "Connected. complaints: " + ALL_COMPLAINTS.length + " rows.";
+    applyFilter();
+  }catch(e){
+    status.style.color="#c0392b";
+    status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+function getFilter(){
+  return {
+    section: document.getElementById("filterSection").value,
+    department: document.getElementById("filterDepartment").value,
+    shift: document.getElementById("filterShift").value,
+    type: document.getElementById("filterType").value,
+    fromDate: document.getElementById("filterFrom").value,
+    toDate: document.getElementById("filterTo").value
+  };
+}
+
+function matches(c, f, ignoreType){
+  if(f.section && c.section !== f.section) return false;
+  if(f.department && c.department !== f.department) return false;
+  if(f.shift && c.shift !== f.shift) return false;
+  if(f.fromDate && c.date_col < f.fromDate) return false;
+  if(f.toDate && c.date_col > f.toDate) return false;
+  if(!ignoreType && f.type && c.complaint_type !== f.type) return false;
+  return true;
+}
+
+function updateTypes(){
+  const f = getFilter();
+  const types = [...new Set(ALL_COMPLAINTS.filter(c => matches(c, f, true)).map(c => c.complaint_type).filter(Boolean))].sort();
+  const sel = document.getElementById("filterType");
+  const current = sel.value;
+  sel.innerHTML = '<option value="">All</option>' + types.map(t=>`<option value="${t}">${t}</option>`).join("");
+  if(types.includes(current)) sel.value = current;
+}
+
+function applyFilter(){
+  const f = getFilter();
+  document.getElementById("filterInfo").innerHTML =
+    `<strong>Filters Applied:</strong> Section: ${f.section||"All"} | Department: ${f.department||"All"} | ` +
+    `Shift: ${f.shift||"All"} | Type: ${f.type||"All"} | Date: ${f.fromDate||"All"} to ${f.toDate||"All"}`;
+
+  const rows = ALL_COMPLAINTS.filter(c => matches(c, f, false))
+    .sort((a,b)=> (b.date_col+b.from_time).localeCompare(a.date_col+a.from_time));
+
+  let html = '<table><tr><th>ID</th><th>Section</th><th>Department</th><th>Shift</th><th>Date</th><th>Type</th><th>From</th><th>To</th><th>Description</th></tr>';
+  rows.forEach(c=>{
+    html += `<tr><td>${c.complaint_id||""}</td><td>${c.section||""}</td><td>${c.department||""}</td>` +
+      `<td>${c.shift||""}</td><td>${c.date_col||""}</td><td>${c.complaint_type||""}</td>` +
+      `<td>${c.from_time||""}</td><td>${c.to_time||""}</td><td>${c.description||""}</td></tr>`;
+  });
+  html += "</table>";
+  if(!rows.length) html = "<p style='text-align:center;'>No complaints found for the selected filters.</p>";
+  document.getElementById("complaintTable").innerHTML = html;
+}
+
+init();
+</script>
+<script src="../../assets/letterhead.js"></script>
+</body>
+</html>

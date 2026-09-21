@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Staff Tracking Form</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+body{font-family:var(--sans);background:var(--bg);margin:0}
+.container{max-width:960px;margin:auto;padding:16px}
+h1{color:var(--heading);margin-bottom:4px;}
+.form-row{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;align-items:flex-end;}
+.form-row>div{flex:1 1 160px;}
+label{font-weight:600;display:block;margin-bottom:4px;}
+select,input,button{padding:8px;font-size:14px;width:100%;box-sizing:border-box;}
+button{background:var(--accent);color:#fff;border:none;cursor:pointer;border-radius:4px;}
+#status{font-size:13px;font-weight:bold;margin-bottom:10px;}
+#timeline{position:relative;height:80px;border:1px solid var(--line);border-radius:6px;background:var(--card);margin-top:12px}
+.segment{position:absolute;top:0;height:100%;cursor:pointer;}
+.work{background:var(--accent)}
+.idle{background:#e53935}
+.lvjob{background:purple !important;}
+#ticks{display:flex;justify-content:space-between;margin-top:4px;font-size:12px;color:var(--text)}
+#summary{margin-top:12px;background:var(--card);padding:12px;border-radius:6px}
+#details{margin-top:12px;background:var(--card);padding:12px;border-radius:6px;font-size:13px}
+#modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);align-items:center;justify-content:center}
+#modal>div{background:var(--card);padding:16px;border-radius:8px;max-width:360px;}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>Rumbu Industries Limited</h1>
+<h3>Staff Tracking Form</h3>
+<div id="status">Connecting to Supabase...</div>
+
+<div class="form-row">
+  <div><label>Date</label><input id="date" type="date"></div>
+  <div><label>Shift</label>
+    <select id="shift">
+      <option value="Morning">Morning (07:00 &rarr; 19:00)</option>
+      <option value="Night">Night (19:00 &rarr; 07:00)</option>
+    </select>
+  </div>
+  <div><label>Nurse</label><select id="nurse"><option>Select date & shift</option></select></div>
+  <div><button id="load">Load Timeline</button></div>
+</div>
+
+<div id="timeline"></div>
+<div id="ticks"></div>
+<div id="summary"></div>
+<div id="details"></div>
+
+<div id="modal">
+  <div>
+    <h3>Work Details</h3>
+    <div id="modal-content"></div>
+    <button onclick="document.getElementById('modal').style.display='none'">Close</button>
+  </div>
+</div>
+</div>
+
+<script>
+const SUPABASE_URL = "https://betfhunzmhtdzgvufmfk.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp";
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
+
+let CTRL_ROWS = []; CTRL_ROWS.forEach(normalizeControlRow);
+
+const dateEl = document.getElementById('date');
+const shiftEl = document.getElementById('shift');
+const nurseEl = document.getElementById('nurse');
+const timeline = document.getElementById('timeline');
+const ticks = document.getElementById('ticks');
+const summary = document.getElementById('summary');
+const details = document.getElementById('details');
+const modal = document.getElementById('modal');
+const modalContent = document.getElementById('modal-content');
+
+dateEl.value = new Date().toISOString().slice(0,10);
+
+async function fetchAllControlRows(){
+  const pageSize = 1000;
+  let all = [];
+  let offset = 0;
+  while(true){
+    const url = SUPABASE_URL + "/rest/v1/control?select=*&limit=" + pageSize + "&offset=" + offset;
+    const res = await fetch(url, { headers: authHeaders() });
+    if(!res.ok) throw new Error("HTTP " + res.status);
+    const page = await res.json();
+    all = all.concat(page);
+    if(page.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+
+function normalizeControlRow(r){
+  if(r.date_col === undefined) r.date_col = r.date;
+  if(r.names === undefined) r.names = r.nurse_name;
+  if(r.stop_time === undefined) r.stop_time = r.mc_stoppage_time;
+  if(r.extimated_time === undefined) r.extimated_time = r.estimated_duration;
+  if(r.discription === undefined) r.discription = r.description;
+  return r;
+}
+
+async function init(){
+  const status = document.getElementById("status");
+  try{
+    if(typeof requireAuth === "function"){
+      const me = await requireAuth("../../login.html");
+      if(!me) return;
+    }
+    if(typeof SUPABASE_URL === "undefined") throw new Error("Supabase credentials not loaded.");
+    status.style.color="#1d8a4e"; status.textContent = "Select a date to load records.";
+  }catch(e){
+    status.style.color="#c0392b"; status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+async function fetchAllRows(table, select, query){
+  let all = [], offset = 0; const pageSize = 1000;
+  const q = query || "";
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=" + (select||"*") + q, { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+dateEl.addEventListener('change', fetchNurses);
+shiftEl.addEventListener('change', fetchNurses);
+
+async function fetchNurses(){
+  if(!dateEl.value) return;
+  const status = document.getElementById("status");
+  status.style.color=""; status.textContent = "Loading…";
+  try{
+    CTRL_ROWS = await fetchAllRows("control","*", "&date=eq."+dateEl.value);
+    CTRL_ROWS.forEach(normalizeControlRow);
+  }catch(err){
+    status.style.color="#c0392b"; status.textContent = "Could not read data: " + (err.message||err); return;
+  }
+  status.textContent = "";
+  const names = [...new Set(CTRL_ROWS.filter(r =>
+    r.date_col === dateEl.value && r.shift === shiftEl.value && r.names
+  ).map(r => r.names))].sort();
+
+  if(!names.length){
+    nurseEl.innerHTML = `<option value="">No records for ${dateEl.value} / ${shiftEl.value}</option>`;
+    document.getElementById("status").textContent =
+      `No records match ${dateEl.value} / ${shiftEl.value}.`;
+    return;
+  }
+  nurseEl.innerHTML = '<option value="">-- Select Nurse --</option>' + names.map(n=>`<option value="${n}">${n}</option>`).join('');
+}
+
+document.getElementById('load').addEventListener('click', ()=>{
+  if(!nurseEl.value) return alert('Select nurse');
+  summary.textContent='Loading...'; details.innerHTML=''; timeline.innerHTML=''; ticks.innerHTML='';
+
+  const rows = CTRL_ROWS.filter(r =>
+    r.date_col === dateEl.value && r.shift === shiftEl.value &&
+    String(r.names||"").trim().toLowerCase() === nurseEl.value.trim().toLowerCase() &&
+    r.starting_time && r.finish_time
+  );
+  renderTimeline(rows);
+});
+
+function parseTs(t){ return new Date((t||"").replace(/Z$|\+00:00$/, "")).getTime(); }
+
+function renderTimeline(rows){
+  if(!rows || rows.length===0){
+    timeline.innerHTML=''; ticks.innerHTML='';
+    summary.textContent='No work records for this nurse.'; details.innerHTML='';
+    return;
+  }
+
+  const d = dateEl.value;
+  let start, end;
+  if(shiftEl.value === 'Morning'){
+    start = new Date(d+'T07:00:00').getTime();
+    end = new Date(d+'T19:00:00').getTime();
+  } else {
+    const nd = new Date(d+'T00:00:00'); nd.setDate(nd.getDate()+1);
+    start = new Date(d+'T19:00:00').getTime();
+    end = new Date(nd.toISOString().slice(0,10)+'T07:00:00').getTime();
+  }
+
+  timeline.innerHTML=''; ticks.innerHTML='';
+  let segments=[], cursor=start;
+
+  rows.sort((a,b)=> new Date(a.starting_time)-new Date(b.starting_time));
+  rows.forEach(r=>{
+    const s = Math.max(parseTs(r.starting_time), start);
+    const f = Math.min(parseTs(r.finish_time), end);
+    if(f <= s) return;
+    if(s > cursor) segments.push({type:'idle', start:cursor, end:s});
+    segments.push({type:'work', start:s, end:f, data:r});
+    cursor = f;
+  });
+  if(cursor < end) segments.push({type:'idle', start:cursor, end:end});
+
+  let totalWork=0, totalIdle=0;
+  const workIntervals=[], idleIntervals=[];
+  segments.forEach(s=>{
+    const dur = s.end - s.start;
+    if(s.type==='work'){ totalWork+=dur; workIntervals.push(s); }
+    else { totalIdle+=dur; idleIntervals.push(s); }
+  });
+
+  const totalMs = totalWork + totalIdle;
+  const workPct = ((totalWork/totalMs)*100).toFixed(1);
+  const idlePct = ((totalIdle/totalMs)*100).toFixed(1);
+
+  summary.innerHTML = `<b>Total Work:</b> ${Math.round(totalWork/60000)} min (${workPct}%)<br>` +
+    `<b>Total Idle:</b> ${Math.round(totalIdle/60000)} min (${idlePct}%)`;
+
+  const formatTime = ms => { const dt=new Date(ms); return String(dt.getHours()).padStart(2,'0')+':'+String(dt.getMinutes()).padStart(2,'0'); };
+
+  let detailsHtml = '<b>Work Intervals:</b><br>';
+  workIntervals.forEach(w=> detailsHtml += `${formatTime(w.start)} &rarr; ${formatTime(w.end)}<br>`);
+  detailsHtml += '<br><b>Idle Intervals:</b><br>';
+  idleIntervals.forEach(i=> detailsHtml += `${formatTime(i.start)} &rarr; ${formatTime(i.end)}<br>`);
+  details.innerHTML = detailsHtml;
+
+  const step = 2*60*60*1000;
+  const tickLabels = [];
+  for(let t=start; t<=end; t+=step) tickLabels.push(formatTime(t));
+  ticks.innerHTML = `<div style="width:100%;display:flex;justify-content:space-between">${tickLabels.map(t=>`<div>${t}</div>`).join('')}</div>`;
+
+  const LVJOB_CODES = new Set(['LR01','LR02','LR03','LR04','LV01','LV02','LV03','LV04']);
+
+  segments.forEach(seg=>{
+    const el = document.createElement('div');
+    let segmentClass = 'segment ' + seg.type;
+    if(seg.type==='work' && seg.data && LVJOB_CODES.has(seg.data.job_code)) segmentClass = 'segment lvjob';
+    el.className = segmentClass;
+    el.style.left = ((seg.start-start)/totalMs*100)+'%';
+    el.style.width = ((seg.end-seg.start)/totalMs*100)+'%';
+
+    if(seg.type==='work' && seg.data){
+      const jobCode = seg.data.job_code;
+      const jobColor = (jobCode==='LV01'||jobCode==='LV02'||jobCode==='LV03'||jobCode==='LV04') ? 'style="color:purple;font-weight:bold;"' : '';
+      el.onclick = ()=>{
+        modal.style.display='flex';
+        modalContent.innerHTML = `<b>Time:</b> ${formatTime(seg.start)} &rarr; ${formatTime(seg.end)}<br>
+          <b>Work Order:</b> ${seg.data.work_order||''}<br>
+          <b>Assets:</b> ${seg.data.assets||''}<br>
+          <b>Job Code:</b> <span ${jobColor}>${jobCode||''}</span>`;
+      };
+    }
+    timeline.appendChild(el);
+  });
+}
+
+init();
+</script>
+</body>
+</html>

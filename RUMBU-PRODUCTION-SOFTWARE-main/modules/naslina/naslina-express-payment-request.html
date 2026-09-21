@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Naslina Express — Payment Request</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme") || "navy"); }catch(e){}
+  })();
+  window.addEventListener("message", function(e){
+    if(e.data && e.data.rumbuTheme){ document.documentElement.setAttribute("data-theme", e.data.rumbuTheme); }
+  });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="attachments-modal.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:900px;margin:0 auto;}
+  #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);}
+  .readonly-banner{background:rgba(154,107,0,.12);color:var(--warn);padding:10px 14px;border-radius:var(--radius-sm);font-size:13px;font-weight:600;margin-bottom:14px;}
+
+  .amount-row{display:flex;gap:0;}
+  .amount-row input{border-top-right-radius:0;border-bottom-right-radius:0;}
+  .amount-row select{max-width:90px;border-top-left-radius:0;border-bottom-left-radius:0;border-left:0;}
+
+  /* Upload dropzones — mirrors the source Kissflow form: a light tinted
+     panel with a centered icon + link-styled action text. */
+  .dropzone{
+    background:var(--bg);border:1px dashed var(--line-2);border-radius:var(--radius);
+    padding:26px 16px;text-align:center;cursor:pointer;transition:border-color .15s;
+  }
+  .dropzone:hover,.dropzone.drag{border-color:var(--accent);}
+  .dropzone .dz-icon{font-size:22px;color:var(--muted);margin-bottom:6px;}
+  .dropzone .dz-action{color:var(--primary);font-weight:700;font-size:14px;}
+  .dropzone .dz-hint{font-size:11.5px;color:var(--muted);margin-top:2px;}
+  .dropzone input[type=file]{display:none;}
+  .file-list{margin-top:8px;display:flex;flex-direction:column;gap:6px;}
+  .file-chip{
+    display:flex;align-items:center;justify-content:space-between;gap:8px;
+    background:var(--card);border:1px solid var(--line);border-radius:7px;
+    padding:6px 10px;font-size:12.5px;color:var(--text);
+  }
+  .file-chip .fc-remove{color:var(--bad);cursor:pointer;font-weight:700;background:none;border:0;padding:0 4px;font-size:14px;}
+
+  .req-note{color:var(--muted);font-size:12px;margin-top:4px;}
+  .ref-banner{background:rgba(46,117,182,.10);color:var(--primary);border:1px solid var(--line);border-radius:var(--radius-sm);padding:10px 14px;font-size:13px;font-weight:600;margin-bottom:14px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div id="connStatus">Loading...</div>
+<div id="roBanner" class="readonly-banner" style="display:none;">You don't have permission to submit Naslina Express Payment Requests.</div>
+
+<div class="card-panel" id="formPanel" style="display:none;">
+  <h3>Expenditure Payment Request</h3>
+  <p class="sub">Naslina Express — Finance Request</p>
+
+  <div class="form-row">
+    <div class="field">
+      <label>Request Date *</label>
+      <input type="datetime-local" id="f_request_date">
+      <div class="req-note">Request date</div>
+    </div>
+    <div class="field">
+      <label>Recipient Account Name: *</label>
+      <select id="f_beneficiary_id">
+        <option value="">— Select —</option>
+      </select>
+      <div class="req-note">Company Account Number</div>
+    </div>
+  </div>
+
+  <div class="field">
+    <label>Company *</label>
+    <select id="f_company_id"><option value="">— Select —</option></select>
+    <div class="req-note">Select the company</div>
+  </div>
+
+  <div class="field">
+    <label>Department *</label>
+    <select id="f_department_id"><option value="">— Select —</option></select>
+    <div class="req-note">Select the department</div>
+  </div>
+
+  <div class="field">
+    <label>Title *</label>
+    <input id="f_title">
+    <div class="req-note">Request title</div>
+  </div>
+
+  <div class="field">
+    <label>Description</label>
+    <textarea id="f_description"></textarea>
+    <div class="req-note">Short description of the request</div>
+  </div>
+
+  <div class="form-row">
+    <div class="field">
+      <label>Total Amount *</label>
+      <div class="amount-row">
+        <input type="number" step="0.01" min="0" id="f_total_amount" placeholder="Amount">
+        <select id="f_currency">
+          <option value="NGN" selected>NGN</option>
+          <option value="USD">USD</option>
+          <option value="EUR">EUR</option>
+        </select>
+      </div>
+      <div class="req-note">Total request amount</div>
+    </div>
+    <div class="field">
+      <label>Project Duration in Days *</label>
+      <input type="number" min="1" id="f_project_duration_days">
+    </div>
+  </div>
+
+  <div class="field">
+    <label>Request form *</label>
+    <div class="dropzone" data-target="request_form" data-multi="false">
+      <div class="dz-icon">📄</div>
+      <div class="dz-action">Upload file</div>
+      <div class="dz-hint">Drag and drop file or paste from clipboard</div>
+      <input type="file">
+    </div>
+    <div class="file-list" data-list="request_form"></div>
+    <div class="req-note">Upload the request form</div>
+  </div>
+
+  <div class="field">
+    <label>Other Relevant Document</label>
+    <div class="dropzone" data-target="other_document" data-multi="true">
+      <div class="dz-icon">📎</div>
+      <div class="dz-action">Upload files</div>
+      <div class="dz-hint">Drag and drop files or paste from clipboard</div>
+      <input type="file" multiple>
+    </div>
+    <div class="file-list" data-list="other_document"></div>
+  </div>
+
+  <div class="field">
+    <label>Pre-former Invoice</label>
+    <div class="dropzone" data-target="proforma_invoice" data-multi="false">
+      <div class="dz-icon">📄</div>
+      <div class="dz-action">Upload file</div>
+      <div class="dz-hint">Drag and drop file or paste from clipboard</div>
+      <input type="file">
+    </div>
+    <div class="file-list" data-list="proforma_invoice"></div>
+    <div class="req-note">Upload pre-former invoice or quotation</div>
+  </div>
+
+  <div class="field">
+    <label>Pre-former Invoice2</label>
+    <div class="dropzone" data-target="proforma_invoice_2" data-multi="false">
+      <div class="dz-icon">📄</div>
+      <div class="dz-action">Upload file</div>
+      <div class="dz-hint">Drag and drop file or paste from clipboard</div>
+      <input type="file">
+    </div>
+    <div class="file-list" data-list="proforma_invoice_2"></div>
+  </div>
+
+  <button id="submitBtn" onclick="submitRequest()">Submit Request</button>
+  <div class="status" id="formStatus"></div>
+</div>
+
+<div class="card-panel" id="successPanel" style="display:none;">
+  <h3>Request Submitted</h3>
+  <div class="ref-banner" id="refBanner"></div>
+  <p class="sub">Your request has entered the approval workflow starting at Task-Force Check. You'll see its status update as each stage acts on it.</p>
+  <button class="btn-ghost" onclick="resetForm()">Submit Another Request</button>
+</div>
+
+</div>
+
+<script>
+let ME = null;
+let CAN_SUBMIT = false;
+// field_key -> array of { file, name } staged for upload on submit
+const STAGED_FILES = {
+  request_form: [], other_document: [], proforma_invoice: [], proforma_invoice_2: []
+};
+
+let MY_EMPLOYEE_ID = null;
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+
+    const { data: emp, error: empErr } = await sb.from("employees").select("id").eq("linked_profile_id", ME.id).maybeSingle();
+    if(empErr) throw empErr;
+    if(!emp){ throw new Error("No employee record is linked to your account, so a request can't be submitted under your name."); }
+    MY_EMPLOYEE_ID = emp.id;
+
+    // Only a named set of initiators can submit \u2014 see naslina_initiators.
+    const { data: initRow, error: initErr } = await sb.from("naslina_initiators")
+      .select("id").eq("employee_ref_id", MY_EMPLOYEE_ID).maybeSingle();
+    if(initErr) throw initErr;
+    CAN_SUBMIT = !!initRow;
+    document.getElementById("roBanner").style.display = CAN_SUBMIT ? "none" : "block";
+    document.getElementById("formPanel").style.display = CAN_SUBMIT ? "block" : "none";
+
+    status.style.color = "#1d8a4e"; status.textContent = "Connected.";
+
+    document.getElementById("f_request_date").value = new Date().toISOString().slice(0,16);
+
+    await Promise.all([loadBeneficiaries(), loadCompanies(), loadDepartments()]);
+    wireDropzones();
+  }catch(e){
+    status.style.color = "#c0392b"; status.textContent = "\u274C " + e.message;
+    console.error(e);
+  }
+}
+
+async function loadBeneficiaries(){
+  const { data, error } = await sb.from("beneficiaries").select("id,name,account_number,bank").eq("is_active", true).order("name");
+  const sel = document.getElementById("f_beneficiary_id");
+  if(error){ sel.innerHTML = "<option value=''>Error loading recipients</option>"; return; }
+  sel.innerHTML = '<option value="">\u2014 Select \u2014</option>' +
+    (data||[]).map(b => `<option value="${b.id}">${b.name} \u2014 ${b.account_number} (${b.bank})</option>`).join("");
+}
+
+async function loadCompanies(){
+  const { data, error } = await sb.from("naslina_companies").select("id,name").eq("is_active", true).order("name");
+  const sel = document.getElementById("f_company_id");
+  if(error){ sel.innerHTML = "<option value=''>Error</option>"; return; }
+  sel.innerHTML = '<option value="">\u2014 Select \u2014</option>' + (data||[]).map(c => `<option value="${c.id}">${c.name}</option>`).join("");
+  if((data||[]).length === 1) sel.value = data[0].id; // Naslina \u2014 only option
+}
+
+async function loadDepartments(){
+  const { data, error } = await sb.from("naslina_departments").select("id,name").eq("is_active", true).order("name");
+  const sel = document.getElementById("f_department_id");
+  if(error){ sel.innerHTML = "<option value=''>Error</option>"; return; }
+  sel.innerHTML = '<option value="">\u2014 Select \u2014</option>' + (data||[]).map(d => `<option value="${d.id}">${d.name}</option>`).join("");
+  if((data||[]).length === 1) sel.value = data[0].id;
+}
+
+// ---- Dropzones (drag/drop, paste, click-to-browse) ----
+function wireDropzones(){
+  document.querySelectorAll(".dropzone").forEach(zone=>{
+    const key = zone.getAttribute("data-target");
+    const multi = zone.getAttribute("data-multi") === "true";
+    const input = zone.querySelector("input[type=file]");
+
+    zone.addEventListener("click", ()=>input.click());
+    input.addEventListener("change", e => stageFiles(key, multi, e.target.files));
+
+    zone.addEventListener("dragover", e => { e.preventDefault(); zone.classList.add("drag"); });
+    zone.addEventListener("dragleave", () => zone.classList.remove("drag"));
+    zone.addEventListener("drop", e => {
+      e.preventDefault(); zone.classList.remove("drag");
+      stageFiles(key, multi, e.dataTransfer.files);
+    });
+
+    zone.addEventListener("paste", e => {
+      const items = (e.clipboardData || {}).files;
+      if(items && items.length) stageFiles(key, multi, items);
+    });
+  });
+}
+
+function stageFiles(key, multi, fileList){
+  const files = Array.from(fileList || []);
+  if(!files.length) return;
+  if(multi){
+    STAGED_FILES[key].push(...files);
+  }else{
+    STAGED_FILES[key] = [files[0]]; // single-file fields replace, not append
+  }
+  renderFileList(key);
+}
+
+function renderFileList(key){
+  const wrap = document.querySelector(`.file-list[data-list="${key}"]`);
+  wrap.innerHTML = STAGED_FILES[key].map((f, i) =>
+    `<div class="file-chip"><span>${f.name}</span><span><button type="button" onclick="previewStagedFile('${key}',${i})" style="background:none;border:none;color:var(--primary);font-weight:600;cursor:pointer;margin-right:10px;padding:0;">Preview</button><button class="fc-remove" onclick="removeStagedFile('${key}',${i})">&times;</button></span></div>`
+  ).join("");
+}
+
+function previewStagedFile(key, idx){
+  const f = STAGED_FILES[key][idx];
+  if(!f) return;
+  const url = URL.createObjectURL(f);
+  previewFileDirect(url, f.name);
+}
+window.previewStagedFile = previewStagedFile;
+
+function removeStagedFile(key, idx){
+  STAGED_FILES[key].splice(idx, 1);
+  renderFileList(key);
+}
+window.removeStagedFile = removeStagedFile;
+
+// ---- Submit ----
+async function submitRequest(){
+  const status = document.getElementById("formStatus");
+  const btn = document.getElementById("submitBtn");
+
+  const beneficiarySel = document.getElementById("f_beneficiary_id").value;
+  const title = document.getElementById("f_title").value.trim();
+  const companyId = document.getElementById("f_company_id").value;
+  const departmentId = document.getElementById("f_department_id").value;
+  const totalAmount = document.getElementById("f_total_amount").value;
+  const duration = document.getElementById("f_project_duration_days").value;
+  const requestDate = document.getElementById("f_request_date").value;
+
+  if(!requestDate || !beneficiarySel || !companyId || !departmentId || !title || !totalAmount || !duration){
+    status.className = "status err"; status.textContent = "Please fill in every required (*) field.";
+    return;
+  }
+  if(Number(totalAmount) < 0 || Number(duration) < 0){
+    status.className = "status err"; status.textContent = "Total Amount and Project Duration cannot be negative.";
+    return;
+  }
+  if(!STAGED_FILES.request_form.length){
+    status.className = "status err"; status.textContent = "Request form upload is required.";
+    return;
+  }
+
+  btn.disabled = true; btn.textContent = "Submitting...";
+  status.className = "status"; status.textContent = "Submitting...";
+
+  try{
+    const beneficiaryId = beneficiarySel;
+
+    // 1) Look up the first workflow stage (Task-Force Check).
+    const { data: firstStage, error: stageErr } = await sb.from("naslina_workflow_stages")
+      .select("id").eq("sequence_order", 1).single();
+    if(stageErr) throw stageErr;
+
+    // 3) Create the request.
+    const payload = {
+      request_date: requestDate,
+      beneficiary_id: beneficiaryId,
+      company_id: companyId,
+      department_id: departmentId,
+      title,
+      description: document.getElementById("f_description").value.trim() || null,
+      total_amount: Number(totalAmount),
+      currency: document.getElementById("f_currency").value,
+      project_duration_days: Number(duration),
+      current_stage_id: firstStage.id,
+      status: "in_progress",
+      submitted_by: MY_EMPLOYEE_ID
+    };
+    const { data: request, error: reqErr } = await sb.from("naslina_requests").insert(payload).select("id, reference_no").single();
+    if(reqErr) throw reqErr;
+
+    // 4) Upload staged files and log attachments.
+    for(const key of Object.keys(STAGED_FILES)){
+      for(const file of STAGED_FILES[key]){
+        const path = `naslina/${request.id}/${key}/${Date.now()}_${file.name}`;
+        const { error: upErr } = await sb.storage.from("request-attachments").upload(path, file);
+        if(upErr) throw upErr;
+        const { data: pub } = sb.storage.from("request-attachments").getPublicUrl(path);
+        await sb.from("naslina_request_attachments").insert({
+          request_id: request.id, field_key: key, file_name: file.name,
+          file_url: pub.publicUrl, uploaded_by: MY_EMPLOYEE_ID
+        });
+      }
+    }
+
+    document.getElementById("refBanner").textContent = "Reference: " + request.reference_no;
+    document.getElementById("formPanel").style.display = "none";
+    document.getElementById("successPanel").style.display = "block";
+  }catch(e){
+    status.className = "status err"; status.textContent = "\u274C " + (e.message || e);
+  }finally{
+    btn.disabled = false; btn.textContent = "Submit Request";
+  }
+}
+window.submitRequest = submitRequest;
+
+function resetForm(){
+  document.getElementById("successPanel").style.display = "none";
+  document.getElementById("formPanel").style.display = "block";
+  document.getElementById("formStatus").textContent = "";
+  document.querySelectorAll("#formPanel input, #formPanel textarea").forEach(el=>{ if(el.type!=="file") el.value=""; });
+  document.getElementById("f_request_date").value = new Date().toISOString().slice(0,16);
+  Object.keys(STAGED_FILES).forEach(k=>{ STAGED_FILES[k] = []; renderFileList(k); });
+  loadCompanies(); loadDepartments();
+}
+window.resetForm = resetForm;
+
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>KWP — Staff &amp; Shift Management</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme") || "navy"); }catch(e){}
+  })();
+  window.addEventListener("message", function(e){
+    if(e.data && e.data.rumbuTheme){ document.documentElement.setAttribute("data-theme", e.data.rumbuTheme); }
+  });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1200px;margin:0 auto;}
+  .tab-bar{display:flex;gap:6px;flex-wrap:wrap;border-bottom:2px solid var(--line);margin-bottom:16px;}
+  .tab-btn{background:none;border:none;padding:10px 14px;font-weight:700;font-size:13px;color:var(--muted);cursor:pointer;margin:0;border-bottom:3px solid transparent;}
+  .tab-btn:hover{background:var(--bg);color:var(--heading);}
+  .tab-btn.active{color:var(--heading);border-bottom-color:var(--accent);}
+  .tab-content{display:none;}
+  .tab-content.active{display:block;}
+  .readonly-banner{background:rgba(154,107,0,.12);color:var(--warn);padding:10px 14px;border-radius:var(--radius-sm);font-size:13px;font-weight:600;margin-bottom:14px;}
+  #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);}
+  .pending-note{background:rgba(154,107,0,.10);border:1px dashed var(--warn);color:var(--warn);border-radius:var(--radius-sm);padding:10px 14px;font-size:12.5px;margin-bottom:14px;}
+  .toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px;}
+  .toolbar .f{flex:1;min-width:150px;}
+  .toolbar .f.f-min{flex:0 0 auto;min-width:0;}
+  .toolbar label{display:block;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px;}
+  .roster-preview{display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;}
+  .roster-card{flex:1;min-width:180px;background:var(--bg);border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:14px 16px;text-align:center;}
+  .roster-card .shift-name{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;}
+  .roster-card .team{font-size:22px;font-weight:800;color:var(--heading);margin-top:4px;}
+  .emp-result{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;border:1px solid var(--line);border-radius:8px;margin-top:6px;cursor:pointer;background:var(--card);}
+  .emp-result:hover{background:var(--bg);}
+  .emp-result .n{font-weight:700;color:var(--heading);}
+  .emp-result .m{font-size:12px;color:var(--muted);}
+  .emp-result.linked{opacity:.55;cursor:not-allowed;}
+  .picked-box{background:var(--bg);border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:12px 14px;margin:10px 0;}
+  .picked-box.empty{color:var(--muted);font-size:13px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div id="connStatus">Loading...</div>
+<div id="roBanner" class="readonly-banner" style="display:none;">You have read-only access to KWP Staff &amp; Shift Management. Adding and changing records is limited to Manager, Assistant Manager, Plant Manager, Head (Kano Wash Plant), and Admin/Super Admin.</div>
+
+<div class="tab-bar">
+  <button class="tab-btn active" data-tab="tab-staff" onclick="showTab('tab-staff')">Staff</button>
+  <button class="tab-btn" data-tab="tab-rotation" onclick="showTab('tab-rotation')">Shift Rotation</button>
+  <button class="tab-btn" data-tab="tab-targets" onclick="showTab('tab-targets')">Targets</button>
+</div>
+
+<!-- ============ STAFF TAB ============ -->
+<div class="tab-content active" id="tab-staff">
+
+  <div class="card-panel" id="staffFormPanel" style="display:none;">
+    <h3 id="staffFormTitle">Add Staff</h3>
+    <p class="sub">KWP staff are linked to existing records in the central <b>Employees</b> directory — the same one Weaving and Overtime use — never typed in from scratch, and identity (name, ID, department) is always read live from there. New staff are created as <b>Pending Verification</b> by default (spec §67 migration rule); set Active only once KWP/HR has verified the record.</p>
+
+    <div id="employeeSearchBlock">
+      <div class="field"><label>Search Employees (name or Employee ID)</label>
+        <input id="emp_search_box" placeholder="Start typing..." oninput="searchEmployees()">
+      </div>
+      <div id="empSearchResults"></div>
+      <div class="pending-note" id="empNoMatchNote" style="display:none;">
+        No matching employee found in the Employees directory, or every match is already linked to a KWP staff record.
+        Ask HR/Admin to add this person to Employees first (in Supabase), then search again.
+      </div>
+    </div>
+
+    <div id="pickedEmployeeBox" class="picked-box empty" style="display:none;"></div>
+
+    <div id="kwpFieldsBlock" style="display:none;">
+      <input type="hidden" id="s_id">
+      <input type="hidden" id="s_employee_ref_id">
+      <div class="form-row-3">
+        <div class="field"><label>KWP Role</label>
+          <select id="s_kwp_role">
+            <option>Junior Worker</option>
+            <option>Operator</option>
+            <option>Shift Leader</option>
+            <option>Store Junior Officer</option>
+            <option>Store Officer</option>
+            <option>Technician/Mechanic</option>
+            <option>Quality Control Personnel</option>
+            <option>Supplier</option>
+            <option>Head of Unit</option>
+            <option>Assistant Manager</option>
+            <option>Manager</option>
+            <option>Plant Manager</option>
+            <option>Head, Kano Wash Plant</option>
+          </select>
+        </div>
+        <div class="field"><label>Shift Team</label>
+          <select id="s_shift_team"><option value="">— Unassigned —</option><option value="A">Shift A</option><option value="B">Shift B</option></select>
+        </div>
+        <div class="field"><label>Status</label>
+          <select id="s_status"><option>Pending Verification</option><option>Active</option><option>Inactive</option><option>Suspended</option></select>
+        </div>
+      </div>
+      <div class="form-row-3">
+        <div class="field"><label>Employment Date</label><input type="date" id="s_employment_date"></div>
+        <div class="field"><label>Employment Type</label><input id="s_employment_type" placeholder="e.g. Permanent, Casual"></div>
+        <div class="field"><label>Supervisor</label><select id="s_supervisor_id"><option value="">— None —</option></select></div>
+      </div>
+      <div class="form-row">
+        <div class="field"><label>Phone</label><input id="s_phone"></div>
+        <div class="field"><label>Email</label><input id="s_email"></div>
+      </div>
+      <div class="field"><label>Notes</label><textarea id="s_notes"></textarea></div>
+      <div style="display:flex;gap:10px;">
+        <button onclick="saveStaff()">Save Staff</button>
+        <button class="btn-ghost" onclick="closeStaffForm()">Cancel</button>
+      </div>
+      <div class="status" id="staffFormStatus"></div>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <div class="f"><label>Search</label><input id="staffSearch" placeholder="Name or Employee ID" oninput="renderStaffTable()"></div>
+    <div class="f"><label>Shift Team</label><select id="staffFilterTeam" onchange="renderStaffTable()"><option value="all">All</option><option value="A">Shift A</option><option value="B">Shift B</option><option value="">Unassigned</option></select></div>
+    <div class="f"><label>Status</label><select id="staffFilterStatus" onchange="renderStaffTable()">
+      <option value="all">All</option><option>Active</option><option>Pending Verification</option><option>Inactive</option><option>Suspended</option>
+    </select></div>
+    <div class="f f-min"><button id="addStaffBtn" style="display:none;" onclick="openStaffForm()">+ Add Staff</button></div>
+  </div>
+
+  <div class="table-wrap"><div class="table-scroll">
+    <table id="staffTable">
+      <thead><tr><th>Employee ID</th><th>Name</th><th>KWP Role</th><th>Shift</th><th>Status</th><th>Phone</th><th>Login</th><th></th></tr></thead>
+      <tbody id="staffTableBody"><tr><td colspan="8">Loading…</td></tr></tbody>
+    </table>
+  </div></div>
+</div>
+
+<!-- ============ SHIFT ROTATION TAB ============ -->
+<div class="tab-content" id="tab-rotation">
+  <div class="card-panel">
+    <h3>Rotation Settings</h3>
+    <p class="sub">Drives which team (A/B) works Morning vs Night for any date. Times marked <i>Pending Confirmation</i> in the spec — leave blank until KWP management confirms them.</p>
+    <div class="form-row-3">
+      <div class="field"><label>Rotation Start Date (Week 1, any date in that week)</label><input type="date" id="rs_start_date"></div>
+      <div class="field"><label>Team on Morning in Week 1</label>
+        <select id="rs_start_team"><option value="">— Not set —</option><option value="A">Shift A</option><option value="B">Shift B</option></select>
+      </div>
+      <div class="field"><label>Rotation Length (weeks per team)</label><input type="number" id="rs_length" min="1" value="1"></div>
+    </div>
+    <div class="form-row">
+      <div class="field"><label>Morning Shift Start</label><input type="time" id="rs_morning_start"></div>
+      <div class="field"><label>Morning Shift End</label><input type="time" id="rs_morning_end"></div>
+    </div>
+    <div class="form-row">
+      <div class="field"><label>Night Shift Start</label><input type="time" id="rs_night_start"></div>
+      <div class="field"><label>Night Shift End</label><input type="time" id="rs_night_end"></div>
+    </div>
+    <button id="saveRotationBtn" style="display:none;" onclick="saveRotationSettings()">Save Settings</button>
+    <div class="status" id="rotationStatus"></div>
+  </div>
+
+  <div class="card-panel">
+    <h3>Roster Preview</h3>
+    <p class="sub">Check which team is assigned to which shift on any date — including any manual override for that date.</p>
+    <div class="field" style="max-width:220px;"><label>Date</label><input type="date" id="previewDate" onchange="previewRoster()"></div>
+    <div class="roster-preview">
+      <div class="roster-card"><div class="shift-name">Morning</div><div class="team" id="previewMorning">—</div></div>
+      <div class="roster-card"><div class="shift-name">Night</div><div class="team" id="previewNight">—</div></div>
+    </div>
+    <div class="pending-note" id="previewPendingNote" style="display:none;">Rotation Start Date and Week-1 team are not configured yet — set them above before the roster can be calculated.</div>
+  </div>
+</div>
+
+<!-- ============ TARGETS TAB ============ -->
+<div class="tab-content" id="tab-targets">
+  <div class="card-panel" id="targetFormPanel" style="display:none;">
+    <h3>Add Target</h3>
+    <div class="form-row-3">
+      <div class="field"><label>Target Type</label><input id="t_type" placeholder="e.g. production_rate_kg_hr, yield_percent"></div>
+      <div class="field"><label>Value</label><input type="number" step="0.01" id="t_value"></div>
+      <div class="field"><label>Unit</label><input id="t_unit" placeholder="kg/hr, %, kg"></div>
+    </div>
+    <div class="form-row-3">
+      <div class="field"><label>Shift</label><select id="t_shift"><option value="">Both</option><option>Morning</option><option>Night</option></select></div>
+      <div class="field"><label>Product Grade</label><select id="t_grade"><option value="">Both</option><option value="A">A Grade</option><option value="B">B Grade</option></select></div>
+      <div class="field"><label>Effective From</label><input type="date" id="t_from"></div>
+    </div>
+    <div class="field" style="max-width:220px;"><label>Effective To (optional)</label><input type="date" id="t_to"></div>
+    <button onclick="saveTarget()">Save Target</button>
+    <button class="btn-ghost" onclick="document.getElementById('targetFormPanel').style.display='none';">Cancel</button>
+    <div class="status" id="targetFormStatus"></div>
+  </div>
+
+  <div class="toolbar">
+    <div class="f f-min"><button id="addTargetBtn" style="display:none;" onclick="document.getElementById('targetFormPanel').style.display='block';">+ Add Target</button></div>
+  </div>
+
+  <div class="table-wrap"><div class="table-scroll">
+    <table>
+      <thead><tr><th>Type</th><th>Value</th><th>Unit</th><th>Shift</th><th>Grade</th><th>From</th><th>To</th><th>Status</th></tr></thead>
+      <tbody id="targetsTableBody"><tr><td colspan="8">Loading…</td></tr></tbody>
+    </table>
+  </div></div>
+</div>
+
+</div>
+
+<script>
+const EDGE_FUNCTION_URL = "https://betfhunzmhtdzgvufmfk.supabase.co/functions/v1/swift-handler";
+let ME = null;
+let ACCESS_TOKEN = null;
+let IS_MANAGER = false;
+let STAFF = [];               // rows from kwp_staff_current (live employees fields + current assignment)
+let PICKED_EMPLOYEE = null;   // {id, employee_id, full_name, department, branch, rank} from `employees`
+let LINKED_EMPLOYEE_REF_IDS = new Set();
+
+async function callEdgeFunction(payload){
+  const res = await fetch(EDGE_FUNCTION_URL, {
+    method: "post",
+    headers: { "Authorization": "Bearer " + ACCESS_TOKEN, "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json();
+  if(!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+  return data;
+}
+
+function showTab(id){
+  document.querySelectorAll(".tab-content").forEach(el=>el.classList.toggle("active", el.id === id));
+  document.querySelectorAll(".tab-btn").forEach(el=>el.classList.toggle("active", el.getAttribute("data-tab") === id));
+}
+window.showTab = showTab;
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+
+    const { data: sessData, error: sessErr } = await sb.auth.getSession();
+    if(sessErr) throw new Error("Could not get session: " + sessErr.message);
+    ACCESS_TOKEN = sessData.session.access_token;
+
+    const { data: mgr, error: mgrErr } = await sb.rpc("kwp_is_manager");
+    if(mgrErr) throw new Error("Could not check permissions: " + mgrErr.message);
+    IS_MANAGER = !!mgr;
+
+    document.getElementById("roBanner").style.display = IS_MANAGER ? "none" : "block";
+    document.getElementById("addStaffBtn").style.display = IS_MANAGER ? "inline-block" : "none";
+    document.getElementById("addTargetBtn").style.display = IS_MANAGER ? "inline-block" : "none";
+    document.getElementById("saveRotationBtn").style.display = IS_MANAGER ? "inline-block" : "none";
+    document.querySelectorAll("#tab-rotation input").forEach(el => el.disabled = !IS_MANAGER);
+    document.getElementById("previewDate").disabled = false; // preview always usable
+
+    status.style.color = "#1d8a4e"; status.textContent = "Connected.";
+
+    document.getElementById("previewDate").value = new Date().toISOString().slice(0,10);
+    await Promise.all([loadStaff(), loadRotationSettings(), loadTargets()]);
+    await previewRoster();
+  }catch(e){
+    status.style.color = "#c0392b"; status.textContent = "❌ " + e.message;
+    console.error(e);
+  }
+}
+
+// ---------------- STAFF ----------------
+async function loadStaff(){
+  const { data, error } = await sb.from("kwp_staff_current").select("*").order("full_name");
+  if(error){ document.getElementById("staffTableBody").innerHTML = "<tr><td colspan='8'>Error: " + error.message + "</td></tr>"; return; }
+  STAFF = data || [];
+  LINKED_EMPLOYEE_REF_IDS = new Set(STAFF.map(s=>s.employee_ref_id).filter(Boolean));
+  const supSel = document.getElementById("s_supervisor_id");
+  supSel.innerHTML = '<option value="">— None —</option>' +
+    STAFF.map(s => `<option value="${s.id}">${s.full_name} (${s.employee_id})</option>`).join("");
+  renderStaffTable();
+}
+
+function renderStaffTable(){
+  const q = (document.getElementById("staffSearch").value || "").toLowerCase();
+  const teamF = document.getElementById("staffFilterTeam").value;
+  const statusF = document.getElementById("staffFilterStatus").value;
+  const rows = STAFF.filter(s=>{
+    if(teamF !== "all" && (s.shift_team || "") !== teamF) return false;
+    if(statusF !== "all" && s.status !== statusF) return false;
+    if(q && !((s.full_name||"").toLowerCase().includes(q) || (s.employee_id||"").toLowerCase().includes(q))) return false;
+    return true;
+  });
+  const body = document.getElementById("staffTableBody");
+  if(!rows.length){ body.innerHTML = "<tr><td colspan='8'>No staff match.</td></tr>"; return; }
+  body.innerHTML = rows.map(s => `<tr>
+    <td>${s.employee_id}</td><td>${s.full_name}</td><td>${s.kwp_role || "—"}</td>
+    <td>${s.shift_team ? "Shift " + s.shift_team : "—"}</td>
+    <td><span class="tag" style="background:${s.status==='Active'?'var(--ok)':s.status==='Suspended'?'var(--bad)':'var(--warn)'}">${s.status}</span></td>
+    <td>${s.phone || "—"}</td>
+    <td>${s.linked_profile_id
+        ? (IS_MANAGER ? `Linked &nbsp;<button class="btn-sm btn-ghost" onclick="resetStaffPassword(${s.id})">Reset Password</button>` : "Linked")
+        : (IS_MANAGER ? `<button class="btn-sm btn-ghost" onclick="grantLoginAccess(${s.id})">Grant Login Access</button>` : "— none —")}</td>
+    <td>${IS_MANAGER ? `<button class="btn-sm btn-ghost" onclick="editStaff(${s.id})">Edit</button>` : ""}</td>
+  </tr>`).join("");
+}
+window.renderStaffTable = renderStaffTable;
+
+function openStaffForm(){
+  document.getElementById("staffFormTitle").textContent = "Add Staff";
+  document.getElementById("employeeSearchBlock").style.display = "block";
+  document.getElementById("emp_search_box").value = "";
+  document.getElementById("empSearchResults").innerHTML = "";
+  document.getElementById("empNoMatchNote").style.display = "none";
+  PICKED_EMPLOYEE = null;
+  document.getElementById("pickedEmployeeBox").style.display = "none";
+  document.getElementById("kwpFieldsBlock").style.display = "none";
+  ["s_id","s_employee_ref_id","s_employment_date","s_employment_type","s_phone","s_email","s_notes"]
+    .forEach(id => document.getElementById(id).value = "");
+  document.getElementById("s_kwp_role").value = "Junior Worker";
+  document.getElementById("s_shift_team").value = "";
+  document.getElementById("s_status").value = "Pending Verification";
+  document.getElementById("s_supervisor_id").value = "";
+  document.getElementById("staffFormStatus").textContent = "";
+  document.getElementById("staffFormPanel").style.display = "block";
+}
+window.openStaffForm = openStaffForm;
+
+let searchDebounce = null;
+function searchEmployees(){
+  clearTimeout(searchDebounce);
+  searchDebounce = setTimeout(runEmployeeSearch, 250);
+}
+window.searchEmployees = searchEmployees;
+
+async function runEmployeeSearch(){
+  const q = document.getElementById("emp_search_box").value.trim();
+  const resultsEl = document.getElementById("empSearchResults");
+  const noMatch = document.getElementById("empNoMatchNote");
+  if(q.length < 2){ resultsEl.innerHTML = ""; noMatch.style.display = "none"; return; }
+
+  const { data, error } = await sb.from("employees")
+    .select("id, employee_id, full_name, department, branch, rank")
+    .or(`full_name.ilike.%${q}%,employee_id.ilike.%${q}%`)
+    .order("full_name").limit(15);
+
+  if(error){ resultsEl.innerHTML = "<p class='sub'>Search error: " + error.message + "</p>"; return; }
+  const rows = data || [];
+  noMatch.style.display = rows.length ? "none" : "block";
+  resultsEl.innerHTML = rows.map(e=>{
+    const isLinked = LINKED_EMPLOYEE_REF_IDS.has(e.id);
+    const meta = e.employee_id + " · " + (e.department||"") + (e.branch ? " · " + e.branch : "");
+    return `<div class="emp-result ${isLinked?'linked':''}" ${isLinked?'':`onclick='pickEmployee(${JSON.stringify(e).replace(/'/g,"&apos;")})'`}>
+      <div><div class="n">${e.full_name}</div><div class="m">${meta}</div></div>
+      <div class="m">${isLinked ? "Already a KWP staff record" : "Select →"}</div>
+    </div>`;
+  }).join("");
+}
+window.runEmployeeSearch = runEmployeeSearch;
+
+function pickEmployee(emp){
+  PICKED_EMPLOYEE = emp;
+  document.getElementById("s_employee_ref_id").value = emp.id;
+  const box = document.getElementById("pickedEmployeeBox");
+  box.classList.remove("empty");
+  box.style.display = "block";
+  box.innerHTML = `Linking: <b>${emp.full_name}</b> (${emp.employee_id}) — ${emp.department||""}${emp.branch?", "+emp.branch:""} &nbsp;
+    <button class="btn-sm btn-ghost" type="button" onclick="unpickEmployee()">Change</button>`;
+  document.getElementById("employeeSearchBlock").style.display = "none";
+  document.getElementById("kwpFieldsBlock").style.display = "block";
+}
+window.pickEmployee = pickEmployee;
+
+function unpickEmployee(){
+  PICKED_EMPLOYEE = null;
+  document.getElementById("s_employee_ref_id").value = "";
+  document.getElementById("pickedEmployeeBox").style.display = "none";
+  document.getElementById("kwpFieldsBlock").style.display = "none";
+  document.getElementById("employeeSearchBlock").style.display = "block";
+}
+window.unpickEmployee = unpickEmployee;
+
+function editStaff(id){
+  const s = STAFF.find(x=>x.id === id);
+  if(!s) return;
+  document.getElementById("staffFormTitle").textContent = "Edit Staff — " + s.full_name;
+  document.getElementById("employeeSearchBlock").style.display = "none";
+  document.getElementById("kwpFieldsBlock").style.display = "block";
+  const box = document.getElementById("pickedEmployeeBox");
+  box.classList.remove("empty");
+  box.style.display = "block";
+  box.innerHTML = `Linked employee: <b>${s.full_name}</b> (${s.employee_id}) — not editable here; this always reflects the Employees directory.`;
+
+  document.getElementById("s_id").value = s.id;
+  document.getElementById("s_employee_ref_id").value = s.employee_ref_id;
+  document.getElementById("s_kwp_role").value = s.kwp_role || "Junior Worker";
+  document.getElementById("s_shift_team").value = s.shift_team || "";
+  document.getElementById("s_status").value = s.status;
+  document.getElementById("s_employment_date").value = s.employment_date || "";
+  document.getElementById("s_employment_type").value = s.employment_type || "";
+  document.getElementById("s_phone").value = s.phone || "";
+  document.getElementById("s_email").value = s.email || "";
+  document.getElementById("s_supervisor_id").value = s.supervisor_id || "";
+  document.getElementById("s_notes").value = s.notes || "";
+  document.getElementById("staffFormStatus").textContent = "";
+  document.getElementById("staffFormPanel").style.display = "block";
+}
+window.editStaff = editStaff;
+
+function closeStaffForm(){ document.getElementById("staffFormPanel").style.display = "none"; }
+window.closeStaffForm = closeStaffForm;
+
+async function saveStaff(){
+  const status = document.getElementById("staffFormStatus");
+  const id = document.getElementById("s_id").value;
+  const employee_ref_id = document.getElementById("s_employee_ref_id").value;
+  if(!id && !employee_ref_id){ status.className="status err"; status.textContent="Search for and select an employee first."; return; }
+
+  const kwpRole = document.getElementById("s_kwp_role").value;
+  const shiftTeam = document.getElementById("s_shift_team").value || null;
+
+  const profilePayload = {
+    status: document.getElementById("s_status").value,
+    employment_date: document.getElementById("s_employment_date").value || null,
+    employment_type: document.getElementById("s_employment_type").value.trim() || null,
+    phone: document.getElementById("s_phone").value.trim() || null,
+    email: document.getElementById("s_email").value.trim() || null,
+    supervisor_id: document.getElementById("s_supervisor_id").value || null,
+    notes: document.getElementById("s_notes").value.trim() || null
+  };
+
+  status.className = "status"; status.textContent = "Saving...";
+  try{
+    let staffId = id ? Number(id) : null;
+    const existing = staffId ? STAFF.find(s=>s.id === staffId) : null;
+    const assignmentChanged = !existing || existing.kwp_role !== kwpRole || (existing.shift_team||null) !== shiftTeam;
+
+    if(staffId){
+      const { error } = await sb.from("kwp_staff").update(profilePayload).eq("id", staffId);
+      if(error) throw error;
+      await logAudit("staff_updated", "kwp_staff", String(staffId), existing, profilePayload);
+    } else {
+      const insertPayload = Object.assign({ employee_ref_id: Number(employee_ref_id), created_by: ME.id }, profilePayload);
+      const { data: inserted, error } = await sb.from("kwp_staff").insert(insertPayload).select("id").single();
+      if(error){
+        if(String(error.message||"").includes("kwp_staff_employee_ref_id_key")){
+          throw new Error("That employee is already linked to a KWP staff record.");
+        }
+        throw error;
+      }
+      staffId = inserted.id;
+      await logAudit("staff_created", "kwp_staff", String(staffId), null, insertPayload);
+    }
+
+    if(assignmentChanged){
+      const today = new Date().toISOString().slice(0,10);
+      await sb.from("kwp_staff_shift_history")
+        .update({ effective_to: today })
+        .eq("staff_id", staffId).is("effective_to", null);
+      await sb.from("kwp_staff_shift_history").insert({
+        staff_id: staffId, kwp_role: kwpRole, shift_team: shiftTeam, effective_from: today,
+        assignment_type: existing ? "Transfer" : "Normal", approved_by: ME.id
+      });
+    }
+
+    status.className = "status ok"; status.textContent = "✅ Saved.";
+    await loadStaff();
+    setTimeout(closeStaffForm, 500);
+  }catch(e){
+    status.className = "status err"; status.textContent = "❌ " + e.message;
+  }
+}
+window.saveStaff = saveStaff;
+
+// ---------------- ROTATION SETTINGS ----------------
+async function loadRotationSettings(){
+  const { data, error } = await sb.from("kwp_shift_settings").select("*").eq("id", 1).single();
+  if(error){ document.getElementById("rotationStatus").textContent = "Could not load: " + error.message; return; }
+  document.getElementById("rs_start_date").value = data.rotation_start_date || "";
+  document.getElementById("rs_start_team").value = data.rotation_start_team_morning || "";
+  document.getElementById("rs_length").value = data.rotation_length_weeks || 1;
+  document.getElementById("rs_morning_start").value = data.morning_shift_start || "";
+  document.getElementById("rs_morning_end").value = data.morning_shift_end || "";
+  document.getElementById("rs_night_start").value = data.night_shift_start || "";
+  document.getElementById("rs_night_end").value = data.night_shift_end || "";
+}
+
+async function saveRotationSettings(){
+  const status = document.getElementById("rotationStatus");
+  const payload = {
+    rotation_start_date: document.getElementById("rs_start_date").value || null,
+    rotation_start_team_morning: document.getElementById("rs_start_team").value || null,
+    rotation_length_weeks: Number(document.getElementById("rs_length").value) || 1,
+    morning_shift_start: document.getElementById("rs_morning_start").value || null,
+    morning_shift_end: document.getElementById("rs_morning_end").value || null,
+    night_shift_start: document.getElementById("rs_night_start").value || null,
+    night_shift_end: document.getElementById("rs_night_end").value || null,
+    updated_by: ME.id
+  };
+  status.className = "status"; status.textContent = "Saving...";
+  try{
+    const { error } = await sb.from("kwp_shift_settings").update(payload).eq("id", 1);
+    if(error) throw error;
+    await logAudit("shift_settings_updated", "kwp_shift_settings", "1", null, payload);
+    status.className = "status ok"; status.textContent = "✅ Saved.";
+    await previewRoster();
+  }catch(e){
+    status.className = "status err"; status.textContent = "❌ " + e.message;
+  }
+}
+window.saveRotationSettings = saveRotationSettings;
+
+async function previewRoster(){
+  const dateVal = document.getElementById("previewDate").value;
+  if(!dateVal) return;
+  const { data, error } = await sb.rpc("kwp_get_shift_teams_for_date", { p_date: dateVal });
+  const row = (data && data[0]) || {};
+  const note = document.getElementById("previewPendingNote");
+  if(error || !row.morning_team){
+    document.getElementById("previewMorning").textContent = "—";
+    document.getElementById("previewNight").textContent = "—";
+    note.style.display = "block";
+    return;
+  }
+  note.style.display = "none";
+  document.getElementById("previewMorning").textContent = "Shift " + row.morning_team;
+  document.getElementById("previewNight").textContent = "Shift " + row.night_team;
+}
+window.previewRoster = previewRoster;
+
+// ---------------- TARGETS ----------------
+async function loadTargets(){
+  const { data, error } = await sb.from("kwp_targets").select("*").order("effective_from", { ascending:false });
+  const body = document.getElementById("targetsTableBody");
+  if(error){ body.innerHTML = "<tr><td colspan='8'>Error: " + error.message + "</td></tr>"; return; }
+  if(!data || !data.length){ body.innerHTML = "<tr><td colspan='8'>No targets configured yet.</td></tr>"; return; }
+  body.innerHTML = data.map(t => `<tr>
+    <td>${t.target_type}</td><td>${t.target_value}</td><td>${t.unit||""}</td>
+    <td>${t.shift||"Both"}</td><td>${t.product_grade?t.product_grade+" Grade":"Both"}</td>
+    <td>${t.effective_from}</td><td>${t.effective_to||"—"}</td><td>${t.status}</td>
+  </tr>`).join("");
+}
+
+async function saveTarget(){
+  const status = document.getElementById("targetFormStatus");
+  const payload = {
+    target_type: document.getElementById("t_type").value.trim(),
+    target_value: Number(document.getElementById("t_value").value),
+    unit: document.getElementById("t_unit").value.trim() || null,
+    shift: document.getElementById("t_shift").value || null,
+    product_grade: document.getElementById("t_grade").value || null,
+    effective_from: document.getElementById("t_from").value,
+    effective_to: document.getElementById("t_to").value || null,
+    created_by: ME.id
+  };
+  if(!payload.target_type || !payload.effective_from || isNaN(payload.target_value)){
+    status.className="status err"; status.textContent="Target Type, Value and Effective From are required."; return;
+  }
+  status.className = "status"; status.textContent = "Saving...";
+  try{
+    const { error } = await sb.from("kwp_targets").insert(payload);
+    if(error) throw error;
+    await logAudit("target_created", "kwp_targets", null, null, payload);
+    status.className = "status ok"; status.textContent = "✅ Saved.";
+    await loadTargets();
+  }catch(e){
+    status.className = "status err"; status.textContent = "❌ " + e.message;
+  }
+}
+window.saveTarget = saveTarget;
+
+// ---------------- LOGIN ACCESS (Phase 2) ----------------
+// Creates the Supabase Auth account for this staff member via the same
+// edge function manage-accounts.html already uses, using Employee ID as
+// the login username (resolve_username_to_email() handles the rest — no
+// login.html changes needed), then calls the existing `link_employee`
+// action so employees.linked_profile_id/has_system_access stay correct
+// everywhere else in the app. There is no kwp_staff.profile_id anymore —
+// employees.linked_profile_id is the single source of truth.
+async function grantLoginAccess(staffId){
+  const s = STAFF.find(x=>x.id === staffId);
+  if(!s) return;
+  const tempPassword = prompt("Set a temporary password for " + s.full_name + " (" + s.employee_id + "). At least 6 characters. The worker will be required to change it on first login.");
+  if(tempPassword === null) return;
+  if(tempPassword.length < 6){ alert("Password must be at least 6 characters."); return; }
+
+  try{
+    const res = await callEdgeFunction({ action:"create_user", username: s.employee_id, password: tempPassword });
+    const { error: rpcErr } = await sb.rpc("kwp_mark_password_reset", { target_profile_id: res.id });
+    if(rpcErr) throw rpcErr;
+    await callEdgeFunction({ action:"link_employee", employee_id: s.employee_ref_id, profile_id: res.id });
+    await logAudit("kwp_login_access_granted", "kwp_staff", String(staffId), null, { employee_id: s.employee_id, profile_id: res.id });
+    alert("✅ Login access granted for " + s.employee_id + ". They must change their password on first login.");
+    await loadStaff();
+  }catch(e){
+    alert("❌ Could not grant login access: " + (e.message||e));
+  }
+}
+window.grantLoginAccess = grantLoginAccess;
+
+// Sets a new temporary password on an already-linked account (real Auth
+// password change happens via the edge function's admin_reset_password
+// action, same as manage-accounts.html) and forces a change on next login.
+async function resetStaffPassword(staffId){
+  const s = STAFF.find(x=>x.id === staffId);
+  if(!s || !s.linked_profile_id) return;
+  const tempPassword = prompt("Set a new temporary password for " + s.full_name + " (" + s.employee_id + "). At least 6 characters. They will be required to change it on next login.");
+  if(tempPassword === null) return;
+  if(tempPassword.length < 6){ alert("Password must be at least 6 characters."); return; }
+
+  try{
+    await callEdgeFunction({ action:"admin_reset_password", target_id: s.linked_profile_id, new_password: tempPassword });
+    const { error: rpcErr } = await sb.rpc("kwp_mark_password_reset", { target_profile_id: s.linked_profile_id });
+    if(rpcErr) throw rpcErr;
+    await logAudit("kwp_password_reset", "kwp_staff", String(staffId), null, { employee_id: s.employee_id });
+    alert("✅ Password reset for " + s.employee_id + ". They must change it on next login.");
+  }catch(e){
+    alert("❌ Could not reset password: " + (e.message||e));
+  }
+}
+window.resetStaffPassword = resetStaffPassword;
+
+// ---------------- AUDIT ----------------
+async function logAudit(action, entityType, entityId, oldValue, newValue){
+  try{
+    await sb.from("kwp_audit_log").insert({
+      actor_profile_id: ME.id, action, entity_type: entityType, entity_id: entityId,
+      old_value: oldValue || null, new_value: newValue || null
+    });
+  }catch(e){ console.warn("Audit log write failed (non-fatal):", e); }
+}
+
+init();
+</script>
+</body>
+</html>

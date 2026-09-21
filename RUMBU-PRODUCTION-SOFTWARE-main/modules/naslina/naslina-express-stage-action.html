@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Naslina Express — Stage Action</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme") || "navy"); }catch(e){}
+  })();
+  window.addEventListener("message", function(e){
+    if(e.data && e.data.rumbuTheme){ document.documentElement.setAttribute("data-theme", e.data.rumbuTheme); }
+  });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="attachments-modal.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1000px;margin:0 auto;}
+  #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);}
+  .empty-note{background:var(--bg);border:1px dashed var(--line-2);border-radius:var(--radius);padding:24px;text-align:center;color:var(--muted);font-size:13px;}
+
+  .req-row{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:14px 18px;margin-bottom:12px;box-shadow:var(--shadow);}
+  .rr-head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;}
+  .rr-ref{font-weight:800;color:var(--heading);font-size:14px;}
+  .rr-title{color:var(--text);font-size:13px;margin-top:2px;}
+  .rr-stage{background:var(--bg);border:1px solid var(--line-2);border-radius:20px;padding:4px 12px;font-size:11.5px;font-weight:700;color:var(--muted);}
+
+  .req-detail{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px;margin-bottom:16px;box-shadow:var(--shadow);}
+  .rd-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:10px;flex-wrap:wrap;}
+  .rd-ref{font-weight:800;color:var(--heading);font-size:15px;}
+  .rd-meta{display:grid;grid-template-columns:1fr 1fr;gap:6px 20px;font-size:13px;color:var(--text);margin-bottom:14px;}
+  .rd-meta .m-label{color:var(--muted);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.3px;}
+
+  /* Stage stepper */
+  .stepper{display:flex;flex-wrap:wrap;gap:6px;margin:14px 0;padding:10px;background:var(--bg);border-radius:var(--radius-sm);}
+  .step-pill{border-radius:20px;padding:6px 12px;font-size:11.5px;font-weight:700;border:1px solid var(--line-2);cursor:pointer;background:var(--card);color:var(--text);}
+  .step-pill.done{background:var(--ok);color:#fff;border-color:var(--ok);}
+  .step-pill.current{background:var(--accent);color:var(--logo-fg,#12203c);border-color:var(--accent);}
+  .step-pill.future{background:var(--bg);color:var(--muted);border-color:var(--line);cursor:not-allowed;opacity:.55;}
+  .step-pill.active-view{outline:2px solid var(--primary);outline-offset:1px;}
+
+  .stage-panel{border-top:1px solid var(--line);padding-top:14px;margin-top:6px;}
+  .stage-panel h4{margin:0 0 8px;font-size:13.5px;color:var(--heading);}
+  .action-row{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px;}
+  .action-row:last-child{border-bottom:0;}
+  .action-badge{border-radius:12px;padding:2px 9px;font-size:11px;font-weight:700;color:#fff;}
+  .action-badge.approve{background:var(--ok);}
+  .action-badge.decline{background:var(--bad);}
+  .waiting-note{color:var(--muted);font-size:12.5px;font-style:italic;}
+
+  .dropzone{background:var(--bg);border:1px dashed var(--line-2);border-radius:var(--radius);padding:20px 14px;text-align:center;cursor:pointer;transition:border-color .15s;}
+  .dropzone:hover,.dropzone.drag{border-color:var(--accent);}
+  .dropzone .dz-action{color:var(--primary);font-weight:700;font-size:13.5px;}
+  .dropzone .dz-hint{font-size:11px;color:var(--muted);margin-top:2px;}
+  .dropzone input[type=file]{display:none;}
+  .file-list{margin-top:8px;display:flex;flex-direction:column;gap:6px;}
+  .file-chip{display:flex;align-items:center;justify-content:space-between;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:7px;padding:5px 10px;font-size:12px;}
+  .file-chip .fc-remove{color:var(--bad);cursor:pointer;font-weight:700;background:none;border:0;padding:0 4px;font-size:14px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div id="connStatus">Loading...</div>
+
+<div class="card-panel">
+  <h3>Pending My Action — Naslina Express Payment Requests</h3>
+  <p class="sub">Every assignee on a stage must approve before it advances. Open a request to see its full stage history, act on the current stage if you're assigned, and preview any file already uploaded.</p>
+</div>
+
+<div id="topStatus" class="status" style="display:none;"></div>
+
+<div id="listWrap"></div>
+<div id="detailWrap"></div>
+
+</div>
+
+<script>
+let ME = null;
+let MY_EMPLOYEE_ID = null;
+let STAGES_BY_ID = {};
+let STAGES_ORDERED = [];
+let MY_STAGE_KEYS = new Set();
+const STAGED_FILES = {};
+
+// field_keys that belong to each stage's own upload fields (Payment
+// and Upload Invoice were deduplicated per request: Payment keeps only
+// the slip, Upload Invoice keeps only the two invoice fields).
+const STAGE_FIELD_KEYS = {
+  payment: ["payment_slip"],
+  upload_invoice: ["invoice", "invoice_2"]
+};
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+
+    const { data: emp, error: empErr } = await sb.from("employees").select("id").eq("linked_profile_id", ME.id).maybeSingle();
+    if(empErr) throw empErr;
+    if(!emp){ throw new Error("No employee record is linked to your account, so no stage assignments can be found for you."); }
+    MY_EMPLOYEE_ID = emp.id;
+
+    const { data: stages, error: stErr } = await sb.from("naslina_workflow_stages").select("*").order("sequence_order");
+    if(stErr) throw stErr;
+    STAGES_ORDERED = stages || [];
+    stages.forEach(s => STAGES_BY_ID[s.id] = s);
+
+    const { data: assignments, error: asErr } = await sb.from("naslina_workflow_stage_assignees")
+      .select("stage_id").eq("employee_ref_id", MY_EMPLOYEE_ID);
+    if(asErr) throw asErr;
+    MY_STAGE_KEYS = new Set((assignments||[]).map(a => a.stage_id));
+
+    status.style.color = "#1d8a4e"; status.textContent = "Connected.";
+    await loadPending();
+  }catch(e){
+    status.style.color = "#c0392b"; status.textContent = "\u274C " + e.message;
+    console.error(e);
+  }
+}
+
+async function loadPending(){
+  const wrap = document.getElementById("listWrap");
+  document.getElementById("detailWrap").innerHTML = "";
+  if(!MY_STAGE_KEYS.size){
+    wrap.innerHTML = "<div class='empty-note'>You aren't an assignee on any workflow stage yet.</div>";
+    return;
+  }
+
+  const { data: requests, error } = await sb.from("naslina_requests")
+    .select("*, beneficiaries(name,account_number,bank), naslina_companies(name), naslina_departments(name), employees:submitted_by(full_name)")
+    .eq("status", "in_progress")
+    .in("current_stage_id", Array.from(MY_STAGE_KEYS))
+    .order("request_date", { ascending: true });
+  if(error){ wrap.innerHTML = "<div class='empty-note'>Error: " + error.message + "</div>"; return; }
+
+  if(!requests || !requests.length){
+    wrap.innerHTML = "<div class='empty-note'>Nothing pending your action right now.</div>";
+    return;
+  }
+
+  const ids = requests.map(r => r.id);
+  const { data: myActions } = await sb.from("naslina_request_stage_actions")
+    .select("request_id, stage_id, cycle")
+    .eq("employee_ref_id", MY_EMPLOYEE_ID)
+    .in("request_id", ids);
+  const actedKey = new Set((myActions||[]).map(a => a.request_id + ":" + a.stage_id + ":" + a.cycle));
+
+  wrap.innerHTML = "";
+  let anyShown = false;
+  requests.forEach(r => {
+    if(actedKey.has(r.id + ":" + r.current_stage_id + ":" + r.cycle)) return;
+    anyShown = true;
+    wrap.appendChild(renderRequestRow(r));
+  });
+  if(!anyShown) wrap.innerHTML = "<div class='empty-note'>Nothing pending your action right now.</div>";
+}
+
+function renderRequestRow(r){
+  const stage = STAGES_BY_ID[r.current_stage_id];
+  const el = document.createElement("div");
+  el.className = "req-row";
+  el.innerHTML = `
+    <div class="rr-head">
+      <div>
+        <div class="rr-ref">${r.reference_no} \u2014 ${r.title}</div>
+        <div class="rr-title">${r.currency} ${Number(r.total_amount).toLocaleString()}</div>
+      </div>
+      <span class="rr-stage">${stage ? stage.stage_name : "\u2014"}</span>
+      <button class="btn-sm" onclick="openRequest('${r.id}')">Open</button>
+    </div>`;
+  return el;
+}
+
+async function openRequest(requestId){
+  const detailWrap = document.getElementById("detailWrap");
+  detailWrap.innerHTML = "<div class='empty-note'>Loading request...</div>";
+
+  const { data: r, error } = await sb.from("naslina_requests")
+    .select("*, beneficiaries(name,account_number,bank), naslina_companies(name), naslina_departments(name), employees:submitted_by(full_name)")
+    .eq("id", requestId).single();
+  if(error){ detailWrap.innerHTML = "<div class='empty-note'>Error: " + error.message + "</div>"; return; }
+
+  const { data: attachments } = await sb.from("naslina_request_attachments").select("*").eq("request_id", requestId);
+  const { data: actions } = await sb.from("naslina_request_stage_actions")
+    .select("*, employees!naslina_request_stage_actions_employee_ref_id_fkey(full_name)")
+    .eq("request_id", requestId).eq("cycle", r.cycle);
+  const { data: assignments } = await sb.from("naslina_workflow_stage_assignees").select("stage_id, employee_ref_id");
+
+  STAGED_FILES[requestId] = { payment_slip: [], invoice: [] };
+
+  renderRequestDetail(r, attachments || [], actions || [], assignments || []);
+}
+window.openRequest = openRequest;
+
+function renderRequestDetail(r, attachments, actions, assignments){
+  const detailWrap = document.getElementById("detailWrap");
+  const currentStage = STAGES_BY_ID[r.current_stage_id];
+  const activeStages = STAGES_ORDERED.filter(s => s.requires_action);
+
+  const pillsHtml = activeStages.map(s => {
+    let state = "future";
+    if(s.sequence_order < currentStage.sequence_order) state = "done";
+    else if(s.id === r.current_stage_id) state = "current";
+    const clickable = state !== "future";
+    return `<button class="step-pill ${state}" ${clickable ? `onclick="showStagePanel('${r.id}','${s.id}')"` : "disabled"}>${s.stage_name}</button>`;
+  }).join("");
+
+  let panelsHtml = "";
+  activeStages.forEach(s => {
+    panelsHtml += renderStagePanel(r, s, currentStage, attachments, actions, assignments);
+  });
+
+  const allFieldKeys = ["request_form","other_document","proforma_invoice","proforma_invoice_2","payment_slip","invoice","invoice_2"];
+
+  detailWrap.innerHTML = `
+    <div class="req-detail" id="detail-${r.id}">
+      <div class="rd-head">
+        <span class="rd-ref">${r.reference_no} \u2014 ${r.title}</span>
+        <button class="btn-ghost btn-sm" onclick="showAttachmentsModal('All Attachments \u2014 ${r.reference_no}', ${JSON.stringify(attachments).replace(/"/g, '&quot;')})">\u{1F4CE} Preview All Attachments</button>
+      </div>
+      <div class="rd-meta">
+        <div><span class="m-label">Submitted by</span><br>${r.employees ? r.employees.full_name : "\u2014"}</div>
+        <div><span class="m-label">Recipient</span><br>${r.beneficiaries ? r.beneficiaries.name + " \u2014 " + r.beneficiaries.account_number : "\u2014"}</div>
+        <div><span class="m-label">Company / Department</span><br>${r.naslina_companies ? r.naslina_companies.name : "\u2014"} / ${r.naslina_departments ? r.naslina_departments.name : "\u2014"}</div>
+        <div><span class="m-label">Amount</span><br>${r.currency} ${Number(r.total_amount).toLocaleString()}</div>
+        <div><span class="m-label">Duration</span><br>${r.project_duration_days} day(s)</div>
+        <div><span class="m-label">Description</span><br>${r.description || "\u2014"}</div>
+      </div>
+
+      <div class="stepper" id="stepper-${r.id}">${pillsHtml}</div>
+
+      <div id="panels-${r.id}">${panelsHtml}</div>
+    </div>`;
+
+  showStagePanel(r.id, r.current_stage_id);
+
+  const dateEl = document.getElementById(`actiondate-${r.id}`);
+  if(dateEl) dateEl.value = new Date().toISOString().slice(0,16);
+  wireDropzonesForRequest(r.id);
+}
+
+function renderStagePanel(r, stage, currentStage, attachments, actions, assignments){
+  const isPast = stage.sequence_order < currentStage.sequence_order;
+  const isCurrent = stage.id === r.current_stage_id;
+  const stageActions = actions.filter(a => a.stage_id === stage.id);
+  const stageAssignees = assignments.filter(a => a.stage_id === stage.id).map(a => a.employee_ref_id);
+  const stageFieldKeys = STAGE_FIELD_KEYS[stage.stage_key] || [];
+  const stageFiles = attachments.filter(a => stageFieldKeys.includes(a.field_key));
+
+  let bodyHtml = "";
+
+  // Approval log for this stage (shown for past stages, and for the
+  // current stage so partial approvals are visible while waiting on
+  // other assignees).
+  if(stageActions.length){
+    bodyHtml += stageActions.map(a => `
+      <div class="action-row">
+        <span>${a.employees ? a.employees.full_name : "\u2014"}${a.comment ? " \u2014 " + a.comment : ""}</span>
+        <span class="action-badge ${a.action}">${a.action === "approve" ? "Approved" : "Declined"}</span>
+      </div>`).join("");
+  } else if(isPast){
+    bodyHtml += `<div class="waiting-note">No recorded action for this stage.</div>`;
+  }
+
+  if(stageFiles.length){
+    bodyHtml += `<div style="margin-top:10px;"><button class="btn-ghost btn-sm" onclick="showAttachmentsModal('${stage.stage_name} \u2014 Files', ${JSON.stringify(stageFiles).replace(/"/g, '&quot;')})">\u{1F4CE} Preview ${stage.stage_name} Files</button></div>`;
+  }
+
+  // Current stage: show the action form only if I'm assigned here and
+  // haven't already acted this cycle.
+  const iAmAssignee = stageAssignees.includes(MY_EMPLOYEE_ID);
+  const iHaveActed = stageActions.some(a => a.employee_ref_id === MY_EMPLOYEE_ID);
+
+  if(isCurrent && iAmAssignee && !iHaveActed){
+    bodyHtml += renderActionForm(r, stage);
+  } else if(isCurrent && iAmAssignee && iHaveActed){
+    bodyHtml += `<div class="waiting-note" style="margin-top:10px;">You've recorded your decision on this stage. Waiting on the remaining assignees.</div>`;
+  } else if(isCurrent && !iAmAssignee){
+    bodyHtml += `<div class="waiting-note" style="margin-top:10px;">You aren't an assignee on this stage \u2014 view only.</div>`;
+  }
+
+  return `<div class="stage-panel" id="panel-${r.id}-${stage.id}" style="display:none;">
+    <h4>${stage.stage_name}</h4>
+    ${bodyHtml || "<div class='waiting-note'>Nothing recorded here yet.</div>"}
+  </div>`;
+}
+
+function renderActionForm(r, stage){
+  let fieldsHtml = "";
+  if(stage.stage_key === "payment"){
+    fieldsHtml = `
+      <div class="field">
+        <label>Payment Slip</label>
+        <div class="dropzone" data-req="${r.id}" data-target="payment_slip" data-multi="true">
+          <div class="dz-action">Upload files</div>
+          <div class="dz-hint">Drag and drop files or paste from clipboard</div>
+          <input type="file" multiple>
+        </div>
+        <div class="file-list" data-list="${r.id}-payment_slip"></div>
+      </div>`;
+  } else if(stage.stage_key === "upload_invoice"){
+    fieldsHtml = `
+      <div class="field">
+        <label>Invoice *</label>
+        <div class="dropzone" data-req="${r.id}" data-target="invoice" data-multi="true">
+          <div class="dz-action">Upload files</div>
+          <div class="dz-hint">Drag and drop files or paste from clipboard \u2014 multiple files allowed</div>
+          <input type="file" multiple>
+        </div>
+        <div class="file-list" data-list="${r.id}-invoice"></div>
+        <div style="color:var(--muted);font-size:12px;margin-top:4px;">Upload invoice(s) or receipts \u2014 at least one file required</div>
+      </div>`;
+  }
+
+  return `
+    <div style="margin-top:12px;">
+      ${fieldsHtml}
+      <div class="field">
+        <label>${stage.stage_name.toUpperCase()} Comment</label>
+        <textarea id="comment-${r.id}"></textarea>
+      </div>
+      <div class="form-row">
+        <div class="field">
+          <label>ACTION *</label>
+          <select id="action-${r.id}">
+            <option value="">\u2014 Select \u2014</option>
+            <option value="approve">Approve</option>
+            <option value="decline">Decline</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Action Date</label>
+          <input type="datetime-local" id="actiondate-${r.id}">
+        </div>
+      </div>
+      <button onclick="submitAction('${r.id}', '${stage.stage_key}', '${r.reference_no}')">Submit</button>
+      <div class="status" id="status-${r.id}"></div>
+    </div>`;
+}
+
+function showStagePanel(requestId, stageId){
+  document.querySelectorAll(`[id^="panel-${requestId}-"]`).forEach(el => el.style.display = "none");
+  const target = document.getElementById(`panel-${requestId}-${stageId}`);
+  if(target) target.style.display = "block";
+  document.querySelectorAll(`#stepper-${requestId} .step-pill`).forEach(p => p.classList.remove("active-view"));
+  // Re-mark the clicked pill active. Pills are rendered in stage order,
+  // so match by onclick attribute instead of index bookkeeping.
+  document.querySelectorAll(`#stepper-${requestId} .step-pill`).forEach(p => {
+    if(p.getAttribute("onclick") === `showStagePanel('${requestId}','${stageId}')`) p.classList.add("active-view");
+  });
+}
+window.showStagePanel = showStagePanel;
+
+// ---- Dropzones for the active action form ----
+function wireDropzonesForRequest(requestId){
+  document.querySelectorAll(`.dropzone[data-req="${requestId}"]`).forEach(zone=>{
+    const key = zone.getAttribute("data-target");
+    const multi = zone.getAttribute("data-multi") === "true";
+    const input = zone.querySelector("input[type=file]");
+    input.addEventListener("change", e => stageFiles(requestId, key, multi, e.target.files));
+    zone.addEventListener("click", () => input.click());
+    zone.addEventListener("dragover", e => { e.preventDefault(); zone.classList.add("drag"); });
+    zone.addEventListener("dragleave", () => zone.classList.remove("drag"));
+    zone.addEventListener("drop", e => { e.preventDefault(); zone.classList.remove("drag"); stageFiles(requestId, key, multi, e.dataTransfer.files); });
+    zone.addEventListener("paste", e => {
+      const items = (e.clipboardData || {}).files;
+      if(items && items.length) stageFiles(requestId, key, multi, items);
+    });
+  });
+}
+window.wireDropzonesForRequest = wireDropzonesForRequest;
+
+function stageFiles(requestId, key, multi, fileList){
+  const files = Array.from(fileList || []);
+  if(!files.length) return;
+  if(multi) STAGED_FILES[requestId][key].push(...files);
+  else STAGED_FILES[requestId][key] = [files[0]];
+  renderFileList(requestId, key);
+}
+
+function renderFileList(requestId, key){
+  const wrap = document.querySelector(`.file-list[data-list="${requestId}-${key}"]`);
+  if(!wrap) return;
+  wrap.innerHTML = STAGED_FILES[requestId][key].map((f, i) =>
+    `<div class="file-chip"><span>${f.name}</span><span><button type="button" onclick="previewStagedFile('${requestId}','${key}',${i})" style="background:none;border:none;color:var(--primary);font-weight:600;cursor:pointer;margin-right:8px;padding:0;">Preview</button><button class="fc-remove" onclick="removeStagedFile('${requestId}','${key}',${i})">&times;</button></span></div>`
+  ).join("");
+}
+
+function previewStagedFile(requestId, key, idx){
+  const f = STAGED_FILES[requestId][key][idx];
+  if(!f) return;
+  const url = URL.createObjectURL(f);
+  previewFileDirect(url, f.name);
+}
+window.previewStagedFile = previewStagedFile;
+
+function removeStagedFile(requestId, key, idx){
+  STAGED_FILES[requestId][key].splice(idx, 1);
+  renderFileList(requestId, key);
+}
+window.removeStagedFile = removeStagedFile;
+
+async function submitAction(requestId, stageKey, referenceNo){
+  const status = document.getElementById(`status-${requestId}`);
+  const action = document.getElementById(`action-${requestId}`).value;
+  const comment = document.getElementById(`comment-${requestId}`).value.trim() || null;
+  const actionDate = document.getElementById(`actiondate-${requestId}`).value || new Date().toISOString();
+
+  if(!action){ status.className = "status err"; status.textContent = "Select Approve or Decline."; return; }
+  if(stageKey === "upload_invoice" && !STAGED_FILES[requestId].invoice.length){
+    status.className = "status err"; status.textContent = "Invoice upload is required at this stage."; return;
+  }
+
+  status.className = "status"; status.textContent = "Submitting...";
+  try{
+    const { data: reqRow, error: reqErr } = await sb.from("naslina_requests").select("cycle, current_stage_id").eq("id", requestId).single();
+    if(reqErr) throw reqErr;
+
+    for(const key of Object.keys(STAGED_FILES[requestId])){
+      for(const file of STAGED_FILES[requestId][key]){
+        const path = `naslina/${requestId}/${key}/${Date.now()}_${file.name}`;
+        const { error: upErr } = await sb.storage.from("request-attachments").upload(path, file);
+        if(upErr) throw upErr;
+        const { data: pub } = sb.storage.from("request-attachments").getPublicUrl(path);
+        await sb.from("naslina_request_attachments").insert({
+          request_id: requestId, field_key: key, file_name: file.name,
+          file_url: pub.publicUrl, uploaded_by: MY_EMPLOYEE_ID
+        });
+      }
+    }
+
+    const { error: actionErr } = await sb.from("naslina_request_stage_actions").insert({
+      request_id: requestId, stage_id: reqRow.current_stage_id, employee_ref_id: MY_EMPLOYEE_ID,
+      action, comment, action_date: actionDate, cycle: reqRow.cycle
+    });
+    if(actionErr) throw actionErr;
+
+    if(action === "decline"){
+      const { error: rejErr } = await sb.from("naslina_requests").update({ status: "rejected" }).eq("id", requestId);
+      if(rejErr) throw rejErr;
+    } else {
+      const { data: assignees } = await sb.from("naslina_workflow_stage_assignees")
+        .select("employee_ref_id").eq("stage_id", reqRow.current_stage_id);
+      const { data: approvals } = await sb.from("naslina_request_stage_actions")
+        .select("employee_ref_id").eq("request_id", requestId).eq("stage_id", reqRow.current_stage_id)
+        .eq("cycle", reqRow.cycle).eq("action", "approve");
+
+      const allApproved = (assignees||[]).length > 0 &&
+        (assignees||[]).every(a => (approvals||[]).some(ap => ap.employee_ref_id === a.employee_ref_id));
+
+      if(allApproved){
+        const currentStage = STAGES_BY_ID[reqRow.current_stage_id];
+        const nextStage = STAGES_ORDERED.find(s => s.sequence_order === currentStage.sequence_order + 1);
+        if(nextStage){
+          await sb.from("naslina_requests").update({
+            current_stage_id: nextStage.id,
+            status: nextStage.is_terminal ? "completed" : "in_progress"
+          }).eq("id", requestId);
+        }
+      }
+    }
+
+    status.className = "status ok"; status.textContent = "\u2705 Recorded.";
+
+    const topStatus = document.getElementById("topStatus");
+    topStatus.style.display = "block";
+    topStatus.className = action === "decline" ? "status err" : "status ok";
+    topStatus.textContent = (action === "decline" ? "\u2705 Declined \u2014 " : "\u2705 Approved \u2014 ") +
+      referenceNo + " recorded. Refreshing list...";
+    setTimeout(()=>{ topStatus.style.display = "none"; }, 5000);
+
+    setTimeout(loadPending, 700);
+  }catch(e){
+    status.className = "status err"; status.textContent = "\u274C " + (e.message || e);
+  }
+}
+window.submitAction = submitAction;
+
+init();
+</script>
+</body>
+</html>

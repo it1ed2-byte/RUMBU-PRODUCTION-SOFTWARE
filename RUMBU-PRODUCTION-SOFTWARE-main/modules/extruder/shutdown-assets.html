@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Shutdown Assets</title>
+<link rel="stylesheet" href="../../styles.css">
+<style>
+  body{ padding:22px; }
+  .container{ max-width:1000px; margin:0 auto; }
+  #status{ text-align:center; font-size:13px; font-weight:700; }
+  .msg{ text-align:center; margin-top:12px; font-weight:700; }
+</style>
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+</head>
+<body>
+
+<div class="container">
+
+  <div id="statusBox" class="card-panel">
+    <div id="status">Checking your session...</div>
+  </div>
+
+  <div id="appArea" style="display:none;">
+
+    <div class="card-panel">
+      <h2>Shutdown Entry</h2>
+      <p class="sub">Record an asset shutdown for your section.</p>
+
+      <div class="field"><label>Assets</label><input id="assets" placeholder="Asset name"></div>
+      <div class="field"><label>Reason</label><input id="reason" placeholder="Reason for shutdown"></div>
+
+      <div class="form-row">
+        <div class="field"><label>Section</label><select id="workSection" onchange="updateDepartments()"></select></div>
+        <div class="field"><label>Shift</label>
+          <select id="shift"><option>Morning</option><option>Evening</option><option>Night</option></select>
+        </div>
+      </div>
+
+      <div class="field"><label>Extruder</label><select id="department"></select></div>
+
+      <button id="btn" onclick="submitData()">Submit</button>
+      <div class="msg" id="msg"></div>
+    </div>
+
+    <div class="card-panel">
+      <h3>Last 7 Days Records</h3>
+      <div class="table-wrap"><div class="table-scroll">
+        <table>
+          <thead><tr><th>Assets</th><th>Reason</th><th>Section</th><th>Shift</th><th>Extruder</th><th>Date</th><th>Action</th></tr></thead>
+          <tbody id="tableBody"></tbody>
+        </table>
+      </div></div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY, "Content-Type": "application/json" }; }
+const SECTION_DISPLAY_MAP = { "Rumbu":"Rumbu", "MamaSannu":"Mama Sannu" };
+const EXTRUDERS_BY_SECTION = {
+  "Rumbu": ["Extruder 1","Extruder 2","Extruder 3","Extruder 4","Extruder 5"],
+  "Mama Sannu": ["Extruder MamaSannu"]
+};
+
+async function init(){
+  const me = await requireAuth("../../login.html");
+  if(!me) return;
+
+  const mySections = (me.sectionNames && me.sectionNames.length)
+    ? me.sectionNames.map(s => SECTION_DISPLAY_MAP[s] || s).filter(s => s === "Rumbu" || s === "Mama Sannu")
+    : [];
+  const opts = mySections.length ? mySections : ["Rumbu","Mama Sannu"];
+
+  const sel = document.getElementById("workSection");
+  sel.innerHTML = opts.map(s=>`<option value="${s}">${s}</option>`).join("");
+  if(opts.length === 1) sel.disabled = true;
+
+  updateDepartments();
+
+  document.getElementById("statusBox").style.display = "none";
+  document.getElementById("appArea").style.display = "block";
+  loadData();
+}
+
+function updateDepartments(){
+  const section = document.getElementById("workSection").value;
+  const list = EXTRUDERS_BY_SECTION[section] || [];
+  const dep = document.getElementById("department");
+  dep.innerHTML = list.map(e=>`<option>${e}</option>`).join("");
+}
+
+function todayISO(){ return new Date().toISOString().slice(0,10); }
+function daysAgoISO(n){ const d=new Date(); d.setDate(d.getDate()-n); return d.toISOString().slice(0,10); }
+
+async function submitData(){
+  const btn = document.getElementById("btn");
+  const msg = document.getElementById("msg");
+
+  const row = {
+    date_col: todayISO(),
+    assets: document.getElementById("assets").value,
+    reason: document.getElementById("reason").value,
+    section: document.getElementById("workSection").value,
+    shift: document.getElementById("shift").value,
+    department: document.getElementById("department").value,
+    recorded_at: new Date().toISOString()
+  };
+
+  if(!row.assets || !row.reason || !row.section){
+    msg.style.color = "var(--bad)";
+    msg.innerText = "Please fill Assets, Reason and Section.";
+    return;
+  }
+
+  btn.disabled = true; btn.innerText = "Submitting...";
+  try{
+    const res = await fetch(SUPABASE_URL + "/rest/v1/shutdown_assets", {
+      method: "POST", headers: authHeaders(), body: JSON.stringify(row)
+    });
+    if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
+    msg.style.color = "var(--ok)";
+    msg.innerText = "✅ Saved successfully";
+    document.getElementById("assets").value = "";
+    document.getElementById("reason").value = "";
+    await loadData();
+  }catch(e){
+    msg.style.color = "var(--bad)";
+    msg.innerText = "❌ " + (e.message || e);
+  }finally{
+    btn.disabled = false; btn.innerText = "Submit";
+  }
+}
+
+async function loadData(){
+  const tbody = document.getElementById("tableBody");
+  try{
+    const cutoff = daysAgoISO(7);
+    const url = SUPABASE_URL + "/rest/v1/shutdown_assets?date_col=gte." + cutoff + "&order=recorded_at.desc&select=*";
+    const res = await fetch(url, { headers: authHeaders() });
+    if(!res.ok) throw new Error("HTTP " + res.status);
+    const rows = await res.json();
+
+    let html = "";
+    rows.forEach(r=>{
+      html += `<tr><td>${r.assets||""}</td><td>${r.reason||""}</td><td>${r.section||""}</td>`
+            + `<td>${r.shift||""}</td><td>${r.department||""}</td><td>${r.date_col||""}</td>`
+            + `<td><button class="btn-sm btn-danger" onclick="deleteRow(${r.id})">Delete</button></td></tr>`;
+    });
+    tbody.innerHTML = html || `<tr><td colspan="7" style="text-align:center;color:var(--muted);">No records in the last 7 days.</td></tr>`;
+  }catch(e){
+    tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;color:var(--bad);">Could not load: ${e.message||e}</td></tr>`;
+  }
+}
+
+async function deleteRow(id){
+  if(!confirm("Delete this record?")) return;
+  try{
+    // Only records within the last 7 days may be deleted (matches the original rule).
+    const cutoff = daysAgoISO(7);
+    const url = SUPABASE_URL + "/rest/v1/shutdown_assets?id=eq." + id + "&date_col=gte." + cutoff;
+    const res = await fetch(url, { method: "DELETE", headers: authHeaders() });
+    if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
+    await loadData();
+  }catch(e){
+    alert("Error: " + (e.message||e));
+  }
+}
+
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Manage Target</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme") || "navy"); }catch(e){}
+  })();
+  window.addEventListener("message", function(e){
+    if(e.data && e.data.rumbuTheme){ document.documentElement.setAttribute("data-theme", e.data.rumbuTheme); }
+  });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1200px;margin:0 auto;}
+  .tab-bar{display:flex;gap:6px;flex-wrap:wrap;border-bottom:2px solid var(--line);margin-bottom:16px;}
+  .tab-btn{background:none;border:none;padding:10px 14px;font-weight:700;font-size:13px;color:var(--muted);cursor:pointer;margin:0;border-bottom:3px solid transparent;}
+  .tab-btn:hover{background:var(--bg);color:var(--heading);}
+  .tab-btn.active{color:var(--heading);border-bottom-color:var(--accent);}
+  .tab-content{display:none;}
+  .tab-content.active{display:block;}
+  .readonly-banner{background:rgba(154,107,0,.12);color:var(--warn);padding:10px 14px;border-radius:var(--radius-sm);font-size:13px;font-weight:600;margin-bottom:14px;}
+  .row-actions{display:flex;gap:6px;flex-wrap:wrap;}
+  #editPanel{display:none;}
+  #editPanel.show{display:block;}
+  .newUnitBlock{display:none;background:var(--bg);border:1px dashed var(--line-2);border-radius:var(--radius-sm);padding:14px;margin-top:8px;}
+  .newUnitBlock.show{display:block;}
+  #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);}
+  .diff{font-size:12px;color:var(--muted);}
+</style>
+</head>
+<body>
+<div class="wrap">
+<button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:220px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back to Dashboard</button>
+<div id="connStatus">Loading...</div>
+<div id="roBanner" class="readonly-banner" style="display:none;">You have read-only access to this page. Adding assets and changing targets is limited to Admin and Super Admin.</div>
+
+<div class="tab-bar">
+  <button class="tab-btn active" data-tab="tab-assets" onclick="showTab('tab-assets')">Assets &amp; Targets</button>
+  <button class="tab-btn" data-tab="tab-log" onclick="showTab('tab-log')">Activity Log</button>
+</div>
+
+<!-- ============ ASSETS TAB ============ -->
+<div class="tab-content active" id="tab-assets">
+
+  <div class="card-panel" id="editPanel">
+    <h3 id="editPanelTitle">Add New Asset</h3>
+    <p class="sub" id="editPanelSub">Fill in the asset details below.</p>
+    <div class="form-row-3">
+      <div class="field"><label>Asset Code</label><input type="text" id="f_asset_code" placeholder="e.g. WA-13"></div>
+      <div class="field">
+        <label>Unit</label>
+        <select id="f_unit_code" onchange="onUnitPick()"><option value="">Select unit...</option><option value="__new__">+ Add new unit...</option></select>
+      </div>
+      <div class="field">
+        <label>Mat Type</label>
+        <select id="f_mat_type">
+          <option value="">(none / not tracked)</option>
+          <option>No.1</option><option>No.2</option><option>No.3</option><option>No.4</option>
+          <option>Hajj Mat</option><option>Prayer Mat</option><option>Customize</option>
+        </select>
+      </div>
+    </div>
+    <div class="newUnitBlock" id="newUnitBlock">
+      <div class="form-row-3">
+        <div class="field"><label>New Unit Code</label><input type="text" id="nu_unit_code" placeholder="e.g. WA13-15"></div>
+        <div class="field">
+          <label>Shed</label>
+          <select id="nu_shed">
+            <option value="1">1</option><option value="2">2</option><option value="3">3</option>
+            <option value="4">4</option><option value="5">5</option><option value="6">6</option>
+            <option value="CR">CR</option><option value="MamaSannu">MamaSannu</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Section</label>
+          <select id="nu_section"><option>Rumbu</option><option>MamaSannu</option></select>
+        </div>
+      </div>
+    </div>
+    <div class="form-row-3">
+      <div class="field"><label>Target — Normal Mat</label><input type="number" id="f_target_normal" value="0"></div>
+      <div class="field"><label>Target — Hajj Mat</label><input type="number" id="f_target_hajj" value="0"></div>
+      <div class="field"><label>Target — Prayer Mat</label><input type="number" id="f_target_prayer" value="0"></div>
+    </div>
+    <div class="row-actions">
+      <button onclick="saveAsset()">Save</button>
+      <button class="btn-ghost" onclick="closeEditPanel()">Cancel</button>
+    </div>
+    <div class="status" id="editStatus" style="display:none;"></div>
+  </div>
+
+  <div class="filters">
+    <div class="f"><label>Section</label><select id="filt_section" onchange="populateShedFilter(); loadAssets();"><option value="">All</option><option>Rumbu</option><option>MamaSannu</option></select></div>
+    <div class="f"><label>Shed</label><select id="filt_shed" onchange="loadAssets()"><option value="">All</option></select></div>
+    <div class="f"><label>Mat Type</label><select id="filt_mattype" onchange="loadAssets()"><option value="">All</option><option>No.1</option><option>No.2</option><option>No.3</option><option>No.4</option><option>Hajj Mat</option><option>Prayer Mat</option><option>Customize</option></select></div>
+    <div class="f"><label>Search Asset / Unit</label><input type="text" id="filt_search" placeholder="e.g. WA-01" oninput="loadAssets()"></div>
+    <div class="f f-min"><button id="btnAddAsset" onclick="openAddAsset()">+ Add New Asset</button></div>
+  </div>
+
+  <div class="table-wrap">
+    <div class="table-scroll">
+      <table id="assetsTable">
+        <thead><tr><th>Asset</th><th>Unit</th><th>Shed</th><th>Section</th><th>Mat Type</th><th>Normal</th><th>Hajj</th><th>Prayer</th><th></th></tr></thead>
+        <tbody id="assetsBody"><tr><td colspan="9">Loading...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ============ ACTIVITY LOG TAB ============ -->
+<div class="tab-content" id="tab-log">
+  <div class="filters">
+    <div class="f"><label>From Date</label><input type="date" id="log_from"></div>
+    <div class="f"><label>To Date</label><input type="date" id="log_to"></div>
+    <div class="f"><label>Action Type</label><select id="log_action_type"><option value="">All</option></select></div>
+    <div class="f"><label>Search (actor or description)</label><input type="text" id="log_search" placeholder="e.g. Sulaiman, WA-01"></div>
+    <div class="f f-min"><button onclick="applyLogFilter()">Filter</button></div>
+  </div>
+  <div class="table-wrap">
+    <div class="table-scroll">
+      <table id="logTable">
+        <thead><tr><th>When</th><th>By</th><th>Action</th><th>Details</th></tr></thead>
+        <tbody id="logBody"><tr><td colspan="4">Use the filters above and click Filter.</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+</div>
+
+<script>
+let ME = null;
+let UNITS = [];       // {unit_code, shed, section}
+let ASSETS = [];      // current filtered view of weaving_assets_full
+let EDIT_ASSET_CODE = null; // null = adding new; set = editing existing
+let LOG_ROWS = [];
+const ACTION_TYPES = ["weaving_asset_added","weaving_asset_mat_type_changed","weaving_asset_target_changed","weaving_unit_added"];
+
+function canWrite(){ return ME && (ME.role === "admin" || ME.role === "super_admin"); }
+
+function showTab(id){
+  document.querySelectorAll(".tab-content").forEach(t=>t.classList.toggle("active", t.id===id));
+  document.querySelectorAll(".tab-btn").forEach(b=>b.classList.toggle("active", b.getAttribute("data-tab")===id));
+}
+
+async function logActivity(actionType, description){
+  try{
+    await sb.from("activity_log").insert({
+      actor_id: ME.id, actor_username: ME.username, actor_role: ME.role,
+      section_id: ME.sectionId, action_type: actionType, description: description
+    });
+  }catch(e){ console.warn("Activity log write failed (non-fatal):", e); }
+}
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+
+    if(!canWrite()){
+      document.getElementById("roBanner").style.display = "block";
+      document.getElementById("btnAddAsset").style.display = "none";
+    }
+
+    const { data: unitRows, error: uErr } = await sb.from("weaving_units").select("unit_code,shed,section").order("section").order("unit_code");
+    if(uErr) throw uErr;
+    UNITS = unitRows || [];
+    populateUnitDropdown();
+    populateShedFilter();
+
+    status.style.color = "var(--ok)"; status.textContent = "Connected. " + UNITS.length + " units loaded.";
+    await loadAssets();
+  }catch(e){
+    status.style.color = "var(--bad)"; status.textContent = "Could not load: " + e.message;
+  }
+}
+
+function populateUnitDropdown(){
+  const sel = document.getElementById("f_unit_code");
+  sel.innerHTML = '<option value="">Select unit...</option>' +
+    UNITS.map(u=>`<option value="${u.unit_code}">${u.unit_code} (${u.section} / Shed ${u.shed})</option>`).join("") +
+    '<option value="__new__">+ Add new unit...</option>';
+}
+
+function populateShedFilter(){
+  const section = document.getElementById("filt_section").value;
+  const sheds = [...new Set(UNITS.filter(u=>!section || u.section===section).map(u=>u.shed))].sort();
+  document.getElementById("filt_shed").innerHTML = '<option value="">All</option>' + sheds.map(s=>`<option>${s}</option>`).join("");
+}
+
+function onUnitPick(){
+  const v = document.getElementById("f_unit_code").value;
+  document.getElementById("newUnitBlock").classList.toggle("show", v === "__new__");
+}
+
+async function loadAssets(){
+  const section = document.getElementById("filt_section").value;
+  const shed = document.getElementById("filt_shed").value;
+  const matType = document.getElementById("filt_mattype").value;
+  const q = document.getElementById("filt_search").value.trim();
+
+  let query = sb.from("weaving_assets_full").select("*").order("section").order("shed").order("unit_code").order("asset_code");
+  if(section) query = query.eq("section", section);
+  if(shed) query = query.eq("shed", shed);
+  if(matType) query = query.eq("mat_type", matType);
+  if(q) query = query.or(`asset_code.ilike.%${q}%,unit_code.ilike.%${q}%`);
+
+  const { data, error } = await query;
+  const body = document.getElementById("assetsBody");
+  if(error){ body.innerHTML = `<tr><td colspan="9">Error: ${error.message}</td></tr>`; return; }
+  ASSETS = data || [];
+  if(!ASSETS.length){ body.innerHTML = `<tr><td colspan="9">No assets match these filters.</td></tr>`; return; }
+
+  body.innerHTML = ASSETS.map(a => `
+    <tr>
+      <td><b>${a.asset_code}</b></td>
+      <td>${a.unit_code}</td>
+      <td>${a.shed}</td>
+      <td>${a.section}</td>
+      <td>${a.mat_type || "—"}</td>
+      <td>${a.target_normal_mat}</td>
+      <td>${a.target_hajj_mat}</td>
+      <td>${a.target_prayer_mat}</td>
+      <td>${canWrite() ? `<button class="btn-sm btn-ghost" onclick="openEditAsset('${a.asset_code}')">Edit</button>` : ""}</td>
+    </tr>`).join("");
+}
+
+function openAddAsset(){
+  EDIT_ASSET_CODE = null;
+  document.getElementById("editPanelTitle").textContent = "Add New Asset";
+  document.getElementById("editPanelSub").textContent = "Fill in the asset details below.";
+  document.getElementById("f_asset_code").value = "";
+  document.getElementById("f_asset_code").disabled = false;
+  document.getElementById("f_unit_code").value = "";
+  document.getElementById("newUnitBlock").classList.remove("show");
+  document.getElementById("f_mat_type").value = "";
+  document.getElementById("f_target_normal").value = 0;
+  document.getElementById("f_target_hajj").value = 0;
+  document.getElementById("f_target_prayer").value = 0;
+  document.getElementById("editStatus").style.display = "none";
+  document.getElementById("editPanel").classList.add("show");
+  window.scrollTo({top:0, behavior:"smooth"});
+}
+
+function openEditAsset(assetCode){
+  const a = ASSETS.find(x=>x.asset_code === assetCode);
+  if(!a) return;
+  EDIT_ASSET_CODE = assetCode;
+  document.getElementById("editPanelTitle").textContent = "Edit Asset — " + assetCode;
+  document.getElementById("editPanelSub").textContent = "Change mat type and/or target, then Save.";
+  document.getElementById("f_asset_code").value = a.asset_code;
+  document.getElementById("f_asset_code").disabled = true; // asset code is the primary key, not editable
+  document.getElementById("f_unit_code").value = a.unit_code;
+  document.getElementById("newUnitBlock").classList.remove("show");
+  document.getElementById("f_mat_type").value = a.mat_type || "";
+  document.getElementById("f_target_normal").value = a.target_normal_mat;
+  document.getElementById("f_target_hajj").value = a.target_hajj_mat;
+  document.getElementById("f_target_prayer").value = a.target_prayer_mat;
+  document.getElementById("editStatus").style.display = "none";
+  document.getElementById("editPanel").classList.add("show");
+  window.scrollTo({top:0, behavior:"smooth"});
+}
+
+function closeEditPanel(){
+  document.getElementById("editPanel").classList.remove("show");
+  EDIT_ASSET_CODE = null;
+}
+
+async function saveAsset(){
+  if(!canWrite()) return;
+  const statusEl = document.getElementById("editStatus");
+  statusEl.style.display = "block"; statusEl.className = "status"; statusEl.textContent = "Saving...";
+
+  const assetCode = document.getElementById("f_asset_code").value.trim();
+  let unitCode = document.getElementById("f_unit_code").value;
+  const matType = document.getElementById("f_mat_type").value || null;
+  const targetNormal = Number(document.getElementById("f_target_normal").value) || 0;
+  const targetHajj = Number(document.getElementById("f_target_hajj").value) || 0;
+  const targetPrayer = Number(document.getElementById("f_target_prayer").value) || 0;
+
+  if(!assetCode){ statusEl.className="status err"; statusEl.textContent="Enter an Asset Code."; return; }
+  if(!unitCode){ statusEl.className="status err"; statusEl.textContent="Select or create a Unit."; return; }
+
+  try{
+    // Handle inline "new unit" creation first
+    if(unitCode === "__new__"){
+      const newUnitCode = document.getElementById("nu_unit_code").value.trim();
+      const newShed = document.getElementById("nu_shed").value;
+      const newSection = document.getElementById("nu_section").value;
+      if(!newUnitCode){ throw new Error("Enter a code for the new unit."); }
+      const { error: unitErr } = await sb.from("weaving_units").insert({ unit_code: newUnitCode, shed: newShed, section: newSection });
+      if(unitErr) throw unitErr;
+      await logActivity("weaving_unit_added", ME.username + " added Unit \"" + newUnitCode + "\" (Shed " + newShed + ", " + newSection + ")");
+      UNITS.push({unit_code:newUnitCode, shed:newShed, section:newSection});
+      populateUnitDropdown();
+      unitCode = newUnitCode;
+    }
+
+    if(EDIT_ASSET_CODE === null){
+      // ---- ADD NEW ASSET ----
+      const { error } = await sb.from("weaving_assets").insert({
+        asset_code: assetCode, unit_code: unitCode, mat_type: matType,
+        target_normal_mat: targetNormal, target_hajj_mat: targetHajj, target_prayer_mat: targetPrayer
+      });
+      if(error) throw error;
+      await logActivity("weaving_asset_added",
+        ME.username + " added asset \"" + assetCode + "\" to unit " + unitCode +
+        " (Mat Type: " + (matType || "none") + "; Targets N/H/P: " + targetNormal + "/" + targetHajj + "/" + targetPrayer + ")");
+      statusEl.className = "status ok"; statusEl.textContent = "Asset added.";
+    } else {
+      // ---- EDIT EXISTING ASSET ----
+      const before = ASSETS.find(x=>x.asset_code === EDIT_ASSET_CODE);
+      const { error } = await sb.from("weaving_assets").update({
+        mat_type: matType, target_normal_mat: targetNormal, target_hajj_mat: targetHajj, target_prayer_mat: targetPrayer
+      }).eq("asset_code", EDIT_ASSET_CODE);
+      if(error) throw error;
+
+      if(before && (before.mat_type||null) !== matType){
+        await logActivity("weaving_asset_mat_type_changed",
+          ME.username + " changed Mat Type for asset " + EDIT_ASSET_CODE + " from \"" + (before.mat_type||"none") + "\" to \"" + (matType||"none") + "\"");
+      }
+      if(before && (before.target_normal_mat !== targetNormal || before.target_hajj_mat !== targetHajj || before.target_prayer_mat !== targetPrayer)){
+        await logActivity("weaving_asset_target_changed",
+          ME.username + " changed target for asset " + EDIT_ASSET_CODE +
+          ": Normal " + before.target_normal_mat + "→" + targetNormal +
+          ", Hajj " + before.target_hajj_mat + "→" + targetHajj +
+          ", Prayer " + before.target_prayer_mat + "→" + targetPrayer);
+      }
+      statusEl.className = "status ok"; statusEl.textContent = "Asset updated.";
+    }
+
+    await loadAssets();
+    setTimeout(closeEditPanel, 700);
+  }catch(e){
+    statusEl.className = "status err";
+    statusEl.textContent = (e.message && e.message.indexOf("duplicate") !== -1) ? "That Asset Code already exists." : "Error: " + e.message;
+  }
+}
+
+// ---------- Activity Log (filtered display only — no raw dumps) ----------
+async function applyLogFilter(){
+  const from = document.getElementById("log_from").value;
+  const to = document.getElementById("log_to").value;
+  const actionType = document.getElementById("log_action_type").value;
+  const q = document.getElementById("log_search").value.trim();
+
+  let query = sb.from("activity_log")
+    .select("actor_username, actor_role, action_type, description, created_at")
+    .in("action_type", ACTION_TYPES)
+    .order("created_at", { ascending: false })
+    .limit(500);
+  if(from) query = query.gte("created_at", from + "T00:00:00");
+  if(to) query = query.lte("created_at", to + "T23:59:59");
+  if(actionType) query = query.eq("action_type", actionType);
+  if(q) query = query.or(`actor_username.ilike.%${q}%,description.ilike.%${q}%`);
+
+  const { data, error } = await query;
+  const body = document.getElementById("logBody");
+  if(error){ body.innerHTML = `<tr><td colspan="4">Error: ${error.message}</td></tr>`; return; }
+  LOG_ROWS = data || [];
+  if(!LOG_ROWS.length){ body.innerHTML = `<tr><td colspan="4">No activity matches these filters.</td></tr>`; return; }
+  body.innerHTML = LOG_ROWS.map(r=>{
+    const when = new Date(r.created_at).toLocaleString();
+    return `<tr><td>${when}</td><td>${r.actor_username||""} (${r.actor_role||""})</td><td>${r.action_type||""}</td><td>${r.description||""}</td></tr>`;
+  }).join("");
+}
+
+document.getElementById("log_action_type").innerHTML = '<option value="">All</option>' +
+  ACTION_TYPES.map(t=>`<option value="${t}">${t}</option>`).join("");
+
+init();
+</script>
+</body>
+</html>

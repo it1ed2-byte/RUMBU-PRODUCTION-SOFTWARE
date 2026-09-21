@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Manage Agents — PET Collection</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme")||"navy"); }catch(e){} })();
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) document.documentElement.setAttribute("data-theme",e.data.rumbuTheme); });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1100px;margin:0 auto;}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;}
+  .badge{display:inline-block;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:700;}
+  .badge.active{background:#d1fae5;color:#065f46;}
+  .badge.inactive{background:#fee2e2;color:#991b1b;}
+  .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;justify-content:center;align-items:flex-start;padding:40px 16px;overflow-y:auto;}
+  .modal-overlay.open{display:flex;}
+  .modal{background:var(--card);border-radius:14px;padding:28px;width:100%;max-width:580px;box-shadow:0 8px 32px rgba(0,0,0,.2);}
+  .modal h3{color:var(--heading);margin:0 0 18px;}
+  label{font-size:12px;font-weight:700;display:block;margin:10px 0 4px;color:var(--muted);}
+  input,select,textarea{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);}
+  .btn-row{display:flex;gap:10px;margin-top:18px;}
+  .act-btn{padding:5px 12px;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;}
+  .act-btn.edit{background:#dbeafe;color:#1e40af;}
+  .act-btn.toggle{background:#fef3c7;color:#92400e;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <button class="no-print" onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back</button>
+  <div id="connStatus" style="font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);">Loading...</div>
+
+  <div class="card-panel">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+      <h3 style="margin:0;color:var(--heading);">PET Agents</h3>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <input type="text" id="searchInput" placeholder="Search name or code..." style="width:220px;" oninput="filterTable()">
+        <button onclick="openAdd()">+ Add Agent</button>
+      </div>
+    </div>
+    <div class="table-wrap" style="margin-top:14px;">
+      <div class="table-scroll">
+        <table id="agentTable">
+          <thead><tr>
+            <th>Code</th><th>Name</th><th>Branch</th><th>Phone</th><th>Category</th>
+            <th>Bank</th><th>Account No.</th><th>Status</th><th>Actions</th>
+          </tr></thead>
+          <tbody id="agentBody"><tr><td colspan="9" style="text-align:center;color:var(--muted);">Loading...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal -->
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <h3 id="modalTitle">Add Agent</h3>
+    <div class="grid2">
+      <div>
+        <label>Agent Code <span style="color:var(--muted);font-weight:400;">(auto-generated)</span></label>
+        <input type="text" id="fCode" readonly style="background:var(--bg);">
+      </div>
+      <div>
+        <label>Category</label>
+        <select id="fCategory">
+          <option value="">-- Select --</option>
+          <option>Local</option><option>International</option><option>Cooperative</option><option>Individual</option>
+        </select>
+      </div>
+    </div>
+    <label>Agent Name *</label>
+    <input type="text" id="fName" placeholder="Full legal name">
+    <div class="grid2">
+      <div>
+        <label>Phone Number</label>
+        <input type="tel" id="fPhone" placeholder="+234...">
+      </div>
+      <div>
+        <label>Branch (Section) *</label>
+        <select id="fSection">
+          <option value="">Loading branches...</option>
+        </select>
+      </div>
+    </div>
+    <label>Address</label>
+    <textarea id="fAddress" rows="2" placeholder="Full address"></textarea>
+    <div class="grid3">
+      <div>
+        <label>Bank Name</label>
+        <input type="text" id="fBankName" placeholder="e.g. GTBank">
+      </div>
+      <div>
+        <label>Account Number</label>
+        <input type="text" id="fBankAccNum" placeholder="10-digit number">
+      </div>
+      <div>
+        <label>Account Name</label>
+        <input type="text" id="fBankAccName" placeholder="As on bank record">
+      </div>
+    </div>
+    <div class="btn-row">
+      <button onclick="saveAgent()">Save Agent</button>
+      <button class="btn-ghost" onclick="closeModal()">Cancel</button>
+    </div>
+    <div id="modalStatus" style="margin-top:10px;font-size:13px;font-weight:700;min-height:16px;"></div>
+  </div>
+</div>
+
+<script>
+let ME = null, AGENTS = [], BRANCHES = [], EDITING_ID = null;
+
+async function loadBranches(){
+  // PET collection currently only happens at these two sites — matches the
+  // same restriction applied at Initiation.
+  const ACTIVE_PET_BRANCHES = ["LagosWash", "KanoWash"];
+  const { data, error } = await sb.from("app_sections").select("name").in("name", ACTIVE_PET_BRANCHES).order("name");
+  if(error) throw new Error("Could not load branches: "+error.message);
+  BRANCHES = (data||[]).map(s=>s.name);
+  const sel = document.getElementById("fSection");
+  sel.innerHTML = BRANCHES.length
+    ? `<option value="">-- Select --</option>` + BRANCHES.map(b=>`<option value="${b}">${b}</option>`).join("")
+    : `<option value="">No branches configured</option>`;
+}
+
+async function init(){
+  const cs = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    await loadBranches();
+    await loadAgents();
+    cs.style.color="var(--ok)"; cs.textContent="Connected.";
+  }catch(e){
+    cs.style.color="var(--bad)"; cs.textContent="Error: "+e.message;
+  }
+}
+
+async function loadAgents(){
+  const { data, error } = await sb.from("pet_agents").select("*").order("agent_code");
+  if(error) throw error;
+  AGENTS = data || [];
+  renderTable(AGENTS);
+}
+
+function renderTable(list){
+  const body = document.getElementById("agentBody");
+  if(!list.length){ body.innerHTML=`<tr><td colspan="9" style="text-align:center;color:var(--muted);">No agents found.</td></tr>`; return; }
+  body.innerHTML = list.map(a=>`<tr>
+    <td><b>${a.agent_code}</b></td>
+    <td>${a.agent_name}</td>
+    <td>${a.section||"—"}</td>
+    <td>${a.phone||"—"}</td>
+    <td>${a.category||"—"}</td>
+    <td>${a.bank_name||"—"}</td>
+    <td>${a.bank_account_number||"—"}</td>
+    <td><span class="badge ${a.is_active?'active':'inactive'}">${a.is_active?'Active':'Inactive'}</span></td>
+    <td>
+      <button class="act-btn edit" onclick="openEdit(${a.id})">Edit</button>
+      <button class="act-btn toggle" onclick="toggleAgent(${a.id},${a.is_active})">${a.is_active?'Deactivate':'Activate'}</button>
+    </td>
+  </tr>`).join("");
+}
+
+function filterTable(){
+  const q = document.getElementById("searchInput").value.toLowerCase();
+  renderTable(AGENTS.filter(a=> (a.agent_name+a.agent_code).toLowerCase().includes(q)));
+}
+
+async function generateCode(){
+  const { data } = await sb.from("pet_agents").select("agent_code").order("id",{ascending:false}).limit(1);
+  if(!data||!data.length) return "AGT-001";
+  const num = parseInt((data[0].agent_code||"AGT-000").split("-")[1]||"0") + 1;
+  return "AGT-" + String(num).padStart(3,"0");
+}
+
+async function openAdd(){
+  EDITING_ID = null;
+  document.getElementById("modalTitle").textContent = "Add Agent";
+  clearForm();
+  document.getElementById("fCode").value = await generateCode();
+  document.getElementById("modal").classList.add("open");
+}
+
+function openEdit(id){
+  EDITING_ID = id;
+  const a = AGENTS.find(x=>x.id===id);
+  if(!a) return;
+  document.getElementById("modalTitle").textContent = "Edit Agent";
+  document.getElementById("fCode").value = a.agent_code;
+  document.getElementById("fName").value = a.agent_name;
+  document.getElementById("fPhone").value = a.phone||"";
+  document.getElementById("fSection").value = a.section||"";
+  document.getElementById("fCategory").value = a.category||"";
+  document.getElementById("fAddress").value = a.address||"";
+  document.getElementById("fBankName").value = a.bank_name||"";
+  document.getElementById("fBankAccNum").value = a.bank_account_number||"";
+  document.getElementById("fBankAccName").value = a.bank_account_name||"";
+  document.getElementById("modalStatus").textContent = "";
+  document.getElementById("modal").classList.add("open");
+}
+
+function clearForm(){
+  ["fName","fPhone","fAddress","fBankName","fBankAccNum","fBankAccName"].forEach(id=>document.getElementById(id).value="");
+  document.getElementById("fCategory").selectedIndex = 0;
+  document.getElementById("fSection").selectedIndex = 0;
+  document.getElementById("modalStatus").textContent = "";
+}
+
+function closeModal(){ document.getElementById("modal").classList.remove("open"); }
+
+async function saveAgent(){
+  const st = document.getElementById("modalStatus");
+  const name = document.getElementById("fName").value.trim();
+  const section = document.getElementById("fSection").value;
+  if(!name){ st.style.color="var(--bad)"; st.textContent="Agent name is required."; return; }
+  if(!section){ st.style.color="var(--bad)"; st.textContent="Select a branch."; return; }
+
+  const payload = {
+    agent_code:         document.getElementById("fCode").value,
+    agent_name:         name,
+    phone:              document.getElementById("fPhone").value.trim()||null,
+    section:            section,
+    category:           document.getElementById("fCategory").value||null,
+    address:            document.getElementById("fAddress").value.trim()||null,
+    bank_name:          document.getElementById("fBankName").value.trim()||null,
+    bank_account_number:document.getElementById("fBankAccNum").value.trim()||null,
+    bank_account_name:  document.getElementById("fBankAccName").value.trim()||null,
+  };
+
+  st.style.color="var(--muted)"; st.textContent="Saving...";
+  const { error } = EDITING_ID
+    ? await sb.from("pet_agents").update(payload).eq("id", EDITING_ID)
+    : await sb.from("pet_agents").insert(payload);
+
+  if(error){ st.style.color="var(--bad)"; st.textContent="Error: "+error.message; return; }
+  st.style.color="var(--ok)"; st.textContent="Saved.";
+  await loadAgents();
+  setTimeout(closeModal, 800);
+}
+
+async function toggleAgent(id, current){
+  if(!confirm(`${current?"Deactivate":"Activate"} this agent?`)) return;
+  const { error } = await sb.from("pet_agents").update({ is_active: !current }).eq("id", id);
+  if(error){ alert("Error: "+error.message); return; }
+  await loadAgents();
+}
+
+document.getElementById("modal").addEventListener("click", function(e){ if(e.target===this) closeModal(); });
+init();
+</script>
+</body>
+</html>

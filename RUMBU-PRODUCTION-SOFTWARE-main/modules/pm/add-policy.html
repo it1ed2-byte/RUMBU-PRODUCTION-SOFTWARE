@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Add PM Policy</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme") || "navy"); }catch(e){} })();
+  window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme){ document.documentElement.setAttribute("data-theme", e.data.rumbuTheme); } });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:820px;margin:0 auto;}
+  #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);}
+  .readonly-field{background:var(--bg);border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:11px 12px;font-size:14px;color:var(--muted);}
+  .cl-head{display:flex;align-items:center;justify-content:space-between;margin:22px 0 8px;}
+  .cl-head h4{margin:0;color:var(--heading);font-size:14px;}
+  table.cl{width:100%;border-collapse:collapse;}
+  table.cl th,table.cl td{padding:8px;border-bottom:1px solid var(--line);vertical-align:middle;}
+  table.cl th{background:var(--th-bg);color:var(--th-fg);font-size:11px;text-transform:uppercase;letter-spacing:.4px;text-align:left;}
+  table.cl th:first-child,table.cl td:first-child{width:52px;text-align:center;}
+  table.cl th:last-child,table.cl td:last-child{width:60px;text-align:center;}
+  table.cl td input{margin:0;}
+  .row-no{font-weight:700;color:var(--muted);font-variant-numeric:tabular-nums;}
+  .btn-rm{background:var(--bad);color:#fff;border:0;border-radius:7px;padding:6px 10px;font-size:13px;cursor:pointer;line-height:1;}
+  .btn-add-row{background:var(--bg);color:var(--heading);border:1px solid var(--line-2);border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;}
+  .actions{display:flex;gap:10px;align-items:center;margin-top:20px;}
+  .actions .btn-primary{background:var(--accent);color:var(--logo-fg);}
+</style>
+</head>
+<body>
+<div class="wrap">
+<button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:220px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back to Dashboard</button>
+<div id="connStatus">Loading...</div>
+
+<div class="card-panel">
+  <h3>Add PM Policy</h3>
+  <p class="sub">Define a preventive-maintenance policy for a Technical unit, then list its checklist items below.</p>
+
+  <div class="form-row">
+    <div class="field"><label>Policy Number</label><input type="text" id="f_number" placeholder="e.g. PM-001"></div>
+    <div class="field"><label>Policy Name</label><input type="text" id="f_name" placeholder="e.g. Weekly Gearbox Service"></div>
+  </div>
+
+  <div class="form-row">
+    <div class="field">
+      <label>Unit (Technical department)</label>
+      <select id="f_unit"><option value="">Select...</option></select>
+    </div>
+    <div class="field"><label>PM Next Day (number of days)</label><input type="number" id="f_days" min="1" step="1" placeholder="e.g. 30"></div>
+  </div>
+
+  <div class="field"><label>Created By</label><div class="readonly-field" id="f_createdby">—</div></div>
+
+  <div class="field"><label>Description</label><textarea id="f_desc" placeholder="What this policy covers, notes, scope..."></textarea></div>
+
+  <div class="cl-head">
+    <h4>Checklist Items</h4>
+    <button type="button" class="btn-add-row" onclick="addRow()">+ Add checklist item</button>
+  </div>
+  <table class="cl">
+    <thead><tr><th>#</th><th>Checklist Item</th><th></th></tr></thead>
+    <tbody id="clBody"></tbody>
+  </table>
+
+  <div class="actions">
+    <button class="btn-primary" onclick="submitPolicy()">Add</button>
+  </div>
+  <div class="status" id="entryStatus" style="display:none;"></div>
+</div>
+</div>
+
+<script>
+let ME = null;
+let UNITS = []; // [{id,name,department_id,section}]
+
+async function logActivity(actionType, description){
+  try{
+    await sb.from("activity_log").insert({
+      actor_id: ME.id, actor_username: ME.username, actor_role: ME.role,
+      section_id: ME.sectionId, action_type: actionType, description: description
+    });
+  }catch(e){ console.warn("Activity log write failed (non-fatal):", e); }
+}
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    document.getElementById("f_createdby").textContent = ME.username;
+
+    await loadTechnicalUnits();
+
+    // Start with three blank checklist rows.
+    addRow(); addRow(); addRow();
+
+    status.style.color = "var(--ok)"; status.textContent = "Connected.";
+  }catch(e){
+    status.style.color = "var(--bad)"; status.textContent = "Could not load: " + e.message;
+  }
+}
+
+// Units that sit under a department named "Technical", across all branches.
+async function loadTechnicalUnits(){
+  const { data: depts, error: dErr } = await sb.from("departments").select("id, name, section");
+  if(dErr) throw dErr;
+  const techDepts = (depts || []).filter(d => (d.name || "").trim().toLowerCase() === "technical");
+  const deptSection = {}; techDepts.forEach(d => deptSection[d.id] = d.section);
+  const ids = techDepts.map(d => d.id);
+
+  UNITS = [];
+  if(ids.length){
+    const { data: units, error: uErr } = await sb.from("units").select("id, name, department_id").in("department_id", ids).order("name");
+    if(uErr) throw uErr;
+    UNITS = (units || []).map(u => ({ id: u.id, name: u.name, department_id: u.department_id, section: deptSection[u.department_id] || "" }));
+  }
+
+  const sel = document.getElementById("f_unit");
+  if(!UNITS.length){
+    sel.innerHTML = '<option value="">No Technical units found</option>';
+    return;
+  }
+  sel.innerHTML = '<option value="">Select...</option>' + UNITS.map(u =>
+    `<option value="${u.id}">${u.name}${u.section ? " — " + u.section : ""}</option>`
+  ).join("");
+}
+
+// ---- Dynamic checklist rows ----
+function addRow(value){
+  const body = document.getElementById("clBody");
+  const tr = document.createElement("tr");
+  tr.innerHTML =
+    '<td><span class="row-no"></span></td>' +
+    '<td><input type="text" class="cl-item" placeholder="Describe the checklist step" value="' + (value ? String(value).replace(/"/g,"&quot;") : "") + '"></td>' +
+    '<td><button type="button" class="btn-rm" title="Remove" onclick="removeRow(this)">&times;</button></td>';
+  body.appendChild(tr);
+  renumber();
+  const inp = tr.querySelector(".cl-item"); if(inp) inp.focus();
+}
+function removeRow(btn){
+  const tr = btn.closest("tr");
+  if(tr) tr.remove();
+  renumber();
+}
+function renumber(){
+  document.querySelectorAll("#clBody tr").forEach((tr, i) => {
+    const n = tr.querySelector(".row-no"); if(n) n.textContent = (i + 1);
+  });
+}
+
+async function submitPolicy(){
+  const status = document.getElementById("entryStatus");
+  const show = (cls, msg) => { status.style.display = "block"; status.className = "status " + cls; status.textContent = msg; };
+
+  const number = document.getElementById("f_number").value.trim();
+  const name = document.getElementById("f_name").value.trim();
+  const unitId = document.getElementById("f_unit").value;
+  const days = parseInt(document.getElementById("f_days").value, 10);
+  const desc = document.getElementById("f_desc").value.trim();
+
+  const items = Array.from(document.querySelectorAll("#clBody .cl-item"))
+    .map(i => i.value.trim()).filter(Boolean);
+
+  if(!number){ return show("bad", "Enter a Policy Number."); }
+  if(!name){ return show("bad", "Enter a Policy Name."); }
+  if(!unitId){ return show("bad", "Select a Unit."); }
+  if(!days || days < 1){ return show("bad", "Enter PM Next Day as a whole number of days (1 or more)."); }
+  if(!items.length){ return show("bad", "Add at least one checklist item."); }
+
+  const unit = UNITS.find(u => String(u.id) === String(unitId));
+
+  show("warn", "Saving...");
+  try{
+    // Guard against a duplicate policy number (the column is unique too).
+    const { data: dup } = await sb.from("pm_policies").select("id").eq("policy_number", number).maybeSingle();
+    if(dup){ return show("bad", "Policy Number \"" + number + "\" already exists. Use a different one."); }
+
+    const { data: policy, error: pErr } = await sb.from("pm_policies").insert({
+      policy_number: number,
+      policy_name: name,
+      unit_id: unit ? unit.id : null,
+      unit_name: unit ? unit.name : null,
+      department_id: unit ? unit.department_id : null,
+      section: unit ? unit.section : null,
+      pm_next_days: days,
+      created_by: ME.username,
+      description: desc || null
+    }).select("id").single();
+    if(pErr) throw pErr;
+
+    const rows = items.map((text, idx) => ({ policy_id: policy.id, item_no: idx + 1, checklist_item: text }));
+    const { error: iErr } = await sb.from("pm_policy_items").insert(rows);
+    if(iErr) throw iErr;
+
+    await logActivity("pm_policy_add", "Added PM policy " + number + " (" + name + ") for unit " + (unit ? unit.name : unitId) + " with " + rows.length + " checklist item(s).");
+
+    show("ok", "Policy \"" + number + "\" saved with " + rows.length + " checklist item(s).");
+    // Reset for the next entry, keeping the unit selection for convenience.
+    document.getElementById("f_number").value = "";
+    document.getElementById("f_name").value = "";
+    document.getElementById("f_days").value = "";
+    document.getElementById("f_desc").value = "";
+    document.getElementById("clBody").innerHTML = "";
+    addRow(); addRow(); addRow();
+  }catch(e){
+    show("bad", "Could not save: " + (e.message || e));
+  }
+}
+
+init();
+</script>
+</body>
+</html>

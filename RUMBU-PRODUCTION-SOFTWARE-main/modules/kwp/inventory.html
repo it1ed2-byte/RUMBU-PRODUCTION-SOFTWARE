@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>KWP — Inventory &amp; Receipts</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme") || "navy"); }catch(e){}
+  })();
+  window.addEventListener("message", function(e){
+    if(e.data && e.data.rumbuTheme){ document.documentElement.setAttribute("data-theme", e.data.rumbuTheme); }
+  });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1150px;margin:0 auto;}
+  .tab-bar{display:flex;gap:6px;flex-wrap:wrap;border-bottom:2px solid var(--line);margin-bottom:16px;}
+  .tab-btn{background:none;border:none;padding:10px 14px;font-weight:700;font-size:13px;color:var(--muted);cursor:pointer;margin:0;border-bottom:3px solid transparent;}
+  .tab-btn:hover{background:var(--bg);color:var(--heading);}
+  .tab-btn.active{color:var(--heading);border-bottom-color:var(--accent);}
+  .tab-content{display:none;}
+  .tab-content.active{display:block;}
+  .readonly-banner{background:rgba(154,107,0,.12);color:var(--warn);padding:10px 14px;border-radius:var(--radius-sm);font-size:13px;font-weight:600;margin-bottom:14px;}
+  .pending-note{background:rgba(154,107,0,.10);border:1px dashed var(--warn);color:var(--warn);border-radius:var(--radius-sm);padding:10px 14px;font-size:12.5px;margin-bottom:14px;}
+  #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);}
+  .toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px;}
+  .toolbar .f{min-width:150px;}
+  .toolbar label{display:block;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div id="connStatus">Loading...</div>
+<div id="roBanner" class="readonly-banner" style="display:none;">You don't have an active KWP staff assignment, so this page is read-only for you.</div>
+
+<div class="tab-bar">
+  <button class="tab-btn active" data-tab="tab-ledger" onclick="showTab('tab-ledger')">Inventory Ledger</button>
+  <button class="tab-btn" data-tab="tab-receipts" onclick="showTab('tab-receipts')">Material Receipts</button>
+  <button class="tab-btn" data-tab="tab-dispatch" onclick="showTab('tab-dispatch')">Dispatch</button>
+</div>
+
+<!-- ============ LEDGER TAB ============ -->
+<div class="tab-content active" id="tab-ledger">
+  <div class="card-panel" id="obPanel" style="display:none;">
+    <h3>Opening Balance (one-time seed — not re-entered daily)</h3>
+    <p class="sub">Everything after this date is a running total from receipts/production/dispatch — you only set this once, or reset it if the plant does a physical stock count.</p>
+    <div class="form-row-3">
+      <div class="field"><label>Bales Opening (kg)</label><input type="number" step="0.01" id="ob_bales"></div>
+      <div class="field"><label>Flakes Opening (kg)</label><input type="number" step="0.01" id="ob_flakes"></div>
+      <div class="field"><label>As Of Date</label><input type="date" id="ob_date"></div>
+    </div>
+    <button class="btn-sm" onclick="saveOpeningBalance()">Save Opening Balance</button>
+    <div class="status" id="obStatus"></div>
+  </div>
+
+  <div class="toolbar">
+    <div class="f"><label>From</label><input type="date" id="inv_from" onchange="loadLedger()"></div>
+    <div class="f"><label>To</label><input type="date" id="inv_to" onchange="loadLedger()"></div>
+    <div class="f" style="flex:0 0 auto;"><button id="editObBtn" style="display:none;" onclick="toggleObPanel()">Edit Opening Balance</button></div>
+  </div>
+  <div class="pending-note" id="planNote" style="display:none;">No "daily_plan_kg" target is configured (Staff &amp; Shift Management &rarr; Targets), so Days of Cover can't be shown. Your Daily Pack reference is 28,160 kg/day.</div>
+
+  <div class="table-wrap"><div class="table-scroll">
+    <table>
+      <thead><tr><th>Item</th><th>Date</th><th>Opening (kg)</th><th>Received (kg)</th><th>Consumed (kg)</th><th>Closing (kg)</th><th>Days of Cover</th></tr></thead>
+      <tbody id="ledgerBody"><tr><td colspan="7">Loading…</td></tr></tbody>
+    </table>
+  </div></div>
+</div>
+
+<!-- ============ RECEIPTS TAB ============ -->
+<div class="tab-content" id="tab-receipts">
+  <div class="card-panel" id="recFormPanel" style="display:none;">
+    <h3 id="recFormTitle">Log Material Receipt</h3>
+    <p class="sub">Matches the paper weight-verification register: vendor's claimed weight, what was recorded on arrival, and the final settled weight once verified. It's normal for a receipt to start with only the claimed weight known — save it, then come back and <b>Edit</b> it once the recorded/settled figures are confirmed, rather than logging it again as a new row.</p>
+    <input type="hidden" id="r_id">
+    <div class="form-row-3">
+      <div class="field"><label>Date</label><input type="date" id="r_date"></div>
+      <div class="field"><label>Vendor Name</label><input id="r_vendor"></div>
+      <div class="field"><label>Vendor Location</label><input id="r_location" placeholder="e.g. Kano State"></div>
+    </div>
+    <div class="form-row-3">
+      <div class="field"><label>Total Weight — vendor's claim (kg)</label><input type="number" step="0.01" min="0" id="r_kg"></div>
+      <div class="field"><label>Material Quality (%)</label><input type="number" step="0.1" min="0" max="100" id="r_grade"></div>
+      <div class="field"><label>Material Remark</label><input id="r_remark_material" placeholder="e.g. Good, Needs sorting"></div>
+    </div>
+    <div class="form-row-3">
+      <div class="field"><label>Total Weight Recorded on arrival (kg)</label><input type="number" step="0.01" min="0" id="r_recorded_kg"></div>
+      <div class="field"><label>Material Available on Ground (kg)</label><input type="number" step="0.01" min="0" id="r_ground_kg"></div>
+      <div class="field"><label>Sum of Total Weight — final settled (kg)</label><input type="number" step="0.01" min="0" id="r_final_kg"></div>
+    </div>
+    <div class="form-row-3">
+      <div class="field"><label>Payment Status — % Allowed</label><input type="number" step="0.1" min="0" max="100" id="r_payment_pct"></div>
+      <div class="field"><label>Comment</label><input id="r_comment" placeholder="e.g. Excellent, Needs improvement"></div>
+      <div class="field"><label>Rate (₦/kg, if known)</label><input type="number" step="0.01" min="0" id="r_rate"></div>
+    </div>
+    <div class="form-row">
+      <div class="field"><label>Lot No (optional)</label><input id="r_lot"></div>
+      <div class="field"><label><input type="checkbox" id="r_slip" style="width:auto;"> Weight slip received</label></div>
+    </div>
+    <div class="field"><label>Additional Remarks</label><input id="r_remarks"></div>
+    <button onclick="saveReceipt()">Save Receipt</button>
+    <button class="btn-ghost" onclick="document.getElementById('recFormPanel').style.display='none';">Cancel</button>
+    <div class="status" id="recFormStatus"></div>
+  </div>
+  <div class="toolbar">
+    <div class="f"><label>From</label><input type="date" id="rec_from" onchange="loadReceipts()"></div>
+    <div class="f"><label>To</label><input type="date" id="rec_to" onchange="loadReceipts()"></div>
+    <div class="f" style="flex:0 0 auto;"><button id="addRecBtn" style="display:none;" onclick="openReceiptForm()">+ Log Receipt</button></div>
+  </div>
+  <div class="table-wrap"><div class="table-scroll">
+    <table>
+      <thead><tr><th>Date</th><th>Vendor</th><th>Location</th><th>Quality %</th><th>Claimed (kg)</th><th>Recorded (kg)</th><th>Settled (kg)</th><th>Payment %</th><th>Comment</th><th></th></tr></thead>
+      <tbody id="recTableBody"><tr><td colspan="10">Loading…</td></tr></tbody>
+    </table>
+  </div></div>
+</div>
+
+<!-- ============ DISPATCH TAB ============ -->
+<div class="tab-content" id="tab-dispatch">
+  <div class="card-panel" id="dispFormPanel" style="display:none;">
+    <h3>Log Dispatch (Flakes leaving the plant)</h3>
+    <div class="form-row-3">
+      <div class="field"><label>Date</label><input type="date" id="d_date"></div>
+      <div class="field"><label>Quantity (kg)</label><input type="number" step="0.01" min="0" id="d_kg"></div>
+      <div class="field"><label>Destination</label><input id="d_dest" placeholder="e.g. Agbara"></div>
+    </div>
+    <div class="field"><label>Reference / Waybill</label><input id="d_ref"></div>
+    <button onclick="saveDispatch()">Save Dispatch</button>
+    <button class="btn-ghost" onclick="document.getElementById('dispFormPanel').style.display='none';">Cancel</button>
+    <div class="status" id="dispFormStatus"></div>
+  </div>
+  <div class="toolbar">
+    <div class="f"><label>From</label><input type="date" id="disp_from" onchange="loadDispatch()"></div>
+    <div class="f"><label>To</label><input type="date" id="disp_to" onchange="loadDispatch()"></div>
+    <div class="f" style="flex:0 0 auto;"><button id="addDispBtn" style="display:none;" onclick="openDispatchForm()">+ Log Dispatch</button></div>
+  </div>
+  <div class="table-wrap"><div class="table-scroll">
+    <table>
+      <thead><tr><th>Date</th><th>Quantity (kg)</th><th>Destination</th><th>Reference</th></tr></thead>
+      <tbody id="dispTableBody"><tr><td colspan="4">Loading…</td></tr></tbody>
+    </table>
+  </div></div>
+</div>
+
+</div>
+
+<script>
+let ME = null;
+let CAN_ENTER = false;
+let IS_MANAGER = false;
+
+function showTab(id){
+  document.querySelectorAll(".tab-content").forEach(el=>el.classList.toggle("active", el.id === id));
+  document.querySelectorAll(".tab-btn").forEach(el=>el.classList.toggle("active", el.getAttribute("data-tab") === id));
+}
+window.showTab = showTab;
+function n(v){ return v==null ? "—" : Number(v).toFixed(2); }
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+
+    const { data: canEnter } = await sb.rpc("kwp_is_active_staff");
+    CAN_ENTER = !!canEnter;
+    const { data: mgr } = await sb.rpc("kwp_is_manager");
+    IS_MANAGER = !!mgr;
+
+    document.getElementById("roBanner").style.display = CAN_ENTER ? "none" : "block";
+    document.getElementById("addRecBtn").style.display = CAN_ENTER ? "inline-block" : "none";
+    document.getElementById("addDispBtn").style.display = CAN_ENTER ? "inline-block" : "none";
+    document.getElementById("editObBtn").style.display = IS_MANAGER ? "inline-block" : "none";
+
+    status.style.color = "#1d8a4e"; status.textContent = "Connected.";
+
+    const today = new Date().toISOString().slice(0,10);
+    const weekAgo = new Date(Date.now()-7*86400000).toISOString().slice(0,10);
+    ["inv_from","rec_from","disp_from"].forEach(id => document.getElementById(id).value = weekAgo);
+    ["inv_to","rec_to","disp_to"].forEach(id => document.getElementById(id).value = today);
+    document.getElementById("r_date").value = today;
+    document.getElementById("d_date").value = today;
+    document.getElementById("ob_date").value = today;
+
+    await Promise.all([loadLedger(), loadReceipts(), loadDispatch(), loadOpeningBalance()]);
+  }catch(e){
+    status.style.color = "#c0392b"; status.textContent = "❌ " + e.message;
+    console.error(e);
+  }
+}
+
+// ---------------- OPENING BALANCE ----------------
+async function loadOpeningBalance(){
+  const { data } = await sb.from("kwp_inventory_opening_balance").select("*");
+  (data||[]).forEach(r=>{
+    if(r.item_type === "Bales") document.getElementById("ob_bales").value = r.opening_kg;
+    if(r.item_type === "Flakes") document.getElementById("ob_flakes").value = r.opening_kg;
+  });
+}
+function toggleObPanel(){ const p = document.getElementById("obPanel"); p.style.display = p.style.display==="none"?"block":"none"; }
+window.toggleObPanel = toggleObPanel;
+
+async function saveOpeningBalance(){
+  const status = document.getElementById("obStatus");
+  const asOf = document.getElementById("ob_date").value;
+  status.className = "status"; status.textContent = "Saving...";
+  try{
+    const { error: e1 } = await sb.from("kwp_inventory_opening_balance")
+      .update({ opening_kg: Number(document.getElementById("ob_bales").value)||0, as_of_date: asOf, updated_by: ME.id })
+      .eq("item_type","Bales");
+    if(e1) throw e1;
+    const { error: e2 } = await sb.from("kwp_inventory_opening_balance")
+      .update({ opening_kg: Number(document.getElementById("ob_flakes").value)||0, as_of_date: asOf, updated_by: ME.id })
+      .eq("item_type","Flakes");
+    if(e2) throw e2;
+    status.className = "status ok"; status.textContent = "✅ Saved.";
+    await loadLedger();
+  }catch(e){
+    status.className = "status err"; status.textContent = "❌ " + e.message;
+  }
+}
+window.saveOpeningBalance = saveOpeningBalance;
+
+// ---------------- LEDGER ----------------
+async function loadLedger(){
+  const from = document.getElementById("inv_from").value, to = document.getElementById("inv_to").value;
+  const body = document.getElementById("ledgerBody");
+  if(!from || !to) return;
+  body.innerHTML = "<tr><td colspan='7'>Loading…</td></tr>";
+
+  const { data, error } = await sb.rpc("kwp_inventory_daily", { p_from: from, p_to: to });
+  if(error){ body.innerHTML = "<tr><td colspan='7'>Error: " + error.message + "</td></tr>"; return; }
+  if(!data || !data.length){ body.innerHTML = "<tr><td colspan='7'>No data in this range.</td></tr>"; return; }
+
+  const anyCover = data.some(r=>r.days_of_cover!=null);
+  document.getElementById("planNote").style.display = anyCover ? "none" : "block";
+
+  body.innerHTML = data.map(r => `<tr>
+    <td>${r.item_type}</td><td>${r.movement_date}</td><td>${n(r.opening_kg)}</td>
+    <td>${n(r.received_kg)}</td><td>${n(r.consumed_kg)}</td><td><b>${n(r.closing_kg)}</b></td>
+    <td>${r.days_of_cover!=null?r.days_of_cover:"—"}</td>
+  </tr>`).join("");
+}
+window.loadLedger = loadLedger;
+
+// ---------------- RECEIPTS ----------------
+let RECEIPTS = [];
+
+function openReceiptForm(){
+  document.getElementById("recFormTitle").textContent = "Log Material Receipt";
+  ["r_id","r_lot","r_vendor","r_location","r_kg","r_grade","r_remark_material","r_recorded_kg",
+   "r_ground_kg","r_final_kg","r_payment_pct","r_comment","r_rate","r_remarks"]
+    .forEach(id => document.getElementById(id).value = "");
+  document.getElementById("r_slip").checked = false;
+  document.getElementById("r_date").value = new Date().toISOString().slice(0,10);
+  document.getElementById("recFormPanel").style.display = "block";
+  document.getElementById("recFormStatus").textContent = "";
+}
+window.openReceiptForm = openReceiptForm;
+
+function editReceipt(id){
+  const r = RECEIPTS.find(x=>x.id === id);
+  if(!r) return;
+  document.getElementById("recFormTitle").textContent = "Edit Material Receipt — " + (r.vendor||"");
+  document.getElementById("r_id").value = r.id;
+  document.getElementById("r_date").value = r.received_date;
+  document.getElementById("r_lot").value = r.lot_no || "";
+  document.getElementById("r_vendor").value = r.vendor || "";
+  document.getElementById("r_location").value = r.vendor_location || "";
+  document.getElementById("r_kg").value = r.kg;
+  document.getElementById("r_grade").value = r.material_quality_percent ?? "";
+  document.getElementById("r_remark_material").value = r.material_remark || "";
+  document.getElementById("r_recorded_kg").value = r.weight_recorded_kg ?? "";
+  document.getElementById("r_ground_kg").value = r.material_available_ground_kg ?? "";
+  document.getElementById("r_final_kg").value = r.final_settled_kg ?? "";
+  document.getElementById("r_payment_pct").value = r.payment_allowed_percent ?? "";
+  document.getElementById("r_comment").value = r.comment || "";
+  document.getElementById("r_rate").value = r.rate_per_kg ?? "";
+  document.getElementById("r_slip").checked = !!r.weight_slip;
+  document.getElementById("r_remarks").value = r.remarks || "";
+  document.getElementById("recFormPanel").style.display = "block";
+  document.getElementById("recFormStatus").textContent = "";
+}
+window.editReceipt = editReceipt;
+
+async function loadReceipts(){
+  const from = document.getElementById("rec_from").value, to = document.getElementById("rec_to").value;
+  const body = document.getElementById("recTableBody");
+  if(!from||!to) return;
+  const { data, error } = await sb.from("kwp_material_receipts").select("*")
+    .gte("received_date", from).lte("received_date", to).order("received_date", { ascending:false });
+  if(error){ body.innerHTML = "<tr><td colspan='10'>Error: " + error.message + "</td></tr>"; return; }
+  RECEIPTS = data || [];
+  if(!RECEIPTS.length){ body.innerHTML = "<tr><td colspan='10'>No receipts in this range.</td></tr>"; return; }
+  body.innerHTML = RECEIPTS.map(r => `<tr>
+    <td>${r.received_date}</td><td>${r.vendor||"—"}</td><td>${r.vendor_location||"—"}</td>
+    <td>${r.material_quality_percent!=null?r.material_quality_percent+"%":"—"}</td>
+    <td>${n(r.kg)}</td><td>${r.weight_recorded_kg!=null?n(r.weight_recorded_kg):"—"}</td>
+    <td>${r.final_settled_kg!=null?"<b>"+n(r.final_settled_kg)+"</b>":"<i>pending</i>"}</td>
+    <td>${r.payment_allowed_percent!=null?r.payment_allowed_percent+"%":"—"}</td>
+    <td>${r.comment||"—"}</td>
+    <td>${CAN_ENTER?`<button class="btn-sm btn-ghost" onclick="editReceipt(${r.id})">${r.final_settled_kg==null?"Complete":"Edit"}</button>`:""}</td>
+  </tr>`).join("");
+}
+window.loadReceipts = loadReceipts;
+
+async function saveReceipt(){
+  const status = document.getElementById("recFormStatus");
+  const id = document.getElementById("r_id").value;
+  const payload = {
+    received_date: document.getElementById("r_date").value,
+    lot_no: document.getElementById("r_lot").value.trim() || null,
+    vendor: document.getElementById("r_vendor").value.trim() || null,
+    vendor_location: document.getElementById("r_location").value.trim() || null,
+    kg: Number(document.getElementById("r_kg").value),
+    material_quality_percent: document.getElementById("r_grade").value || null,
+    material_remark: document.getElementById("r_remark_material").value.trim() || null,
+    weight_recorded_kg: document.getElementById("r_recorded_kg").value || null,
+    material_available_ground_kg: document.getElementById("r_ground_kg").value || null,
+    final_settled_kg: document.getElementById("r_final_kg").value || null,
+    payment_allowed_percent: document.getElementById("r_payment_pct").value || null,
+    comment: document.getElementById("r_comment").value.trim() || null,
+    rate_per_kg: document.getElementById("r_rate").value || null,
+    weight_slip: document.getElementById("r_slip").checked,
+    remarks: document.getElementById("r_remarks").value.trim() || null
+  };
+  if(!payload.received_date || isNaN(payload.kg)){ status.className="status err"; status.textContent="Date and vendor's claimed Weight are required."; return; }
+  status.className = "status"; status.textContent = "Saving...";
+  try{
+    if(id){
+      payload.updated_by = ME.id;
+      const { error } = await sb.from("kwp_material_receipts").update(payload).eq("id", Number(id));
+      if(error) throw error;
+      await sb.from("kwp_audit_log").insert({ actor_profile_id: ME.id, action:"material_receipt_completed", entity_type:"kwp_material_receipts", entity_id:id, new_value: payload });
+    } else {
+      payload.received_by = ME.id;
+      const { error } = await sb.from("kwp_material_receipts").insert(payload);
+      if(error) throw error;
+      await sb.from("kwp_audit_log").insert({ actor_profile_id: ME.id, action:"material_receipt_logged", entity_type:"kwp_material_receipts", new_value: payload });
+    }
+    status.className = "status ok"; status.textContent = "✅ Saved.";
+    await Promise.all([loadReceipts(), loadLedger()]);
+    setTimeout(()=>{ document.getElementById("recFormPanel").style.display="none"; }, 500);
+  }catch(e){
+    status.className = "status err"; status.textContent = "❌ " + e.message;
+  }
+}
+window.saveReceipt = saveReceipt;
+
+// ---------------- DISPATCH ----------------
+function openDispatchForm(){
+  document.getElementById("dispFormPanel").style.display = "block";
+  document.getElementById("dispFormStatus").textContent = "";
+}
+window.openDispatchForm = openDispatchForm;
+
+async function loadDispatch(){
+  const from = document.getElementById("disp_from").value, to = document.getElementById("disp_to").value;
+  const body = document.getElementById("dispTableBody");
+  if(!from||!to) return;
+  const { data, error } = await sb.from("kwp_dispatch_records").select("*")
+    .gte("dispatch_date", from).lte("dispatch_date", to).order("dispatch_date", { ascending:false });
+  if(error){ body.innerHTML = "<tr><td colspan='4'>Error: " + error.message + "</td></tr>"; return; }
+  if(!data || !data.length){ body.innerHTML = "<tr><td colspan='4'>No dispatches in this range.</td></tr>"; return; }
+  body.innerHTML = data.map(d => `<tr><td>${d.dispatch_date}</td><td>${n(d.quantity_kg)}</td><td>${d.destination||"—"}</td><td>${d.reference||"—"}</td></tr>`).join("");
+}
+window.loadDispatch = loadDispatch;
+
+async function saveDispatch(){
+  const status = document.getElementById("dispFormStatus");
+  const payload = {
+    dispatch_date: document.getElementById("d_date").value,
+    quantity_kg: Number(document.getElementById("d_kg").value),
+    destination: document.getElementById("d_dest").value.trim() || null,
+    reference: document.getElementById("d_ref").value.trim() || null,
+    recorded_by: ME.id
+  };
+  if(!payload.dispatch_date || isNaN(payload.quantity_kg)){ status.className="status err"; status.textContent="Date and Quantity are required."; return; }
+  status.className = "status"; status.textContent = "Saving...";
+  try{
+    const { error } = await sb.from("kwp_dispatch_records").insert(payload);
+    if(error) throw error;
+    await sb.from("kwp_audit_log").insert({ actor_profile_id: ME.id, action:"dispatch_logged", entity_type:"kwp_dispatch_records", new_value: payload });
+    status.className = "status ok"; status.textContent = "✅ Saved.";
+    await Promise.all([loadDispatch(), loadLedger()]);
+    setTimeout(()=>{ document.getElementById("dispFormPanel").style.display="none"; }, 500);
+  }catch(e){
+    status.className = "status err"; status.textContent = "❌ " + e.message;
+  }
+}
+window.saveDispatch = saveDispatch;
+
+init();
+</script>
+</body>
+</html>

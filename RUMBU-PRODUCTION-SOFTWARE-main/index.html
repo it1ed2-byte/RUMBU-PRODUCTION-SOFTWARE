@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>RumbuApp</title>
+<link rel="manifest" href="manifest.json">
+<script src="pwa-install.js" defer></script>
+<meta name="theme-color" content="#1F3864">
+<link rel="icon" href="favicon-32.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="RumbuApp">
+<link rel="stylesheet" href="styles.css">
+<script>
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    });
+  }
+</script>
+<script>
+  // Apply the user's saved theme as early as possible (per-device).
+  (function(){
+    try{ var t = localStorage.getItem("rumbu_theme") || "navy";
+      document.documentElement.setAttribute("data-theme", t); }
+    catch(e){ document.documentElement.setAttribute("data-theme","navy"); }
+  })();
+  function setTheme(t){
+    document.documentElement.setAttribute("data-theme", t);
+    try{ localStorage.setItem("rumbu_theme", t); }catch(e){}
+    document.querySelectorAll(".theme-toggle button").forEach(function(b){
+      b.classList.toggle("on", b.getAttribute("data-theme-val") === t);
+    });
+    // tell any open module iframe to match
+    var f = document.getElementById("moduleFrame");
+    if(f && f.contentWindow){ try{ f.contentWindow.postMessage({rumbuTheme:t}, "*"); }catch(e){} }
+    var df = document.getElementById("dashFrame");
+    if(df && df.contentWindow){ try{ df.contentWindow.postMessage({rumbuTheme:t}, "*"); }catch(e){} }
+    closeThemePopover();
+  }
+
+  // On mobile the 6 theme swatches collapse behind one icon button, so
+  // they don't crowd the header row — this opens/closes that popover.
+  function toggleThemePopover(){
+    document.getElementById("themePopover").classList.toggle("show");
+  }
+  function closeThemePopover(){
+    document.getElementById("themePopover").classList.remove("show");
+  }
+  document.addEventListener("click", function(e){
+    if(!e.target.closest("#themeToggle")) closeThemePopover();
+  });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="auth.js"></script>
+<style>
+  /* Auth gate — hide the dashboard until the session is confirmed, so it
+     never flashes on screen before redirecting to login. */
+  #authGate{
+    position:fixed; inset:0; z-index:99999;
+    display:flex; align-items:center; justify-content:center;
+    background:var(--bg); color:var(--muted);
+    font-size:14px; font-weight:600; text-align:center; padding:20px;
+  }
+  #authGate.err{ color:var(--bad); }
+  body.ready #authGate{ display:none; }
+  body:not(.ready) > *:not(#authGate){ visibility:hidden !important; }
+</style>
+</head>
+<body>
+
+<div id="authGate">Checking your session...</div>
+
+<div class="overlay" id="overlay" onclick="closeDrawer()"></div>
+
+<!-- Side flyout submenu: a module's pages slide out beside the sidebar -->
+<div class="side-flyout" id="sideFlyout" onmouseenter="cancelHoverClose()" onmouseleave="scheduleHoverClose()"></div>
+
+<div class="app" id="appShell">
+
+<!-- SIDEBAR -->
+<nav class="sidebar" id="side" onmouseleave="scheduleHoverClose()">
+  <div class="side-brand">
+    <div class="logo">R</div>
+    <div class="b-text"><b>RumbuApp</b><span>RUMBU INDUSTRIES GROUP</span></div>
+    <button class="side-close" onclick="closeDrawer()" aria-label="Close menu">&times;</button>
+  </div>
+  <div class="side-scroll">
+
+  <button class="menu-flat" data-group-name="Manage Accounts" onclick="openAccountPicker(event)" onmouseenter="hoverOpenAccountPicker(event)">
+    <span class="m-label"><span class="m-icon" id="iconAccount"></span><span>MANAGE ACCOUNTS</span></span><span class="chev">&rsaquo;</span>
+  </button>
+
+  <!-- Dynamically rendered from modules + pages tables — see renderSidebarModules() -->
+  <div id="dynamicModules"></div>
+
+  </div><!-- /side-scroll -->
+
+  <!-- Pinned at the bottom, outside the scrollable module list, so it's
+       always reachable without scrolling past every module first. -->
+  <div class="side-footer">
+    <button class="side-logout" onclick="logout('login.html')">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+      Log Out
+    </button>
+  </div>
+</nav>
+
+<!-- MAIN COLUMN -->
+<div class="main">
+  <header class="app-header">
+    <button class="hamburger" onclick="openDrawer()" aria-label="Open menu">&#9776;</button>
+    <div class="titles">
+      <h1>RumbuApp</h1>
+      <p>RUMBU INDUSTRIES GROUP</p>
+    </div>
+    <div class="theme-toggle" id="themeToggle">
+      <button class="theme-toggle-trigger" id="themeToggleTrigger" onclick="toggleThemePopover()" aria-label="Change theme">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>
+      </button>
+      <div class="theme-popover" id="themePopover">
+        <button class="theme-swatch" data-theme-val="navy" title="Navy &amp; Gold" style="background:linear-gradient(135deg,#12203c,#c8a34e);" onclick="setTheme('navy')"></button>
+        <button class="theme-swatch" data-theme-val="dark" title="Sleek Dark" style="background:linear-gradient(135deg,#0d1420,#38bdf8);" onclick="setTheme('dark')"></button>
+        <button class="theme-swatch" data-theme-val="emerald" title="Emerald &amp; Gold" style="background:linear-gradient(135deg,#0f3d2e,#c8a34e);" onclick="setTheme('emerald')"></button>
+        <button class="theme-swatch" data-theme-val="burgundy" title="Burgundy &amp; Gold" style="background:linear-gradient(135deg,#4a1220,#c8a34e);" onclick="setTheme('burgundy')"></button>
+        <button class="theme-swatch" data-theme-val="ocean" title="Ocean Blue" style="background:linear-gradient(135deg,#0c3548,#38bdf8);" onclick="setTheme('ocean')"></button>
+        <button class="theme-swatch" data-theme-val="graphite" title="Graphite" style="background:linear-gradient(135deg,#2a2e35,#c8a34e);" onclick="setTheme('graphite')"></button>
+      </div>
+    </div>
+    <div class="user-box" id="userBox"></div>
+  </header>
+
+  <div class="content" id="contentRegion">
+    <!-- LANDING (dashboards) -->
+    <div class="content-inner" id="landing">
+      <div id="dashLanding">
+        <div class="dash-toolbar">
+          <div class="dash-filter">
+            <label>Branch</label>
+            <select id="dashBranch" onchange="onDashBranchChange()"></select>
+          </div>
+          <div class="dash-filter">
+            <label>Dashboard</label>
+            <select id="dashPick" onchange="onDashPickChange()"></select>
+          </div>
+        </div>
+        <div id="dashEmpty" class="card-panel" style="display:none;">
+          <h2>Welcome to the Rumbu Production Reporting System</h2>
+          <p class="sub">No dashboards are available for this Branch yet. Open a module from the sidebar, or pick another Branch above.</p>
+        </div>
+        <iframe id="dashFrame" class="dash-frame" title="Dashboard" style="display:none;"></iframe>
+      </div>
+    </div>
+
+    <!-- MODULE PICKER — clicking a sidebar module opens this fresh full-
+         screen card instead of an inline dropdown; its page-cards then
+         open the actual page normally via openModule(). -->
+    <div class="module-host" id="pickerView">
+      <div class="m-bar">
+        <button class="m-back" onclick="closePicker()">&larr; All Modules</button>
+        <span class="m-title"><span class="m-icon" id="pickerIcon" style="margin-right:8px;"></span><span id="pickerTitleText"></span></span>
+      </div>
+      <div class="picker-scroll">
+        <div class="picker-grid" id="pickerGrid"></div>
+      </div>
+    </div>
+
+    <!-- MODULE (renders here, beside the sidebar) -->
+    <div class="module-host" id="moduleView">
+      <div class="m-bar">
+        <button class="m-back" onclick="closeModule()" id="moduleBackBtn">&larr; Back to Dashboards</button>
+        <span class="m-title" id="moduleName"></span>
+      </div>
+      <!-- Quick links: every page in the current module, for jumping
+           between sibling pages without returning to the sidebar. -->
+      <div class="quick-links" id="quickLinks" style="display:none;"></div>
+      <iframe id="moduleFrame" title="Module"></iframe>
+    </div>
+  </div>
+</div><!-- /main -->
+</div><!-- /app -->
+
+<!-- Bottom tab bar — mobile only. Puts the 3 most-reached-for actions
+     within thumb range instead of relying solely on the top-left
+     hamburger for everything. -->
+<nav class="bottom-tabs" id="bottomTabs">
+  <button onclick="closeModule()">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9.5 12 3l9 6.5"/><path d="M5 9.5V21h14V9.5"/></svg>
+    <span>Dashboard</span>
+  </button>
+  <button onclick="openDrawer()">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg>
+    <span>Menu</span>
+  </button>
+  <button onclick="logout('login.html')">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+    <span>Log Out</span>
+  </button>
+</nav>
+
+<script>
+  // Reflect the active theme in the toggle buttons on load.
+  (function(){
+    var t = document.documentElement.getAttribute("data-theme") || "navy";
+    document.querySelectorAll(".theme-toggle button").forEach(function(b){
+      b.classList.toggle("on", b.getAttribute("data-theme-val") === t);
+    });
+  })();
+</script>
+
+<script>
+  function openDrawer(){
+    document.getElementById("side").classList.add("open");
+    document.getElementById("overlay").classList.add("show");
+    document.body.classList.add("drawer-open");
+  }
+  function closeDrawer(){
+    document.getElementById("side").classList.remove("open");
+    document.getElementById("overlay").classList.remove("show");
+    document.body.classList.remove("drawer-open");
+    hideFlyout();
+  }
+  function toggleGroup(id) {
+    // Kept as a harmless no-op for backward compatibility — the sidebar
+    // no longer uses inline accordions (see openPagePicker / openAccountPicker).
+  }
+
+  // Modules that are actually built and ready to open.
+  // Add a line here each time a new module is wired in.
+  // Sidebar modules are now built dynamically from the modules + pages
+  // tables (see renderSidebarModules() below) — no hardcoded module list
+  // to maintain here anymore. Adding a new module going forward is a
+  // pure SQL operation: insert into pages (and modules, if it's a brand
+  // new category), and it appears automatically, same look and behavior
+  // as every existing module.
+
+  let MODULE_PAGES_BY_MODULE = {}; // { moduleName: [ {name, module_path}, ... ] }
+
+  // ---- Sidebar module icons (inline SVG, currentColor — matches theme
+  // automatically, no icon font / external request needed). Matched by
+  // module name, case-insensitive, with sensible keyword fallbacks so a
+  // newly-created module (via Manage Accounts) still gets a reasonable
+  // icon instead of nothing. ----
+  const ICONS = {
+    default:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>',
+    accounts: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.2"/><path d="M5 20c0-3.3 3.1-6 7-6s7 2.7 7 6"/></svg>',
+    weavingProduction: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/><circle cx="19" cy="18" r="2"/></svg>',
+    manageWeaving: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/><circle cx="12" cy="12" r="3.6"/></svg>',
+    weaving:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="17" height="17" rx="1.5"/><path d="M3.5 9h17M3.5 15h17M9 3.5v17M15 3.5v17"/></svg>',
+    technical: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 0 0 5.4-5.4l-2.3 2.3-2-2 2.3-2.3Z"/></svg>',
+    extruder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21V9l4-4h6l4 4v2h4v10H3Z"/><path d="M9 21v-6h4v6"/></svg>',
+    workshop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18v3H3zM5 10v10h14V10"/><path d="M9 14h6"/></svg>',
+    controlRoom: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M8 20h8M12 16v4"/></svg>',
+    overtime: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>',
+    gatepass: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><circle cx="8.5" cy="12" r="1.8"/><path d="M13 10h5M13 14h5"/></svg>',
+    hr:       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8.5" cy="8" r="3"/><path d="M2.5 20c0-3 2.7-5.4 6-5.4s6 2.4 6 5.4"/><path d="M17 8.2a3 3 0 1 1 3.3 3M15.5 14.8c2.6.4 5 2.4 5 5.2"/></svg>',
+    inventory: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8 12 3l9 5-9 5-9-5Z"/><path d="M3 8v9l9 5 9-5V8M12 13v9"/></svg>',
+    todo:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3.5" width="16" height="17" rx="1.5"/><path d="M8 8.5h8M8 12.5h8M8 16.5h5"/></svg>',
+    training: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8 12 4l10 4-10 4-10-4Z"/><path d="M6 10.5v4.7c0 1.6 2.7 2.8 6 2.8s6-1.2 6-2.8v-4.7"/></svg>',
+    twine:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5c3 3 3 13.5 0 17M12 3.5c-3 3-3 13.5 0 17"/></svg>',
+    waste:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4.5h6V7M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/></svg>',
+    assets:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="7" width="17" height="13" rx="1.5"/><path d="M8 7V5.5A2 2 0 0 1 10 3.5h4A2 2 0 0 1 16 5.5V7"/></svg>',
+    visitors: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.2"/><path d="M5 20c0-3.3 3.1-6 7-6s7 2.7 7 6"/><path d="m15.5 8 1.6 1.6L20 6.5"/></svg>',
+    admin:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 5-3.2 8-7 10-3.8-2-7-5-7-10V6l7-3Z"/></svg>'
+  };
+  // Keyword → icon key, checked against the module name (case-insensitive)
+  // in this order; first match wins. Exact-name matches take priority.
+  const ICON_BY_EXACT_NAME = { "manage accounts": "accounts", "weaving production": "weavingProduction", "manage weaving": "manageWeaving" };
+  const ICON_KEYWORDS = [
+    ["weaving","weaving"], ["technical","technical"], ["extruder","extruder"], ["workshop","workshop"],
+    ["control room","controlRoom"], ["overtime","overtime"], ["gatepass","gatepass"], ["gate pass","gatepass"],
+    ["hr","hr"], ["human resource","hr"], ["item inventory","inventory"], ["inventory","inventory"],
+    ["to do","todo"], ["task","todo"], ["training","training"], ["twine","twine"], ["waste","waste"],
+    ["asset","assets"], ["visitor","visitors"], ["admin","admin"], ["account","accounts"]
+  ];
+  function iconKeyFor(name){
+    const key = (name||"").trim().toLowerCase();
+    if(ICON_BY_EXACT_NAME[key]) return ICON_BY_EXACT_NAME[key];
+    for(const [kw, iconKey] of ICON_KEYWORDS){ if(key.indexOf(kw) !== -1) return iconKey; }
+    return "default";
+  }
+  function iconSvgFor(name){ return ICONS[iconKeyFor(name)] || ICONS.default; }
+
+  (function(){ const el = document.getElementById("iconAccount"); if(el) el.innerHTML = iconSvgFor("Manage Accounts"); })();
+
+  // Builds the sidebar from the database. Runs once, before buildAccessMap(),
+  // so applySidebarForBranch() has real DOM elements to filter afterward.
+  //
+  // Each module is now a single flat button (icon + name + chevron) —
+  // clicking it does NOT expand an inline dropdown. It opens a fresh
+  // full-screen "picker" card listing that module's pages (see
+  // openPagePicker()); picking a page from there opens it normally.
+  async function renderSidebarModules(){
+    const wrap = document.getElementById("dynamicModules");
+    try{
+      const [{ data: modules, error: modErr }, { data: pages, error: pgErr }] = await Promise.all([
+        sb.from("modules").select("id, name, sort_order").order("sort_order"),
+        sb.from("pages").select("id, name, module_path, module_id").order("name")
+      ]);
+      if(modErr) throw modErr;
+      if(pgErr) throw pgErr;
+
+      const pagesByModule = {};
+      (pages||[]).forEach(p=>{
+        if(!p.module_path) return;
+        if(!pagesByModule[p.module_id]) pagesByModule[p.module_id] = [];
+        pagesByModule[p.module_id].push(p);
+      });
+
+      let html = "";
+      (modules||[]).forEach(m=>{
+        const modPages = pagesByModule[m.id] || [];
+        if(!modPages.length) return; // skip empty module categories
+        MODULE_PAGES_BY_MODULE[m.name] = modPages;
+        const safeName = m.name.replace(/'/g,"\\'");
+        html += `<button class="menu-flat" data-group-name="${m.name.replace(/"/g,"&quot;")}" onclick="openPagePicker('${safeName}', event)" onmouseenter="hoverOpenModule('${safeName}', event)">` +
+          `<span class="m-label"><span class="m-icon">${iconSvgFor(m.name)}</span><span>${m.name.toUpperCase()}</span></span><span class="chev">&rsaquo;</span></button>`;
+      });
+
+      wrap.innerHTML = html;
+    }catch(e){
+      wrap.innerHTML = "<p style='color:#c0392b;padding:10px;font-size:12px;'>Could not load sidebar modules: " + e.message + "</p>";
+      console.error(e);
+    }
+  }
+
+  // ---- Manage Accounts: same picker treatment as every other module,
+  // instead of its own separate inline dropdown. Role-gating for
+  // Create User / Manage User / Settings happens at render time below,
+  // same restrictions as before. ----
+  const ACCOUNT_PAGES = [
+    { name: "Create User",     dept: "admin", mod: "manage-accounts", query: "section=create-user",   roleGate: "adminPlus" },
+    { name: "Change Password", dept: "admin", mod: "manage-accounts", query: "section=change-password" },
+    { name: "Manage User",     dept: "admin", mod: "manage-accounts", query: "section=manage-user",    roleGate: "adminPlus" },
+    { name: "Activity Log",    dept: "admin", mod: "manage-accounts", query: "section=activity-log" },
+    { name: "Settings",        dept: "admin", mod: "manage-accounts", query: "section=settings",       roleGate: "superAdmin" }
+  ];
+  function accountPageAllowed(p){
+    if(!p.roleGate) return true;
+    if(p.roleGate === "adminPlus") return ME.role === "admin" || ME.role === "super_admin";
+    if(p.roleGate === "superAdmin") return ME.role === "super_admin";
+    return true;
+  }
+
+  // ---- Page picker ("fresh card" screen shown instead of an inline
+  // sidebar dropdown) ----
+  let CURRENT_PICKER = null; // { kind:'module'|'account', name }
+  let CURRENT_PAGE = null;   // "dept/module" of the page open in the iframe
+  let CURRENT_QUERY = "";    // its query string (distinguishes account sub-pages)
+
+  // ---- Side flyout submenu ----------------------------------------
+  // Selecting a module no longer opens a full-screen card screen; it
+  // slides that module's pages out in a panel BESIDE the sidebar. A
+  // second click on the same module (or clicking away) closes it.
+  function openPagePicker(moduleName, ev){ openSideMenu("module", moduleName, ev); }
+  function openAccountPicker(ev){ openSideMenu("account", "Manage Accounts", ev); }
+
+  // ---- Hover-to-reveal: placing the cursor on a module opens its page
+  // list immediately, no click needed. Click still works exactly as
+  // before (mainly for touch devices, where hover doesn't apply). A
+  // short close delay, cancelled on re-entering either the sidebar or
+  // the flyout, stops it from closing while the cursor is briefly
+  // between the two during the diagonal mouse movement.
+  let hoverCloseTimer = null;
+  function cancelHoverClose(){ if(hoverCloseTimer){ clearTimeout(hoverCloseTimer); hoverCloseTimer = null; } }
+  function scheduleHoverClose(){ cancelHoverClose(); hoverCloseTimer = setTimeout(hideFlyout, 250); }
+
+  function hoverOpenModule(moduleName, ev){ hoverOpenSideMenu("module", moduleName, ev); }
+  function hoverOpenAccountPicker(ev){ hoverOpenSideMenu("account", "Manage Accounts", ev); }
+
+  function hoverOpenSideMenu(kind, name, ev){
+    cancelHoverClose();
+    const anchor = ev && (ev.currentTarget || ev.target) ? (ev.currentTarget || ev.target).closest(".menu-flat") : null;
+    const fly = document.getElementById("sideFlyout");
+    CURRENT_PICKER = { kind, name };
+    renderFlyout();
+    fly.classList.add("show");
+    if(anchor) positionFlyout(anchor);
+    document.querySelectorAll(".menu-flat.active").forEach(b=>b.classList.remove("active"));
+    if(anchor) anchor.classList.add("active");
+  }
+
+  function openSideMenu(kind, name, ev){
+    const anchor = ev && (ev.currentTarget || ev.target)
+      ? (ev.currentTarget || ev.target).closest(".menu-flat") : null;
+    const fly = document.getElementById("sideFlyout");
+    // Toggle: clicking the module whose menu is already open closes it.
+    if(fly.classList.contains("show") && CURRENT_PICKER &&
+       CURRENT_PICKER.kind === kind && CURRENT_PICKER.name === name){
+      hideFlyout();
+      return;
+    }
+    CURRENT_PICKER = { kind, name };
+    renderFlyout();
+    fly.classList.add("show");
+    if(anchor) positionFlyout(anchor);
+    document.querySelectorAll(".menu-flat.active").forEach(b=>b.classList.remove("active"));
+    if(anchor) anchor.classList.add("active");
+  }
+
+  function renderFlyout(){
+    const fly = document.getElementById("sideFlyout");
+    if(!CURRENT_PICKER){ fly.innerHTML = ""; return; }
+    let items = [];
+    if(CURRENT_PICKER.kind === "account"){
+      items = ACCOUNT_PAGES.filter(accountPageAllowed).map(p=>({
+        label: p.name,
+        onclick: `openModule(null,'${p.dept}','${p.mod}','${p.name.replace(/'/g,"\\'")}','${p.query||""}')`
+      }));
+    } else {
+      const pages = (MODULE_PAGES_BY_MODULE[CURRENT_PICKER.name] || []).filter(p => MY_ALLOWED_PATHS.has(p.module_path));
+      items = pages.map(p=>{
+        const parts = p.module_path.split("/");
+        return { label: p.name, onclick: `openModule(null,'${parts[0]}','${parts[1]}','${p.name.replace(/'/g,"\\'")}')` };
+      });
+    }
+    const head = `<div class="fly-head">${CURRENT_PICKER.name}</div>`;
+    if(!items.length){
+      fly.innerHTML = head + "<div class='flyout-empty'>Nothing available here for your current Branch yet.</div>";
+      return;
+    }
+    fly.innerHTML = head + items.map(it=>
+      `<button class="flyout-item" onclick="${it.onclick}"><span>${it.label}</span><span class="fi-arrow">&rarr;</span></button>`
+    ).join("");
+  }
+
+  // Anchor the flyout to the right edge of the sidebar, vertically near
+  // the clicked module button, clamped to stay on-screen.
+  function positionFlyout(anchor){
+    const fly = document.getElementById("sideFlyout");
+    const side = document.getElementById("side");
+    const sr = side.getBoundingClientRect();
+    const ar = anchor.getBoundingClientRect();
+    const fw = fly.offsetWidth, fh = fly.offsetHeight;
+    let left = sr.right + 6;
+    const maxLeft = window.innerWidth - fw - 8;
+    if(left > maxLeft) left = Math.max(8, maxLeft);
+    let top = ar.top;
+    const maxTop = window.innerHeight - fh - 8;
+    if(top > maxTop) top = Math.max(8, maxTop);
+    fly.style.left = left + "px";
+    fly.style.top = top + "px";
+  }
+
+  function hideFlyout(){
+    const fly = document.getElementById("sideFlyout");
+    if(fly) fly.classList.remove("show");
+    document.querySelectorAll(".menu-flat.active").forEach(b=>b.classList.remove("active"));
+  }
+
+  // ---- Quick links inside an open module ----------------------------
+  // When a page is open, show every page in that same module as a pill
+  // bar so the user can jump between sibling pages in place. The active
+  // page's pill is highlighted. Hidden when a module has only one page.
+  function renderQuickLinks(){
+    const bar = document.getElementById("quickLinks");
+    if(!bar) return;
+    let items = [];
+    if(CURRENT_PICKER && CURRENT_PICKER.kind === "account"){
+      items = ACCOUNT_PAGES.filter(accountPageAllowed).map(p=>({
+        label: p.name, dept: p.dept, mod: p.mod, query: p.query || ""
+      }));
+    } else if(CURRENT_PICKER){
+      const pages = (MODULE_PAGES_BY_MODULE[CURRENT_PICKER.name] || []).filter(p => MY_ALLOWED_PATHS.has(p.module_path));
+      items = pages.map(p=>{ const parts = p.module_path.split("/"); return { label: p.name, dept: parts[0], mod: parts[1], query: "" }; });
+    }
+    if(items.length <= 1){ bar.innerHTML = ""; bar.style.display = "none"; return; }
+    bar.style.display = "";
+    const head = CURRENT_PICKER ? `<span class="ql-label">${CURRENT_PICKER.name}</span>` : "";
+    bar.innerHTML = head + items.map(it=>{
+      const active = ((it.dept + "/" + it.mod) === CURRENT_PAGE) && ((it.query || "") === (CURRENT_QUERY || ""));
+      const oc = `openModule(null,'${it.dept}','${it.mod}','${it.label.replace(/'/g,"\\'")}','${it.query || ""}')`;
+      return `<button class="ql-item${active ? " active" : ""}" onclick="${oc}">${it.label}</button>`;
+    }).join("");
+    // Keep the active pill in view.
+    const act = bar.querySelector(".ql-item.active");
+    if(act && act.scrollIntoView) act.scrollIntoView({inline:"nearest", block:"nearest"});
+  }
+
+  // Close on Escape; re-anchor on resize so it never drifts off-screen.
+  document.addEventListener("keydown", function(e){ if(e.key === "Escape") hideFlyout(); });
+  window.addEventListener("resize", function(){
+    const fly = document.getElementById("sideFlyout");
+    if(fly && fly.classList.contains("show")){
+      const active = document.querySelector(".menu-flat.active");
+      if(active) positionFlyout(active); else hideFlyout();
+    }
+  });
+
+  function openModule(btn, dept, module, label, query) {
+    const view = document.getElementById("moduleView");
+    const frame = document.getElementById("moduleFrame");
+    const name = document.getElementById("moduleName");
+
+    // If a button exists at all, it came from the pages table via
+    // renderSidebarModules() — meaning it's registered and ready, no
+    // separate READY_MODULES whitelist needed anymore.
+    hideFlyout();
+    frame.src = "modules/" + dept + "/" + module + ".html" + (query ? ("?" + query) : "");
+    name.textContent = label || "";
+    document.getElementById("moduleBackBtn").textContent = "← Back to Dashboards";
+    // Remember which page is open so the quick-links bar can highlight it.
+    CURRENT_PAGE = dept + "/" + module;
+    CURRENT_QUERY = query || "";
+    // Also persist it to localStorage — a browser refresh destroys this
+    // whole document (including CURRENT_PAGE), so without this a refresh
+    // always dumps the person back on the dashboard landing, mid-task.
+    // See restoreOpenModule(), called once at the end of initAuth().
+    try{
+      localStorage.setItem("rumbu_open_module", JSON.stringify({ dept, module, label: label||"", query: query||"" }));
+    }catch(e){}
+    renderQuickLinks();
+    document.getElementById("pickerView").classList.remove("show");
+    view.classList.add("show");
+    document.getElementById("landing").style.display = "none";
+    // Full-screen navigation: hide the sidebar entirely and let this
+    // page's "card" take the whole viewport — same behavior on desktop
+    // and mobile.
+    document.getElementById("appShell").classList.add("module-open");
+    // push current theme into the module once it loads
+    var t = document.documentElement.getAttribute("data-theme") || "navy";
+    frame.onload = function(){ try{ frame.contentWindow.postMessage({rumbuTheme:t}, "*"); }catch(e){} };
+    closeDrawer();
+  }
+
+  function closeModule(){
+    document.getElementById("moduleView").classList.remove("show");
+    document.getElementById("moduleFrame").src = "about:blank";
+    document.getElementById("landing").style.display = "";
+    document.getElementById("appShell").classList.remove("module-open");
+    hideFlyout();
+    try{ localStorage.removeItem("rumbu_open_module"); }catch(e){}
+  }
+
+  // Called once, after a successful initAuth(), to reopen whatever module
+  // was on screen before a browser refresh. Restores the SAME PAGE — it
+  // cannot restore unsaved, half-typed form values inside that page (a
+  // refresh always destroys the iframe's in-memory state; that part is
+  // normal browser behavior, same as any website). The module page itself
+  // still re-checks access via requireAuth() on load, so a saved entry for
+  // a module the person no longer has access to just fails there safely,
+  // same as clicking a stale sidebar link would.
+  function restoreOpenModule(){
+    let saved = null;
+    try{ saved = JSON.parse(localStorage.getItem("rumbu_open_module") || "null"); }catch(e){}
+    if(!saved || !saved.dept || !saved.module) return;
+    openModule(null, saved.dept, saved.module, saved.label, saved.query);
+  }
+
+  // ---- Sidebar modules are rendered dynamically; ME holds the logged-in profile ----
+  let ME = null;
+
+  async function initAuth(){
+    const gate = document.getElementById("authGate");
+    try{
+      ME = await requireAuth("login.html");
+      if(!ME) return; // requireAuth already redirected to login
+
+      renderUserBox();
+      await renderSidebarModules(); // build the sidebar DOM before filtering it by branch
+      await buildAccessMap();
+      initDashboardLanding();
+      restoreOpenModule();
+
+      document.body.classList.add("ready");
+    }catch(e){
+      gate.classList.add("err");
+      gate.textContent = "❌ " + e.message;
+      console.error(e);
+    }
+  }
+
+  function renderUserBox(){
+    const box = document.getElementById("userBox");
+    const roleLabel = ME.role === "super_admin"
+      ? "SUPER ADMIN" + (ME.superAdminType ? " (" + ME.superAdminType.toUpperCase() + ")" : "")
+      : ME.role.toUpperCase();
+
+    box.innerHTML = `<span class="u-name">${ME.username}</span><span class="u-role">${roleLabel}</span>`;
+
+    // Manage Accounts role-gating (Create User / Manage User need
+    // admin+, Settings needs super_admin) now happens inside
+    // accountPageAllowed() when the picker card screen is rendered —
+    // nothing to toggle here anymore.
+  }
+
+  // ============================================================
+  // ACCESS MODEL
+  //   Sidebar modules are PERSON-BASED: whatever pages are ticked for
+  //   someone in Manage Role (assigned_pages) is what they get, and it
+  //   follows their account everywhere — the Branch dropdown no longer
+  //   hides or shows sidebar modules. See MY_ALLOWED_PATHS below.
+  //
+  //   Dashboards stay BRANCH-BASED on purpose: a dashboard's whole job
+  //   is "show me this Branch's numbers", so switching the Branch
+  //   dropdown still changes which dashboard is offered. That mapping
+  //   (page_sections, intersected with assigned_pages) lives in
+  //   BRANCH_PATHS, used only by dashboardsForBranch() now.
+  // ============================================================
+  let BRANCH_PATHS = {};        // { branchName: Set(module_path) } — DASHBOARDS ONLY, see dashboardsForBranch()
+  let MY_ALLOWED_PATHS = new Set(); // every module_path this person may use, branch-independent — drives the sidebar
+  let MY_BRANCHES = [];      // [{id, name}] the person's branches (still used for the Dashboard Branch dropdown)
+  let ALL_DASHBOARDS = [];   // [{module_path, display_name, department}]
+  let CURRENT_BRANCH = null; // selected branch name (Dashboard landing only now)
+  const TASK_PATHS_ADMIN = ["todo/assign-task","todo/view-tasks","todo/todo-settings"];
+
+  async function buildAccessMap(){
+    // 1) Which pages may this person use?
+    let allowedPaths = null; // null = unrestricted (super admin, uncustomized)
+    if(ME.role === "super_admin"){
+      const { data } = await sb.from("assigned_pages").select("pages(module_path)").eq("profile_id", ME.id);
+      const customized = (data || []).map(r => r.pages ? r.pages.module_path : null).filter(Boolean);
+      allowedPaths = customized.length ? new Set(customized) : null;
+    } else {
+      const { data } = await sb.from("assigned_pages").select("pages(module_path)").eq("profile_id", ME.id);
+      allowedPaths = new Set((data || []).map(r => r.pages ? r.pages.module_path : null).filter(Boolean));
+    }
+
+    // 2) The person's branches.
+    if(ME.role === "super_admin"){
+      const { data } = await sb.from("app_sections").select("id,name").order("name");
+      MY_BRANCHES = data || [];
+    } else {
+      const ids = ME.sectionIds || [];
+      if(ids.length){
+        const { data } = await sb.from("app_sections").select("id,name").in("id", ids).order("name");
+        MY_BRANCHES = data || [];
+      } else {
+        MY_BRANCHES = [];
+      }
+    }
+
+    // 3) Map pages to branches (page_sections) for the person's branches.
+    BRANCH_PATHS = {};
+    MY_BRANCHES.forEach(b => BRANCH_PATHS[b.name] = new Set());
+
+    if(ME.role === "super_admin"){
+      // Super Admin is never constrained by branch mapping. Normally they see
+      // every module. BUT if they customized their own sidebar in Settings
+      // (assigned_pages present), honor that selection instead of showing all.
+      const allPaths = Object.values(MODULE_PAGES_BY_MODULE).flat().map(p => p.module_path);
+      const everySet = (allowedPaths && allowedPaths.size)
+        ? new Set(allPaths.filter(p => allowedPaths.has(p)))   // only chosen modules
+        : new Set(allPaths);                                    // no customization = show all
+      MY_BRANCHES.forEach(b=>{ BRANCH_PATHS[b.name] = new Set(everySet); });
+      // Prepend an "All Branches" pseudo-branch.
+      MY_BRANCHES = [{ id: 0, name: "All Branches" }].concat(MY_BRANCHES);
+      BRANCH_PATHS["All Branches"] = new Set(everySet);
+    } else if(MY_BRANCHES.length){
+      const branchIds = MY_BRANCHES.map(b=>b.id);
+      const { data } = await sb
+        .from("page_sections")
+        .select("section_id, app_sections(name), pages(module_path)")
+        .in("section_id", branchIds);
+      (data||[]).forEach(r=>{
+        const bn = r.app_sections ? r.app_sections.name : null;
+        const mp = r.pages ? r.pages.module_path : null;
+        if(!bn || !mp) return;
+        if(allowedPaths && !allowedPaths.has(mp)) return;
+        if(!BRANCH_PATHS[bn]) BRANCH_PATHS[bn] = new Set();
+        BRANCH_PATHS[bn].add(mp);
+      });
+    }
+
+    // 4) Person-level allowed set — this is what the sidebar now runs on.
+    // Super Admin: every registered module_path, unless they've
+    // customized their own sidebar (same rule as before, just no longer
+    // duplicated per branch).
+    if(ME.role === "super_admin"){
+      const allPaths = Object.values(MODULE_PAGES_BY_MODULE).flat().map(p => p.module_path);
+      MY_ALLOWED_PATHS = (allowedPaths && allowedPaths.size)
+        ? new Set(allPaths.filter(p => allowedPaths.has(p)))
+        : new Set(allPaths);
+    } else {
+      MY_ALLOWED_PATHS = new Set(allowedPaths || []);
+    }
+
+    // Task Management is compulsory for everyone, on every branch tab.
+    if(ME.role === "user"){ MY_ALLOWED_PATHS.add("todo/my-tasks"); }
+    else { TASK_PATHS_ADMIN.forEach(p=>MY_ALLOWED_PATHS.add(p)); }
+
+    // 4b) Overtime auto-detect: Fill Overtime and Step-N Approval screens
+    // are useless to anyone who isn't specifically assigned an overtime
+    // role — there's no scenario where seeing them without an actual
+    // assignment helps. So these become visible automatically based on
+    // the overtime_step2_fillers / overtime_initiators /
+    // overtime_step_approvers tables, independent of whatever Manage
+    // Role has (or hasn't) ticked. Now person-level like everything
+    // else here, so it no longer matters which Branch tab is open, or
+    // whether the person's own Branches even include the section named
+    // in their overtime scope row. "Initiate Overtime" and "Approver
+    // Setup" are NOT auto-detected — those stay on the normal ticked
+    // cascade, same as every Gatepass screen, since anyone with page
+    // access might legitimately use them.
+    if(ME.role !== "super_admin"){
+      try{
+        const { data: emp } = await sb.from("employees").select("id").eq("linked_profile_id", ME.id).maybeSingle();
+        if(emp){
+          const { data: fillerScopes } = await sb.from("overtime_step2_fillers").select("section").eq("employee_id", emp.id);
+          if((fillerScopes||[]).length) MY_ALLOWED_PATHS.add("overtime/fill-overtime");
+
+          const { data: initScopes } = await sb.from("overtime_initiators").select("section").eq("employee_id", emp.id);
+          if((initScopes||[]).length){
+            MY_ALLOWED_PATHS.add("overtime/add-overtime");
+            // Anyone who can initiate will eventually need to review their
+            // own Step 4 submissions — no separate assignment needed for this.
+            MY_ALLOWED_PATHS.add("overtime/overtime-step4-review");
+          }
+
+          const { data: approverScopes } = await sb.from("overtime_step_approvers").select("section, step").eq("employee_id", emp.id);
+          (approverScopes||[]).forEach(s=>{
+            if(s.step === 3) MY_ALLOWED_PATHS.add("overtime/overtime-step3-approval");
+            if(s.step === 5) MY_ALLOWED_PATHS.add("overtime/overtime-step5-disbursement");
+            if(s.step === 6) MY_ALLOWED_PATHS.add("overtime/overtime-step6-ed1");
+          });
+        }
+      }catch(e){ console.warn("Overtime auto-detect failed (non-fatal):", e); }
+    }
+
+    // 5) Load dashboard registry.
+    try{
+      const { data } = await sb.from("dashboards").select("module_path, display_name, department, sort_order").order("sort_order");
+      ALL_DASHBOARDS = data || [];
+    }catch(e){ ALL_DASHBOARDS = []; }
+  }
+
+  // Sidebar module visibility is person-based now (MY_ALLOWED_PATHS) —
+  // the branchName argument is kept only so this can still be called from
+  // onDashBranchChange() to track CURRENT_BRANCH for the Dashboard picker
+  // and to refresh an open flyout; it no longer changes which sidebar
+  // modules are shown.
+  function applySidebarForBranch(branchName){
+    CURRENT_BRANCH = branchName;
+    document.querySelectorAll("[data-group-name]").forEach(btn=>{
+      const groupName = btn.getAttribute("data-group-name");
+      if(groupName === "Manage Accounts"){ btn.style.display = ""; return; } // role-gated per page inside its own picker, not hidden as a group
+      const pages = MODULE_PAGES_BY_MODULE[groupName] || [];
+      const anyAllowed = pages.some(p => MY_ALLOWED_PATHS.has(p.module_path));
+      btn.style.display = anyAllowed ? "" : "none";
+    });
+    // If a module's flyout is open right now, refresh its contents for
+    // the newly selected Branch instead of showing stale pages.
+    const fly = document.getElementById("sideFlyout");
+    if(fly && fly.classList.contains("show") && CURRENT_PICKER && CURRENT_PICKER.kind === "module"){
+      renderFlyout();
+      const active = document.querySelector(".menu-flat.active");
+      if(active) positionFlyout(active);
+    }
+  }
+
+  // ---- Dashboard landing ----
+  // Dashboards are Admin/Super Admin only — a plain "user" account never
+  // gets the Branch/Dashboard toolbar or any dashboard content, no matter
+  // what's ticked in assigned_pages or page_sections. This is a role
+  // check, not a page-assignment one, so it can't be worked around by
+  // ticking a dashboard for a User in Manage Role.
+  function initDashboardLanding(){
+    if(ME.role === "user"){
+      document.querySelector("#dashLanding .dash-toolbar").style.display = "none";
+      document.getElementById("dashFrame").style.display = "none";
+      const empty = document.getElementById("dashEmpty");
+      empty.style.display = "block";
+      empty.querySelector("h2").textContent = "Welcome to the Rumbu Production Reporting System";
+      empty.querySelector("p").textContent = "Open a module from the sidebar to get started.";
+      // Still filter the sidebar itself by MY_ALLOWED_PATHS — skipping the
+      // Dashboard toolbar above must not skip sidebar filtering too.
+      applySidebarForBranch(null);
+      return;
+    }
+    const branchSel = document.getElementById("dashBranch");
+    branchSel.innerHTML = MY_BRANCHES.map(b=>`<option value="${b.name}">${b.name}</option>`).join("");
+    if(!MY_BRANCHES.length){
+      document.getElementById("dashEmpty").style.display = "block";
+      document.getElementById("dashEmpty").querySelector("p").textContent = "No Branch is assigned to your account yet. Ask a Super Admin to set this up.";
+      // Still filter the sidebar by MY_ALLOWED_PATHS even with no Branch
+      // assigned — otherwise every module stays visible in its default
+      // unfiltered state, showing things this person was never granted.
+      applySidebarForBranch(null);
+      return;
+    }
+    branchSel.value = MY_BRANCHES[0].name;
+    applySidebarForBranch(branchSel.value);
+    initDashboardPicker();
+  }
+
+  // Populates the Dashboard picker ONCE. Dashboards are person-granted and
+  // branch-independent now (see dashboardsForBranch above), so this no
+  // longer needs to re-run on every branch tab switch — only sidebar
+  // module visibility does that (see onDashBranchChange below).
+  function initDashboardPicker(){
+    const dashes = dashboardsForBranch(null); // branchName is unused now
+    const pick = document.getElementById("dashPick");
+    pick.innerHTML = dashes.map(d=>`<option value="${d.module_path}">${d.display_name}</option>`).join("");
+    if(dashes.length){
+      pick.parentElement.style.display = "";
+      document.getElementById("dashEmpty").style.display = "none";
+      pick.value = dashes[0].module_path;
+      showDashboard(dashes[0].module_path);
+    }else{
+      pick.parentElement.style.display = "none";
+      document.getElementById("dashFrame").style.display = "none";
+      document.getElementById("dashEmpty").style.display = "block";
+    }
+  }
+
+  // Dashboards are now granted per-PERSON via assigned_pages, exactly like
+  // every other module — consistent with the rest of the system, and
+  // collapses "grant + branch-map" down to one step (just grant it).
+  // The branchName argument is kept purely so existing callers (the
+  // Dashboard picker's branch dropdown) don't need touching — it's just no
+  // longer used to filter which Dashboards appear.
+  //
+  // ROLLBACK: if this ever needs undoing, no database change is required —
+  // just swap this function's body for dashboardsForBranch_LEGACY's body
+  // below (or rename the calls), and branch-gated Dashboards return exactly
+  // as they were. BRANCH_PATHS/page_sections are still computed above,
+  // untouched, so the legacy path keeps working immediately.
+  function dashboardsForBranch(branchName){
+    if(ME.role === "user") return []; // Dashboards are Admin/Super Admin only
+    return ALL_DASHBOARDS.filter(d => MY_ALLOWED_PATHS.has(d.module_path));
+  }
+
+  // Preserved, currently unused — the original per-branch gating logic,
+  // kept intact for a one-line rollback if the change above ever needs
+  // reverting. Do not delete.
+  function dashboardsForBranch_LEGACY(branchName){
+    if(ME.role === "user") return [];
+    const allowed = BRANCH_PATHS[branchName] || new Set();
+    return ALL_DASHBOARDS.filter(d => allowed.has(d.module_path));
+  }
+
+  // Branch switching now ONLY affects sidebar module visibility — the
+  // Dashboard picker (populated once in initDashboardPicker() above) is
+  // deliberately left alone across branch changes, since Dashboards no
+  // longer depend on branch.
+  //
+  // ROLLBACK: if branch-gated Dashboards are ever restored via
+  // dashboardsForBranch_LEGACY, restore this function's old behavior too
+  // — preserved intact as onDashBranchChange_LEGACY right below — so
+  // switching branches goes back to re-filtering the Dashboard picker.
+  window.onDashBranchChange = function(){
+    const branchName = document.getElementById("dashBranch").value;
+    applySidebarForBranch(branchName);
+  };
+
+  // Preserved, currently unused — the original behavior where changing
+  // Branch also re-filtered and reset the Dashboard picker. Kept intact
+  // for a one-line rollback alongside dashboardsForBranch_LEGACY. Do not
+  // delete.
+  function onDashBranchChange_LEGACY(){
+    const branchName = document.getElementById("dashBranch").value;
+    applySidebarForBranch(branchName);
+    const dashes = dashboardsForBranch_LEGACY(branchName);
+    const pick = document.getElementById("dashPick");
+    pick.innerHTML = dashes.map(d=>`<option value="${d.module_path}">${d.display_name}</option>`).join("");
+    if(dashes.length){
+      pick.parentElement.style.display = "";
+      document.getElementById("dashEmpty").style.display = "none";
+      pick.value = dashes[0].module_path;
+      showDashboard(dashes[0].module_path);
+    }else{
+      pick.parentElement.style.display = "none";
+      document.getElementById("dashFrame").style.display = "none";
+      document.getElementById("dashEmpty").style.display = "block";
+    }
+  }
+
+  window.onDashPickChange = function(){
+    showDashboard(document.getElementById("dashPick").value);
+  };
+
+  function showDashboard(modulePath){
+    const frame = document.getElementById("dashFrame");
+    frame.src = "modules/" + modulePath + ".html";
+    frame.style.display = "block";
+    document.getElementById("dashEmpty").style.display = "none";
+  }
+
+  initAuth();
+</script>
+
+</body>
+</html>

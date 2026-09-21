@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Extruder Material Used Report v2</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--red-dark:#a5281b;--green:#1d8a4e;--green-dark:#156d3d;}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:0;color:var(--text);}
+  .wrap{max-width:980px;margin:0 auto;padding:18px;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;}
+  .card h3{color:var(--navy);margin:0 0 4px;font-size:16px;}
+  .card .sub{color:var(--blue);font-size:12px;margin:0 0 14px;}
+  label{display:block;font-size:12px;font-weight:bold;color:var(--text);margin-bottom:4px;}
+  .req{color:var(--red);}
+  .badge{display:inline-block;background:var(--navy);color:#fff;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:bold;}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  .grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;}
+  .grid-5{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;}
+  input,select{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;}
+  .field{margin-bottom:4px;}
+  .btn-row{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap;}
+  button.primary,button.outline,button.danger,button.success{flex:1 1 150px;padding:12px;border-radius:8px;font-weight:bold;font-size:15px;cursor:pointer;font-family:inherit;border:none;}
+  button.primary{background:var(--blue);color:#fff;} button.primary:hover{background:var(--blue-dark);}
+  button.outline{background:var(--card);color:var(--navy);border:1px solid var(--navy);} button.outline:hover{background:#f0f4fa;}
+  button.success{background:var(--green);color:#fff;} button.success:hover{background:var(--green-dark);}
+  button.danger{background:var(--red);color:#fff;} button.danger:hover{background:var(--red-dark);}
+  button:disabled{opacity:.6;cursor:not-allowed;}
+  .back-btn{background:var(--card);color:var(--navy);border:1px solid var(--navy);padding:8px 14px;border-radius:8px;cursor:pointer;font-family:inherit;font-weight:bold;font-size:13px;}
+  .status{margin-top:12px;font-weight:bold;font-size:14px;min-height:18px;}
+  .status.ok{color:var(--green);} .status.err{color:var(--red);}
+  .table-scroll{overflow-x:auto;}
+  table{width:100%;border-collapse:collapse;margin-top:14px;font-size:13px;}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:right;white-space:nowrap;}
+  th:first-child,td:first-child{text-align:left;}
+  thead th{background:var(--navy);color:#fff;font-size:12px;}
+  tbody tr:nth-child(even){background:#f6f8fb;}
+  tfoot td{font-weight:bold;background:#eaf0f8;color:var(--navy);}
+  .total-col{background:#f0f4fa;font-weight:bold;}
+  td.txt,th.txt{text-align:left;}
+  .row-del{background:var(--red);color:#fff;border:none;padding:5px 12px;border-radius:5px;cursor:pointer;font-family:inherit;}
+  .row-del:hover{background:var(--red-dark);}
+  .hint{font-size:12px;color:var(--muted);margin-top:8px;}
+  .hidden{display:none;}
+  .gate-card{max-width:440px;margin:10px auto;}
+  #connStatus{text-align:center;font-size:12px;font-weight:bold;margin-bottom:10px;}
+  #printArea{display:none;}
+  @media print{
+    .wrap{display:none !important;}
+    #printArea{display:block;padding:10px;}
+    #printArea h1{font-size:16pt;color:#000;margin:0;}
+    #printArea .meta{font-size:10pt;margin:6px 0 12px;color:#222;}
+    #printArea table{width:100%;border-collapse:collapse;font-size:9pt;}
+    #printArea th,#printArea td{border:1px solid #444;padding:5px 7px;text-align:right;}
+    #printArea th:first-child,#printArea td:first-child{text-align:left;}
+    #printArea thead th{background:#1F3864 !important;color:#fff !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+  }
+  @media(max-width:760px){.grid,.grid-3,.grid-5{grid-template-columns:1fr 1fr;}}
+  @media(max-width:460px){.grid,.grid-3,.grid-5{grid-template-columns:1fr;}}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+</head>
+<body>
+
+<div class="wrap">
+<div id="connStatus">Checking your session...</div>
+
+<div id="reportBox" class="hidden">
+  <div class="card">
+    <h3>Material Used Report</h3>
+    <p class="sub">Total quantity used per material &middot; all figures in kg</p>
+    <div class="grid-5">
+      <div class="field"><label>Extruder</label>
+        <select id="r_extruder"><option value="ALL">All Extruders</option><option>Extruder 1</option><option>Extruder 2</option><option>Mama Sannu Extruder</option></select>
+      </div>
+      <div class="field"><label>Section</label>
+        <select id="r_section"><option value="ALL">All Sections</option></select>
+      </div>
+      <div class="field"><label>From</label><input id="r_from" type="date"></div>
+      <div class="field"><label>To</label><input id="r_to" type="date"></div>
+      <div class="field"><label>Period</label>
+        <select id="r_period"><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="primary" id="viewBtn" onclick="viewReport()">VIEW REPORT</button>
+      <button class="outline" onclick="openManage()">MANAGE REPORT</button>
+    </div>
+    <div class="btn-row hidden" id="exportRow">
+      <button class="success" onclick="exportCSV()">EXPORT CSV</button>
+      <button class="success" onclick="exportPDF()">EXPORT PDF</button>
+    </div>
+    <div class="table-scroll">
+      <table id="r_table" class="hidden">
+        <thead><tr><th>Period</th><th class="txt">Extruder</th><th class="txt">Section</th><th class="txt">Shift</th>
+          <th>PP</th><th>Recycling Black</th><th>Recycling Colour</th><th>Calcium Colour</th><th>Calcium Black</th><th>Colour M/B</th><th>Black M/B</th><th>Total</th></tr></thead>
+        <tbody id="r_tbody"></tbody><tfoot id="r_tfoot"></tfoot>
+      </table>
+    </div>
+    <div class="hint" id="r_hint"></div>
+  </div>
+</div>
+
+<div id="gateBox" class="hidden">
+  <div class="card gate-card">
+    <h3>Manage Report</h3>
+    <p class="sub">Choose which Extruder you're recording for</p>
+    <div class="field"><label>Extruder <span class="req">*</span></label>
+      <select id="gateExtruder" required>
+        <option value="" disabled selected>Select Extruder</option>
+        <option value="Extruder 1">Extruder 1</option><option value="Extruder 2">Extruder 2</option><option value="Mama Sannu Extruder">Mama Sannu Extruder</option>
+      </select>
+    </div>
+    <div class="btn-row">
+      <button class="primary" id="gateBtn" onclick="confirmExtruderSelection()">CONTINUE</button>
+      <button class="outline" onclick="backToReport()">CANCEL</button>
+    </div>
+  </div>
+</div>
+
+<div id="manageBox" class="hidden">
+  <div class="back-row" style="margin-bottom:14px;">
+    <button class="back-btn" onclick="backToReport()">&larr; Back to Report</button>
+    <span class="badge" id="extruderBadge" style="margin-left:8px;"></span>
+  </div>
+
+  <div class="card">
+    <h3>New Material Used Entry</h3>
+    <p class="sub">All fields are required &middot; quantities in kg</p>
+    <div class="grid-3">
+      <div class="field"><label>Section <span class="req">*</span></label>
+        <select id="m_section" required><option value="" disabled selected>Select Section</option></select></div>
+      <div class="field"><label>Report Date <span class="req">*</span></label><input id="m_date" type="date"></div>
+      <div class="field"><label>Shift <span class="req">*</span></label>
+        <select id="m_shift" required><option value="" disabled selected>Select Shift</option><option value="Morning">Morning</option><option value="Night">Night</option></select></div>
+    </div>
+    <div class="grid" style="margin-top:12px">
+      <div class="field"><label>Polypropylene (PP) (kg) <span class="req">*</span></label><input id="m_pp" type="number" step="0.01" min="0" placeholder="0"></div>
+      <div class="field"><label>Recycling Black (kg) <span class="req">*</span></label><input id="m_recBlack" type="number" step="0.01" min="0" placeholder="0"></div>
+      <div class="field"><label>Recycling Colour (kg) <span class="req">*</span></label><input id="m_recColour" type="number" step="0.01" min="0" placeholder="0"></div>
+      <div class="field"><label>Calcium Colour (kg) <span class="req">*</span></label><input id="m_calColour" type="number" step="0.01" min="0" placeholder="0"></div>
+      <div class="field"><label>Calcium Black (kg) <span class="req">*</span></label><input id="m_calBlack" type="number" step="0.01" min="0" placeholder="0"></div>
+      <div class="field"><label>Colour M/B (kg) <span class="req">*</span></label><input id="m_colourMB" type="number" step="0.01" min="0" placeholder="0"></div>
+      <div class="field"><label>Black M/B (kg) <span class="req">*</span></label><input id="m_blackMB" type="number" step="0.01" min="0" placeholder="0"></div>
+    </div>
+    <div class="btn-row"><button class="primary" id="saveBtn" onclick="saveEntry()">SAVE ENTRY</button></div>
+    <div class="status" id="m_status"></div>
+  </div>
+
+  <div class="card">
+    <h3>Delete Records</h3>
+    <p class="sub">Most recent entries for this extruder. Deleting cannot be undone.</p>
+    <div class="grid-3">
+      <div class="field"><label>Filter by Section</label>
+        <select id="d_section" onchange="loadRecent()"><option value="ALL">All Sections</option></select></div>
+      <div class="field" style="align-self:end;"><button class="outline" onclick="loadRecent()">REFRESH LIST</button></div>
+      <div class="field" style="align-self:end;"><button class="outline" onclick="purgeOld()">PURGE RECORDS OVER 90 DAYS</button></div>
+    </div>
+    <div class="table-scroll">
+      <table id="d_table" class="hidden">
+        <thead><tr><th>ID</th><th>Date</th><th>Section</th><th>Shift</th><th>Total (kg)</th><th>Entered</th><th>Action</th></tr></thead>
+        <tbody id="d_tbody"></tbody>
+      </table>
+    </div>
+    <div class="hint" id="d_hint"></div>
+  </div>
+</div>
+
+</div>
+
+<div id="printArea"></div>
+
+<script>
+const SECTION_DISPLAY_MAP = { "Rumbu": "Rumbu", "MamaSannu": "Mama Sannu" };
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY, "Content-Type": "application/json" }; }
+function fmt(n){ return Number(n||0).toLocaleString("en-GB",{maximumFractionDigits:2}); }
+function todayISO(){ return new Date().toISOString().slice(0,10); }
+function daysAgoISO(n){ const d=new Date(); d.setDate(d.getDate()-n); return d.toISOString().slice(0,10); }
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function fmtDDMonYYYY(iso){ const d=new Date(iso+"T00:00:00"); return String(d.getDate()).padStart(2,"0")+" "+MONTHS[d.getMonth()]+" "+d.getFullYear(); }
+function mondayOf(iso){ const d=new Date(iso+"T00:00:00"); const day=d.getDay()||7; if(day!==1) d.setDate(d.getDate()-(day-1)); return d; }
+
+let ALL_ROWS = [];
+let currentExtruder = null;
+let lastReport = null;
+
+const REPORT_COLS = ["PP","Recycling_Black","Recycling_Colour","Calcium_Colour","Calcium_Black","Colour_MB","Black_MB","Total_Material"];
+const REPORT_HEADERS = ["PP","Recycling Black","Recycling Colour","Calcium Colour","Calcium Black","Colour M/B","Black M/B","Total"];
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    const me = await requireAuth("../../login.html");
+    if(!me) return;
+
+    const mySections = (me.sectionNames && me.sectionNames.length)
+      ? me.sectionNames.map(s => SECTION_DISPLAY_MAP[s] || s)
+      : ["Rumbu","Mama Sannu"];
+
+    document.getElementById("m_section").innerHTML = '<option value="" disabled selected>Select Section</option>' + mySections.map(s=>`<option value="${s}">${s}</option>`).join("");
+    document.getElementById("r_section").innerHTML = '<option value="ALL">All Sections</option>' + mySections.map(s=>`<option value="${s}">${s}</option>`).join("");
+    document.getElementById("d_section").innerHTML = '<option value="ALL">All Sections</option>' + mySections.map(s=>`<option value="${s}">${s}</option>`).join("");
+
+    document.getElementById("m_date").value = todayISO();
+    const firstOfMonth = todayISO().slice(0,8)+"01";
+    document.getElementById("r_from").value = firstOfMonth;
+    document.getElementById("r_to").value = todayISO();
+
+    const res = await fetch(SUPABASE_URL + "/rest/v1/extruder_material_report_v2?select=*", { headers: authHeaders() });
+    if(!res.ok) throw new Error("HTTP " + res.status);
+    ALL_ROWS = await res.json();
+    document.getElementById("connStatus").classList.add("hidden");
+    document.getElementById("reportBox").classList.remove("hidden");
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "Could not read data: " + (e.message||e);
+    return;
+  }
+
+  document.getElementById("d_tbody").addEventListener("click", function(e){
+    const btn = e.target.closest(".row-del");
+    if(!btn) return;
+    deleteEntry(btn.getAttribute("data-id"));
+  });
+}
+
+function openManage(){
+  document.getElementById("reportBox").classList.add("hidden");
+  document.getElementById("gateBox").classList.remove("hidden");
+  document.getElementById("gateExtruder").selectedIndex = 0;
+}
+function confirmExtruderSelection(){
+  const extruder = document.getElementById("gateExtruder").value;
+  if(!extruder){ alert("Select an extruder"); return; }
+  currentExtruder = extruder;
+  document.getElementById("extruderBadge").textContent = extruder;
+  document.getElementById("gateBox").classList.add("hidden");
+  document.getElementById("manageBox").classList.remove("hidden");
+  document.getElementById("m_section").selectedIndex = 0;
+  document.getElementById("m_shift").selectedIndex = 0;
+  loadRecent();
+}
+function backToReport(){
+  currentExtruder = null;
+  document.getElementById("gateBox").classList.add("hidden");
+  document.getElementById("manageBox").classList.add("hidden");
+  document.getElementById("reportBox").classList.remove("hidden");
+}
+
+function viewReport(){
+  const btn = document.getElementById("viewBtn");
+  const meta = {
+    extruder: document.getElementById("r_extruder").value,
+    section: document.getElementById("r_section").value,
+    period: document.getElementById("r_period").value,
+    from: document.getElementById("r_from").value,
+    to: document.getElementById("r_to").value
+  };
+  btn.disabled = true; btn.innerText = "Loading...";
+
+  const rows = ALL_ROWS.filter(r=>{
+    if(meta.extruder !== "ALL" && r.extruder !== meta.extruder) return false;
+    if(meta.section !== "ALL" && r.section !== meta.section) return false;
+    if(meta.from && r.report_date < meta.from) return false;
+    if(meta.to && r.report_date > meta.to) return false;
+    return true;
+  });
+
+  const groups = {};
+  rows.forEach(r=>{
+    let periodKey, periodLabel;
+    if(meta.period === "weekly"){
+      const mon = mondayOf(r.report_date);
+      periodKey = mon.toISOString().slice(0,10);
+      periodLabel = "Week of " + fmtDDMonYYYY(periodKey);
+    } else if(meta.period === "monthly"){
+      const d = new Date(r.report_date+"T00:00:00");
+      periodKey = d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");
+      periodLabel = MONTHS[d.getMonth()] + " " + d.getFullYear();
+    } else {
+      periodKey = r.report_date; periodLabel = fmtDDMonYYYY(r.report_date);
+    }
+    const key = [periodKey, r.extruder, r.section, r.shift].join("||");
+    if(!groups[key]) groups[key] = { Period: periodLabel, periodKey, Extruder: r.extruder, Section: r.section, Shift: r.shift,
+      PP:0, Recycling_Black:0, Recycling_Colour:0, Calcium_Colour:0, Calcium_Black:0, Colour_MB:0, Black_MB:0 };
+    const g = groups[key];
+    g.PP += Number(r.pp||0); g.Recycling_Black += Number(r.recycling_black||0); g.Recycling_Colour += Number(r.recycling_colour||0);
+    g.Calcium_Colour += Number(r.calcium_colour||0); g.Calcium_Black += Number(r.calcium_black||0);
+    g.Colour_MB += Number(r.colour_mb||0); g.Black_MB += Number(r.black_mb||0);
+  });
+
+  const result = Object.values(groups).map(g=>({ ...g, Total_Material: g.PP+g.Recycling_Black+g.Recycling_Colour+g.Calcium_Colour+g.Calcium_Black+g.Colour_MB+g.Black_MB }))
+    .sort((a,b)=> a.periodKey.localeCompare(b.periodKey) || a.Extruder.localeCompare(b.Extruder) || (a.Section||"").localeCompare(b.Section||"") || (a.Shift||"").localeCompare(b.Shift||""));
+
+  btn.disabled = false; btn.innerText = "VIEW REPORT";
+  renderReport(result);
+  if(result.length){ lastReport = { rows: result, meta }; document.getElementById("exportRow").classList.remove("hidden"); }
+  else { lastReport = null; document.getElementById("exportRow").classList.add("hidden"); }
+}
+
+function computeTotals(rows){
+  const totals = {}; REPORT_COLS.forEach(c=>totals[c]=0);
+  rows.forEach(r=>REPORT_COLS.forEach(c=>totals[c]+=Number(r[c]||0)));
+  return totals;
+}
+
+function renderReport(rows){
+  const table = document.getElementById("r_table"), tbody = document.getElementById("r_tbody"), tfoot = document.getElementById("r_tfoot"), hint = document.getElementById("r_hint");
+  if(!rows.length){ table.classList.add("hidden"); tbody.innerHTML=""; tfoot.innerHTML=""; hint.textContent = "No records found for the selected range."; return; }
+
+  let html = "";
+  rows.forEach(r=>{
+    html += `<tr><td>${r.Period}</td><td class="txt">${r.Extruder||""}</td><td class="txt">${r.Section||""}</td><td class="txt">${r.Shift||""}</td>`;
+    REPORT_COLS.forEach(c=>{ const cls = c==="Total_Material" ? " class='total-col'" : ""; html += `<td${cls}>${fmt(r[c])}</td>`; });
+    html += "</tr>";
+  });
+  tbody.innerHTML = html;
+
+  const totals = computeTotals(rows);
+  let foot = "<tr><td>TOTAL</td><td class='txt'></td><td class='txt'></td><td class='txt'></td>";
+  REPORT_COLS.forEach(c=>foot += `<td>${fmt(totals[c])}</td>`);
+  foot += "</tr>";
+  tfoot.innerHTML = foot;
+  hint.textContent = "All figures in kg.";
+  table.classList.remove("hidden");
+}
+
+async function saveEntry(){
+  const status = document.getElementById("m_status");
+  const btn = document.getElementById("saveBtn");
+  const numericIds = ["m_pp","m_recBlack","m_recColour","m_calColour","m_calBlack","m_colourMB","m_blackMB"];
+
+  if(!currentExtruder){ status.className="status err"; status.textContent="❌ Session expired, please unlock again"; return; }
+
+  const data = {
+    extruder: currentExtruder,
+    section: document.getElementById("m_section").value,
+    date: document.getElementById("m_date").value,
+    shift: document.getElementById("m_shift").value,
+    pp: document.getElementById("m_pp").value, recBlack: document.getElementById("m_recBlack").value,
+    recColour: document.getElementById("m_recColour").value, calColour: document.getElementById("m_calColour").value,
+    calBlack: document.getElementById("m_calBlack").value, colourMB: document.getElementById("m_colourMB").value,
+    blackMB: document.getElementById("m_blackMB").value
+  };
+
+  if(!data.section || !data.date || !data.shift){ status.className="status err"; status.textContent="❌ Section, Date and Shift are required"; return; }
+  for(const id of numericIds){
+    if(document.getElementById(id).value === ""){
+      status.className="status err"; status.textContent="❌ All quantity fields are required (enter 0 if none)";
+      document.getElementById(id).focus(); return;
+    }
+  }
+
+  if(!confirm("Save this entry?\n\nExtruder: "+data.extruder+"\nSection: "+data.section+"\nDate: "+data.date+"\nShift: "+data.shift)) return;
+
+  btn.disabled = true; btn.innerText = "Saving..."; status.textContent = "";
+  try{
+    const dup = ALL_ROWS.some(r => r.report_date===data.date && r.section===data.section && r.shift===data.shift && r.extruder===data.extruder);
+    if(dup){ status.className="status err"; status.textContent="❌ An entry already exists for this Extruder, Section, Date and Shift"; btn.disabled=false; btn.innerText="SAVE ENTRY"; return; }
+
+    const row = {
+      report_date: data.date, section: data.section, shift: data.shift, extruder: data.extruder,
+      pp: Number(data.pp)||0, recycling_black: Number(data.recBlack)||0, recycling_colour: Number(data.recColour)||0,
+      calcium_colour: Number(data.calColour)||0, calcium_black: Number(data.calBlack)||0,
+      colour_mb: Number(data.colourMB)||0, black_mb: Number(data.blackMB)||0, created_at: new Date().toISOString()
+    };
+    const res = await fetch(SUPABASE_URL + "/rest/v1/extruder_material_report_v2", { method:"post", headers: authHeaders(), body: JSON.stringify(row) });
+    if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
+    const saved = await res.json();
+    ALL_ROWS.push(saved[0] || row);
+
+    status.className = "status ok"; status.textContent = "✅ Material report saved successfully" + (saved[0]&&saved[0].id ? " (ID " + saved[0].id + ")" : "");
+    numericIds.forEach(id=>document.getElementById(id).value = "");
+    document.getElementById("m_section").selectedIndex = 0;
+    document.getElementById("m_shift").selectedIndex = 0;
+    loadRecent();
+  }catch(e){
+    status.className = "status err"; status.textContent = "❌ Error: " + (e.message||e);
+  }finally{
+    btn.disabled = false; btn.innerText = "SAVE ENTRY";
+  }
+}
+
+function loadRecent(){
+  if(!currentExtruder) return;
+  const section = document.getElementById("d_section").value;
+  const hint = document.getElementById("d_hint");
+  hint.textContent = "Loading...";
+
+  let rows = ALL_ROWS.filter(r => r.extruder === currentExtruder && (section === "ALL" || r.section === section));
+  rows = rows.slice().sort((a,b)=>(b.created_at||"").localeCompare(a.created_at||"")).slice(0,25);
+
+  const table = document.getElementById("d_table"), tbody = document.getElementById("d_tbody");
+  if(!rows.length){ table.classList.add("hidden"); tbody.innerHTML=""; hint.textContent="No records found."; return; }
+
+  let html = "";
+  rows.forEach(r=>{
+    const total = Number(r.pp||0)+Number(r.recycling_black||0)+Number(r.recycling_colour||0)+Number(r.calcium_colour||0)+Number(r.calcium_black||0)+Number(r.colour_mb||0)+Number(r.black_mb||0);
+    const entered = r.created_at ? new Date(r.created_at).toLocaleString("en-GB",{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"}) : "";
+    html += `<tr><td>${r.id}</td><td>${fmtDDMonYYYY(r.report_date)}</td><td>${r.section}</td><td>${r.shift}</td><td>${fmt(total)}</td><td>${entered}</td>` +
+      `<td><button class="row-del" data-id="${r.id}">Delete</button></td></tr>`;
+  });
+  tbody.innerHTML = html;
+  hint.textContent = "Showing " + rows.length + " most recent record(s) for " + currentExtruder + ".";
+  table.classList.remove("hidden");
+}
+
+async function deleteEntry(id){
+  if(!id) return;
+  if(!confirm("Delete record ID " + id + " permanently?\n\nThis cannot be undone.")) return;
+  try{
+    const res = await fetch(SUPABASE_URL + "/rest/v1/extruder_material_report_v2?id=eq." + id, { method:"delete", headers: authHeaders() });
+    if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
+    alert("🗑️ Record deleted successfully");
+    ALL_ROWS = ALL_ROWS.filter(r=>String(r.id)!==String(id));
+    loadRecent();
+  }catch(e){ alert("Error: " + (e.message||e)); }
+}
+
+async function purgeOld(){
+  if(!confirm("Delete all records older than 90 days? This cannot be undone.")) return;
+  const cutoff = daysAgoISO(90);
+  try{
+    const res = await fetch(SUPABASE_URL + "/rest/v1/extruder_material_report_v2?report_date=lt." + cutoff, { method:"delete", headers: authHeaders() });
+    if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
+    alert("🧹 Old reports purged");
+    ALL_ROWS = ALL_ROWS.filter(r=>r.report_date >= cutoff);
+    loadRecent();
+  }catch(e){ alert("Error: " + (e.message||e)); }
+}
+
+function reportMetaText(){
+  const m = lastReport.meta;
+  return { ext: m.extruder==="ALL"?"All Extruders":m.extruder, sec: m.section==="ALL"?"All Sections":m.section,
+    per: m.period.charAt(0).toUpperCase()+m.period.slice(1), from: m.from, to: m.to };
+}
+
+function exportCSV(){
+  if(!lastReport){ alert("Generate a report first."); return; }
+  const m = reportMetaText();
+  let lines = [];
+  lines.push('"Extruder Material Used Report"');
+  lines.push('"Extruder","'+m.ext+'","Section","'+m.sec+'"');
+  lines.push('"Period","'+m.per+'","From","'+m.from+'","To","'+m.to+'"');
+  lines.push('"All figures in kg"'); lines.push("");
+  lines.push(['"Period"','"Extruder"','"Section"','"Shift"'].concat(REPORT_HEADERS.map(h=>'"'+h+'"')).join(","));
+  lastReport.rows.forEach(r=>{
+    let row = ['"'+r.Period+'"','"'+(r.Extruder||"")+'"','"'+(r.Section||"")+'"','"'+(r.Shift||"")+'"'];
+    REPORT_COLS.forEach(c=>row.push(Number(r[c]||0)));
+    lines.push(row.join(","));
+  });
+  const totals = computeTotals(lastReport.rows);
+  let totalRow = ['"TOTAL"','""','""','""']; REPORT_COLS.forEach(c=>totalRow.push(totals[c])); lines.push(totalRow.join(","));
+  const csv = lines.join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a"); a.href = url;
+  a.download = "Extruder_Material_Report_"+lastReport.meta.from+"_to_"+lastReport.meta.to+".csv";
+  document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+
+function exportPDF(){
+  if(!lastReport){ alert("Generate a report first."); return; }
+  const m = reportMetaText();
+  let head = "<tr><th>Period</th><th>Extruder</th><th>Section</th><th>Shift</th>" + REPORT_HEADERS.map(h=>"<th>"+h+"</th>").join("") + "</tr>";
+  let body = "";
+  lastReport.rows.forEach(r=>{
+    body += "<tr><td>"+r.Period+"</td><td>"+(r.Extruder||"")+"</td><td>"+(r.Section||"")+"</td><td>"+(r.Shift||"")+"</td>";
+    REPORT_COLS.forEach(c=>body += "<td>"+fmt(r[c])+"</td>");
+    body += "</tr>";
+  });
+  const totals = computeTotals(lastReport.rows);
+  let foot = "<tr><td>TOTAL</td><td></td><td></td><td></td>"; REPORT_COLS.forEach(c=>foot += "<td>"+fmt(totals[c])+"</td>"); foot += "</tr>";
+
+  document.getElementById("printArea").innerHTML =
+    '<h1>Extruder &mdash; Material Used Report</h1>'
+    + '<div class="meta">Extruder: '+m.ext+' &nbsp;|&nbsp; Section: '+m.sec+' &nbsp;|&nbsp; Period: '+m.per+' &nbsp;|&nbsp; '+m.from+' to '+m.to
+    + '<br>All figures in kg</div>'
+    + '<table><thead>'+head+'</thead><tbody>'+body+'</tbody><tfoot>'+foot+'</tfoot></table>';
+  window.print();
+}
+
+init();
+</script>
+</body>
+</html>

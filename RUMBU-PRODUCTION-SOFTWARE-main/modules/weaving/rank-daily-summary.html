@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Rank Daily Summary</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+  :root{--navy:var(--heading);}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;}
+  .card{max-width:460px;margin:0 auto;background:var(--card);border-radius:12px;padding:24px;box-shadow:0 4px 10px rgba(0,0,0,.12);}
+  h2{text-align:center;color:var(--navy);margin:0 0 12px;}
+  label{font-weight:bold;margin-top:10px;display:block;font-size:13px;}
+  input,select{width:100%;padding:8px;margin-top:5px;border:1px solid var(--line);border-radius:6px;font-size:14px;}
+  button{width:100%;margin-top:18px;padding:11px;background:var(--navy);color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:bold;}
+  table{width:100%;margin-top:20px;border-collapse:collapse;font-size:13px;}
+  th,td{border:1px solid #333;padding:6px;text-align:center;}
+  th{background:var(--navy);color:#fff;}
+  #status{margin-top:12px;text-align:center;font-weight:bold;font-size:13px;}
+  .note{font-size:11px;color:#6b7280;margin-top:14px;text-align:center;}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="../../table-resolver.js"></script>
+</head>
+<body>
+
+<div class="card">
+  <h2>Rank Daily Summary</h2>
+
+  <label>Date</label>
+  <input type="date" id="workDate">
+
+  <label>Shift</label>
+  <select id="shift"><option value="All">All</option><option>Morning</option><option>Night</option></select>
+
+  <label>Section</label>
+  <select id="section"><option value="All">All</option></select>
+
+  <label>Shed</label>
+  <select id="shed">
+    <option value="All">All</option>
+    <option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option>
+    <option>MamaSannu</option>
+  </select>
+
+  <label>Target %</label>
+  <input type="number" id="targetPct" value="90">
+
+  <button onclick="generate()">Generate</button>
+  <div id="status">Connecting to Supabase...</div>
+  <div id="result"></div>
+
+  <p class="note">
+    job_table exclusion is applied to downtime, matching the original module.
+    Work duration is fixed at 660 minutes, matching the original module.
+  </p>
+</div>
+
+<script>
+const WORK_MINUTES = 660;
+const SECTION_LABEL = { "Rumbu": "Rumbu", "MamaSannu": "Mama Sannu" };
+
+let MW_TABLE = "mat_weaving"; // resolved properly in init() below
+let MW_ROWS = [], CTRL_ROWS = [], EXCLUDED_JOB_CODES = new Set(); CTRL_ROWS.forEach(normalizeControlRow);
+
+function parseDT(v){ const d=new Date(v); return isNaN(d)?null:d; }
+function minutesBetween(a,b){ return (!a||!b) ? 0 : Math.round((b-a)/60000); }
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
+
+
+// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
+async function fetchAllRows(table, select, query){
+  let all = [], offset = 0; const pageSize = 1000;
+  const q = query || "";
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=" + (select||"*") + q, { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+function normalizeControlRow(r){
+  if(r.date_col === undefined) r.date_col = r.date;
+  if(r.names === undefined) r.names = r.nurse_name;
+  if(r.stop_time === undefined) r.stop_time = r.mc_stoppage_time;
+  if(r.extimated_time === undefined) r.extimated_time = r.estimated_duration;
+  if(r.discription === undefined) r.discription = r.description;
+  return r;
+}
+
+async function init(){
+  const status = document.getElementById("status");
+  try{
+    const me = await requireAuth("../../login.html");
+    if(!me) return;
+    MW_TABLE = await resolveWeavingTable();
+
+    const mySections = (me.sectionNames && me.sectionNames.length) ? me.sectionNames : ["Rumbu","MamaSannu"];
+    document.getElementById("section").innerHTML = '<option value="All">All</option>' +
+      mySections.map(s=>`<option value="${s}">${SECTION_LABEL[s]||s}</option>`).join("");
+    // Default-select and lock the dropdown to the user's own Section when they only have one.
+    if(mySections.length === 1){
+      document.getElementById("section").value = mySections[0];
+      document.getElementById("section").disabled = true;
+    }
+
+    const jobRes = await fetch(SUPABASE_URL + "/rest/v1/job_table?select=job_code", { headers: authHeaders() });
+    if(jobRes.ok){
+      const jobRows = await jobRes.json();
+      EXCLUDED_JOB_CODES = new Set(jobRows.map(r => r.job_code));
+    }
+    status.style.color = "#1d8a4e";
+    status.textContent = "Ready. Select a date and click Generate.";
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+// Fetch Mat_Weaving + control for a single day (server-side filter).
+async function fetchDayData(date){
+  const [mw, ctrl] = await Promise.all([
+    fetchAllRows(MW_TABLE,"*", "&date_col=eq."+date),
+    fetchAllRows("control","*", "&date=eq."+date)
+  ]);
+  MW_ROWS = mw;
+  CTRL_ROWS = ctrl; CTRL_ROWS.forEach(normalizeControlRow);
+}
+
+async function generate(){
+  const date = document.getElementById("workDate").value;
+  const shift = document.getElementById("shift").value;
+  const section = document.getElementById("section").value;
+  const shed = document.getElementById("shed").value;
+  const targetPct = Number(document.getElementById("targetPct").value) || 0;
+  const status = document.getElementById("status");
+  const result = document.getElementById("result");
+
+  if(!date){ status.style.color="#c0392b"; status.textContent = "⚠️ Select a date"; return; }
+
+  status.style.color=""; status.textContent = "Loading…";
+  try{
+    await fetchDayData(date);
+  }catch(e){
+    status.style.color="#c0392b"; status.textContent = "Could not read data: " + (e.message||e); return;
+  }
+
+  if(!MW_ROWS.length){
+    status.style.color="#c0392b";
+    status.textContent = "No production records found for " + date + ".";
+    result.innerHTML = "";
+    return;
+  }
+
+  // matched_downtime: control rows for that date, grouped by assets+shift
+  const downtimeMap = {};
+  CTRL_ROWS.forEach(r=>{
+    if(r.date_col !== date) return;
+    if(EXCLUDED_JOB_CODES.has(r.job_code)) return;
+    const stop = parseDT(r.stop_time), finish = parseDT(r.finish_time);
+    if(!stop || !finish) return;
+    const key = r.assets + "||" + r.shift;
+    downtimeMap[key] = (downtimeMap[key] || 0) + minutesBetween(stop, finish);
+  });
+
+  // operator_prod: Mat_Weaving rows for that date + filters
+  const prod = MW_ROWS.filter(r=>{
+    if(r.date_col !== date) return false;
+    if(shift !== "All" && r.shift !== shift) return false;
+    if(section !== "All" && r.section !== section) return false;
+    if(shed !== "All" && String(r.shed) !== shed) return false;
+    return true;
+  });
+
+  if(!prod.length){ status.style.color="#c0392b"; status.innerHTML=`⚠️ No data found. Mat_Weaving had ${MW_ROWS.length} rows total, but none matched date=${date}, shift=${shift}, section=${section}, shed=${shed}.`; result.innerHTML=""; return; }
+
+  const byOp = {};
+  prod.forEach(r=>{
+    const key = (r.operator_id||"") + "||" + (r.rank||"");
+    if(!byOp[key]) byOp[key] = { rank:r.rank||"(blank)", A:0, target:0, downtime:0, assets:new Set() };
+    const o = byOp[key];
+    o.A += Number(r.a_double||0) + Number(r.a_single||0);
+    o.target += Number(r.target||0);
+    o.assets.add(r.assets);
+    const dkey = r.assets + "||" + r.shift;
+    o.downtime += downtimeMap[dkey] ? (downtimeMap[dkey] / [...prod].filter(p=>p.assets===r.assets && p.shift===r.shift).length || 1) : 0;
+  });
+
+  const byRank = {};
+  Object.values(byOp).forEach(o=>{
+    const mc = o.assets.size || 1;
+    const adjTarget = Math.round(o.target - (o.target * o.downtime) / (WORK_MINUTES * mc));
+    const pA = adjTarget ? (o.A / adjTarget) * 100 : 0;
+    if(!byRank[o.rank]) byRank[o.rank] = { rank:o.rank, total:0, above:0, below:0 };
+    byRank[o.rank].total++;
+    if(pA >= targetPct) byRank[o.rank].above++; else byRank[o.rank].below++;
+  });
+
+  let html = "<table><tr><th>Rank</th><th>Total Operators</th><th>&ge; Target</th><th>&lt; Target</th></tr>";
+  Object.values(byRank).forEach(r=>{
+    html += `<tr><td>${r.rank}</td><td>${r.total}</td><td>${r.above}</td><td>${r.below}</td></tr>`;
+  });
+  html += "</table>";
+  result.innerHTML = html;
+  status.style.color = "#1d8a4e"; status.textContent = "✅ Done";
+}
+
+init();
+</script>
+</body>
+</html>

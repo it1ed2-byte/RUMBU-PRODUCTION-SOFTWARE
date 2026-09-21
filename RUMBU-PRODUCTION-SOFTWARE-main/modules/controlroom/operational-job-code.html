@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Operational Job Code</title>
+<link rel="stylesheet" href="../../styles.css">
+<style>
+  body{ padding:22px; }
+  .container{ max-width:760px; margin:0 auto; }
+  #status{ text-align:center; font-size:13px; font-weight:700; }
+  .msg{ margin-top:10px; font-weight:700; }
+</style>
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+</head>
+<body>
+
+<div class="container">
+
+  <div id="statusBox" class="card-panel">
+    <div id="status">Checking your session...</div>
+  </div>
+
+  <div id="appArea" style="display:none;">
+
+    <div class="card-panel">
+      <h2>Operational Job Code</h2>
+      <p class="sub">Add a job code to the operational list. These codes are used across the technical dashboards and reports.</p>
+      <div class="form-row">
+        <div class="field"><label>Job Code</label><input type="text" id="jobCode" placeholder="e.g. JC-101"></div>
+        <div class="field"><label>Name / Description</label><input type="text" id="jobName" placeholder="e.g. Routine service"></div>
+      </div>
+      <button id="addBtn" onclick="addCode()">Add Job Code</button>
+      <div class="msg" id="addMsg"></div>
+    </div>
+
+    <div class="card-panel">
+      <h3>Existing Job Codes</h3>
+      <div class="field" style="max-width:320px;"><label>Search</label><input type="text" id="search" placeholder="Filter by code or name" oninput="renderTable()"></div>
+      <div class="table-wrap"><div class="table-scroll">
+        <table>
+          <thead><tr><th>Job Code</th><th>Name</th><th style="width:90px;">Action</th></tr></thead>
+          <tbody id="tableBody"></tbody>
+        </table>
+      </div></div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+function authHeaders(extra){ return Object.assign({ "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY, "Content-Type": "application/json" }, extra||{}); }
+let ROWS = [];
+
+
+async function fetchAllRows(table, query){
+  let all = [], offset = 0; const pageSize = 1000;
+  const q = query || "";
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=*" + q, { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+
+async function init(){
+  const me = await requireAuth("../../login.html");
+  if(!me) return;
+  document.getElementById("statusBox").style.display = "none";
+  document.getElementById("appArea").style.display = "block";
+  loadCodes();
+}
+
+async function loadCodes(){
+  try{
+    ROWS = await fetchAllRows("job_table", "&order=job_code");
+    renderTable();
+  }catch(e){
+    document.getElementById("tableBody").innerHTML = `<tr><td colspan="3" style="text-align:center;color:var(--bad);">Could not load: ${e.message}</td></tr>`;
+  }
+}
+
+function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+
+function renderTable(){
+  const q = (document.getElementById("search").value || "").toLowerCase().trim();
+  const tbody = document.getElementById("tableBody");
+  const list = ROWS.filter(r=>{
+    if(!q) return true;
+    return String(r.job_code||"").toLowerCase().includes(q) || String(r.name||"").toLowerCase().includes(q);
+  });
+  if(!list.length){ tbody.innerHTML = `<tr><td colspan="3" style="text-align:center;color:var(--muted);">No job codes${q?" match your search":" yet"}.</td></tr>`; return; }
+  tbody.innerHTML = list.map(r=>
+    `<tr><td>${esc(r.job_code)}</td><td>${esc(r.name)}</td>`
+    + `<td><button class="btn-sm btn-danger" onclick="deleteCode(${r.id})">Delete</button></td></tr>`
+  ).join("");
+}
+
+async function addCode(){
+  const btn = document.getElementById("addBtn");
+  const msg = document.getElementById("addMsg");
+  const code = document.getElementById("jobCode").value.trim();
+  const name = document.getElementById("jobName").value.trim();
+  msg.innerText = "";
+
+  if(!code){ msg.style.color="var(--bad)"; msg.innerText="Job Code is required."; return; }
+
+  // Block duplicates (case-insensitive) using the already-loaded list.
+  if(ROWS.some(r=> String(r.job_code||"").toLowerCase() === code.toLowerCase())){
+    msg.style.color="var(--bad)"; msg.innerText="That Job Code already exists.";
+    return;
+  }
+
+  btn.disabled = true; btn.innerText = "Adding...";
+  try{
+    const res = await fetch(SUPABASE_URL + "/rest/v1/job_table", {
+      method:"POST", headers: authHeaders({ "Prefer":"return=representation" }),
+      body: JSON.stringify({ job_code: code, name: name || null })
+    });
+    if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
+    msg.style.color="var(--ok)"; msg.innerText="✅ Job code added.";
+    document.getElementById("jobCode").value = "";
+    document.getElementById("jobName").value = "";
+    await loadCodes();
+  }catch(e){ msg.style.color="var(--bad)"; msg.innerText="❌ "+e.message; }
+  finally{ btn.disabled=false; btn.innerText="Add Job Code"; }
+}
+
+async function deleteCode(id){
+  if(!confirm("Delete this job code?")) return;
+  try{
+    const res = await fetch(SUPABASE_URL + "/rest/v1/job_table?id=eq." + id, { method:"DELETE", headers: authHeaders() });
+    if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
+    await loadCodes();
+  }catch(e){ alert("Error: " + e.message); }
+}
+
+init();
+</script>
+</body>
+</html>

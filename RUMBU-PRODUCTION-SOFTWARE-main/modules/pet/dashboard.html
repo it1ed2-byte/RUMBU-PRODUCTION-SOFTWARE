@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>PET Collection — Dashboard</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  :root{
+    --p-blue:#2E75B6;   /* Collections / Initiation  */
+    --p-violet:#7c3aed; /* Quality Control            */
+    --p-green:#059669;  /* Payment                     */
+    --p-teal:#0f766e;   /* Production                  */
+    --p-amber:#d97706;  /* Waste                       */
+    --p-red:#c0392b;    /* Rejected                    */
+    --p-emerald:#10b981;/* Completed                   */
+    --p-muted:#6b7280;
+  }
+  *{box-sizing:border-box;}
+  body{padding:18px;}
+  .wrap{max-width:1280px;margin:0 auto;}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;}
+
+  .hero{
+    background:linear-gradient(120deg,#1F3864 0%,#2E75B6 55%,#0f766e 100%);
+    border-radius:14px;padding:20px 24px;margin-bottom:16px;color:#fff;
+    display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;
+  }
+  .hero h2{margin:0;font-size:19px;letter-spacing:.3px;}
+  .hero p{margin:4px 0 0;font-size:12.5px;opacity:.85;}
+  .hero .hero-stat{text-align:right;}
+  .hero .hero-stat .n{font-size:26px;font-weight:800;line-height:1;}
+  .hero .hero-stat .l{font-size:10.5px;opacity:.8;text-transform:uppercase;letter-spacing:.5px;margin-top:4px;}
+
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;}
+  .row > div{flex:1;min-width:150px;}
+  .quickbar{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;}
+  .qbtn{background:var(--bg);color:var(--heading);padding:6px 11px;border:1px solid var(--line);border-radius:8px;font-size:12px;font-weight:bold;cursor:pointer;}
+  .qbtn.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+
+  .kpi-section-label{font-size:11px;font-weight:800;color:var(--p-muted);text-transform:uppercase;letter-spacing:.5px;margin:18px 0 8px;}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;}
+  .kpi{background:var(--card);border:1px solid var(--line);border-top:4px solid var(--kc,#94a3b8);border-radius:12px;padding:14px;text-align:center;}
+  .kpi .n{font-size:23px;font-weight:800;color:var(--heading);line-height:1.1;}
+  .kpi .l{font-size:10.5px;color:var(--p-muted);margin-top:4px;font-weight:bold;text-transform:uppercase;letter-spacing:.4px;}
+  .kpi .icon{font-size:18px;margin-bottom:2px;}
+
+  .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:16px;margin-top:16px;}
+  .card-panel h3{display:flex;align-items:center;gap:8px;}
+  .card-panel h3 .swatch{width:11px;height:11px;border-radius:3px;display:inline-block;}
+
+  .bar-row{display:flex;align-items:center;gap:10px;margin:7px 0;font-size:13px;}
+  .bar-row .lbl{width:42%;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .bar-row .track{flex:1;background:var(--bg);border-radius:6px;height:16px;overflow:hidden;}
+  .bar-row .fill{height:100%;}
+  .bar-row .val{width:64px;text-align:right;font-weight:bold;color:var(--heading);font-size:12px;}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;margin-top:8px;}
+  .legend span{display:inline-flex;align-items:center;gap:5px;}
+  .dot{width:11px;height:11px;border-radius:3px;display:inline-block;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div id="connStatus">Loading...</div>
+
+<div id="appArea" style="display:none;">
+  <div class="hero">
+    <div>
+      <h2>🧴 PET Collection — Overview</h2>
+      <p>Live pipeline health across Initiation → Quality Control → Payment → Production → Completion</p>
+    </div>
+    <div class="hero-stat">
+      <div class="n" id="heroLots">—</div>
+      <div class="l">LOTs Occupied</div>
+    </div>
+  </div>
+
+  <div class="card-panel">
+    <h3>Filters</h3>
+    <div class="quickbar" id="quickbar">
+      <button class="qbtn" data-range="today" onclick="setRange('today',this)">Today</button>
+      <button class="qbtn active" data-range="week" onclick="setRange('week',this)">This Week</button>
+      <button class="qbtn" data-range="month" onclick="setRange('month',this)">This Month</button>
+      <button class="qbtn" data-range="custom" onclick="setRange('custom',this)">Custom</button>
+    </div>
+    <div class="row">
+      <div><label>From</label><input type="date" id="fromDate"></div>
+      <div><label>To</label><input type="date" id="toDate"></div>
+      <div><label>Branch</label><select id="f_branch"><option value="">All</option></select></div>
+      <div><label>Agent</label><input type="text" id="f_agent" placeholder="Search agent name or code"></div>
+      <div style="flex:0 0 auto;"><label>&nbsp;</label><button onclick="runDashboard()">Run</button></div>
+    </div>
+    <div class="status" id="dashStatus"></div>
+  </div>
+
+  <div id="dash" style="display:none;">
+    <div class="kpi-section-label">🔵 Always current (not affected by filters above)</div>
+    <div class="kpis" id="kpisFixed"></div>
+
+    <div class="kpi-section-label">🟣 For the selected filter period</div>
+    <div class="kpis" id="kpisFiltered"></div>
+
+    <div class="grid2">
+      <div class="card-panel"><h3><span class="swatch" style="background:var(--p-blue);"></span>Daily Collections Initiated</h3><div id="chartTrend"></div></div>
+      <div class="card-panel"><h3><span class="swatch" style="background:var(--p-violet);"></span>Collections by Stage</h3><div id="chartStage"></div></div>
+      <div class="card-panel"><h3><span class="swatch" style="background:var(--p-blue);"></span>Collections by Branch</h3><div id="chartBranch"></div></div>
+      <div class="card-panel"><h3><span class="swatch" style="background:var(--p-emerald);"></span>Top Agents by Waybill Weight (kg)</h3><div id="chartAgents"></div></div>
+      <div class="card-panel"><h3><span class="swatch" style="background:var(--p-teal);"></span>Production vs Waste Trend (kg)</h3><div id="chartProdWaste"></div></div>
+      <div class="card-panel"><h3><span class="swatch" style="background:var(--p-red);"></span>Rejections by Stage</h3><div id="chartRejections"></div></div>
+    </div>
+  </div>
+</div>
+</div>
+
+<script>
+let ME = null;
+let BRANCHES = [];
+
+function fmt(v){ return v==null ? "0" : (Math.abs(v)>=1000 ? (v/1000).toFixed(1)+"k" : Number(v).toFixed(0)); }
+
+function setRange(range, btn){
+  document.querySelectorAll("#quickbar .qbtn").forEach(b=>b.classList.remove("active"));
+  if(btn) btn.classList.add("active");
+  const today = new Date();
+  const iso = d => d.toISOString().slice(0,10);
+  if(range === "today"){
+    document.getElementById("fromDate").value = iso(today);
+    document.getElementById("toDate").value = iso(today);
+  } else if(range === "week"){
+    const day = today.getDay() || 7;
+    const mon = new Date(today); mon.setDate(today.getDate()-day+1);
+    const sun = new Date(mon); sun.setDate(mon.getDate()+6);
+    document.getElementById("fromDate").value = iso(mon);
+    document.getElementById("toDate").value = iso(sun);
+  } else if(range === "month"){
+    document.getElementById("fromDate").value = iso(new Date(today.getFullYear(), today.getMonth(), 1));
+    document.getElementById("toDate").value = iso(new Date(today.getFullYear(), today.getMonth()+1, 0));
+  }
+  if(range !== "custom") runDashboard();
+}
+window.setRange = setRange;
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    status.style.display = "none";
+    document.getElementById("appArea").style.display = "block";
+
+    // PET currently only operates at these two sites — same restriction as
+    // the rest of the module.
+    const { data: sections } = await sb.from("app_sections").select("name").in("name", ["LagosWash","KanoWash"]).order("name");
+    BRANCHES = (sections||[]).map(s=>s.name);
+    document.getElementById("f_branch").innerHTML = '<option value="">All</option>' + BRANCHES.map(b=>`<option value="${b}">${b}</option>`).join("");
+
+    setRange("week", document.querySelector('.qbtn[data-range="week"]'));
+    await loadFixedKpis();
+    await runDashboard();
+  }catch(e){
+    status.style.display = "block";
+    status.style.color = "var(--p-red)";
+    status.textContent = "Error: " + e.message;
+  }
+}
+
+// ---- Fixed KPIs: always-current pipeline snapshot, ignores filters ----
+async function loadFixedKpis(){
+  const { data: collections } = await sb.from("pet_collections").select("id,status");
+  const rows = collections||[];
+  const count = st => rows.filter(r=>r.status===st).length;
+  const countIn = sts => rows.filter(r=>sts.includes(r.status)).length;
+
+  const pendingQC = countIn(["submitted","stage2_approval","rejected_to_stage1","rejected_to_stage2"]);
+  const pendingPay1 = countIn(["stage3p1_filling","stage3p1_approval","rejected_to_stage3p1"]);
+  const pendingProd = countIn(["stage4_filling","stage4_approval","rejected_to_stage4"]);
+  const pendingPay2 = countIn(["stage3p2_filling","stage3p2_approval"]);
+  const completed = count("completed");
+
+  document.getElementById("kpisFixed").innerHTML = `
+    <div class="kpi" style="--kc:var(--p-blue);"><div class="icon">📥</div><div class="n">${rows.length}</div><div class="l">Total Collections</div></div>
+    <div class="kpi" style="--kc:var(--p-violet);"><div class="icon">🔬</div><div class="n">${pendingQC}</div><div class="l">Pending Quality Control</div></div>
+    <div class="kpi" style="--kc:var(--p-green);"><div class="icon">💳</div><div class="n">${pendingPay1}</div><div class="l">Pending Payment (90%)</div></div>
+    <div class="kpi" style="--kc:var(--p-teal);"><div class="icon">🏭</div><div class="n">${pendingProd}</div><div class="l">Pending Production</div></div>
+    <div class="kpi" style="--kc:var(--p-green);"><div class="icon">💳</div><div class="n">${pendingPay2}</div><div class="l">Pending Payment (10%)</div></div>
+    <div class="kpi" style="--kc:var(--p-emerald);"><div class="icon">✅</div><div class="n">${completed}</div><div class="l">Completed</div></div>
+  `;
+
+  const { data: lots } = await sb.from("pet_lots").select("is_occupied");
+  const occupied = (lots||[]).filter(l=>l.is_occupied).length;
+  document.getElementById("heroLots").textContent = occupied + " / " + (lots||[]).length;
+}
+
+// ---- Filtered KPIs + charts: respects Date range / Branch / Agent ----
+async function runDashboard(){
+  const status = document.getElementById("dashStatus");
+  const from = document.getElementById("fromDate").value;
+  const to = document.getElementById("toDate").value;
+  const branch = document.getElementById("f_branch").value;
+  const agentQ = document.getElementById("f_agent").value.trim().toLowerCase();
+
+  if(!from || !to){ status.className="status err"; status.textContent="Pick a date range."; return; }
+  status.className="status"; status.textContent="Loading...";
+  document.getElementById("dash").style.display = "none";
+
+  try{
+    let q = sb.from("pet_collections")
+      .select("id,form_number,agent_name,agent_code,section,status,cycle,created_at,agent_waybill_weight,rumbu_weighbridge_weight," +
+               "pet_stage4_production(colored_flex_kg,non_colored_flex_kg,total_production_kg,total_waste_kg)")
+      .gte("created_at", from+"T00:00:00").lte("created_at", to+"T23:59:59");
+    if(branch) q = q.eq("section", branch);
+    const { data, error } = await q;
+    if(error) throw error;
+
+    let rows = data||[];
+    if(agentQ) rows = rows.filter(r=>((r.agent_name||"")+(r.agent_code||"")).toLowerCase().includes(agentQ));
+
+    const { data: rejections } = await sb.from("pet_activity_log")
+      .select("stage").eq("action","rejected")
+      .gte("created_at", from+"T00:00:00").lte("created_at", to+"T23:59:59");
+
+    renderFilteredKpis(rows);
+    renderCharts(rows, rejections||[]);
+
+    document.getElementById("dash").style.display = "block";
+    status.className="status ok"; status.textContent = rows.length + " collection(s) in this period.";
+  }catch(e){
+    status.className="status err"; status.textContent="Error: "+e.message;
+  }
+}
+window.runDashboard = runDashboard;
+
+function renderFilteredKpis(rows){
+  const totalWaybill = rows.reduce((s,r)=>s+Number(r.agent_waybill_weight||0),0);
+  const totalRumbu = rows.reduce((s,r)=>s+Number(r.rumbu_weighbridge_weight||0),0);
+  let totalProd = 0, totalWaste = 0;
+  rows.forEach(r=>{
+    const prod = Array.isArray(r.pet_stage4_production) ? r.pet_stage4_production[0] : r.pet_stage4_production;
+    if(prod){ totalProd += Number(prod.total_production_kg||0); totalWaste += Number(prod.total_waste_kg||0); }
+  });
+  const completed = rows.filter(r=>r.status==="completed").length;
+  const completionRate = rows.length ? (completed/rows.length*100) : null;
+
+  document.getElementById("kpisFiltered").innerHTML = `
+    <div class="kpi" style="--kc:var(--p-blue);"><div class="icon">📥</div><div class="n">${rows.length}</div><div class="l">Collections Initiated</div></div>
+    <div class="kpi" style="--kc:var(--p-blue);"><div class="icon">🚚</div><div class="n">${fmt(totalWaybill)}</div><div class="l">Waybill Weight (kg)</div></div>
+    <div class="kpi" style="--kc:var(--p-blue);"><div class="icon">⚖️</div><div class="n">${fmt(totalRumbu)}</div><div class="l">Rumbu Weighbridge (kg)</div></div>
+    <div class="kpi" style="--kc:var(--p-teal);"><div class="icon">🏭</div><div class="n">${fmt(totalProd)}</div><div class="l">Total Production (kg)</div></div>
+    <div class="kpi" style="--kc:var(--p-amber);"><div class="icon">🗑️</div><div class="n">${fmt(totalWaste)}</div><div class="l">Total Waste (kg)</div></div>
+    <div class="kpi ${completionRate>=70?'':''}" style="--kc:var(--p-emerald);"><div class="icon">✅</div><div class="n">${completionRate!=null?completionRate.toFixed(1)+"%":"—"}</div><div class="l">Completion Rate</div></div>
+  `;
+}
+
+const STAGE_LABELS = {
+  submitted:"Awaiting QC", stage2_approval:"QC Approval", rejected_to_stage1:"Returned to Initiate", rejected_to_stage2:"Returned to QC",
+  stage3p1_filling:"Payment 90% Fill", stage3p1_approval:"Payment 90% Approval", rejected_to_stage3p1:"Returned to Payment 90%",
+  stage4_filling:"Production Fill", stage4_approval:"Production Approval", rejected_to_stage4:"Returned to Production",
+  stage3p2_filling:"Payment 10% Fill", stage3p2_approval:"Payment 10% Approval",
+  completed:"Completed"
+};
+
+function renderCharts(rows, rejections){
+  // Daily Collections Trend
+  const dayMap = {};
+  rows.forEach(r=>{ const d = r.created_at.slice(0,10); dayMap[d] = (dayMap[d]||0)+1; });
+  lineChart("chartTrend", Object.entries(dayMap).sort((a,b)=>a[0]<b[0]?-1:1), "#2E75B6", "Collections");
+
+  // Collections by Stage
+  const stageMap = {};
+  rows.forEach(r=>{ const l = STAGE_LABELS[r.status]||r.status; stageMap[l]=(stageMap[l]||0)+1; });
+  hbars("chartStage", Object.entries(stageMap).sort((a,b)=>b[1]-a[1]), "#7c3aed");
+
+  // Collections by Branch
+  const branchMap = {};
+  rows.forEach(r=>{ branchMap[r.section]=(branchMap[r.section]||0)+1; });
+  hbars("chartBranch", Object.entries(branchMap).sort((a,b)=>b[1]-a[1]), "#2E75B6");
+
+  // Top Agents by Waybill Weight
+  const agentMap = {};
+  rows.forEach(r=>{
+    const key = r.agent_name + (r.agent_code?" ("+r.agent_code+")":"");
+    agentMap[key] = (agentMap[key]||0) + Number(r.agent_waybill_weight||0);
+  });
+  const topAgents = Object.entries(agentMap).sort((a,b)=>b[1]-a[1]).slice(0,5);
+  hbars("chartAgents", topAgents, "#10b981");
+
+  // Production vs Waste Trend
+  const prodDayMap = {}, wasteDayMap = {};
+  rows.forEach(r=>{
+    const prod = Array.isArray(r.pet_stage4_production) ? r.pet_stage4_production[0] : r.pet_stage4_production;
+    if(!prod) return;
+    const d = r.created_at.slice(0,10);
+    prodDayMap[d] = (prodDayMap[d]||0) + Number(prod.total_production_kg||0);
+    wasteDayMap[d] = (wasteDayMap[d]||0) + Number(prod.total_waste_kg||0);
+  });
+  dualLineChart("chartProdWaste",
+    Object.entries(prodDayMap).sort((a,b)=>a[0]<b[0]?-1:1),
+    Object.entries(wasteDayMap).sort((a,b)=>a[0]<b[0]?-1:1),
+    "#0f766e", "#d97706", "Production", "Waste");
+
+  // Rejections by Stage
+  const rejMap = {};
+  rejections.forEach(r=>{ const l = STAGE_LABELS[r.stage] || r.stage || "Unknown"; rejMap[l]=(rejMap[l]||0)+1; });
+  hbars("chartRejections", Object.entries(rejMap).sort((a,b)=>b[1]-a[1]), "#c0392b");
+}
+
+// ---------- chart helpers (same visual convention as KWP Dashboard, colorized per-chart) ----------
+function hbars(containerId, entries, color){
+  const wrap = document.getElementById(containerId);
+  if(!entries.length){ wrap.innerHTML="<p style='color:var(--p-muted);font-size:13px;'>No data.</p>"; return; }
+  const max = Math.max.apply(null, entries.map(e=>e[1])) || 1;
+  wrap.innerHTML = entries.map(([label,val])=>{
+    const p = Math.round((val/max)*100);
+    return `<div class="bar-row"><div class="lbl" title="${label}">${label}</div>`+
+           `<div class="track"><div class="fill" style="width:${p}%;background:${color};"></div></div>`+
+           `<div class="val">${fmt(val)}</div></div>`;
+  }).join("");
+}
+
+function lineChart(containerId, series, color, unitLabel){
+  const wrap = document.getElementById(containerId);
+  if(!series.length){ wrap.innerHTML="<p style='color:var(--p-muted);font-size:13px;'>No data.</p>"; return; }
+  const W=1000, H=240, pad=40;
+  const xs = series.map((_,i)=> pad + i*( (W-2*pad)/Math.max(1,series.length-1) ));
+  const maxV = Math.max.apply(null, series.map(s=>s[1])) || 1;
+  const ys = series.map(s=> H-pad - (s[1]/maxV)*(H-2*pad));
+  let path = "";
+  xs.forEach((x,i)=>{ path += (i===0?"M":"L") + x.toFixed(1) + " " + ys[i].toFixed(1) + " "; });
+  const step = Math.max(1, Math.floor(series.length/8));
+  let labels = "";
+  for(let i=0;i<series.length;i+=step){
+    labels += `<text x="${xs[i].toFixed(1)}" y="${H-pad+16}" font-size="10" fill="var(--p-muted)" text-anchor="middle">${series[i][0].slice(5)}</text>`;
+  }
+  const area = `M ${xs[0].toFixed(1)} ${(H-pad)} ` + series.map((s,i)=>`L ${xs[i].toFixed(1)} ${ys[i].toFixed(1)}`).join(" ") + ` L ${xs[xs.length-1].toFixed(1)} ${(H-pad)} Z`;
+  wrap.innerHTML =
+    `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+      <line x1="${pad}" y1="${H-pad}" x2="${W-pad}" y2="${H-pad}" stroke="#cbd5e1" stroke-width="1"/>
+      <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${H-pad}" stroke="#cbd5e1" stroke-width="1"/>
+      <path d="${area}" fill="${color}" opacity="0.12"/>
+      <path d="${path}" fill="none" stroke="${color}" stroke-width="2.5"/>
+      ${xs.map((x,i)=>`<circle cx="${x.toFixed(1)}" cy="${ys[i].toFixed(1)}" r="3" fill="${color}"/>`).join("")}
+      <text x="${pad-6}" y="${pad}" font-size="10" fill="var(--p-muted)" text-anchor="end">${fmt(maxV)}</text>
+      <text x="${pad-6}" y="${H-pad}" font-size="10" fill="var(--p-muted)" text-anchor="end">0</text>
+      ${labels}
+    </svg>
+    <div class="legend"><span><span class="dot" style="background:${color}"></span>${unitLabel||""}</span></div>`;
+}
+
+// Two overlapping line series on one chart (e.g. Production vs Waste)
+function dualLineChart(containerId, seriesA, seriesB, colorA, colorB, labelA, labelB){
+  const wrap = document.getElementById(containerId);
+  const allDates = [...new Set([...seriesA.map(s=>s[0]), ...seriesB.map(s=>s[0])])].sort();
+  if(!allDates.length){ wrap.innerHTML="<p style='color:var(--p-muted);font-size:13px;'>No data.</p>"; return; }
+  const mapA = Object.fromEntries(seriesA), mapB = Object.fromEntries(seriesB);
+  const W=1000, H=240, pad=40;
+  const xs = allDates.map((_,i)=> pad + i*( (W-2*pad)/Math.max(1,allDates.length-1) ));
+  const maxV = Math.max(1, ...allDates.map(d=>Math.max(mapA[d]||0, mapB[d]||0)));
+  const buildPath = (map) => {
+    let p = "";
+    allDates.forEach((d,i)=>{
+      const y = H-pad - ((map[d]||0)/maxV)*(H-2*pad);
+      p += (i===0?"M":"L") + xs[i].toFixed(1) + " " + y.toFixed(1) + " ";
+    });
+    return p;
+  };
+  const step = Math.max(1, Math.floor(allDates.length/8));
+  let labels = "";
+  for(let i=0;i<allDates.length;i+=step){
+    labels += `<text x="${xs[i].toFixed(1)}" y="${H-pad+16}" font-size="10" fill="var(--p-muted)" text-anchor="middle">${allDates[i].slice(5)}</text>`;
+  }
+  wrap.innerHTML =
+    `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+      <line x1="${pad}" y1="${H-pad}" x2="${W-pad}" y2="${H-pad}" stroke="#cbd5e1" stroke-width="1"/>
+      <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${H-pad}" stroke="#cbd5e1" stroke-width="1"/>
+      <path d="${buildPath(mapA)}" fill="none" stroke="${colorA}" stroke-width="2.5"/>
+      <path d="${buildPath(mapB)}" fill="none" stroke="${colorB}" stroke-width="2.5" stroke-dasharray="5,4"/>
+      <text x="${pad-6}" y="${pad}" font-size="10" fill="var(--p-muted)" text-anchor="end">${fmt(maxV)}</text>
+      <text x="${pad-6}" y="${H-pad}" font-size="10" fill="var(--p-muted)" text-anchor="end">0</text>
+      ${labels}
+    </svg>
+    <div class="legend">
+      <span><span class="dot" style="background:${colorA}"></span>${labelA}</span>
+      <span><span class="dot" style="background:${colorB}"></span>${labelB}</span>
+    </div>`;
+}
+
+init();
+</script>
+</body>
+</html>

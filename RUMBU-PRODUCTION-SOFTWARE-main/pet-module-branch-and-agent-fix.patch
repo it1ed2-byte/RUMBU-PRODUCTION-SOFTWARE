@@ -1,0 +1,383 @@
+diff --git a/modules/pet/collections.html b/modules/pet/collections.html
+index 2f33db2..e9be816 100644
+--- a/modules/pet/collections.html
++++ b/modules/pet/collections.html
+@@ -66,8 +66,6 @@
+       <div><label>Section</label>
+         <select id="fSection">
+           <option value="">All</option>
+-          <option value="Rumbu">Rumbu</option>
+-          <option value="MamaSannu">Mama Sannu</option>
+         </select>
+       </div>
+       <div><label>Agent Code</label><input type="text" id="fAgent" placeholder="AGT-..."></div>
+@@ -153,11 +151,19 @@ function statusBadge(s){
+   return `<span class="badge" style="background:${bg};color:${tc};">${STATUS_LABELS[s]||s}</span>`;
+ }
+ 
++async function loadBranches(){
++  const { data, error } = await sb.from("app_sections").select("name").order("name");
++  if(error) throw new Error("Could not load branches: "+error.message);
++  const sel = document.getElementById("fSection");
++  sel.innerHTML = `<option value="">All</option>` + (data||[]).map(s=>`<option value="${s.name}">${s.name}</option>`).join("");
++}
++
+ async function init(){
+   const cs=document.getElementById("connStatus");
+   try{
+     ME=await requireAuth("../../login.html");
+     if(!ME) return;
++    await loadBranches();
+     await loadCollections();
+     cs.style.color="var(--ok)"; cs.textContent="Connected.";
+   }catch(e){ cs.style.color="var(--bad)"; cs.textContent="Error: "+e.message; }
+diff --git a/modules/pet/initiate.html b/modules/pet/initiate.html
+index 3709a6e..9e728b7 100644
+--- a/modules/pet/initiate.html
++++ b/modules/pet/initiate.html
+@@ -65,8 +65,7 @@
+       <div>
+         <label>Section (Branch) *</label>
+         <select id="fSection">
+-          <option value="Rumbu">Rumbu</option>
+-          <option value="MamaSannu">Mama Sannu</option>
++          <option value="">Loading branches...</option>
+         </select>
+       </div>
+     </div>
+@@ -131,14 +130,25 @@
+ </div>
+ 
+ <script>
+-let ME = null, AGENTS = [], EDITING_ID = null;
++let ME = null, AGENTS = [], BRANCHES = [], EDITING_ID = null;
++
++async function loadBranches(){
++  const { data, error } = await sb.from("app_sections").select("name").order("name");
++  if(error) throw new Error("Could not load branches: "+error.message);
++  BRANCHES = (data||[]).map(s=>s.name);
++  const sel = document.getElementById("fSection");
++  sel.innerHTML = BRANCHES.length
++    ? BRANCHES.map(b=>`<option value="${b}">${b}</option>`).join("")
++    : `<option value="">No branches configured</option>`;
++}
+ 
+ async function init(){
+   const cs = document.getElementById("connStatus");
+   try{
+     ME = await requireAuth("../../login.html");
+     if(!ME) return;
+-    const { data } = await sb.from("pet_agents").select("id,agent_code,agent_name").eq("is_active",true).order("agent_name");
++    await loadBranches();
++    const { data } = await sb.from("pet_agents").select("id,agent_code,agent_name,section").eq("is_active",true).order("agent_name");
+     AGENTS = data||[];
+     await prepareNewForm();
+     await loadCorrectionQueue();
+@@ -213,7 +223,7 @@ function searchAgent(q){
+   const matches = AGENTS.filter(a=>(a.agent_name+a.agent_code).toLowerCase().includes(q.toLowerCase())).slice(0,8);
+   if(!matches.length){ drop.style.display="none"; return; }
+   drop.innerHTML = matches.map(a=>`<div class="agent-row" onclick="selectAgent(${a.id})">
+-    <b>${a.agent_code}</b> — ${a.agent_name}
++    <b>${a.agent_code}</b> — ${a.agent_name}${a.section?` <span style="color:var(--muted);">(${a.section})</span>`:""}
+   </div>`).join("");
+   drop.style.display="block";
+ }
+diff --git a/modules/pet/manage-agents.html b/modules/pet/manage-agents.html
+index ebc3fb1..9cc679d 100644
+--- a/modules/pet/manage-agents.html
++++ b/modules/pet/manage-agents.html
+@@ -48,10 +48,10 @@
+       <div class="table-scroll">
+         <table id="agentTable">
+           <thead><tr>
+-            <th>Code</th><th>Name</th><th>Phone</th><th>Category</th>
++            <th>Code</th><th>Name</th><th>Branch</th><th>Phone</th><th>Category</th>
+             <th>Bank</th><th>Account No.</th><th>Status</th><th>Actions</th>
+           </tr></thead>
+-          <tbody id="agentBody"><tr><td colspan="8" style="text-align:center;color:var(--muted);">Loading...</td></tr></tbody>
++          <tbody id="agentBody"><tr><td colspan="9" style="text-align:center;color:var(--muted);">Loading...</td></tr></tbody>
+         </table>
+       </div>
+     </div>
+@@ -77,8 +77,18 @@
+     </div>
+     <label>Agent Name *</label>
+     <input type="text" id="fName" placeholder="Full legal name">
+-    <label>Phone Number</label>
+-    <input type="tel" id="fPhone" placeholder="+234...">
++    <div class="grid2">
++      <div>
++        <label>Phone Number</label>
++        <input type="tel" id="fPhone" placeholder="+234...">
++      </div>
++      <div>
++        <label>Branch (Section) *</label>
++        <select id="fSection">
++          <option value="">Loading branches...</option>
++        </select>
++      </div>
++    </div>
+     <label>Address</label>
+     <textarea id="fAddress" rows="2" placeholder="Full address"></textarea>
+     <div class="grid3">
+@@ -104,13 +114,24 @@
+ </div>
+ 
+ <script>
+-let ME = null, AGENTS = [], EDITING_ID = null;
++let ME = null, AGENTS = [], BRANCHES = [], EDITING_ID = null;
++
++async function loadBranches(){
++  const { data, error } = await sb.from("app_sections").select("name").order("name");
++  if(error) throw new Error("Could not load branches: "+error.message);
++  BRANCHES = (data||[]).map(s=>s.name);
++  const sel = document.getElementById("fSection");
++  sel.innerHTML = BRANCHES.length
++    ? `<option value="">-- Select --</option>` + BRANCHES.map(b=>`<option value="${b}">${b}</option>`).join("")
++    : `<option value="">No branches configured</option>`;
++}
+ 
+ async function init(){
+   const cs = document.getElementById("connStatus");
+   try{
+     ME = await requireAuth("../../login.html");
+     if(!ME) return;
++    await loadBranches();
+     await loadAgents();
+     cs.style.color="var(--ok)"; cs.textContent="Connected.";
+   }catch(e){
+@@ -127,10 +148,11 @@ async function loadAgents(){
+ 
+ function renderTable(list){
+   const body = document.getElementById("agentBody");
+-  if(!list.length){ body.innerHTML=`<tr><td colspan="8" style="text-align:center;color:var(--muted);">No agents found.</td></tr>`; return; }
++  if(!list.length){ body.innerHTML=`<tr><td colspan="9" style="text-align:center;color:var(--muted);">No agents found.</td></tr>`; return; }
+   body.innerHTML = list.map(a=>`<tr>
+     <td><b>${a.agent_code}</b></td>
+     <td>${a.agent_name}</td>
++    <td>${a.section||"—"}</td>
+     <td>${a.phone||"—"}</td>
+     <td>${a.category||"—"}</td>
+     <td>${a.bank_name||"—"}</td>
+@@ -171,6 +193,7 @@ function openEdit(id){
+   document.getElementById("fCode").value = a.agent_code;
+   document.getElementById("fName").value = a.agent_name;
+   document.getElementById("fPhone").value = a.phone||"";
++  document.getElementById("fSection").value = a.section||"";
+   document.getElementById("fCategory").value = a.category||"";
+   document.getElementById("fAddress").value = a.address||"";
+   document.getElementById("fBankName").value = a.bank_name||"";
+@@ -183,6 +206,7 @@ function openEdit(id){
+ function clearForm(){
+   ["fName","fPhone","fAddress","fBankName","fBankAccNum","fBankAccName"].forEach(id=>document.getElementById(id).value="");
+   document.getElementById("fCategory").selectedIndex = 0;
++  document.getElementById("fSection").selectedIndex = 0;
+   document.getElementById("modalStatus").textContent = "";
+ }
+ 
+@@ -191,12 +215,15 @@ function closeModal(){ document.getElementById("modal").classList.remove("open")
+ async function saveAgent(){
+   const st = document.getElementById("modalStatus");
+   const name = document.getElementById("fName").value.trim();
++  const section = document.getElementById("fSection").value;
+   if(!name){ st.style.color="var(--bad)"; st.textContent="Agent name is required."; return; }
++  if(!section){ st.style.color="var(--bad)"; st.textContent="Select a branch."; return; }
+ 
+   const payload = {
+     agent_code:         document.getElementById("fCode").value,
+     agent_name:         name,
+     phone:              document.getElementById("fPhone").value.trim()||null,
++    section:            section,
+     category:           document.getElementById("fCategory").value||null,
+     address:            document.getElementById("fAddress").value.trim()||null,
+     bank_name:          document.getElementById("fBankName").value.trim()||null,
+diff --git a/modules/pet/manage-assignments.html b/modules/pet/manage-assignments.html
+index 7b093b7..7bfaf4d 100644
+--- a/modules/pet/manage-assignments.html
++++ b/modules/pet/manage-assignments.html
+@@ -42,8 +42,7 @@
+     <div style="margin-bottom:14px;">
+       <label>Section (Branch)</label>
+       <select id="sectionSel" onchange="loadAll()" style="max-width:260px;">
+-        <option value="Rumbu">Rumbu</option>
+-        <option value="MamaSannu">Mama Sannu</option>
++        <option value="">Loading branches...</option>
+       </select>
+     </div>
+ 
+@@ -78,6 +77,10 @@ async function init(){
+   try{
+     ME = await requireAuth("../../login.html");
+     if(!ME) return;
++    const { data: sections, error: secErr } = await sb.from("app_sections").select("name").order("name");
++    if(secErr) throw new Error("Could not load branches: "+secErr.message);
++    document.getElementById("sectionSel").innerHTML = (sections||[]).map(s=>`<option value="${s.name}">${s.name}</option>`).join("")
++      || `<option value="">No branches configured</option>`;
+     const { data: users } = await sb.from("profiles").select("id,username,full_name").order("full_name");
+     ALL_USERS = users||[];
+     await loadAll();
+diff --git a/modules/pet/manage-lots.html b/modules/pet/manage-lots.html
+index cb4b272..62c0d0d 100644
+--- a/modules/pet/manage-lots.html
++++ b/modules/pet/manage-lots.html
+@@ -58,8 +58,7 @@
+       <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Assign persons who will be alerted when a LOT is occupied or freed. Scoped per section (branch).</p>
+       <label>Section</label>
+       <select id="mgrSection" onchange="loadManagers()">
+-        <option value="Rumbu">Rumbu</option>
+-        <option value="MamaSannu">Mama Sannu</option>
++        <option value="">Loading branches...</option>
+       </select>
+       <div style="margin-top:14px;" id="mgrList"></div>
+       <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+@@ -94,6 +93,10 @@ async function init(){
+   try{
+     ME = await requireAuth("../../login.html");
+     if(!ME) return;
++    const { data: sections, error: secErr } = await sb.from("app_sections").select("name").order("name");
++    if(secErr) throw new Error("Could not load branches: "+secErr.message);
++    document.getElementById("mgrSection").innerHTML = (sections||[]).map(s=>`<option value="${s.name}">${s.name}</option>`).join("")
++      || `<option value="">No branches configured</option>`;
+     const { data: users } = await sb.from("profiles").select("id,username,full_name").order("full_name");
+     ALL_USERS = users || [];
+     const sel = document.getElementById("mgrUserSel");
+diff --git a/modules/pet/payment-stage.html b/modules/pet/payment-stage.html
+index fd2a112..0e1be71 100644
+--- a/modules/pet/payment-stage.html
++++ b/modules/pet/payment-stage.html
+@@ -143,7 +143,7 @@
+ </div>
+ 
+ <script>
+-let ME=null, CURRENT_P1=null, CURRENT_P2=null;
++let ME=null, CURRENT_P1=null, CURRENT_P2=null, ALL_SECTIONS=[];
+ 
+ const NEXT_STATUS={stage3p1:'stage4_filling', stage3p2:'completed'};
+ const REJECT_STATUS={stage3p1:'rejected_to_stage2', stage3p2:'rejected_to_stage4'};
+@@ -154,6 +154,9 @@ async function init(){
+     ME=await requireAuth("../../login.html");
+     if(!ME) return;
+ 
++    const { data: secData } = await sb.from("app_sections").select("name").order("name");
++    ALL_SECTIONS = (secData||[]).map(s=>s.name);
++
+     const [{ data:f1 },{ data:a1 },{ data:f2 },{ data:a2 }]=await Promise.all([
+       sb.from("pet_stage_fillers").select("section").eq("stage","stage3p1").eq("profile_id",ME.id),
+       sb.from("pet_stage_approvers").select("section").eq("stage","stage3p1").eq("profile_id",ME.id),
+@@ -184,7 +187,7 @@ async function loadP1FillQueue(sections){
+   const { data }=await sb.from("pet_collections")
+     .select("id,form_number,agent_name,agent_code,section,status,updated_at")
+     .in("status",["stage3p1_filling","rejected_to_stage3p1"])
+-    .in("section",sections.length?sections:["Rumbu","MamaSannu"])
++    .in("section",sections.length?sections:ALL_SECTIONS)
+     .order("updated_at",{ascending:false});
+   const queue=document.getElementById("p1FillQueue");
+   if(!data||!data.length){ queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No collections waiting for Phase 1 payment entry.</p>`; return; }
+@@ -198,7 +201,7 @@ async function loadP1ApprovalQueue(sections){
+   const { data }=await sb.from("pet_collections")
+     .select("id,form_number,agent_name,section,status,pet_stage3_payment(*)")
+     .eq("status","stage3p1_approval")
+-    .in("section",sections.length?sections:["Rumbu","MamaSannu"])
++    .in("section",sections.length?sections:ALL_SECTIONS)
+     .order("updated_at",{ascending:false});
+   const queue=document.getElementById("p1ApprovalQueue");
+   if(!data||!data.length){ queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No Phase 1 submissions awaiting approval.</p>`; return; }
+@@ -229,7 +232,7 @@ async function loadP2FillQueue(sections){
+   const { data }=await sb.from("pet_collections")
+     .select("id,form_number,agent_name,section,status,updated_at")
+     .in("status",["stage3p2_filling","rejected_to_stage4"])
+-    .in("section",sections.length?sections:["Rumbu","MamaSannu"])
++    .in("section",sections.length?sections:ALL_SECTIONS)
+     .order("updated_at",{ascending:false});
+   const queue=document.getElementById("p2FillQueue");
+   if(!data||!data.length){ queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No collections ready for Phase 2 payment.</p>`; return; }
+@@ -245,7 +248,7 @@ async function loadP2ApprovalQueue(sections){
+   const { data }=await sb.from("pet_collections")
+     .select("id,form_number,agent_name,section,status,pet_stage3_payment(*)")
+     .eq("status","stage3p2_approval")
+-    .in("section",sections.length?sections:["Rumbu","MamaSannu"])
++    .in("section",sections.length?sections:ALL_SECTIONS)
+     .order("updated_at",{ascending:false});
+   const queue=document.getElementById("p2ApprovalQueue");
+   if(!data||!data.length){ queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No Phase 2 submissions awaiting approval.</p>`; return; }
+diff --git a/modules/pet/production-stage.html b/modules/pet/production-stage.html
+index 9827a1c..827b710 100644
+--- a/modules/pet/production-stage.html
++++ b/modules/pet/production-stage.html
+@@ -116,7 +116,7 @@
+ </div>
+ 
+ <script>
+-let ME=null, CURRENT_PROD=null;
++let ME=null, CURRENT_PROD=null, ALL_SECTIONS=[];
+ 
+ const NEXT_STATUS={stage4:'stage3p2_filling'};
+ const REJECT_STATUS={stage4:'rejected_to_stage3p1'};
+@@ -127,6 +127,9 @@ async function init(){
+     ME=await requireAuth("../../login.html");
+     if(!ME) return;
+ 
++    const { data: secData } = await sb.from("app_sections").select("name").order("name");
++    ALL_SECTIONS = (secData||[]).map(s=>s.name);
++
+     const [{ data:fillerRows },{ data:approverRows }]=await Promise.all([
+       sb.from("pet_stage_fillers").select("section").eq("stage","stage4").eq("profile_id",ME.id),
+       sb.from("pet_stage_approvers").select("section").eq("stage","stage4").eq("profile_id",ME.id)
+@@ -149,7 +152,7 @@ async function loadFillQueue(sections){
+   const { data }=await sb.from("pet_collections")
+     .select("id,form_number,agent_name,agent_code,section,status,updated_at")
+     .in("status",["stage4_filling","rejected_to_stage4"])
+-    .in("section",sections.length?sections:["Rumbu","MamaSannu"])
++    .in("section",sections.length?sections:ALL_SECTIONS)
+     .order("updated_at",{ascending:false});
+   const queue=document.getElementById("fillQueue");
+   if(!data||!data.length){ queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No collections ready for production entry.</p>`; return; }
+@@ -165,7 +168,7 @@ async function loadApprovalQueue(sections){
+   const { data }=await sb.from("pet_collections")
+     .select("id,form_number,agent_name,section,status,updated_at,pet_stage4_production(*),pet_stage2_qc(offload_location)")
+     .eq("status","stage4_approval")
+-    .in("section",sections.length?sections:["Rumbu","MamaSannu"])
++    .in("section",sections.length?sections:ALL_SECTIONS)
+     .order("updated_at",{ascending:false});
+   const queue=document.getElementById("approvalQueue");
+   if(!data||!data.length){ queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No production submissions awaiting approval.</p>`; return; }
+diff --git a/modules/pet/qc-stage.html b/modules/pet/qc-stage.html
+index 99cb4ea..b48b813 100644
+--- a/modules/pet/qc-stage.html
++++ b/modules/pet/qc-stage.html
+@@ -168,7 +168,7 @@
+ </div>
+ 
+ <script>
+-let ME=null, MY_SECTIONS=[], IS_FILLER=false, IS_APPROVER=false, CURRENT_COLLECTION=null, FREE_LOTS=[];
++let ME=null, MY_SECTIONS=[], ALL_SECTIONS=[], IS_FILLER=false, IS_APPROVER=false, CURRENT_COLLECTION=null, FREE_LOTS=[];
+ const WM = 660;
+ 
+ const NEXT_STATUS   = { stage2:'stage3p1_filling' };
+@@ -181,6 +181,8 @@ async function init(){
+     if(!ME) return;
+ 
+     const mySections = (ME.sectionNames&&ME.sectionNames.length) ? ME.sectionNames : [];
++    const { data: secData } = await sb.from("app_sections").select("name").order("name");
++    ALL_SECTIONS = (secData||[]).map(s=>s.name);
+ 
+     // Check assignments
+     const [{ data: fillerRows }, { data: approverRows }] = await Promise.all([
+@@ -212,7 +214,7 @@ async function loadFillQueue(sections){
+   const { data } = await sb.from("pet_collections")
+     .select("id,form_number,agent_name,agent_code,section,status,updated_at")
+     .in("status",["submitted","rejected_to_stage2"])
+-    .in("section", sections.length ? sections : ["Rumbu","MamaSannu"])
++    .in("section", sections.length ? sections : ALL_SECTIONS)
+     .order("updated_at",{ascending:false});
+ 
+   const el = document.getElementById("fillSection");
+@@ -239,7 +241,7 @@ async function loadApprovalQueue(sections){
+   const { data } = await sb.from("pet_collections")
+     .select("id,form_number,agent_name,section,status,updated_at,pet_stage2_qc(*)")
+     .eq("status","stage2_approval")
+-    .in("section", sections.length ? sections : ["Rumbu","MamaSannu"])
++    .in("section", sections.length ? sections : ALL_SECTIONS)
+     .order("updated_at",{ascending:false});
+ 
+   const el = document.getElementById("approvalSection");

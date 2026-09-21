@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Extruder Maintenance Report</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+:root{--navy:#1F3864;--blue:#2E75B6;--blue-dark:#245d92;--line:#d8dee8;--bg:#eef2f7;--muted:#6b7280;--green:#1d8a4e;--green-dark:#156d3d;--red:#c0392b;--sans:"Inter","Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;color:var(--text);}
+  .wrap{max-width:1000px;margin:0 auto;}
+  .card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;}
+  .card h3{color:var(--navy);margin:0 0 4px;font-size:16px;}
+  .card .sub{color:var(--blue);font-size:12px;margin:0 0 14px;}
+  label{display:block;font-size:12px;font-weight:bold;color:var(--text);margin:0 0 4px;}
+  .req{color:var(--red);}
+  input,select{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;}
+  .grid-4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr auto;gap:12px;align-items:end;}
+  .btn-row{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap;}
+  button.primary,button.success{padding:12px 16px;border:none;border-radius:8px;font-weight:bold;font-size:15px;cursor:pointer;font-family:inherit;color:#fff;}
+  button.primary{background:var(--blue);} button.primary:hover{background:var(--blue-dark);}
+  button.success{background:var(--green);padding:10px 14px;font-size:14px;} button.success:hover{background:var(--green-dark);}
+  button:disabled{opacity:.6;cursor:not-allowed;}
+  .table-scroll{overflow-x:auto;}
+  table{width:100%;border-collapse:collapse;margin-top:14px;font-size:13px;}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;white-space:nowrap;}
+  th.num,td.num{text-align:right;}
+  thead th{background:var(--navy);color:#fff;font-size:12px;}
+  tbody tr:nth-child(even){background:#f6f8fb;}
+  tfoot td{font-weight:bold;background:#eaf0f8;color:var(--navy);}
+  .fault-head{color:var(--navy);font-size:15px;margin:22px 0 0;padding-bottom:6px;border-bottom:2px solid var(--blue);}
+  .fault-head .cnt{color:var(--muted);font-size:12px;font-weight:normal;}
+  .grand{margin-top:22px;padding:12px 14px;background:var(--navy);color:#fff;border-radius:8px;font-size:14px;font-weight:bold;}
+  .hint{font-size:12px;color:var(--muted);margin-top:8px;}
+  .hidden{display:none;}
+  #status{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;}
+  #printArea{display:none;}
+  @media print{
+    .wrap{display:none !important;}
+    #printArea{display:block;padding:10px;}
+    #printArea .grp{font-size:11pt;letter-spacing:1px;color:#000;font-weight:bold;}
+    #printArea h1{font-size:16pt;color:#000;margin:0;}
+    #printArea .meta{font-size:10pt;margin:6px 0 12px;color:#222;}
+    #printArea table{width:100%;border-collapse:collapse;font-size:9pt;}
+    #printArea th,#printArea td{border:1px solid #444;padding:5px 7px;text-align:left;}
+    #printArea thead th{background:#1F3864 !important;color:#fff !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+  }
+  @media(max-width:760px){.grid-4{grid-template-columns:1fr 1fr;}}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+</head>
+<body>
+<div class="wrap">
+
+<div class="card">
+  <h3>Extruder Maintenance Report</h3>
+  <p class="sub">Downtime and waiting time by asset &middot; extruder job codes only</p>
+  <div id="status">Checking your session...</div>
+
+  <div class="grid-4">
+    <div><label>From <span class="req">*</span></label><input type="date" id="startDate"></div>
+    <div><label>To <span class="req">*</span></label><input type="date" id="endDate"></div>
+    <div><label>Section</label><select id="section"><option value="">All Sections</option></select></div>
+    <div><label>Shift</label><select id="shift">
+      <option value="">All Shifts</option><option value="Morning">Morning</option><option value="Night">Night</option>
+    </select></div>
+    <div><button class="primary" id="viewBtn" onclick="viewReport()">VIEW REPORT</button></div>
+  </div>
+
+  <div class="btn-row" id="exportRow" style="display:none;">
+    <button class="success" onclick="exportPDF()">EXPORT PDF</button>
+    <button class="success" onclick="exportSummaryPDF()">EXPORT SUMMARY (PDF)</button>
+  </div>
+
+  <div id="reportArea"></div>
+  <div class="hint" id="hint"></div>
+</div>
+
+<div id="extraArea"></div>
+
+</div>
+
+<div id="printArea"></div>
+
+<script>
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
+const SECTION_DISPLAY_MAP = { "Rumbu": "Rumbu", "MamaSannu": "Mama Sannu" };
+
+let ME = null;
+let CONTROL_ROWS = [], JOB_CODES_ROWS = [], PROD_ROWS = [], WASTE_ROWS = [], SHUTDOWN_ROWS = [], RECO_ROWS = [];
+let lastRows = [], nurseRows = [];
+let meta = {};
+
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c])); }
+function num(n){ return Number(n||0).toLocaleString("en-GB",{maximumFractionDigits:0}); }
+function pct(n,d){ d=Number(d); return d ? Math.round((Number(n)/d)*100) : 0; }
+function fmtDur(min){
+  if(min===null||min===undefined||min==="") return "-";
+  let m = Number(min); if(isNaN(m)) return "-";
+  const neg = m<0; m = Math.abs(m);
+  const h = Math.floor(m/60), mm = m%60;
+  return (neg?"-":"") + h + "h " + mm + "m";
+}
+function fmtKg(n){
+  if(n===null||n===undefined||n==="") return "-";
+  const v = Number(n); if(isNaN(v)) return "-";
+  return v.toLocaleString("en-GB",{maximumFractionDigits:2});
+}
+function parseDT(v){ if(!v) return null; const d = new Date(v); return isNaN(d.getTime()) ? null : d; }
+function minutesBetween(a,b){ if(!a||!b) return 0; return Math.trunc((b-a)/60000); }
+function typeMultiplier(t){
+  const n = Number(t);
+  return n===1 ? 170 : n===2 ? 130 : (n===3||n===4) ? 110 : null;
+}
+
+async function fetchAllRows(table, query){
+  let all = [], offset = 0; const pageSize = 1000;
+  const q = query || "";
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=*" + q, { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+async function init(){
+  const status = document.getElementById("status");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+
+    const mySections = (ME.sectionNames && ME.sectionNames.length)
+      ? ME.sectionNames.map(s => SECTION_DISPLAY_MAP[s] || s)
+      : ["Rumbu","Mama Sannu"];
+    const sectionSelect = document.getElementById("section");
+    sectionSelect.innerHTML = '<option value="">All Sections</option>' + mySections.map(s=>`<option>${s}</option>`).join("");
+    if(mySections.length === 1){ sectionSelect.value = mySections[0]; sectionSelect.disabled = true; }
+
+    JOB_CODES_ROWS = await fetchAllRows("job_codes_extruder");
+
+    status.style.color = "#1d8a4e";
+    status.textContent = "Connected. job_codes_extruder: " + JOB_CODES_ROWS.length + " job code(s) loaded.";
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+// =========================================================
+// job_codes_extruder lookup: job_code -> Fault, and the set of valid
+// extruder job codes (only codes present in job_codes_extruder count).
+// =========================================================
+function buildJobTableLookup(){
+  const faultByCode = {}, validCodes = new Set();
+  JOB_CODES_ROWS.forEach(r=>{
+    const code = (r.job_code||"").toUpperCase().trim();
+    if(!code) return;
+    validCodes.add(code);
+    if(!(code in faultByCode)) faultByCode[code] = r.fault || "(no fault)";
+  });
+  return { faultByCode, validCodes };
+}
+
+// =========================================================
+// VIEW REPORT
+// =========================================================
+async function viewReport(){
+  const btn = document.getElementById("viewBtn");
+  const hint = document.getElementById("hint");
+  meta = {
+    startDate: document.getElementById("startDate").value,
+    endDate: document.getElementById("endDate").value,
+    section: document.getElementById("section").value,
+    shift: document.getElementById("shift").value
+  };
+
+  if(!meta.startDate || !meta.endDate){ hint.textContent = "Select both From and To dates."; return; }
+
+  btn.disabled = true; btn.innerText = "Loading..."; hint.textContent = "";
+
+  try{
+    // Only fetch the selected window's control rows — matching the
+    // original's date-scoped BigQuery query, not a full-table pull.
+    const dateClause = "&date=gte." + meta.startDate + "&date=lte." + meta.endDate;
+    CONTROL_ROWS = await fetchAllRows("control", dateClause);
+
+    buildMaintenanceReport();
+    render();
+    renderNurse();
+
+    btn.disabled = false; btn.innerText = "VIEW REPORT";
+  }catch(e){
+    btn.disabled = false; btn.innerText = "VIEW REPORT";
+    hint.textContent = "❌ " + (e.message||e);
+  }
+
+  loadExtras();
+}
+
+// =========================================================
+// DOWNTIME / LOSS (matches getMaintenanceReport exactly)
+// =========================================================
+function passesBaseFilter(r){
+  if(meta.section && String(r.section||"").toUpperCase().trim() !== meta.section.toUpperCase().trim()) return false;
+  if(meta.shift && String(r.shift||"").toUpperCase().trim() !== meta.shift.toUpperCase().trim()) return false;
+  return true;
+}
+
+function buildMaintenanceReport(){
+  const { faultByCode, validCodes } = buildJobTableLookup();
+
+  const inRangeCount = CONTROL_ROWS.length;
+  const matchedCodeCount = CONTROL_ROWS.filter(r=>{
+    const code = (r.job_code||"").toUpperCase().trim();
+    return validCodes.has(code);
+  }).length;
+  window._diag = { inRangeCount, matchedCodeCount, validCodeCount: validCodes.size };
+
+  const rows = CONTROL_ROWS.filter(r=>{
+    const code = (r.job_code||"").toUpperCase().trim();
+    if(!validCodes.has(code)) return false;
+    return passesBaseFilter(r);
+  }).map(r=>{
+    const code = (r.job_code||"").toUpperCase().trim();
+    const repair = minutesBetween(parseDT(r.starting_time), parseDT(r.finish_time));
+    const waiting = minutesBetween(parseDT(r.mc_stoppage_time), parseDT(r.starting_time));
+    const downtime = repair + waiting;
+    const mult = typeMultiplier(r.type);
+    const loss = mult===null ? null : Math.round(((Number(r.denier||0) * mult * Number(r.nozzle||0) * 60 * (downtime/60)) / 1000) * 100) / 100;
+    return {
+      Asset: r.assets, Date: r.date, Job_Code: r.job_code, Nurse: r.nurse_name,
+      Fault: faultByCode[code] || "(no fault)",
+      Repair_Min: repair, Waiting_Min: waiting, Downtime_Min: downtime, Loss_KG: loss
+    };
+  });
+
+  rows.sort((a,b)=> (a.Fault||"").localeCompare(b.Fault||"") || (a.Date||"").localeCompare(b.Date||"") || (a.Asset||"").localeCompare(b.Asset||""));
+  lastRows = rows;
+}
+
+function groupByFault(rows){
+  const map = {}, order = [];
+  rows.forEach(r=>{
+    const f = r.Fault || "(no fault)";
+    if(!map[f]){ map[f] = []; order.push(f); }
+    map[f].push(r);
+  });
+  return order.map(f=>({ fault:f, rows: map[f] }));
+}
+
+function render(){
+  const area = document.getElementById("reportArea");
+  const hint = document.getElementById("hint");
+
+  if(!lastRows.length){
+    area.innerHTML = "";
+    document.getElementById("exportRow").style.display = "none";
+    const d = window._diag || {};
+    hint.textContent = "No records found for the selected range. Diagnostic: " + (d.inRangeCount||0) +
+      " control row(s) in this date range, " + (d.matchedCodeCount||0) + " matched a known extruder job code (job_codes_extruder has " +
+      (d.validCodeCount||0) + " code(s) loaded). If matched is 0 while in-range is not, the Job_Code values in control likely don't match job_codes_extruder's spelling/format for this period.";
+    return;
+  }
+
+  const groups = groupByFault(lastRows);
+  const stats = groups.map(g=>{
+    let rep=0,wait=0,down=0,loss=0;
+    g.rows.forEach(r=>{ rep+=Number(r.Repair_Min||0); wait+=Number(r.Waiting_Min||0); down+=Number(r.Downtime_Min||0); loss+=Number(r.Loss_KG||0); });
+    return { g, count: g.rows.length, rep, wait, down, loss };
+  });
+  const gRep=stats.reduce((s,x)=>s+x.rep,0), gWait=stats.reduce((s,x)=>s+x.wait,0),
+        gDown=stats.reduce((s,x)=>s+x.down,0), gLoss=stats.reduce((s,x)=>s+x.loss,0);
+
+  const sumSorted = stats.slice().sort((a,b)=>b.down-a.down);
+  let summary = `<h4 class="fault-head">Weekly Summary <span class="cnt">(${lastRows.length} records across ${groups.length} fault types)</span></h4>
+    <div class="table-scroll"><table><thead><tr><th>Fault</th><th class="num">Records</th><th class="num">Repair</th><th class="num">Waiting</th><th class="num">Downtime</th><th class="num">Loss (kg)</th></tr></thead><tbody>`;
+  sumSorted.forEach(x=>{
+    summary += `<tr><td>${esc(x.g.fault)}</td><td class="num">${x.count}</td><td class="num">${fmtDur(x.rep)}</td><td class="num">${fmtDur(x.wait)}</td><td class="num">${fmtDur(x.down)}</td><td class="num">${fmtKg(x.loss)}</td></tr>`;
+  });
+  summary += `</tbody><tfoot><tr><td>TOTAL</td><td class="num">${lastRows.length}</td><td class="num">${fmtDur(gRep)}</td><td class="num">${fmtDur(gWait)}</td><td class="num">${fmtDur(gDown)}</td><td class="num">${fmtKg(gLoss)}</td></tr></tfoot></table></div>`;
+
+  let html = "";
+  stats.forEach(x=>{
+    const g = x.g;
+    const nurseLabel = (g.fault && g.fault.toUpperCase()==="AIR COMPRESSOR") ? "Problem" : "Nurse";
+    let body = "";
+    g.rows.forEach(r=>{
+      body += `<tr><td>${esc(r.Date)}</td><td>${esc(r.Asset)}</td><td>${esc(r.Job_Code)}</td><td>${esc(r.Nurse)}</td>` +
+        `<td class="num">${fmtDur(r.Repair_Min)}</td><td class="num">${fmtDur(r.Waiting_Min)}</td><td class="num">${fmtDur(r.Downtime_Min)}</td><td class="num">${fmtKg(r.Loss_KG)}</td></tr>`;
+    });
+    html += `<h4 class="fault-head">${esc(g.fault)} <span class="cnt">(${x.count} record${x.count===1?"":"s"})</span></h4>
+      <div class="table-scroll"><table><thead><tr><th>Date</th><th>Asset</th><th>Job Code</th><th>${nurseLabel}</th><th class="num">Repair Time</th><th class="num">Waiting Time</th><th class="num">Downtime</th><th class="num">Loss (kg)</th></tr></thead>
+      <tbody>${body}</tbody>
+      <tfoot><tr><td colspan="4">SUBTOTAL</td><td class="num">${fmtDur(x.rep)}</td><td class="num">${fmtDur(x.wait)}</td><td class="num">${fmtDur(x.down)}</td><td class="num">${fmtKg(x.loss)}</td></tr></tfoot>
+      </table></div>`;
+  });
+
+  html += `<div class="grand">Grand total &middot; ${groups.length} fault type${groups.length===1?"":"s"} &middot; Repair ${fmtDur(gRep)} &middot; Waiting ${fmtDur(gWait)} &middot; Downtime ${fmtDur(gDown)} &middot; Loss ${fmtKg(gLoss)} kg</div>`;
+
+  area.innerHTML = summary + html;
+  document.getElementById("exportRow").style.display = "flex";
+  hint.textContent = lastRows.length + " record(s) across " + groups.length + " fault type(s).";
+}
+
+// =========================================================
+// NURSE PERFORMANCE (matches getNursePerformance exactly)
+// =========================================================
+function renderNurse(){
+  const byNurse = {};
+  lastRows.forEach(r=>{
+    const key = (r.Nurse||"").trim() || "(unassigned)";
+    if(!byNurse[key]) byNurse[key] = { Nurse:key, Jobs:0, Repair_Min:0, Waiting_Min:0, Loss_KG:0 };
+    byNurse[key].Jobs++;
+    byNurse[key].Repair_Min += Number(r.Repair_Min||0);
+    byNurse[key].Waiting_Min += Number(r.Waiting_Min||0);
+    byNurse[key].Loss_KG += Number(r.Loss_KG||0);
+  });
+  nurseRows = Object.values(byNurse).sort((a,b)=>{
+    const avgA = a.Jobs ? a.Repair_Min/a.Jobs : 0, avgB = b.Jobs ? b.Repair_Min/b.Jobs : 0;
+    return avgA - avgB;
+  });
+
+  const el = document.getElementById("nurseBody");
+  if(!el) return;
+  if(!nurseRows.length){ el.innerHTML = "<p class='hint'>No repair records.</p>"; return; }
+  let body = "";
+  nurseRows.forEach(r=>{
+    const jobs=Number(r.Jobs||0), rep=Number(r.Repair_Min||0), wait=Number(r.Waiting_Min||0), down=rep+wait, loss=Number(r.Loss_KG||0);
+    const avg = jobs ? Math.round(rep/jobs) : 0;
+    body += `<tr><td>${esc(r.Nurse)}</td><td class="num">${num(jobs)}</td><td class="num">${fmtDur(rep)}</td><td class="num">${fmtDur(avg)}</td><td class="num">${fmtDur(wait)}</td><td class="num">${fmtDur(down)}</td><td class="num">${fmtKg(loss)}</td></tr>`;
+  });
+  el.innerHTML = `<div class="table-scroll"><table><thead><tr><th>Nurse</th><th class="num">Jobs</th><th class="num">Total Repair</th><th class="num">Avg Repair</th><th class="num">Total Waiting</th><th class="num">Total Downtime</th><th class="num">Loss (kg)</th></tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+// =========================================================
+// EXTRA SECTIONS: Production, Waste, Shutdown, Recommendation
+// =========================================================
+async function loadExtras(){
+  const area = document.getElementById("extraArea");
+  area.innerHTML =
+      "<div class='card'><h3>Nurse Performance</h3><p class='sub'>Repair time by nurse &middot; fastest average first</p><div id='nurseBody'><p class='hint'>Loading...</p></div></div>"
+    + "<div class='card'><h3>Production Report</h3><p class='sub'>By extruder &middot; A, B, C and combined</p><div id='prodBody'><p class='hint'>Loading...</p></div></div>"
+    + "<div class='card'><h3>Waste Report</h3><p class='sub'>Total weight by waste type</p><div id='wasteBody'><p class='hint'>Loading...</p></div></div>"
+    + "<div class='card'><h3>Shutdown Assets Report</h3><div id='shutBody'><p class='hint'>Loading...</p></div></div>"
+    + "<div class='card'><h3>Recommendation Report</h3><div id='recoBody'><p class='hint'>Loading...</p></div></div>";
+
+  renderNurse(); // nurseBody now exists
+
+  try{
+    const dateClause = "&date_col=gte." + meta.startDate + "&date_col=lte." + meta.endDate;
+    PROD_ROWS = await fetchAllRows("extruder_new", dateClause);
+    renderProduction();
+  }catch(e){ document.getElementById("prodBody").innerHTML = "<p class='hint'>❌ " + (e.message||e) + "</p>"; }
+
+  try{
+    const dateClause = "&date_col=gte." + meta.startDate + "&date_col=lte." + meta.endDate;
+    WASTE_ROWS = await fetchAllRows("waste_table", dateClause);
+    renderWaste();
+  }catch(e){ document.getElementById("wasteBody").innerHTML = "<p class='hint'>❌ " + (e.message||e) + "</p>"; }
+
+  try{
+    // shutdown_assets' schema was never confirmed against your real
+    // Supabase table, so fetch unfiltered here rather than guess a date
+    // column name that might not exist (which would 400 the whole request).
+    SHUTDOWN_ROWS = await fetchAllRows("shutdown_assets");
+    SHUTDOWN_ROWS = SHUTDOWN_ROWS.filter(r=>{
+      if(r.date_col){ if(r.date_col < meta.startDate || r.date_col > meta.endDate) return false; }
+      return passesBaseFilter(r);
+    });
+    document.getElementById("shutBody").innerHTML = dynTable(SHUTDOWN_ROWS);
+  }catch(e){ document.getElementById("shutBody").innerHTML = "<p class='hint'>❌ " + (e.message||e) + "</p>"; }
+
+  try{
+    const dateClause = "&date_col=gte." + meta.startDate + "&date_col=lte." + meta.endDate;
+    RECO_ROWS = await fetchAllRows("recommendation", dateClause);
+    if(meta.section) RECO_ROWS = RECO_ROWS.filter(r=> String(r.section||"").toLowerCase() === meta.section.toLowerCase());
+    document.getElementById("recoBody").innerHTML = dynTable(RECO_ROWS);
+  }catch(e){ document.getElementById("recoBody").innerHTML = "<p class='hint'>❌ " + (e.message||e) + "</p>"; }
+}
+
+function renderProduction(){
+  const el = document.getElementById("prodBody");
+  const filtered = PROD_ROWS.filter(r=>passesBaseFilter(r));
+  const grouped = {};
+  filtered.forEach(r=>{
+    const name = r.extruder_name || "(blank)";
+    if(!grouped[name]) grouped[name] = { A:0,B:0,C:0,Total:0 };
+    grouped[name].A += Number(r.a||0);
+    grouped[name].B += Number(r.b||0);
+    grouped[name].C += Number(r.c||0);
+    grouped[name].Total += Number(r.total||0);
+  });
+  const names = Object.keys(grouped);
+  if(!names.length){ el.innerHTML = "<p class='hint'>No production data.</p>"; return; }
+
+  let a = `<h4 class="fault-head">A Production</h4><div class="table-scroll"><table><thead><tr><th>Extruder</th><th class="num">A</th><th class="num">Target</th><th class="num">%A</th></tr></thead><tbody>`;
+  let b = `<h4 class="fault-head">B Production</h4><div class="table-scroll"><table><thead><tr><th>Extruder</th><th class="num">B</th><th class="num">Target</th><th class="num">%B</th></tr></thead><tbody>`;
+  let cG = `<h4 class="fault-head">C Production</h4><div class="table-scroll"><table><thead><tr><th>Extruder</th><th class="num">C</th><th class="num">Target</th><th class="num">%C</th></tr></thead><tbody>`;
+  let comb = `<h4 class="fault-head">Combined Production</h4><div class="table-scroll"><table><thead><tr><th>Extruder</th><th class="num">A</th><th class="num">B</th><th class="num">C</th><th class="num">Total</th><th class="num">Target</th><th class="num">%A</th><th class="num">%B</th><th class="num">%C</th><th class="num">%P</th></tr></thead><tbody>`;
+
+  names.forEach(name=>{
+    const g = grouped[name];
+    const A=Math.round(g.A), B=Math.round(g.B), C=Math.round(g.C), T=Math.round(g.Total||1), tot=A+B+C;
+    a += `<tr><td>${esc(name)}</td><td class="num">${num(A)}</td><td class="num">${num(T)}</td><td class="num">${pct(A,T)}%</td></tr>`;
+    b += `<tr><td>${esc(name)}</td><td class="num">${num(B)}</td><td class="num">${num(T)}</td><td class="num">${pct(B,T)}%</td></tr>`;
+    cG += `<tr><td>${esc(name)}</td><td class="num">${num(C)}</td><td class="num">${num(T)}</td><td class="num">${pct(C,T)}%</td></tr>`;
+    comb += `<tr><td>${esc(name)}</td><td class="num">${num(A)}</td><td class="num">${num(B)}</td><td class="num">${num(C)}</td><td class="num">${num(tot)}</td><td class="num">${num(T)}</td><td class="num">${pct(A,T)}%</td><td class="num">${pct(B,T)}%</td><td class="num">${pct(C,T)}%</td><td class="num">${pct(tot,T)}%</td></tr>`;
+  });
+  a += "</tbody></table></div>"; b += "</tbody></table></div>"; cG += "</tbody></table></div>"; comb += "</tbody></table></div>";
+  el.innerHTML = a + b + cG + comb;
+}
+
+function renderWaste(){
+  const el = document.getElementById("wasteBody");
+  const filtered = WASTE_ROWS.filter(r=>passesBaseFilter(r));
+  const byType = {};
+  filtered.forEach(r=>{ byType[r.waste_type||"(blank)"] = (byType[r.waste_type||"(blank)"]||0) + Number(r.waste_weight||0); });
+  const entries = Object.entries(byType);
+  if(!entries.length){ el.innerHTML = "<p class='hint'>No waste data.</p>"; return; }
+  let total = 0, body = "";
+  entries.forEach(([type,qty])=>{
+    total += qty;
+    body += `<tr><td>${esc(type)}</td><td class="num">${qty.toLocaleString("en-GB",{maximumFractionDigits:2})}</td></tr>`;
+  });
+  el.innerHTML = `<div class="table-scroll"><table><thead><tr><th>Waste Type</th><th class="num">Qty (kg)</th></tr></thead><tbody>${body}</tbody>` +
+    `<tfoot><tr><td>TOTAL</td><td class="num">${total.toLocaleString("en-GB",{maximumFractionDigits:2})}</td></tr></tfoot></table></div>`;
+}
+
+function dynTable(rows){
+  if(!rows || !rows.length) return "<p class='hint'>No records.</p>";
+  const cols = Object.keys(rows[0]);
+  let h = "<div class='table-scroll'><table><thead><tr>" + cols.map(c=>"<th>"+esc(c)+"</th>").join("") + "</tr></thead><tbody>";
+  rows.forEach(r=>{ h += "<tr>" + cols.map(c=>"<td>"+esc(r[c])+"</td>").join("") + "</tr>"; });
+  return h + "</tbody></table></div>";
+}
+function dynTablePlain(rows){
+  if(!rows || !rows.length) return "<p>No records.</p>";
+  const cols = Object.keys(rows[0]);
+  let h = "<table><thead><tr>" + cols.map(c=>"<th>"+esc(c)+"</th>").join("") + "</tr></thead><tbody>";
+  rows.forEach(r=>{ h += "<tr>" + cols.map(c=>"<td>"+esc(r[c])+"</td>").join("") + "</tr>"; });
+  return h + "</tbody></table>";
+}
+
+// =========================================================
+// PDF EXPORT
+// =========================================================
+function metaText(){
+  return "Section: " + (meta.section||"All") + "  |  Shift: " + (meta.shift||"All") + "  |  " + meta.startDate + " to " + meta.endDate;
+}
+
+function exportSummaryPDF(){
+  if(!lastRows.length) return;
+  const groups = groupByFault(lastRows);
+  const stats = groups.map(g=>{
+    let rep=0,wait=0,down=0,loss=0;
+    g.rows.forEach(r=>{ rep+=Number(r.Repair_Min||0); wait+=Number(r.Waiting_Min||0); down+=Number(r.Downtime_Min||0); loss+=Number(r.Loss_KG||0); });
+    return { fault:g.fault, count:g.rows.length, rep,wait,down,loss };
+  });
+  const gRep=stats.reduce((s,x)=>s+x.rep,0), gWait=stats.reduce((s,x)=>s+x.wait,0), gDown=stats.reduce((s,x)=>s+x.down,0), gLoss=stats.reduce((s,x)=>s+x.loss,0);
+  let body = "";
+  stats.slice().sort((a,b)=>b.down-a.down).forEach(x=>{
+    body += `<tr><td>${esc(x.fault)}</td><td>${x.count}</td><td>${fmtDur(x.rep)}</td><td>${fmtDur(x.wait)}</td><td>${fmtDur(x.down)}</td><td>${fmtKg(x.loss)}</td></tr>`;
+  });
+  body += `<tr><td><b>TOTAL</b></td><td><b>${lastRows.length}</b></td><td><b>${fmtDur(gRep)}</b></td><td><b>${fmtDur(gWait)}</b></td><td><b>${fmtDur(gDown)}</b></td><td><b>${fmtKg(gLoss)}</b></td></tr>`;
+
+  document.getElementById("printArea").innerHTML =
+    '<div class="grp">RUMBU INDUSTRIES GROUP</div><h1>Extruder Maintenance Report &ndash; Weekly Summary</h1>' +
+    '<div class="meta">' + esc(metaText()) + '</div>' +
+    "<table><thead><tr><th>Fault</th><th>Records</th><th>Repair</th><th>Waiting</th><th>Downtime</th><th>Loss (kg)</th></tr></thead><tbody>" + body + "</tbody></table>";
+  window.print();
+}
+
+function exportPDF(){
+  if(!lastRows.length) return;
+  const groups = groupByFault(lastRows);
+  let gRep=0, gWait=0, gDown=0, gLoss=0, sections="";
+  groups.forEach(g=>{
+    const nurseLabel = (g.fault && g.fault.toUpperCase()==="AIR COMPRESSOR") ? "Problem" : "Nurse";
+    let rep=0,wait=0,down=0,loss=0, body="";
+    g.rows.forEach(r=>{
+      rep+=Number(r.Repair_Min||0); wait+=Number(r.Waiting_Min||0); down+=Number(r.Downtime_Min||0); loss+=Number(r.Loss_KG||0);
+      body += `<tr><td>${esc(r.Date)}</td><td>${esc(r.Asset)}</td><td>${esc(r.Job_Code)}</td><td>${esc(r.Nurse)}</td><td>${fmtDur(r.Repair_Min)}</td><td>${fmtDur(r.Waiting_Min)}</td><td>${fmtDur(r.Downtime_Min)}</td><td>${fmtKg(r.Loss_KG)}</td></tr>`;
+    });
+    body += `<tr><td colspan="4"><b>Subtotal</b></td><td><b>${fmtDur(rep)}</b></td><td><b>${fmtDur(wait)}</b></td><td><b>${fmtDur(down)}</b></td><td><b>${fmtKg(loss)}</b></td></tr>`;
+    gRep+=rep; gWait+=wait; gDown+=down; gLoss+=loss;
+    sections += `<h3 style="margin:14px 0 4px;color:#000;">${esc(g.fault)}</h3><table><thead><tr><th>Date</th><th>Asset</th><th>Job Code</th><th>${nurseLabel}</th><th>Repair Time</th><th>Waiting Time</th><th>Downtime</th><th>Loss (kg)</th></tr></thead><tbody>${body}</tbody></table>`;
+  });
+  const grand = `<p style="margin-top:12px;font-size:11pt;"><b>Grand total</b> &middot; Repair ${fmtDur(gRep)} &middot; Waiting ${fmtDur(gWait)} &middot; Downtime ${fmtDur(gDown)} &middot; Loss ${fmtKg(gLoss)} kg</p>`;
+
+  const sumStats = groups.map(g=>{
+    let rep=0,wait=0,down=0,loss=0;
+    g.rows.forEach(r=>{ rep+=Number(r.Repair_Min||0); wait+=Number(r.Waiting_Min||0); down+=Number(r.Downtime_Min||0); loss+=Number(r.Loss_KG||0); });
+    return { fault:g.fault, count:g.rows.length, rep,wait,down,loss };
+  }).sort((a,b)=>b.down-a.down);
+  let sumBody = "";
+  sumStats.forEach(x=>{ sumBody += `<tr><td>${esc(x.fault)}</td><td>${x.count}</td><td>${fmtDur(x.rep)}</td><td>${fmtDur(x.wait)}</td><td>${fmtDur(x.down)}</td><td>${fmtKg(x.loss)}</td></tr>`; });
+  sumBody += `<tr><td><b>TOTAL</b></td><td><b>${lastRows.length}</b></td><td><b>${fmtDur(gRep)}</b></td><td><b>${fmtDur(gWait)}</b></td><td><b>${fmtDur(gDown)}</b></td><td><b>${fmtKg(gLoss)}</b></td></tr>`;
+  const summaryPDF = `<h2 style="color:#000;margin:12px 0 4px;">Weekly Summary</h2><table><thead><tr><th>Fault</th><th>Records</th><th>Repair</th><th>Waiting</th><th>Downtime</th><th>Loss (kg)</th></tr></thead><tbody>${sumBody}</tbody></table>`;
+
+  document.getElementById("printArea").innerHTML =
+    '<div class="grp">RUMBU INDUSTRIES GROUP</div><h1>Extruder Maintenance Report</h1>' +
+    '<div class="meta">' + esc(metaText()) + '</div>' +
+    summaryPDF + sections + grand + extrasPDF();
+  window.print();
+}
+
+function extrasPDF(){
+  let out = "";
+  if(nurseRows.length){
+    let body = "";
+    nurseRows.forEach(r=>{
+      const jobs=Number(r.Jobs||0), rep=Number(r.Repair_Min||0), wait=Number(r.Waiting_Min||0), down=rep+wait, loss=Number(r.Loss_KG||0);
+      const avg = jobs ? Math.round(rep/jobs) : 0;
+      body += `<tr><td>${esc(r.Nurse)}</td><td>${num(jobs)}</td><td>${fmtDur(rep)}</td><td>${fmtDur(avg)}</td><td>${fmtDur(wait)}</td><td>${fmtDur(down)}</td><td>${fmtKg(loss)}</td></tr>`;
+    });
+    out += `<h2 style="color:#000;margin-top:18px;">Nurse Performance</h2><table><thead><tr><th>Nurse</th><th>Jobs</th><th>Total Repair</th><th>Avg Repair</th><th>Total Waiting</th><th>Total Downtime</th><th>Loss (kg)</th></tr></thead><tbody>${body}</tbody></table>`;
+  }
+
+  const filtered = PROD_ROWS.filter(r=>passesBaseFilter(r));
+  const grouped = {};
+  filtered.forEach(r=>{
+    const name = r.extruder_name || "(blank)";
+    if(!grouped[name]) grouped[name] = { A:0,B:0,C:0,Total:0 };
+    grouped[name].A += Number(r.a||0); grouped[name].B += Number(r.b||0);
+    grouped[name].C += Number(r.c||0); grouped[name].Total += Number(r.total||0);
+  });
+  const names = Object.keys(grouped);
+  if(names.length){
+    let a="",b="",cG="",comb="";
+    names.forEach(name=>{
+      const g=grouped[name];
+      const A=Math.round(g.A),B=Math.round(g.B),C=Math.round(g.C),T=Math.round(g.Total||1),tot=A+B+C;
+      a += `<tr><td>${esc(name)}</td><td>${num(A)}</td><td>${num(T)}</td><td>${pct(A,T)}%</td></tr>`;
+      b += `<tr><td>${esc(name)}</td><td>${num(B)}</td><td>${num(T)}</td><td>${pct(B,T)}%</td></tr>`;
+      cG += `<tr><td>${esc(name)}</td><td>${num(C)}</td><td>${num(T)}</td><td>${pct(C,T)}%</td></tr>`;
+      comb += `<tr><td>${esc(name)}</td><td>${num(A)}</td><td>${num(B)}</td><td>${num(C)}</td><td>${num(tot)}</td><td>${num(T)}</td><td>${pct(A,T)}%</td><td>${pct(B,T)}%</td><td>${pct(C,T)}%</td><td>${pct(tot,T)}%</td></tr>`;
+    });
+    out += `<h2 style="color:#000;margin-top:18px;">Production Report</h2>` +
+      `<h3 style="color:#000;">A Production</h3><table><thead><tr><th>Extruder</th><th>A</th><th>Target</th><th>%A</th></tr></thead><tbody>${a}</tbody></table>` +
+      `<h3 style="color:#000;">B Production</h3><table><thead><tr><th>Extruder</th><th>B</th><th>Target</th><th>%B</th></tr></thead><tbody>${b}</tbody></table>` +
+      `<h3 style="color:#000;">C Production</h3><table><thead><tr><th>Extruder</th><th>C</th><th>Target</th><th>%C</th></tr></thead><tbody>${cG}</tbody></table>` +
+      `<h3 style="color:#000;">Combined Production</h3><table><thead><tr><th>Extruder</th><th>A</th><th>B</th><th>C</th><th>Total</th><th>Target</th><th>%A</th><th>%B</th><th>%C</th><th>%P</th></tr></thead><tbody>${comb}</tbody></table>`;
+  }
+
+  const wFiltered = WASTE_ROWS.filter(r=>passesBaseFilter(r));
+  const byType = {};
+  wFiltered.forEach(r=>{ byType[r.waste_type||"(blank)"] = (byType[r.waste_type||"(blank)"]||0) + Number(r.waste_weight||0); });
+  const wEntries = Object.entries(byType);
+  if(wEntries.length){
+    let total=0, body="";
+    wEntries.forEach(([type,qty])=>{ total+=qty; body += `<tr><td>${esc(type)}</td><td>${qty.toLocaleString("en-GB",{maximumFractionDigits:2})}</td></tr>`; });
+    body += `<tr><td><b>TOTAL</b></td><td><b>${total.toLocaleString("en-GB",{maximumFractionDigits:2})}</b></td></tr>`;
+    out += `<h2 style="color:#000;margin-top:18px;">Waste Report</h2><table><thead><tr><th>Waste Type</th><th>Qty (kg)</th></tr></thead><tbody>${body}</tbody></table>`;
+  }
+
+  out += `<h2 style="color:#000;margin-top:18px;">Shutdown Assets Report</h2>` + dynTablePlain(SHUTDOWN_ROWS);
+  out += `<h2 style="color:#000;margin-top:18px;">Recommendation Report</h2>` + dynTablePlain(RECO_ROWS);
+  return out;
+}
+
+init();
+</script>
+</body>
+</html>

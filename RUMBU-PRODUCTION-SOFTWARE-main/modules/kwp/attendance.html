@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>KWP — Attendance</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme") || "navy"); }catch(e){}
+  })();
+  window.addEventListener("message", function(e){
+    if(e.data && e.data.rumbuTheme){ document.documentElement.setAttribute("data-theme", e.data.rumbuTheme); }
+  });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1100px;margin:0 auto;}
+  .readonly-banner{background:rgba(154,107,0,.12);color:var(--warn);padding:10px 14px;border-radius:var(--radius-sm);font-size:13px;font-weight:600;margin-bottom:14px;}
+  .pending-note{background:rgba(154,107,0,.10);border:1px dashed var(--warn);color:var(--warn);border-radius:var(--radius-sm);padding:10px 14px;font-size:12.5px;margin-bottom:14px;}
+  #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);}
+  .toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px;}
+  .toolbar .f{min-width:160px;}
+  .toolbar label{display:block;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px;}
+  .summary-row{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;}
+  .summary-card{flex:1;min-width:120px;background:var(--bg);border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:12px 14px;text-align:center;}
+  .summary-card .n{font-size:22px;font-weight:800;color:var(--heading);}
+  .summary-card .l{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-top:2px;}
+  select.att-status{padding:6px 8px;font-size:12.5px;border-radius:6px;border:1px solid var(--line);}
+  input.att-time{width:90px;padding:5px 6px;font-size:12.5px;border-radius:6px;border:1px solid var(--line);}
+  input.att-remarks{width:140px;padding:5px 6px;font-size:12.5px;border-radius:6px;border:1px solid var(--line);}
+  details.override-panel{margin-top:18px;border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:10px 14px;}
+  details.override-panel summary{cursor:pointer;font-weight:700;color:var(--heading);font-size:13px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div id="connStatus">Loading...</div>
+<div id="roBanner" class="readonly-banner" style="display:none;">You have read-only access to Attendance. Recording attendance is limited to Shift Leaders, Manager, Assistant Manager, Plant Manager, Head (Kano Wash Plant), and Admin/Super Admin.</div>
+
+<div class="card-panel">
+  <h3>Attendance</h3>
+  <p class="sub">Roster is derived automatically from the shift rotation (and any individual overrides below) — you only mark who was actually Present/Absent/Late, etc.</p>
+
+  <div class="toolbar">
+    <div class="f"><label>Date</label><input type="date" id="att_date" onchange="loadAttendance()"></div>
+    <div class="f"><label>Shift</label><select id="att_shift" onchange="loadAttendance()"><option value="Morning">Morning</option><option value="Night">Night</option></select></div>
+    <div class="f" style="flex:0 0 auto;"><button id="saveAttBtn" style="display:none;" onclick="saveAttendance()">Save Attendance</button></div>
+  </div>
+
+  <div class="pending-note" id="rotationPendingNote" style="display:none;">
+    Shift rotation isn't configured yet (Shift Rotation tab in Staff &amp; Shift Management) — the roster can't be calculated until it is.
+  </div>
+
+  <div class="summary-row" id="summaryRow" style="display:none;">
+    <div class="summary-card"><div class="n" id="sumExpected">0</div><div class="l">Expected</div></div>
+    <div class="summary-card"><div class="n" id="sumPresent">0</div><div class="l">Present</div></div>
+    <div class="summary-card"><div class="n" id="sumAbsent">0</div><div class="l">Absent</div></div>
+    <div class="summary-card"><div class="n" id="sumLate">0</div><div class="l">Late</div></div>
+    <div class="summary-card"><div class="n" id="sumPct">—</div><div class="l">Attendance %</div></div>
+  </div>
+
+  <div class="table-wrap"><div class="table-scroll">
+    <table id="attTable">
+      <thead><tr><th>Employee ID</th><th>Name</th><th>KWP Role</th><th>Team</th><th>Status</th><th>Clock In</th><th>Clock Out</th><th>Remarks</th></tr></thead>
+      <tbody id="attTableBody"><tr><td colspan="8">Loading…</td></tr></tbody>
+    </table>
+  </div></div>
+
+  <details class="override-panel" id="overridePanel" style="display:none;">
+    <summary>Individual Shift Override (temporary — spec §9.3)</summary>
+    <p class="sub">Temporarily move one person to a different shift than their team's rotation, for a bounded date range — their normal team assignment is untouched and resumes automatically after the end date.</p>
+    <div class="form-row-3">
+      <div class="field"><label>Staff</label><select id="ov_staff_id"></select></div>
+      <div class="field"><label>Override Shift</label><select id="ov_shift"><option>Morning</option><option>Night</option></select></div>
+      <div class="field"><label>Reason</label><input id="ov_reason" placeholder="e.g. Staff shortage"></div>
+    </div>
+    <div class="form-row">
+      <div class="field"><label>Effective From</label><input type="date" id="ov_from"></div>
+      <div class="field"><label>Effective To</label><input type="date" id="ov_to"></div>
+    </div>
+    <button onclick="saveOverride()">Save Override</button>
+    <div class="status" id="overrideStatus"></div>
+  </details>
+</div>
+</div>
+
+<script>
+let ME = null;
+let IS_MANAGER = false;
+let CAN_RECORD = false;
+let CURRENT_ROSTER = [];
+let EXISTING_ATTENDANCE = {};
+
+const STATUS_OPTIONS = ["Present","Absent","Late","Excused","Off duty","On leave","Other"];
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+
+    const { data: mgr } = await sb.rpc("kwp_is_manager");
+    IS_MANAGER = !!mgr;
+    const { data: canRec, error: canRecErr } = await sb.rpc("kwp_can_manage_attendance");
+    if(canRecErr) throw new Error("Could not check permissions: " + canRecErr.message);
+    CAN_RECORD = !!canRec;
+
+    document.getElementById("roBanner").style.display = CAN_RECORD ? "none" : "block";
+    document.getElementById("saveAttBtn").style.display = CAN_RECORD ? "inline-block" : "none";
+    document.getElementById("overridePanel").style.display = IS_MANAGER ? "block" : "none";
+
+    status.style.color = "#1d8a4e"; status.textContent = "Connected.";
+
+    document.getElementById("att_date").value = new Date().toISOString().slice(0,10);
+    document.getElementById("ov_from").value = new Date().toISOString().slice(0,10);
+    document.getElementById("ov_to").value = new Date().toISOString().slice(0,10);
+
+    if(IS_MANAGER) await loadStaffForOverride();
+    await loadAttendance();
+  }catch(e){
+    status.style.color = "#c0392b"; status.textContent = "❌ " + e.message;
+    console.error(e);
+  }
+}
+
+async function loadStaffForOverride(){
+  const { data } = await sb.from("kwp_staff_current").select("id, employee_id, full_name").eq("status","Active").order("full_name");
+  const sel = document.getElementById("ov_staff_id");
+  sel.innerHTML = (data||[]).map(s => `<option value="${s.id}">${s.full_name} (${s.employee_id})</option>`).join("");
+}
+
+async function loadAttendance(){
+  const dateVal = document.getElementById("att_date").value;
+  const shiftVal = document.getElementById("att_shift").value;
+  if(!dateVal) return;
+
+  const body = document.getElementById("attTableBody");
+  body.innerHTML = "<tr><td colspan='8'>Loading…</td></tr>";
+  document.getElementById("summaryRow").style.display = "none";
+  document.getElementById("rotationPendingNote").style.display = "none";
+
+  const { data: roster, error: rosterErr } = await sb.rpc("kwp_expected_staff_for_shift", { p_date: dateVal, p_shift: shiftVal });
+  if(rosterErr){ body.innerHTML = "<tr><td colspan='8'>Error loading roster: " + rosterErr.message + "</td></tr>"; return; }
+  CURRENT_ROSTER = roster || [];
+
+  const { data: existing, error: attErr } = await sb.from("kwp_attendance")
+    .select("*").eq("attendance_date", dateVal).eq("shift", shiftVal);
+  if(attErr){ body.innerHTML = "<tr><td colspan='8'>Error loading attendance: " + attErr.message + "</td></tr>"; return; }
+  EXISTING_ATTENDANCE = {};
+  (existing||[]).forEach(a => EXISTING_ATTENDANCE[a.staff_id] = a);
+
+  if(!CURRENT_ROSTER.length){
+    body.innerHTML = "<tr><td colspan='8'>No staff expected on this shift for this date — check the Shift Rotation settings.</td></tr>";
+    document.getElementById("rotationPendingNote").style.display = "block";
+    return;
+  }
+
+  renderAttendanceTable();
+  updateSummary();
+}
+window.loadAttendance = loadAttendance;
+
+function renderAttendanceTable(){
+  const body = document.getElementById("attTableBody");
+  body.innerHTML = CURRENT_ROSTER.map(r=>{
+    const existing = EXISTING_ATTENDANCE[r.staff_id];
+    const statusVal = existing ? existing.status : "Present";
+    const opts = STATUS_OPTIONS.map(s => `<option ${s===statusVal?"selected":""}>${s}</option>`).join("");
+    return `<tr data-staff-id="${r.staff_id}">
+      <td>${r.employee_id}</td><td>${r.full_name}</td><td>${r.kwp_role||"—"}</td><td>${r.shift_team?"Shift "+r.shift_team:"—"}</td>
+      <td><select class="att-status" ${CAN_RECORD?"":"disabled"} onchange="updateSummary()">${opts}</select></td>
+      <td><input type="time" class="att-time" value="${existing&&existing.clock_in?existing.clock_in:""}" ${CAN_RECORD?"":"disabled"}></td>
+      <td><input type="time" class="att-time" value="${existing&&existing.clock_out?existing.clock_out:""}" ${CAN_RECORD?"":"disabled"}></td>
+      <td><input class="att-remarks" value="${existing&&existing.remarks?existing.remarks.replace(/"/g,'&quot;'):""}" ${CAN_RECORD?"":"disabled"}></td>
+    </tr>`;
+  }).join("");
+}
+
+function updateSummary(){
+  const rows = [...document.querySelectorAll("#attTableBody tr[data-staff-id]")];
+  const expected = rows.length;
+  let present = 0, absent = 0, late = 0;
+  rows.forEach(tr=>{
+    const s = tr.querySelector(".att-status").value;
+    if(s === "Present") present++;
+    else if(s === "Absent") absent++;
+    else if(s === "Late") { late++; present++; } // Late counts toward Present per spec §10
+  });
+  document.getElementById("summaryRow").style.display = "flex";
+  document.getElementById("sumExpected").textContent = expected;
+  document.getElementById("sumPresent").textContent = present;
+  document.getElementById("sumAbsent").textContent = absent;
+  document.getElementById("sumLate").textContent = late;
+  document.getElementById("sumPct").textContent = expected ? Math.round((present/expected)*1000)/10 + "%" : "—";
+}
+window.updateSummary = updateSummary;
+
+async function saveAttendance(){
+  const btn = document.getElementById("saveAttBtn");
+  const dateVal = document.getElementById("att_date").value;
+  const shiftVal = document.getElementById("att_shift").value;
+  const rows = [...document.querySelectorAll("#attTableBody tr[data-staff-id]")];
+  const payload = rows.map(tr=>{
+    const staffId = Number(tr.getAttribute("data-staff-id"));
+    const status = tr.querySelector(".att-status").value;
+    const times = tr.querySelectorAll(".att-time");
+    return {
+      attendance_date: dateVal, shift: shiftVal, staff_id: staffId, status,
+      clock_in: times[0].value || null, clock_out: times[1].value || null,
+      remarks: tr.querySelector(".att-remarks").value.trim() || null,
+      recorded_by: ME.id
+    };
+  });
+
+  btn.disabled = true; btn.textContent = "Saving...";
+  try{
+    const { error } = await sb.from("kwp_attendance")
+      .upsert(payload, { onConflict: "attendance_date,shift,staff_id" });
+    if(error) throw error;
+    await sb.from("kwp_audit_log").insert({
+      actor_profile_id: ME.id, action: "attendance_recorded", entity_type: "kwp_attendance",
+      entity_id: dateVal + " " + shiftVal, new_value: { count: payload.length }
+    });
+    alert("✅ Attendance saved for " + dateVal + " (" + shiftVal + ").");
+    await loadAttendance();
+  }catch(e){
+    alert("❌ Could not save attendance: " + (e.message||e));
+  }finally{
+    btn.disabled = false; btn.textContent = "Save Attendance";
+  }
+}
+window.saveAttendance = saveAttendance;
+
+async function saveOverride(){
+  const status = document.getElementById("overrideStatus");
+  const payload = {
+    staff_id: Number(document.getElementById("ov_staff_id").value),
+    override_shift: document.getElementById("ov_shift").value,
+    effective_from: document.getElementById("ov_from").value,
+    effective_to: document.getElementById("ov_to").value,
+    reason: document.getElementById("ov_reason").value.trim() || null,
+    approved_by: ME.id
+  };
+  if(!payload.staff_id || !payload.effective_from || !payload.effective_to){
+    status.className="status err"; status.textContent="Staff, Effective From and Effective To are required."; return;
+  }
+  status.className = "status"; status.textContent = "Saving...";
+  try{
+    const { error } = await sb.from("kwp_staff_individual_overrides").insert(payload);
+    if(error) throw error;
+    await sb.from("kwp_audit_log").insert({
+      actor_profile_id: ME.id, action: "individual_shift_override_created",
+      entity_type: "kwp_staff_individual_overrides", new_value: payload
+    });
+    status.className = "status ok"; status.textContent = "✅ Saved.";
+    await loadAttendance();
+  }catch(e){
+    status.className = "status err"; status.textContent = "❌ " + e.message;
+  }
+}
+window.saveOverride = saveOverride;
+
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Assign Task</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;color:var(--text);}
+  .wrap{max-width:760px;margin:0 auto;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;}
+  .card h3{color:var(--navy);margin:0 0 4px;font-size:16px;}
+  .card .sub{color:var(--blue);font-size:12px;margin:0 0 14px;}
+  label{display:block;font-size:12px;font-weight:bold;color:var(--text);margin:10px 0 4px;}
+  input,textarea,select{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;}
+  textarea{resize:vertical;min-height:70px;}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  .checks{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px;max-height:220px;overflow-y:auto;padding:8px;border:1px solid var(--line);border-radius:8px;}
+  .checks label{display:flex;align-items:center;gap:6px;font-weight:normal;background:#f4f7fb;padding:6px 10px;border-radius:6px;font-size:13px;margin:0;}
+  .checks input{width:auto;}
+  button{padding:11px 16px;border:none;border-radius:8px;font-weight:bold;font-size:14px;cursor:pointer;background:var(--blue);color:#fff;margin-top:14px;}
+  button:hover{background:var(--blue-dark);}
+  .status{margin-top:10px;font-weight:bold;font-size:13px;min-height:16px;}
+  .status.ok{color:var(--green);} .status.err{color:var(--red);}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;}
+  .hidden{display:none;}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<div id="connStatus">Checking your session...</div>
+
+<div class="card hidden" id="formBox">
+  <h3>Assign Task</h3>
+  <p class="sub" id="scopeNote"></p>
+
+  <label>Title <span style="color:var(--red);">*</span></label>
+  <input id="title" placeholder="e.g. Prepare monthly production report">
+
+  <label>Description</label>
+  <textarea id="description" placeholder="What needs to be done"></textarea>
+
+  <div class="grid">
+    <div><label>Start Date</label><input type="date" id="start_date"></div>
+    <div><label>Due Date</label><input type="date" id="due_date"></div>
+  </div>
+
+  <label>Assign To <span style="color:var(--red);">*</span></label>
+  <div class="checks" id="assigneeChecks"></div>
+
+  <button onclick="createTask()">CREATE TASK</button>
+  <div class="status" id="status"></div>
+</div>
+
+<div class="card hidden" id="noPermCard">
+  <p>Only Super Admins and Admins can assign tasks.</p>
+</div>
+</div>
+
+<script>
+let ME = null;
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+
+    if(ME.role !== "super_admin" && ME.role !== "admin"){
+      status.classList.add("hidden");
+      document.getElementById("noPermCard").classList.remove("hidden");
+      return;
+    }
+
+    document.getElementById("scopeNote").textContent = ME.role === "super_admin"
+      ? "You can assign to any Admin or User, across every Branch — unless you've narrowed this in Settings > Task Assignment Scope."
+      : "You can assign to Users who share one of your own Branches.";
+
+    await loadAssignees();
+
+    status.classList.add("hidden");
+    document.getElementById("formBox").classList.remove("hidden");
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "Could not load: " + (e.message||e);
+  }
+}
+
+async function loadAssignees(){
+  const wrap = document.getElementById("assigneeChecks");
+  let rows = [];
+
+  if(ME.role === "super_admin"){
+    const { data: scopeRows } = await sb.from("super_admin_task_scope").select("section_id").eq("admin_profile_id", ME.id);
+    const scopedSectionIds = (scopeRows||[]).map(r=>r.section_id);
+
+    if(scopedSectionIds.length){
+      const { data: ps, error: psErr } = await sb.from("profile_sections").select("profile_id").in("section_id", scopedSectionIds);
+      if(psErr){ wrap.innerHTML = "Error: " + psErr.message; return; }
+      const candidateIds = [...new Set((ps||[]).map(r=>r.profile_id))];
+      if(!candidateIds.length){ wrap.innerHTML = "<p class='sub'>No one in your selected Branches yet.</p>"; return; }
+      const { data, error } = await sb.from("profiles").select("id, username, role").in("id", candidateIds).in("role", ["admin","user"]).order("role").order("username");
+      if(error){ wrap.innerHTML = "Error: " + error.message; return; }
+      rows = data || [];
+    } else {
+      const { data, error } = await sb.from("profiles").select("id, username, role").in("role", ["admin","user"]).order("role").order("username");
+      if(error){ wrap.innerHTML = "Error: " + error.message; return; }
+      rows = data || [];
+    }
+  } else {
+    // Admin: only Users who share at least one of the Admin's own Sections.
+    if(!ME.sectionIds || !ME.sectionIds.length){
+      wrap.innerHTML = "<p class='sub'>You have no Branch assigned yet — ask your Super Admin to set one before assigning tasks.</p>";
+      return;
+    }
+    const { data: ps, error: psErr } = await sb.from("profile_sections").select("profile_id").in("section_id", ME.sectionIds);
+    if(psErr){ wrap.innerHTML = "Error: " + psErr.message; return; }
+    const candidateIds = [...new Set((ps||[]).map(r=>r.profile_id))].filter(id=>id !== ME.id);
+    if(!candidateIds.length){ wrap.innerHTML = "<p class='sub'>No Users share your Branch yet.</p>"; return; }
+
+    const { data, error } = await sb.from("profiles").select("id, username, role").in("id", candidateIds).eq("role","user").order("username");
+    if(error){ wrap.innerHTML = "Error: " + error.message; return; }
+    rows = data || [];
+  }
+
+  if(!rows.length){ wrap.innerHTML = "<p class='sub'>No one available to assign to yet.</p>"; return; }
+
+  wrap.innerHTML = rows.map(r=>
+    `<label><input type="checkbox" class="assignee-check" value="${r.id}"> ${r.username} (${r.role})</label>`
+  ).join("");
+}
+
+async function createTask(){
+  const status = document.getElementById("status");
+  const title = document.getElementById("title").value.trim();
+  const description = document.getElementById("description").value.trim();
+  const start_date = document.getElementById("start_date").value || null;
+  const due_date = document.getElementById("due_date").value || null;
+  const assigneeIds = Array.from(document.querySelectorAll(".assignee-check:checked")).map(el=>el.value);
+
+  if(!title){ status.className="status err"; status.textContent="Enter a title."; return; }
+  if(!assigneeIds.length){ status.className="status err"; status.textContent="Select at least one person to assign this to."; return; }
+
+  status.className = "status"; status.textContent = "Creating...";
+  try{
+    const { data: task, error: taskErr } = await sb.from("tasks").insert({
+      title, description, start_date, due_date, created_by: ME.id
+    }).select().single();
+    if(taskErr) throw taskErr;
+
+    const rows = assigneeIds.map(id=>({ task_id: task.id, profile_id: id }));
+    const { error: assignErr } = await sb.from("task_assignees").insert(rows);
+    if(assignErr) throw assignErr;
+
+    status.className = "status ok"; status.textContent = "✅ Task created and assigned to " + assigneeIds.length + " person/people.";
+    document.getElementById("title").value = "";
+    document.getElementById("description").value = "";
+    document.getElementById("start_date").value = "";
+    document.getElementById("due_date").value = "";
+    document.querySelectorAll(".assignee-check:checked").forEach(el=>el.checked=false);
+  }catch(e){
+    status.className = "status err"; status.textContent = "❌ " + e.message;
+  }
+}
+
+init();
+</script>
+</body>
+</html>
