@@ -13,12 +13,10 @@
 <script src="../../auth.js"></script>
 <style>
   body{padding:20px;}
-  .wrap{max-width:1100px;margin:0 auto;}
+  .wrap{max-width:1150px;margin:0 auto;}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
   .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;}
   @media(max-width:640px){ .grid2,.grid3{grid-template-columns:1fr;} }
-  .sec-title{font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--heading);margin:18px 0 10px;padding-bottom:4px;border-bottom:2px solid var(--line);}
-  .panel-title{font-weight:700;font-size:14px;color:var(--heading);margin:0 0 10px;}
   label{font-size:12px;font-weight:700;display:block;margin:10px 0 4px;color:var(--muted);}
   input,select,textarea{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);}
   input:read-only{background:var(--bg);}
@@ -39,6 +37,23 @@
   .file-link{font-size:12px;color:var(--accent);}
   input.no-spinner::-webkit-outer-spin-button,input.no-spinner::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
   input.no-spinner{-moz-appearance:textfield;}
+
+  /* Stepped wizard */
+  .wizard{display:grid;grid-template-columns:220px 1fr;gap:0;border:1px solid var(--line);border-radius:12px;overflow:hidden;}
+  @media(max-width:760px){ .wizard{grid-template-columns:1fr;} }
+  .wiz-stages{background:var(--bg);border-right:1px solid var(--line);padding:14px 0;}
+  @media(max-width:760px){ .wiz-stages{border-right:none;border-bottom:1px solid var(--line);display:flex;overflow-x:auto;padding:10px;} }
+  .wiz-stage{padding:12px 18px;font-size:13px;font-weight:700;color:var(--muted);cursor:default;border-left:3px solid transparent;white-space:nowrap;}
+  .wiz-stage.reached{cursor:pointer;color:var(--text);}
+  .wiz-stage.reached:hover{background:rgba(0,0,0,.03);}
+  .wiz-stage.current{color:var(--heading);border-left-color:var(--accent);background:var(--card);}
+  @media(max-width:760px){ .wiz-stage{border-left:none;border-bottom:3px solid transparent;} .wiz-stage.current{border-bottom-color:var(--accent);} }
+  .wiz-panel{padding:22px;}
+  .wiz-panel h3{margin:0 0 4px;color:var(--heading);}
+  .wiz-panel .sub{font-size:12px;color:var(--muted);margin:0 0 16px;}
+  .diff-callout{background:var(--bg);border-radius:10px;padding:18px;text-align:center;margin-bottom:16px;}
+  .diff-callout .val{font-size:28px;font-weight:800;color:var(--heading);}
+  .diff-callout .lbl{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-top:4px;}
 </style>
 </head>
 <body>
@@ -49,100 +64,48 @@
   <div id="appArea" style="display:none;">
 
     <!-- List of existing export delivery records -->
-    <div class="card-panel">
-      <div class="panel-title" id="listTitle">Export Deliveries</div>
+    <div class="card-panel" id="listCard">
+      <div style="font-weight:700;font-size:14px;color:var(--heading);margin:0 0 10px;">Export Deliveries</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
         <input type="text" id="listSearch" placeholder="Search form no, client, vehicle, container..." style="flex:1;min-width:200px;" oninput="renderList()">
         <select id="listStatusFilter" style="width:200px;" onchange="renderList()">
-          <option value="">All statuses</option>
+          <option value="">All stages</option>
           <option value="start">Start</option>
           <option value="agbara_logistics">Agbara Delivery Logistics</option>
           <option value="shipping_info">Shipping Info</option>
           <option value="weight_issue">Weight Issue</option>
           <option value="completed">Completed</option>
         </select>
-        <button onclick="openForm(null)">+ New Export Delivery</button>
+        <button onclick="openWizard(null)">+ New Export Delivery</button>
       </div>
       <div id="listWrap"></div>
     </div>
 
-    <!-- Form: new / edit -->
-    <div class="card-panel" id="formCard" style="display:none;margin-top:16px;">
-      <h3 id="formTitle" style="color:var(--heading);margin:0 0 4px;">New Export Delivery</h3>
-      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Linked to a completed PET Collection production batch — search and select it below.</p>
-
-      <div class="sec-title">Linked Production Batch</div>
-      <div class="search-box">
-        <label>Search by Form Number or Agent Name *</label>
-        <input type="text" id="batchSearch" placeholder="Type to search completed production batches..." oninput="searchBatch(this.value)" autocomplete="off">
-        <div class="search-results" id="batchResults"></div>
-      </div>
-      <div id="linkedBatchBox" class="linked-batch-box" style="display:none;"></div>
-      <input type="hidden" id="fProductionId">
-
-      <div class="sec-title">Details</div>
-      <div class="grid3">
-        <div><label>Date *</label><input type="date" id="fDate"></div>
-        <div><label>Form No <span style="color:var(--muted);font-weight:400;">(auto-generated)</span></label><input type="text" id="fFormNo" readonly></div>
-        <div><label>Client Name *</label>
-          <select id="fClient"><option value="">-- Select Client --</option></select>
-        </div>
-      </div>
-      <div class="grid2">
-        <div><label>Picking Slip No</label><input type="text" id="fPickingSlip"></div>
+    <!-- Stepped wizard -->
+    <div class="card-panel" id="wizardCard" style="display:none;margin-top:16px;padding:0;overflow:hidden;">
+      <div style="padding:18px 22px 0;display:flex;justify-content:space-between;align-items:flex-start;">
         <div>
-          <label>Odoo Delivery, Picking &amp; Packages Slip</label>
-          <input type="file" id="fOdooFile">
-          <div id="fOdooFileExisting" class="file-link"></div>
+          <h3 id="wizFormTitle" style="margin:0;color:var(--heading);">New Export Delivery</h3>
+          <p style="font-size:12px;color:var(--muted);margin:4px 0 0;" id="wizFormSub"></p>
         </div>
+        <button class="btn-ghost" onclick="closeWizard()" style="padding:6px 14px;font-size:12px;">Close</button>
+      </div>
+      <div style="padding:18px 22px;">
+        <div id="wizStatus" style="font-size:13px;font-weight:700;min-height:16px;margin-bottom:6px;"></div>
       </div>
 
-      <div class="sec-title">Delivery Details</div>
-      <div class="grid3">
-        <div><label>Delivery Slip Weight (Net, kg) *</label><input type="number" class="no-spinner" id="fDeliveryWeight" min="0" step="1" oninput="computeWeightDiff()"></div>
-        <div><label>Bag(s) Quantity *</label><input type="number" class="no-spinner" id="fBagQty" min="0" step="1"></div>
-        <div><label>Vehicle Number *</label><input type="text" id="fVehicle"></div>
+      <div class="wizard">
+        <div class="wiz-stages" id="wizStages"></div>
+        <div class="wiz-panel" id="wizPanel"></div>
       </div>
-      <div class="grid3">
-        <div><label>Container Number</label><input type="text" id="fContainer"></div>
-        <div><label>Rumbu Weighbridge Weight (kg) *</label><input type="number" class="no-spinner" id="fRumbuWeight" min="0" step="1" oninput="computeWeightDiff()"></div>
-        <div>
-          <label>Weighbridge Attachment</label>
-          <input type="file" id="fWbFile">
-          <div id="fWbFileExisting" class="file-link"></div>
-        </div>
-      </div>
-      <div class="grid3">
-        <div><label>Bill of Lading Number</label><input type="text" id="fBillOfLading"></div>
-        <div><label>Shipping Line Name</label><input type="text" id="fShippingLine"></div>
-        <div><label>Diff btw Dlry Slip Wgt &amp; Rumbu Wbrg Weight (kg)</label><input type="number" id="fWeightDiff" readonly></div>
-      </div>
-
-      <div class="sec-title">Status</div>
-      <div class="grid3">
-        <div>
-          <label>Current Stage</label>
-          <select id="fStatus">
-            <option value="start">Start</option>
-            <option value="agbara_logistics">Agbara Delivery Logistics</option>
-            <option value="shipping_info">Shipping Info</option>
-            <option value="weight_issue">Weight Issue</option>
-            <option value="completed">Completed</option>
-          </select>
-        </div>
-      </div>
-
-      <div style="margin-top:20px;display:flex;gap:10px;">
-        <button onclick="saveDelivery()">Save</button>
-        <button class="btn-ghost" onclick="closeForm()">Cancel</button>
-      </div>
-      <div id="formStatus" style="margin-top:10px;font-size:13px;font-weight:700;min-height:16px;"></div>
     </div>
   </div>
 </div>
 
 <script>
-let ME=null, CLIENTS=[], DELIVERIES=[], EDITING_ID=null, SELECTED_BATCH=null;
+let ME=null, CLIENTS=[], DELIVERIES=[], CURRENT_RECORD=null, VIEW_STAGE="start", SELECTED_BATCH=null;
+
+const STAGE_ORDER = ["start","agbara_logistics","shipping_info","weight_issue","completed"];
 const STATUS_LABELS = { start:"Start", agbara_logistics:"Agbara Delivery Logistics", shipping_info:"Shipping Info", weight_issue:"Weight Issue", completed:"Completed" };
 const STATUS_CLASSES = { start:"st-start", agbara_logistics:"st-logistics", shipping_info:"st-shipping", weight_issue:"st-issue", completed:"st-completed" };
 
@@ -155,8 +118,7 @@ async function init(){
     document.getElementById("appArea").style.display="block";
 
     const { data: clients } = await sb.from("pet_export_clients").select("id,client_name").eq("is_active",true).order("client_name");
-    document.getElementById("fClient").innerHTML = '<option value="">-- Select Client --</option>' +
-      (clients||[]).map(c=>`<option value="${c.id}">${c.client_name}</option>`).join("");
+    CLIENTS = clients||[];
 
     await loadDeliveries();
   }catch(e){ cs.style.display="block"; cs.style.color="var(--bad)"; cs.textContent="Error: "+e.message; }
@@ -189,7 +151,7 @@ function renderList(){
   }
 
   wrap.innerHTML = `<div class="table-wrap"><div class="table-scroll"><table>
-    <thead><tr><th>Form No</th><th>Date</th><th>Client</th><th>Linked Batch</th><th>Vehicle</th><th>Container</th><th>Weight Diff</th><th>Status</th><th></th></tr></thead>
+    <thead><tr><th>Form No</th><th>Date</th><th>Client</th><th>Linked Batch</th><th>Vehicle</th><th>Container</th><th>Weight Diff</th><th>Stage</th><th></th></tr></thead>
     <tbody>${rows.map(d=>{
       const client = d.pet_export_clients||{};
       const prod = d.pet_stage4_production||{};
@@ -203,14 +165,116 @@ function renderList(){
         <td>${d.container_number||"—"}</td>
         <td>${d.weight_diff!=null?d.weight_diff+" kg":"—"}</td>
         <td><span class="badge ${STATUS_CLASSES[d.status]||''}">${STATUS_LABELS[d.status]||d.status}</span></td>
-        <td><button class="act-btn edit" style="padding:5px 12px;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;background:#dbeafe;color:#1e40af;" onclick="openForm(${d.id})">Open</button></td>
+        <td><button style="padding:5px 12px;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;background:#dbeafe;color:#1e40af;" onclick="openWizard(${d.id})">Open</button></td>
       </tr>`;
     }).join("")}</tbody>
   </table></div></div>`;
 }
 
+// ---------- Wizard ----------
+
+function openWizard(id){
+  CURRENT_RECORD = id ? DELIVERIES.find(x=>x.id===id) : null;
+  SELECTED_BATCH = null;
+  VIEW_STAGE = CURRENT_RECORD ? CURRENT_RECORD.status : "start";
+  document.getElementById("wizFormTitle").textContent = CURRENT_RECORD ? ("Export Delivery — " + CURRENT_RECORD.form_no) : "New Export Delivery";
+  document.getElementById("wizFormSub").textContent = CURRENT_RECORD ? "Linked to production batch " + ((CURRENT_RECORD.pet_stage4_production||{}).pet_collections||{}).form_number : "Search and link a completed production batch to begin.";
+  document.getElementById("wizardCard").style.display = "block";
+  document.getElementById("wizardCard").scrollIntoView({behavior:"smooth"});
+  renderStages();
+  renderStagePanel();
+}
+
+function closeWizard(){
+  document.getElementById("wizardCard").style.display = "none";
+  CURRENT_RECORD = null;
+}
+
+function stageReached(stage){
+  if(!CURRENT_RECORD) return stage === "start";
+  return STAGE_ORDER.indexOf(stage) <= STAGE_ORDER.indexOf(CURRENT_RECORD.status);
+}
+
+function renderStages(){
+  const wrap = document.getElementById("wizStages");
+  wrap.innerHTML = STAGE_ORDER.map(s=>{
+    const reached = stageReached(s);
+    const cls = ["wiz-stage"];
+    if(reached) cls.push("reached");
+    if(s===VIEW_STAGE) cls.push("current");
+    return `<div class="${cls.join(' ')}" ${reached?`onclick="goToStage('${s}')"`:''}>${STATUS_LABELS[s]}</div>`;
+  }).join("");
+}
+
+function goToStage(stage){
+  if(!stageReached(stage)) return;
+  VIEW_STAGE = stage;
+  renderStages();
+  renderStagePanel();
+}
+
+function renderStagePanel(){
+  const panel = document.getElementById("wizPanel");
+  document.getElementById("wizStatus").textContent = "";
+  if(VIEW_STAGE === "start") return renderStartStage(panel);
+  if(VIEW_STAGE === "agbara_logistics") return renderLogisticsStage(panel);
+  if(VIEW_STAGE === "shipping_info") return renderShippingStage(panel);
+  if(VIEW_STAGE === "weight_issue") return renderWeightIssueStage(panel);
+  if(VIEW_STAGE === "completed") return renderCompletedStage(panel);
+}
+
+// ---- Stage: Start ----
+async function renderStartStage(panel){
+  const r = CURRENT_RECORD;
+  panel.innerHTML = `
+    <h3>Start</h3>
+    <p class="sub">Link this delivery to a completed production batch, then enter the basic form details.</p>
+
+    <label>Search by Form Number or Agent Name *</label>
+    <div class="search-box">
+      <input type="text" id="wStBatchSearch" placeholder="Type to search completed production batches..." oninput="searchBatch(this.value)" autocomplete="off">
+      <div class="search-results" id="wStBatchResults"></div>
+    </div>
+    <div id="wStLinkedBatchBox" class="linked-batch-box" style="display:none;"></div>
+
+    <div class="grid3" style="margin-top:14px;">
+      <div><label>Date *</label><input type="date" id="wStDate"></div>
+      <div><label>Form No <span style="color:var(--muted);font-weight:400;">(auto-generated)</span></label><input type="text" id="wStFormNo" readonly></div>
+      <div><label>Client Name *</label><select id="wStClient"><option value="">-- Select Client --</option>${CLIENTS.map(c=>`<option value="${c.id}">${c.client_name}</option>`).join("")}</select></div>
+    </div>
+    <div class="grid2">
+      <div><label>Picking Slip No</label><input type="text" id="wStPickingSlip"></div>
+      <div>
+        <label>Odoo Delivery, Picking &amp; Packages Slip</label>
+        <input type="file" id="wStOdooFile">
+        <div id="wStOdooExisting" class="file-link"></div>
+      </div>
+    </div>
+
+    <div style="margin-top:20px;">
+      <button onclick="saveStartStage()">${r ? "Save &amp; Continue" : "Save &amp; Continue to Agbara Delivery Logistics"}</button>
+    </div>
+  `;
+
+  if(r){
+    SELECTED_BATCH = r.production_id;
+    document.getElementById("wStDate").value = r.delivery_date||"";
+    document.getElementById("wStFormNo").value = r.form_no||"";
+    document.getElementById("wStClient").value = r.client_id||"";
+    document.getElementById("wStPickingSlip").value = r.picking_slip_no||"";
+    const c = (r.pet_stage4_production||{}).pet_collections||{};
+    document.getElementById("wStBatchSearch").value = c.form_number||"";
+    document.getElementById("wStLinkedBatchBox").style.display="block";
+    document.getElementById("wStLinkedBatchBox").innerHTML = `<b>Form Number:</b> ${c.form_number||"—"} &nbsp; <b>Agent:</b> ${c.agent_name||"—"} &nbsp; <b>Branch:</b> ${c.section||"—"}`;
+    if(r.odoo_slip_attachment) document.getElementById("wStOdooExisting").innerHTML = `<a href="${r.odoo_slip_attachment}" target="_blank">View current file</a>`;
+  } else {
+    document.getElementById("wStFormNo").value = await generateFormNo();
+    document.getElementById("wStDate").value = new Date().toISOString().slice(0,10);
+  }
+}
+
 async function searchBatch(q){
-  const box = document.getElementById("batchResults");
+  const box = document.getElementById("wStBatchResults");
   if(!q || q.length < 2){ box.classList.remove("show"); return; }
   const { data, error } = await sb.from("pet_stage4_production")
     .select("id,collection_id,total_production_kg,production_start,pet_collections!inner(form_number,agent_name,section,status)")
@@ -230,26 +294,19 @@ async function searchBatch(q){
 }
 
 function pickBatch(batch){
-  SELECTED_BATCH = batch;
-  document.getElementById("fProductionId").value = batch.id;
-  document.getElementById("batchSearch").value = (batch.pet_collections||{}).form_number || "";
-  document.getElementById("batchResults").classList.remove("show");
+  SELECTED_BATCH = batch.id;
+  document.getElementById("wStBatchSearch").value = (batch.pet_collections||{}).form_number || "";
+  document.getElementById("wStBatchResults").classList.remove("show");
   const c = batch.pet_collections||{};
-  document.getElementById("linkedBatchBox").style.display = "block";
-  document.getElementById("linkedBatchBox").innerHTML =
+  document.getElementById("wStLinkedBatchBox").style.display = "block";
+  document.getElementById("wStLinkedBatchBox").innerHTML =
     `<b>Form Number:</b> ${c.form_number} &nbsp; <b>Agent:</b> ${c.agent_name} &nbsp; <b>Branch:</b> ${c.section}<br>
      <b>Total Production:</b> ${batch.total_production_kg||0} kg &nbsp; <b>Production Date:</b> ${batch.production_start?new Date(batch.production_start).toLocaleDateString("en-GB"):"—"}`;
 }
 document.addEventListener("click", function(e){
-  if(!e.target.closest(".search-box")) document.getElementById("batchResults").classList.remove("show");
+  const box = document.getElementById("wStBatchResults");
+  if(box && !e.target.closest(".search-box")) box.classList.remove("show");
 });
-
-function computeWeightDiff(){
-  const delivery = parseFloat(document.getElementById("fDeliveryWeight").value);
-  const rumbu = parseFloat(document.getElementById("fRumbuWeight").value);
-  if(isNaN(delivery) || isNaN(rumbu)){ document.getElementById("fWeightDiff").value = ""; return; }
-  document.getElementById("fWeightDiff").value = (rumbu - delivery).toFixed(2);
-}
 
 async function generateFormNo(){
   const { data } = await sb.from("pet_export_deliveries").select("form_no").order("id",{ascending:false}).limit(1);
@@ -260,65 +317,225 @@ async function generateFormNo(){
   return "EXP-" + year + "-" + String(num).padStart(4,"0");
 }
 
-async function openForm(id){
-  EDITING_ID = id;
-  SELECTED_BATCH = null;
-  clearForm();
-  document.getElementById("formCard").style.display = "block";
-  document.getElementById("formCard").scrollIntoView({behavior:"smooth"});
+async function saveStartStage(){
+  const st = document.getElementById("wizStatus");
+  const date = document.getElementById("wStDate").value;
+  const clientId = document.getElementById("wStClient").value;
+  if(!SELECTED_BATCH){ st.style.color="var(--bad)"; st.textContent="Search and select a linked production batch."; return; }
+  if(!date){ st.style.color="var(--bad)"; st.textContent="Date is required."; return; }
+  if(!clientId){ st.style.color="var(--bad)"; st.textContent="Select a client."; return; }
 
-  if(id){
-    const d = DELIVERIES.find(x=>x.id===id);
-    if(!d) return;
-    document.getElementById("formTitle").textContent = "Edit Export Delivery — " + d.form_no;
-    document.getElementById("fProductionId").value = d.production_id||"";
-    document.getElementById("fDate").value = d.delivery_date||"";
-    document.getElementById("fFormNo").value = d.form_no;
-    document.getElementById("fClient").value = d.client_id||"";
-    document.getElementById("fPickingSlip").value = d.picking_slip_no||"";
-    document.getElementById("fDeliveryWeight").value = d.delivery_slip_weight_net ?? "";
-    document.getElementById("fBagQty").value = d.bag_quantity ?? "";
-    document.getElementById("fVehicle").value = d.vehicle_number||"";
-    document.getElementById("fContainer").value = d.container_number||"";
-    document.getElementById("fRumbuWeight").value = d.rumbu_weighbridge_weight ?? "";
-    document.getElementById("fBillOfLading").value = d.bill_of_lading_number||"";
-    document.getElementById("fShippingLine").value = d.shipping_line_name||"";
-    document.getElementById("fWeightDiff").value = d.weight_diff ?? "";
-    document.getElementById("fStatus").value = d.status||"start";
-    if(d.odoo_slip_attachment) document.getElementById("fOdooFileExisting").innerHTML = `<a href="${d.odoo_slip_attachment}" target="_blank">View current file</a>`;
-    if(d.weighbridge_attachment) document.getElementById("fWbFileExisting").innerHTML = `<a href="${d.weighbridge_attachment}" target="_blank">View current file</a>`;
+  st.style.color="var(--muted)"; st.textContent="Saving...";
+  try{
+    const odooFile = document.getElementById("wStOdooFile").files[0];
+    const odooUrl = odooFile ? await uploadFile(odooFile, "odoo-slips") : undefined;
 
-    const prod = d.pet_stage4_production;
-    if(prod){
-      const c = prod.pet_collections||{};
-      document.getElementById("batchSearch").value = c.form_number||"";
-      document.getElementById("linkedBatchBox").style.display = "block";
-      document.getElementById("linkedBatchBox").innerHTML =
-        `<b>Form Number:</b> ${c.form_number||"—"} &nbsp; <b>Agent:</b> ${c.agent_name||"—"} &nbsp; <b>Branch:</b> ${c.section||"—"}`;
+    const payload = {
+      production_id: SELECTED_BATCH,
+      delivery_date: date,
+      client_id: parseInt(clientId),
+      picking_slip_no: document.getElementById("wStPickingSlip").value.trim()||null,
+      updated_by: ME.id,
+      updated_at: new Date().toISOString()
+    };
+    if(odooUrl !== undefined) payload.odoo_slip_attachment = odooUrl;
+
+    if(CURRENT_RECORD){
+      const { error } = await sb.from("pet_export_deliveries").update(payload).eq("id", CURRENT_RECORD.id);
+      if(error) throw error;
+    } else {
+      payload.form_no = document.getElementById("wStFormNo").value;
+      payload.status = "agbara_logistics";
+      payload.created_by = ME.id;
+      const { data: ins, error } = await sb.from("pet_export_deliveries").insert(payload).select("id").single();
+      if(error) throw error;
+      CURRENT_RECORD = { id: ins.id };
     }
-  } else {
-    document.getElementById("formTitle").textContent = "New Export Delivery";
-    document.getElementById("fFormNo").value = await generateFormNo();
-    document.getElementById("fDate").value = new Date().toISOString().slice(0,10);
-  }
+    await refreshCurrentRecord();
+    st.style.color="var(--ok)"; st.textContent="Saved.";
+    VIEW_STAGE = "agbara_logistics";
+    renderStages(); renderStagePanel();
+  }catch(e){ st.style.color="var(--bad)"; st.textContent="Error: "+e.message; }
 }
 
-function clearForm(){
-  ["fProductionId","fDate","fFormNo","fPickingSlip","fDeliveryWeight","fBagQty","fVehicle","fContainer","fRumbuWeight","fBillOfLading","fShippingLine","fWeightDiff","batchSearch"]
-    .forEach(id=>document.getElementById(id).value="");
-  document.getElementById("fClient").value = "";
-  document.getElementById("fStatus").value = "start";
-  document.getElementById("fOdooFile").value = "";
-  document.getElementById("fWbFile").value = "";
-  document.getElementById("fOdooFileExisting").innerHTML = "";
-  document.getElementById("fWbFileExisting").innerHTML = "";
-  document.getElementById("linkedBatchBox").style.display = "none";
-  document.getElementById("formStatus").textContent = "";
+// ---- Stage: Agbara Delivery Logistics ----
+function renderLogisticsStage(panel){
+  const r = CURRENT_RECORD;
+  panel.innerHTML = `
+    <h3>Agbara Delivery Logistics</h3>
+    <p class="sub">Delivery weight, bag count, and vehicle details for this shipment.</p>
+    <div class="grid2">
+      <div><label>Delivery Slip Weight (Net, kg) *</label><input type="number" class="no-spinner" id="wLgDeliveryWeight" min="0" step="1"></div>
+      <div><label>Bag(s) Quantity *</label><input type="number" class="no-spinner" id="wLgBagQty" min="0" step="1"></div>
+    </div>
+    <div class="grid2">
+      <div><label>Vehicle Number *</label><input type="text" id="wLgVehicle"></div>
+      <div><label>Container Number</label><input type="text" id="wLgContainer"></div>
+    </div>
+    <div style="margin-top:20px;">
+      <button onclick="saveLogisticsStage()">Save &amp; Continue to Shipping Info</button>
+    </div>
+  `;
+  document.getElementById("wLgDeliveryWeight").value = r.delivery_slip_weight_net ?? "";
+  document.getElementById("wLgBagQty").value = r.bag_quantity ?? "";
+  document.getElementById("wLgVehicle").value = r.vehicle_number||"";
+  document.getElementById("wLgContainer").value = r.container_number||"";
 }
 
-function closeForm(){
-  document.getElementById("formCard").style.display = "none";
-  EDITING_ID = null;
+async function saveLogisticsStage(){
+  const st = document.getElementById("wizStatus");
+  const weight = document.getElementById("wLgDeliveryWeight").value;
+  const bagQty = document.getElementById("wLgBagQty").value;
+  const vehicle = document.getElementById("wLgVehicle").value.trim();
+  if(weight===""){ st.style.color="var(--bad)"; st.textContent="Delivery Slip Weight (Net) is required."; return; }
+  if(bagQty===""){ st.style.color="var(--bad)"; st.textContent="Bag(s) Quantity is required."; return; }
+  if(!vehicle){ st.style.color="var(--bad)"; st.textContent="Vehicle Number is required."; return; }
+
+  st.style.color="var(--muted)"; st.textContent="Saving...";
+  const payload = {
+    delivery_slip_weight_net: parseFloat(weight),
+    bag_quantity: parseInt(bagQty),
+    vehicle_number: vehicle,
+    container_number: document.getElementById("wLgContainer").value.trim()||null,
+    updated_by: ME.id, updated_at: new Date().toISOString()
+  };
+  if(STAGE_ORDER.indexOf(CURRENT_RECORD.status) < STAGE_ORDER.indexOf("shipping_info")) payload.status = "shipping_info";
+  const { error } = await sb.from("pet_export_deliveries").update(payload).eq("id", CURRENT_RECORD.id);
+  if(error){ st.style.color="var(--bad)"; st.textContent="Error: "+error.message; return; }
+  await refreshCurrentRecord();
+  st.style.color="var(--ok)"; st.textContent="Saved.";
+  VIEW_STAGE = "shipping_info";
+  renderStages(); renderStagePanel();
+}
+
+// ---- Stage: Shipping Info ----
+function renderShippingStage(panel){
+  const r = CURRENT_RECORD;
+  panel.innerHTML = `
+    <h3>Shipping Info</h3>
+    <p class="sub">Weighbridge confirmation and shipping documentation.</p>
+    <div class="grid2">
+      <div><label>Rumbu Weighbridge Weight (kg) *</label><input type="number" class="no-spinner" id="wShRumbuWeight" min="0" step="1"></div>
+      <div>
+        <label>Weighbridge Attachment</label>
+        <input type="file" id="wShWbFile">
+        <div id="wShWbExisting" class="file-link"></div>
+      </div>
+    </div>
+    <div class="grid2">
+      <div><label>Bill of Lading Number</label><input type="text" id="wShBillOfLading"></div>
+      <div><label>Shipping Line Name</label><input type="text" id="wShShippingLine"></div>
+    </div>
+    <div style="margin-top:20px;">
+      <button onclick="saveShippingStage()">Save &amp; Continue to Weight Issue</button>
+    </div>
+  `;
+  document.getElementById("wShRumbuWeight").value = r.rumbu_weighbridge_weight ?? "";
+  document.getElementById("wShBillOfLading").value = r.bill_of_lading_number||"";
+  document.getElementById("wShShippingLine").value = r.shipping_line_name||"";
+  if(r.weighbridge_attachment) document.getElementById("wShWbExisting").innerHTML = `<a href="${r.weighbridge_attachment}" target="_blank">View current file</a>`;
+}
+
+async function saveShippingStage(){
+  const st = document.getElementById("wizStatus");
+  const rumbuWeight = document.getElementById("wShRumbuWeight").value;
+  if(rumbuWeight===""){ st.style.color="var(--bad)"; st.textContent="Rumbu Weighbridge Weight is required."; return; }
+
+  st.style.color="var(--muted)"; st.textContent="Saving...";
+  try{
+    const wbFile = document.getElementById("wShWbFile").files[0];
+    const wbUrl = wbFile ? await uploadFile(wbFile, "weighbridge") : undefined;
+
+    const deliveryWeight = parseFloat(CURRENT_RECORD.delivery_slip_weight_net) || 0;
+    const rumbu = parseFloat(rumbuWeight);
+    const payload = {
+      rumbu_weighbridge_weight: rumbu,
+      bill_of_lading_number: document.getElementById("wShBillOfLading").value.trim()||null,
+      shipping_line_name: document.getElementById("wShShippingLine").value.trim()||null,
+      weight_diff: parseFloat((rumbu - deliveryWeight).toFixed(2)),
+      updated_by: ME.id, updated_at: new Date().toISOString()
+    };
+    if(wbUrl !== undefined) payload.weighbridge_attachment = wbUrl;
+    if(STAGE_ORDER.indexOf(CURRENT_RECORD.status) < STAGE_ORDER.indexOf("weight_issue")) payload.status = "weight_issue";
+
+    const { error } = await sb.from("pet_export_deliveries").update(payload).eq("id", CURRENT_RECORD.id);
+    if(error) throw error;
+    await refreshCurrentRecord();
+    st.style.color="var(--ok)"; st.textContent="Saved.";
+    VIEW_STAGE = "weight_issue";
+    renderStages(); renderStagePanel();
+  }catch(e){ st.style.color="var(--bad)"; st.textContent="Error: "+e.message; }
+}
+
+// ---- Stage: Weight Issue ----
+function renderWeightIssueStage(panel){
+  const r = CURRENT_RECORD;
+  const diff = r.weight_diff;
+  const flagged = diff != null && Math.abs(diff) > 0;
+  panel.innerHTML = `
+    <h3>Weight Issue</h3>
+    <p class="sub">Difference between the Delivery Slip Weight and the Rumbu Weighbridge Weight.</p>
+    <div class="diff-callout" style="${flagged?'background:#fee2e2;':''}">
+      <div class="val" style="${flagged?'color:#991b1b;':''}">${diff!=null ? diff+" kg" : "—"}</div>
+      <div class="lbl">Diff btw Dlry Slip Wgt &amp; Rumbu Wbrg Weight</div>
+    </div>
+    <label>Remark ${flagged?'(explain the discrepancy)':'(optional)'}</label>
+    <textarea id="wWiRemark" rows="3" placeholder="e.g. reason for the weight difference, if any"></textarea>
+    <div style="margin-top:20px;">
+      <button onclick="saveWeightIssueStage()">Continue to Completed</button>
+    </div>
+  `;
+  document.getElementById("wWiRemark").value = r.weight_issue_remark||"";
+}
+
+async function saveWeightIssueStage(){
+  const st = document.getElementById("wizStatus");
+  st.style.color="var(--muted)"; st.textContent="Saving...";
+  const payload = {
+    weight_issue_remark: document.getElementById("wWiRemark").value.trim()||null,
+    updated_by: ME.id, updated_at: new Date().toISOString()
+  };
+  if(STAGE_ORDER.indexOf(CURRENT_RECORD.status) < STAGE_ORDER.indexOf("completed")) payload.status = "completed";
+  const { error } = await sb.from("pet_export_deliveries").update(payload).eq("id", CURRENT_RECORD.id);
+  if(error){ st.style.color="var(--bad)"; st.textContent="Error: "+error.message; return; }
+  await refreshCurrentRecord();
+  st.style.color="var(--ok)"; st.textContent="Saved.";
+  VIEW_STAGE = "completed";
+  renderStages(); renderStagePanel();
+  await loadDeliveries();
+}
+
+// ---- Stage: Completed ----
+function renderCompletedStage(panel){
+  const r = CURRENT_RECORD;
+  const c = (r.pet_stage4_production||{}).pet_collections||{};
+  function row(l,v){ return `<div style="padding:6px 0;border-bottom:1px solid var(--line);font-size:13px;"><span style="color:var(--muted);font-size:11px;">${l}</span><br><b>${v||"—"}</b></div>`; }
+  panel.innerHTML = `
+    <h3>Completed</h3>
+    <p class="sub">This export delivery is complete. Summary below.</p>
+    <div class="grid3">
+      ${row("Form No", r.form_no)}
+      ${row("Linked Batch", c.form_number)}
+      ${row("Client", (CLIENTS.find(x=>x.id===r.client_id)||{}).client_name)}
+      ${row("Delivery Slip Weight (Net)", r.delivery_slip_weight_net+" kg")}
+      ${row("Bag(s) Quantity", r.bag_quantity)}
+      ${row("Vehicle Number", r.vehicle_number)}
+      ${row("Container Number", r.container_number)}
+      ${row("Rumbu Weighbridge Weight", r.rumbu_weighbridge_weight+" kg")}
+      ${row("Bill of Lading Number", r.bill_of_lading_number)}
+      ${row("Shipping Line Name", r.shipping_line_name)}
+      ${row("Weight Diff", r.weight_diff+" kg")}
+      ${row("Weight Issue Remark", r.weight_issue_remark)}
+    </div>
+  `;
+}
+
+async function refreshCurrentRecord(){
+  const { data, error } = await sb.from("pet_export_deliveries")
+    .select("*, pet_export_clients(client_name), pet_stage4_production(id,collection_id,pet_collections(form_number,agent_name,section))")
+    .eq("id", CURRENT_RECORD.id).single();
+  if(!error) CURRENT_RECORD = data;
+  await loadDeliveries();
 }
 
 async function uploadFile(file, folder){
@@ -329,67 +546,6 @@ async function uploadFile(file, folder){
   if(error) throw new Error("Upload failed: "+error.message);
   const { data: urlData } = sb.storage.from("pet-attachments").getPublicUrl(path);
   return urlData.publicUrl;
-}
-
-async function saveDelivery(){
-  const st = document.getElementById("formStatus");
-  const productionId = document.getElementById("fProductionId").value;
-  const date = document.getElementById("fDate").value;
-  const clientId = document.getElementById("fClient").value;
-  const deliveryWeight = document.getElementById("fDeliveryWeight").value;
-  const bagQty = document.getElementById("fBagQty").value;
-  const vehicle = document.getElementById("fVehicle").value.trim();
-  const rumbuWeight = document.getElementById("fRumbuWeight").value;
-
-  if(!productionId){ st.style.color="var(--bad)"; st.textContent="Search and select a linked production batch."; return; }
-  if(!date){ st.style.color="var(--bad)"; st.textContent="Date is required."; return; }
-  if(!clientId){ st.style.color="var(--bad)"; st.textContent="Select a client."; return; }
-  if(deliveryWeight===""){ st.style.color="var(--bad)"; st.textContent="Delivery Slip Weight (Net) is required."; return; }
-  if(bagQty===""){ st.style.color="var(--bad)"; st.textContent="Bag(s) Quantity is required."; return; }
-  if(!vehicle){ st.style.color="var(--bad)"; st.textContent="Vehicle Number is required."; return; }
-  if(rumbuWeight===""){ st.style.color="var(--bad)"; st.textContent="Rumbu Weighbridge Weight is required."; return; }
-
-  st.style.color="var(--muted)"; st.textContent="Saving...";
-  try{
-    const odooFile = document.getElementById("fOdooFile").files[0];
-    const wbFile = document.getElementById("fWbFile").files[0];
-    const odooUrl = odooFile ? await uploadFile(odooFile, "odoo-slips") : undefined;
-    const wbUrl = wbFile ? await uploadFile(wbFile, "weighbridge") : undefined;
-
-    const payload = {
-      production_id: parseInt(productionId),
-      delivery_date: date,
-      form_no: document.getElementById("fFormNo").value,
-      client_id: parseInt(clientId),
-      picking_slip_no: document.getElementById("fPickingSlip").value.trim()||null,
-      delivery_slip_weight_net: parseFloat(deliveryWeight),
-      bag_quantity: parseInt(bagQty),
-      vehicle_number: vehicle,
-      container_number: document.getElementById("fContainer").value.trim()||null,
-      rumbu_weighbridge_weight: parseFloat(rumbuWeight),
-      bill_of_lading_number: document.getElementById("fBillOfLading").value.trim()||null,
-      shipping_line_name: document.getElementById("fShippingLine").value.trim()||null,
-      weight_diff: document.getElementById("fWeightDiff").value !== "" ? parseFloat(document.getElementById("fWeightDiff").value) : null,
-      status: document.getElementById("fStatus").value,
-      updated_by: ME.id,
-      updated_at: new Date().toISOString()
-    };
-    if(odooUrl !== undefined) payload.odoo_slip_attachment = odooUrl;
-    if(wbUrl !== undefined) payload.weighbridge_attachment = wbUrl;
-
-    if(EDITING_ID){
-      const { error } = await sb.from("pet_export_deliveries").update(payload).eq("id", EDITING_ID);
-      if(error) throw error;
-    } else {
-      payload.created_by = ME.id;
-      const { error } = await sb.from("pet_export_deliveries").insert(payload);
-      if(error) throw error;
-    }
-
-    st.style.color="var(--ok)"; st.textContent="Saved.";
-    await loadDeliveries();
-    setTimeout(closeForm, 900);
-  }catch(e){ st.style.color="var(--bad)"; st.textContent="Error: "+e.message; }
 }
 
 init();
