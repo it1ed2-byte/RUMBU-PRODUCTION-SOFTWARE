@@ -103,7 +103,8 @@
 </div>
 
 <script>
-let ME=null, CLIENTS=[], DELIVERIES=[], CURRENT_RECORD=null, VIEW_STAGE="start", SELECTED_BATCH=null;
+let ME=null, CLIENTS=[], DELIVERIES=[], CURRENT_RECORD=null, VIEW_STAGE="start", SELECTED_BATCH=null, SELECTED_BATCH_OBJ=null;
+let MY_ASSIGNMENTS = { start:new Set(), agbara_logistics:new Set(), shipping_info:new Set(), weight_issue:new Set() };
 
 const STAGE_ORDER = ["start","agbara_logistics","shipping_info","weight_issue","completed"];
 const STATUS_LABELS = { start:"Start", agbara_logistics:"Agbara Delivery Logistics", shipping_info:"Shipping Info", weight_issue:"Weight Issue", completed:"Completed" };
@@ -120,8 +121,31 @@ async function init(){
     const { data: clients } = await sb.from("pet_export_clients").select("id,client_name").eq("is_active",true).order("client_name");
     CLIENTS = clients||[];
 
+    // Load which (stage, branch) combinations I'm personally assigned to
+    // fill — Super Admin bypasses this entirely, everyone else can only
+    // save the stages/branches they've actually been assigned.
+    if(ME.role !== "super_admin"){
+      const { data: mine } = await sb.from("pet_export_stage_fillers").select("stage,section").eq("profile_id", ME.id);
+      (mine||[]).forEach(r=>{ if(MY_ASSIGNMENTS[r.stage]) MY_ASSIGNMENTS[r.stage].add(r.section); });
+    }
+
     await loadDeliveries();
   }catch(e){ cs.style.display="block"; cs.style.color="var(--bad)"; cs.textContent="Error: "+e.message; }
+}
+
+// Section (branch) a given record's linked production batch belongs to —
+// this is what stage assignments are actually scoped by.
+function recordSection(){
+  if(SELECTED_BATCH_OBJ) return (SELECTED_BATCH_OBJ.pet_collections||{}).section;
+  if(CURRENT_RECORD) return ((CURRENT_RECORD.pet_stage4_production||{}).pet_collections||{}).section;
+  return null;
+}
+
+function canFillStage(stage){
+  if(ME.role === "super_admin") return true;
+  const section = recordSection();
+  if(!section) return false; // no batch linked yet — nothing to check assignment against
+  return MY_ASSIGNMENTS[stage] && MY_ASSIGNMENTS[stage].has(section);
 }
 
 async function loadDeliveries(){
@@ -176,6 +200,7 @@ function renderList(){
 function openWizard(id){
   CURRENT_RECORD = id ? DELIVERIES.find(x=>x.id===id) : null;
   SELECTED_BATCH = null;
+  SELECTED_BATCH_OBJ = null;
   VIEW_STAGE = CURRENT_RECORD ? CURRENT_RECORD.status : "start";
   document.getElementById("wizFormTitle").textContent = CURRENT_RECORD ? ("Export Delivery — " + CURRENT_RECORD.form_no) : "New Export Delivery";
   document.getElementById("wizFormSub").textContent = CURRENT_RECORD ? "Linked to production batch " + ((CURRENT_RECORD.pet_stage4_production||{}).pet_collections||{}).form_number : "Search and link a completed production batch to begin.";
@@ -295,13 +320,17 @@ async function searchBatch(q){
 
 function pickBatch(batch){
   SELECTED_BATCH = batch.id;
+  SELECTED_BATCH_OBJ = batch;
   document.getElementById("wStBatchSearch").value = (batch.pet_collections||{}).form_number || "";
   document.getElementById("wStBatchResults").classList.remove("show");
   const c = batch.pet_collections||{};
   document.getElementById("wStLinkedBatchBox").style.display = "block";
+  const permissionNote = canFillStage("start") ? "" :
+    `<div style="color:var(--bad);font-weight:700;margin-top:6px;">⚠ You are not assigned to fill the Start stage for ${c.section}. You can still search, but Save will be blocked — ask an admin to assign you in Manage Export Assignments.</div>`;
   document.getElementById("wStLinkedBatchBox").innerHTML =
     `<b>Form Number:</b> ${c.form_number} &nbsp; <b>Agent:</b> ${c.agent_name} &nbsp; <b>Branch:</b> ${c.section}<br>
-     <b>Total Production:</b> ${batch.total_production_kg||0} kg &nbsp; <b>Production Date:</b> ${batch.production_start?new Date(batch.production_start).toLocaleDateString("en-GB"):"—"}`;
+     <b>Total Production:</b> ${batch.total_production_kg||0} kg &nbsp; <b>Production Date:</b> ${batch.production_start?new Date(batch.production_start).toLocaleDateString("en-GB"):"—"}
+     ${permissionNote}`;
 }
 document.addEventListener("click", function(e){
   const box = document.getElementById("wStBatchResults");
@@ -322,6 +351,7 @@ async function saveStartStage(){
   const date = document.getElementById("wStDate").value;
   const clientId = document.getElementById("wStClient").value;
   if(!SELECTED_BATCH){ st.style.color="var(--bad)"; st.textContent="Search and select a linked production batch."; return; }
+  if(!canFillStage("start")){ st.style.color="var(--bad)"; st.textContent="You are not assigned to fill the Start stage for "+recordSection()+". Ask an admin to assign you in Manage Export Assignments."; return; }
   if(!date){ st.style.color="var(--bad)"; st.textContent="Date is required."; return; }
   if(!clientId){ st.style.color="var(--bad)"; st.textContent="Select a client."; return; }
 
@@ -361,20 +391,20 @@ async function saveStartStage(){
 // ---- Stage: Agbara Delivery Logistics ----
 function renderLogisticsStage(panel){
   const r = CURRENT_RECORD;
+  const allowed = canFillStage("agbara_logistics");
   panel.innerHTML = `
     <h3>Agbara Delivery Logistics</h3>
     <p class="sub">Delivery weight, bag count, and vehicle details for this shipment.</p>
+    ${allowed ? "" : `<div style="color:var(--bad);font-weight:700;margin-bottom:14px;">⚠ You are not assigned to fill this stage for ${recordSection()}. Fields are read-only — ask an admin to assign you in Manage Export Assignments.</div>`}
     <div class="grid2">
-      <div><label>Delivery Slip Weight (Net, kg) *</label><input type="number" class="no-spinner" id="wLgDeliveryWeight" min="0" step="1"></div>
-      <div><label>Bag(s) Quantity *</label><input type="number" class="no-spinner" id="wLgBagQty" min="0" step="1"></div>
+      <div><label>Delivery Slip Weight (Net, kg) *</label><input type="number" class="no-spinner" id="wLgDeliveryWeight" min="0" step="1" ${allowed?"":"disabled"}></div>
+      <div><label>Bag(s) Quantity *</label><input type="number" class="no-spinner" id="wLgBagQty" min="0" step="1" ${allowed?"":"disabled"}></div>
     </div>
     <div class="grid2">
-      <div><label>Vehicle Number *</label><input type="text" id="wLgVehicle"></div>
-      <div><label>Container Number</label><input type="text" id="wLgContainer"></div>
+      <div><label>Vehicle Number *</label><input type="text" id="wLgVehicle" ${allowed?"":"disabled"}></div>
+      <div><label>Container Number</label><input type="text" id="wLgContainer" ${allowed?"":"disabled"}></div>
     </div>
-    <div style="margin-top:20px;">
-      <button onclick="saveLogisticsStage()">Save &amp; Continue to Shipping Info</button>
-    </div>
+    ${allowed ? `<div style="margin-top:20px;"><button onclick="saveLogisticsStage()">Save &amp; Continue to Shipping Info</button></div>` : ""}
   `;
   document.getElementById("wLgDeliveryWeight").value = r.delivery_slip_weight_net ?? "";
   document.getElementById("wLgBagQty").value = r.bag_quantity ?? "";
@@ -384,6 +414,7 @@ function renderLogisticsStage(panel){
 
 async function saveLogisticsStage(){
   const st = document.getElementById("wizStatus");
+  if(!canFillStage("agbara_logistics")){ st.style.color="var(--bad)"; st.textContent="You are not assigned to fill this stage."; return; }
   const weight = document.getElementById("wLgDeliveryWeight").value;
   const bagQty = document.getElementById("wLgBagQty").value;
   const vehicle = document.getElementById("wLgVehicle").value.trim();
@@ -411,24 +442,24 @@ async function saveLogisticsStage(){
 // ---- Stage: Shipping Info ----
 function renderShippingStage(panel){
   const r = CURRENT_RECORD;
+  const allowed = canFillStage("shipping_info");
   panel.innerHTML = `
     <h3>Shipping Info</h3>
     <p class="sub">Weighbridge confirmation and shipping documentation.</p>
+    ${allowed ? "" : `<div style="color:var(--bad);font-weight:700;margin-bottom:14px;">⚠ You are not assigned to fill this stage for ${recordSection()}. Fields are read-only — ask an admin to assign you in Manage Export Assignments.</div>`}
     <div class="grid2">
-      <div><label>Rumbu Weighbridge Weight (kg) *</label><input type="number" class="no-spinner" id="wShRumbuWeight" min="0" step="1"></div>
+      <div><label>Rumbu Weighbridge Weight (kg) *</label><input type="number" class="no-spinner" id="wShRumbuWeight" min="0" step="1" ${allowed?"":"disabled"}></div>
       <div>
         <label>Weighbridge Attachment</label>
-        <input type="file" id="wShWbFile">
+        <input type="file" id="wShWbFile" ${allowed?"":"disabled"}>
         <div id="wShWbExisting" class="file-link"></div>
       </div>
     </div>
     <div class="grid2">
-      <div><label>Bill of Lading Number</label><input type="text" id="wShBillOfLading"></div>
-      <div><label>Shipping Line Name</label><input type="text" id="wShShippingLine"></div>
+      <div><label>Bill of Lading Number</label><input type="text" id="wShBillOfLading" ${allowed?"":"disabled"}></div>
+      <div><label>Shipping Line Name</label><input type="text" id="wShShippingLine" ${allowed?"":"disabled"}></div>
     </div>
-    <div style="margin-top:20px;">
-      <button onclick="saveShippingStage()">Save &amp; Continue to Weight Issue</button>
-    </div>
+    ${allowed ? `<div style="margin-top:20px;"><button onclick="saveShippingStage()">Save &amp; Continue to Weight Issue</button></div>` : ""}
   `;
   document.getElementById("wShRumbuWeight").value = r.rumbu_weighbridge_weight ?? "";
   document.getElementById("wShBillOfLading").value = r.bill_of_lading_number||"";
@@ -438,6 +469,7 @@ function renderShippingStage(panel){
 
 async function saveShippingStage(){
   const st = document.getElementById("wizStatus");
+  if(!canFillStage("shipping_info")){ st.style.color="var(--bad)"; st.textContent="You are not assigned to fill this stage."; return; }
   const rumbuWeight = document.getElementById("wShRumbuWeight").value;
   if(rumbuWeight===""){ st.style.color="var(--bad)"; st.textContent="Rumbu Weighbridge Weight is required."; return; }
 
@@ -472,24 +504,25 @@ function renderWeightIssueStage(panel){
   const r = CURRENT_RECORD;
   const diff = r.weight_diff;
   const flagged = diff != null && Math.abs(diff) > 0;
+  const allowed = canFillStage("weight_issue");
   panel.innerHTML = `
     <h3>Weight Issue</h3>
     <p class="sub">Difference between the Delivery Slip Weight and the Rumbu Weighbridge Weight.</p>
+    ${allowed ? "" : `<div style="color:var(--bad);font-weight:700;margin-bottom:14px;">⚠ You are not assigned to fill this stage for ${recordSection()}. Ask an admin to assign you in Manage Export Assignments.</div>`}
     <div class="diff-callout" style="${flagged?'background:#fee2e2;':''}">
       <div class="val" style="${flagged?'color:#991b1b;':''}">${diff!=null ? diff+" kg" : "—"}</div>
       <div class="lbl">Diff btw Dlry Slip Wgt &amp; Rumbu Wbrg Weight</div>
     </div>
     <label>Remark ${flagged?'(explain the discrepancy)':'(optional)'}</label>
-    <textarea id="wWiRemark" rows="3" placeholder="e.g. reason for the weight difference, if any"></textarea>
-    <div style="margin-top:20px;">
-      <button onclick="saveWeightIssueStage()">Continue to Completed</button>
-    </div>
+    <textarea id="wWiRemark" rows="3" placeholder="e.g. reason for the weight difference, if any" ${allowed?"":"disabled"}></textarea>
+    ${allowed ? `<div style="margin-top:20px;"><button onclick="saveWeightIssueStage()">Continue to Completed</button></div>` : ""}
   `;
   document.getElementById("wWiRemark").value = r.weight_issue_remark||"";
 }
 
 async function saveWeightIssueStage(){
   const st = document.getElementById("wizStatus");
+  if(!canFillStage("weight_issue")){ st.style.color="var(--bad)"; st.textContent="You are not assigned to fill this stage."; return; }
   st.style.color="var(--muted)"; st.textContent="Saving...";
   const payload = {
     weight_issue_remark: document.getElementById("wWiRemark").value.trim()||null,

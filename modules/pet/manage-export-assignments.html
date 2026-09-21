@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Manage Export Assignments — PET Collection</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme")||"navy"); }catch(e){} })();
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) document.documentElement.setAttribute("data-theme",e.data.rumbuTheme); });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:900px;margin:0 auto;}
+  .stage-tabs{display:flex;gap:0;border-radius:8px;overflow:hidden;border:1px solid var(--line);width:fit-content;margin-bottom:16px;flex-wrap:wrap;}
+  .stage-tab{padding:8px 18px;border:none;background:var(--bg);color:var(--muted);font-weight:700;font-size:12px;cursor:pointer;font-family:inherit;}
+  .stage-tab.active{background:var(--primary);color:#fff;}
+  .stage-tab:not(:last-child){border-right:1px solid var(--line);}
+  .assign-card{border:1px solid var(--line);border-radius:10px;padding:16px;background:var(--card);max-width:480px;}
+  .assign-card h4{margin:0 0 10px;color:var(--heading);font-size:13px;}
+  label{font-size:12px;font-weight:700;display:block;margin:8px 0 4px;color:var(--muted);}
+  select,input{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);}
+  .person-row{display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px;}
+  .person-row:last-child{border-bottom:none;}
+  .rm-btn{padding:3px 10px;border:none;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;background:#fee2e2;color:#991b1b;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back</button>
+  <div id="connStatus" style="font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);">Loading...</div>
+
+  <div class="card-panel">
+    <h3 style="color:var(--heading);margin:0 0 6px;">Export Delivery — Stage Assignments</h3>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 16px;">Assign who can fill each stage of the Export Delivery form, per branch. Anyone not assigned (and not Super Admin) will not be able to save that stage.</p>
+
+    <div style="margin-bottom:14px;">
+      <label>Section (Branch)</label>
+      <select id="sectionSel" onchange="loadAll()" style="max-width:260px;">
+        <option value="">Loading branches...</option>
+      </select>
+    </div>
+
+    <div class="stage-tabs">
+      <button class="stage-tab active" onclick="setStage('start',this)">Start</button>
+      <button class="stage-tab" onclick="setStage('agbara_logistics',this)">Agbara Delivery Logistics</button>
+      <button class="stage-tab" onclick="setStage('shipping_info',this)">Shipping Info</button>
+      <button class="stage-tab" onclick="setStage('weight_issue',this)">Weight Issue</button>
+    </div>
+
+    <div id="stageLabel" style="font-size:13px;color:var(--muted);margin-bottom:14px;"></div>
+
+    <div class="assign-card">
+      <h4>Assigned Staff <span style="font-weight:400;color:var(--muted);">(who can fill this stage)</span></h4>
+      <div id="fillerList"></div>
+      <div style="margin-top:10px;">
+        <label style="margin:0 0 4px;">Search by Name or Employee ID</label>
+        <input type="text" id="fillerSearch" placeholder="Start typing a name or code..." oninput="searchStaffByQuery(this.value)" onkeydown="if(event.key==='Enter') event.preventDefault();" autocomplete="off">
+        <div id="fillerSearchResults" style="font-size:12.5px;margin-top:6px;"></div>
+      </div>
+    </div>
+    <div id="assignStatus" style="margin-top:10px;font-size:13px;font-weight:700;min-height:16px;"></div>
+  </div>
+</div>
+
+<script>
+let ME=null, ALL_STAFF=[], CURRENT_STAGE='start', FILLER_IDS=new Set();
+
+const STAGE_LABELS = {
+  start: "Start",
+  agbara_logistics: "Agbara Delivery Logistics",
+  shipping_info: "Shipping Info",
+  weight_issue: "Weight Issue"
+};
+
+async function init(){
+  const cs = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    const { data: sections, error: secErr } = await sb.from("app_sections").select("name").in("name", ["LagosWash","KanoWash"]).order("name");
+    if(secErr) throw new Error("Could not load branches: "+secErr.message);
+    document.getElementById("sectionSel").innerHTML = (sections||[]).map(s=>`<option value="${s.name}">${s.name}</option>`).join("")
+      || `<option value="">No branches configured</option>`;
+
+    const { data: staff } = await sb.from("employees").select("id,employee_id,full_name,branch,linked_profile_id").order("full_name");
+    ALL_STAFF = staff||[];
+    await loadAll();
+    cs.style.color="var(--ok)"; cs.textContent="Connected.";
+  }catch(e){
+    cs.style.color="var(--bad)"; cs.textContent="Error: "+e.message;
+  }
+}
+
+function setStage(stage, btn){
+  CURRENT_STAGE = stage;
+  document.querySelectorAll(".stage-tab").forEach(b=>b.classList.remove("active"));
+  btn.classList.add("active");
+  loadAll();
+}
+
+async function loadAll(){
+  const section = document.getElementById("sectionSel").value;
+  document.getElementById("stageLabel").textContent = STAGE_LABELS[CURRENT_STAGE] + " — " + section;
+
+  const { data: fillers } = await sb.from("pet_export_stage_fillers").select("id,profile_id").eq("section",section).eq("stage",CURRENT_STAGE);
+  FILLER_IDS = new Set((fillers||[]).map(f=>f.profile_id));
+  document.getElementById("fillerList").innerHTML = renderPersonList(fillers||[]);
+  document.getElementById("fillerSearch").value = "";
+  document.getElementById("fillerSearchResults").innerHTML = "";
+}
+
+function renderPersonList(list){
+  if(!list.length) return `<p style="font-size:12px;color:var(--muted);">None assigned.</p>`;
+  return list.map(r=>{
+    const u = ALL_STAFF.find(x=>x.linked_profile_id===r.profile_id);
+    return `<div class="person-row">
+      <span>${u?(u.full_name+" ("+u.employee_id+")"):("Profile #"+r.profile_id)}</span>
+      <button class="rm-btn" onclick="removeAssignment(${r.id})">Remove</button>
+    </div>`;
+  }).join("");
+}
+
+function searchStaffByQuery(query){
+  const section = document.getElementById("sectionSel").value;
+  const resultEl = document.getElementById("fillerSearchResults");
+  query = query.trim().toLowerCase();
+  if(!query){ resultEl.innerHTML = ""; return; }
+  if(!section){ resultEl.innerHTML = `<span style="color:var(--bad);">Select a Branch first.</span>`; return; }
+
+  const matches = ALL_STAFF.filter(e =>
+    e.branch === section &&
+    ((e.full_name||"").toLowerCase().includes(query) || (e.employee_id||"").toLowerCase().includes(query))
+  ).slice(0, 8);
+
+  if(!matches.length){
+    resultEl.innerHTML = `<span style="color:var(--muted);">No ${section} employee matches "${query}".</span>`;
+    return;
+  }
+
+  resultEl.innerHTML = matches.map(e=>{
+    const hasAccess = !!e.linked_profile_id;
+    const isAssigned = hasAccess && FILLER_IDS.has(e.linked_profile_id);
+    let action;
+    if(!hasAccess) action = `<span style="color:var(--muted);">No login yet</span>`;
+    else if(isAssigned) action = `<span style="color:var(--ok);">✔ Already assigned</span>`;
+    else action = `<button onclick="confirmAddStaff('${e.linked_profile_id}')" style="padding:3px 10px;font-size:11px;">Add</button>`;
+    return `<div class="person-row"><span>${e.full_name} <span style="color:var(--muted);">(${e.employee_id})</span></span>${action}</div>`;
+  }).join("");
+}
+
+async function confirmAddStaff(profileId){
+  const section = document.getElementById("sectionSel").value;
+  const st = document.getElementById("assignStatus");
+  const { error } = await sb.from("pet_export_stage_fillers").insert({ section, stage: CURRENT_STAGE, profile_id: profileId, assigned_by: ME.username });
+  if(error){ st.style.color="var(--bad)"; st.textContent="Error: "+error.message; return; }
+  st.style.color="var(--ok)"; st.textContent="Assignment saved. Keep searching to add another.";
+  await loadAll();
+  document.getElementById("fillerSearch")?.focus();
+  setTimeout(()=>{ st.textContent=""; }, 2500);
+}
+
+async function removeAssignment(id){
+  const { error } = await sb.from("pet_export_stage_fillers").delete().eq("id", id);
+  if(error){ alert("Error: "+error.message); return; }
+  await loadAll();
+}
+
+init();
+</script>
+</body>
+</html>
