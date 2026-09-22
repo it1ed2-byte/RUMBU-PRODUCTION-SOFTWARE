@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Agriwatts Utility/Power Consumption Payment Request — My Requests</title>
+<title>Agriwatts Utility/Power Consumption Payment Request — Request History</title>
 <link rel="stylesheet" href="../../styles.css">
 <script>
   (function(){
@@ -97,13 +97,13 @@
 <div id="connStatus">Loading...</div>
 
 <div class="card-panel">
-  <h3 id="pageTitle">My Requests — Agriwatts Utility/Power Payment Request</h3>
-  <p class="sub" id="pageSub">Everything you've submitted, its current stage, and — for anything declined or withdrawn — an edit-and-resubmit option.</p>
+  <h3 id="pageTitle">Request History — Agriwatts Utility/Power Payment Request</h3>
+  <p class="sub" id="pageSub">Every request in the workflow, newest first. Use Show below to switch to just your own. Edit, resubmit and withdraw are only offered on requests you submitted yourself.</p>
 </div>
 
 <div class="card-panel" id="filterPanel">
   <div class="filters">
-    <div class="field" id="scopeWrap" style="display:none;">
+    <div class="field" id="scopeWrap">
       <label>Show</label>
       <select id="fScope" onchange="loadRequests()"><option value="all">All requests</option><option value="mine">My requests only</option></select>
     </div>
@@ -136,7 +136,7 @@
 <script>
 let ME = null, MY_EMPLOYEE_REF_ID = null;
 let STAGES_BY_ID = {}, STAGES = [], CATEGORIES_BY_ID = {};
-let IS_APPROVER = false, SCOPE = "mine", ALL_ROWS = [];
+let IS_APPROVER = false, SCOPE = "all", ALL_ROWS = [];
 let ASSIGNEES_BY_STAGE = {}, EMP_NAME = {};
 const STAGED_FILES = {};
 const EDIT_SELECTED_CATEGORIES = {};
@@ -152,8 +152,16 @@ async function init(){
     if(!ME) return;
     const { data: emp, error: empErr } = await sb.from("employees").select("id").eq("linked_profile_id", ME.id).maybeSingle();
     if(empErr) throw empErr;
-    if(!emp){ throw new Error("No employee record is linked to your account."); }
-    MY_EMPLOYEE_REF_ID = emp.id;
+    if(!emp && ME.role !== "super_admin"){
+      throw new Error("No employee record is linked to your account.");
+    }
+    // Super Admin with no linked employee record: proceed in view-only mode
+    // rather than blocking the page. MY_EMPLOYEE_REF_ID stays null, which
+    // naturally means nothing shows as "mine" and Edit/Resubmit/Withdraw
+    // don't appear — there's no submission for them to belong to. Every
+    // request is still visible, per the read policies added alongside
+    // this change.
+    MY_EMPLOYEE_REF_ID = emp ? emp.id : null;
 
     const { data: stages, error: stErr } = await sb.from("utility_workflow_stages").select("*").order("sequence_order");
     if(stErr) throw stErr;
@@ -163,14 +171,12 @@ async function init(){
     const { data: cats } = await sb.from("utility_expense_categories").select("id,name");
     (cats || []).forEach(c => CATEGORIES_BY_ID[c.id] = c.name);
 
-    const { data: myAssign } = await sb.from("utility_workflow_stage_assignees").select("stage_id").eq("employee_ref_id", MY_EMPLOYEE_REF_ID).limit(1);
-    IS_APPROVER = !!(myAssign && myAssign.length);
-    if(IS_APPROVER){
-      SCOPE = "all";
-      document.getElementById("scopeWrap").style.display = "block";
-      document.getElementById("fScope").value = "all";
-      document.getElementById("pageTitle").textContent = "Requests — Agriwatts Utility/Power Payment Request";
-      document.getElementById("pageSub").textContent = "As an approver you can view every request and the step it has reached. Use the filters to narrow the list. Edit, resubmit and withdraw are available only on your own requests.";
+    if(MY_EMPLOYEE_REF_ID){
+      const { data: myAssign } = await sb.from("utility_workflow_stage_assignees").select("stage_id").eq("employee_ref_id", MY_EMPLOYEE_REF_ID).limit(1);
+      IS_APPROVER = !!(myAssign && myAssign.length);
+    }
+    if(!MY_EMPLOYEE_REF_ID){
+      document.getElementById("pageSub").textContent = "Every request in the workflow, newest first. Your account has no linked staff record, so requests can't show as \"yours\" and Edit/Resubmit/Withdraw aren't available here — this is a view of everything, for oversight.";
     }
 
     const { data: allAssign } = await sb.from("utility_workflow_stage_assignees").select("stage_id, employee_ref_id");
@@ -188,8 +194,13 @@ async function init(){
 
 async function loadRequests(){
   const wrap = document.getElementById("listWrap");
+  SCOPE = document.getElementById("fScope").value || "all";
+  if(SCOPE === "mine" && !MY_EMPLOYEE_REF_ID){
+    wrap.innerHTML = "<div class='empty-note'>Your account has no linked staff record, so it can't have submitted any requests. Switch Show back to \"All requests\".</div>";
+    ALL_ROWS = [];
+    return;
+  }
   wrap.innerHTML = "<div class='empty-note'>Loading…</div>";
-  SCOPE = IS_APPROVER ? (document.getElementById("fScope").value || "all") : "mine";
   let q = sb.from("utility_requests")
     .select("*, utility_payees(id,name,bank,account_number), employees:submitted_by(full_name), utility_request_expense_categories(category_id)")
     .order("created_at", { ascending: false });
