@@ -32,6 +32,10 @@
   button{padding:10px 14px;border:none;border-radius:8px;font-weight:bold;font-size:13px;cursor:pointer;background:var(--blue);color:#fff;margin-top:10px;}
   button:hover{background:var(--blue-dark);}
   button.ghost{background:var(--bg);color:var(--heading);border:1px solid var(--line);}
+  button.danger{background:#fff;color:var(--red);border:1px solid var(--red);padding:6px 10px;margin-top:0;font-size:12px;}
+  button.danger:hover{background:var(--red);color:#fff;}
+  td.row-actions{white-space:nowrap;}
+  td.row-actions button{margin-top:0;padding:6px 10px;font-size:12px;}
   .status{margin-top:10px;font-weight:bold;font-size:13px;min-height:16px;}
   .status.ok{color:var(--green);} .status.err{color:var(--red);}
   #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;}
@@ -77,12 +81,12 @@
     <div><label>Email</label><input id="new_email" type="email" placeholder="name@example.com"></div>
     <div><label>Phone Number *</label><input id="new_phone" type="tel" placeholder="e.g. 08012345678"></div>
   </div>
-  <div class="row">
+  <div class="row" id="add_row_dept_unit_rank">
     <div><label>Department *</label><select id="new_department" onchange="onNewDeptChange()"><option value="">— select —</option></select></div>
     <div><label>Unit</label><select id="new_unit" disabled><option value="">— none —</option></select></div>
     <div><label>Rank</label><input id="new_rank" list="new_rank_list" placeholder="e.g. Officer"><datalist id="new_rank_list"></datalist></div>
   </div>
-  <div class="row">
+  <div class="row" id="add_row_bank">
     <div><label>Bank Name</label><input id="new_bank_name" placeholder="e.g. GTBank"></div>
     <div><label>Bank Account Number</label><input id="new_bank_account_number" inputmode="numeric" placeholder="e.g. 0123456789"></div>
     <div><label>Sort Code</label><input id="new_sort_code" placeholder="e.g. 058-152-036"></div>
@@ -106,9 +110,10 @@
 
 <div class="card hidden" id="bulkCard">
   <h3 style="margin-top:0;">Bulk Upload Staff</h3>
-  <p class="sub">Every staff member in one upload goes into this Branch and a single Department you pick below (Unit is optional and also applies to everyone). Required columns: <b>Employee ID</b> and <b>Full Name</b>. Optional: Rank, Email, Phone, Bank Name, Bank Account Number, Sort Code. Rows with a duplicate Employee ID (already in the system, or repeated in the file) are skipped and listed.</p>
+  <p class="sub" id="bulk_note_standard">Every staff member in one upload goes into this Branch and a single Department you pick below (Unit is optional and also applies to everyone). Required columns: <b>Employee ID</b> and <b>Full Name</b>. Optional: Rank, Email, Phone, Bank Name, Bank Account Number, Sort Code. Rows with a duplicate Employee ID (already in the system, or repeated in the file) are skipped and listed.</p>
+  <p class="sub hidden" id="bulk_note_agriwatt">Every staff member in one upload goes into this Branch. Required columns: <b>Employee ID</b> and <b>Full Name</b>. Optional: Email, Phone. Department, Unit, Rank and bank details don't apply to this Branch and are ignored even if present in the file. Rows with a duplicate Employee ID (already in the system, or repeated in the file) are skipped and listed.</p>
   <p class="sub warn">&#9888; Use the Excel template: its Bank Account Number and Sort Code columns are pre-formatted as <b>Text</b>, so leading zeros (e.g. 00023) are kept. A plain CSV also works, but Excel or Google Sheets will strip leading zeros unless you format those two columns as Text first.</p>
-  <div class="row">
+  <div class="row" id="bulk_row_dept_unit">
     <div><label>Department *</label><select id="bulk_department" onchange="onBulkDeptChange()"><option value="">— select —</option></select></div>
     <div><label>Unit</label><select id="bulk_unit" disabled><option value="">— none —</option></select></div>
   </div>
@@ -205,9 +210,30 @@ async function onBranchChange(){
     document.getElementById("listWrap").innerHTML = "<p class='sub'>No Branch available — ask your Super Admin to assign you one.</p>";
     return;
   }
+  applyBranchFieldVisibility();
   await loadMyHrFlag();
   await loadDepartments();
   await loadEmployees();
+}
+
+// AgriWatt has no Department/Unit/Rank structure and no bank-detail
+// requirement, unlike every other Branch — matched loosely (trimmed,
+// case-insensitive, prefix) since the exact Branch name in app_sections may
+// be "AgriWatt", "Agriwatt", "Agriwatts", etc.
+function isAgriwattBranch(branchName){
+  return !!branchName && branchName.trim().toLowerCase().indexOf("agriwatt") === 0;
+}
+
+// Hides Department/Unit/Rank and the three bank-detail fields on both the
+// Add and Bulk Upload panels when the selected Branch is AgriWatt — those
+// fields don't apply there. Re-run whenever the Branch changes.
+function applyBranchFieldVisibility(){
+  const hide = isAgriwattBranch(WORKING_BRANCH);
+  document.getElementById("add_row_dept_unit_rank").classList.toggle("hidden", hide);
+  document.getElementById("add_row_bank").classList.toggle("hidden", hide);
+  document.getElementById("bulk_row_dept_unit").classList.toggle("hidden", hide);
+  document.getElementById("bulk_note_standard").classList.toggle("hidden", hide);
+  document.getElementById("bulk_note_agriwatt").classList.toggle("hidden", !hide);
 }
 
 // Resolves CAN_MANAGE: Super Admin always; otherwise only if THIS person
@@ -284,14 +310,51 @@ function renderList(){
     wrap.innerHTML = "<p class='sub'>" + (EMPLOYEES.length ? "No staff match." : "No staff records for this Branch yet.") + "</p>";
     return;
   }
-  let html = "<table><tr><th>ID</th><th>Name</th><th>Department</th><th>Phone</th><th style='width:110px;'>Actions</th></tr>";
+  let html = "<table><tr><th>ID</th><th>Name</th><th>Department</th><th>Phone</th>" + (CAN_MANAGE ? "<th>Actions</th>" : "") + "</tr>";
   rows.forEach(e=>{
-    const editBtn  = CAN_MANAGE ? `<button class="ghost" style="padding:3px 9px;font-size:11px;margin-right:4px;" onclick="event.stopPropagation();enterEditMode(${e.id})">Edit</button>` : "";
-    const delBtn   = CAN_MANAGE ? `<button class="ghost" style="padding:3px 9px;font-size:11px;color:var(--bad,#c0392b);border-color:var(--bad,#c0392b);" onclick="event.stopPropagation();deleteEmployee(${e.id})">Delete</button>` : "";
-    html += `<tr onclick="openDetail(${e.id})"><td>${esc(e.employee_id)}</td><td>${esc(e.full_name)}</td><td>${esc(e.department)||"—"}</td><td>${esc(e.phone)||"—"}</td><td style="white-space:nowrap;">${editBtn}${delBtn}</td></tr>`;
+    html += `<tr onclick="openDetail(${e.id})"><td>${esc(e.employee_id)}</td><td>${esc(e.full_name)}</td><td>${esc(e.department)||"—"}</td><td>${esc(e.phone)||"—"}</td>`;
+    if(CAN_MANAGE){
+      html += `<td class="row-actions">` +
+        `<button class="ghost" onclick="event.stopPropagation(); enterEditMode(${e.id})">Edit</button> ` +
+        `<button class="danger" onclick="event.stopPropagation(); deleteEmployee(${e.id})">Delete</button>` +
+        `</td>`;
+    }
+    html += `</tr>`;
   });
   html += "</table>";
   wrap.innerHTML = html;
+}
+
+// Deletes one employee record outright, after a confirmation prompt. This
+// is a hard delete, not the reversible "deactivate" some other parts of
+// the schema support — there is no undo. Blocked at the database for
+// anyone who isn't Super Admin or HR Admin for this Branch, same as
+// Add/Edit; if the database rejects it for another reason (e.g. other
+// records still reference this employee), that error is shown as-is
+// rather than silently failing.
+async function deleteEmployee(empId){
+  if(!CAN_MANAGE) return;
+  const e = EMPLOYEES.find(x=>x.id === empId);
+  if(!e) return;
+  if(!confirm("Are you sure you want to delete?")) return;
+
+  const status = document.getElementById("list_status");
+  status.className = "status"; status.textContent = "Deleting…";
+  try{
+    const { error, count } = await sb.from("employees").delete({ count: "exact" }).eq("id", empId);
+    if(error) throw error;
+    if(!count){
+      status.className = "status err";
+      status.textContent = "❌ Nothing was deleted — you may not have permission to delete this record.";
+      return;
+    }
+    await logActivity("employee_deleted", ME.username + " deleted employee \"" + e.full_name + "\" (" + e.employee_id + ") via HR Manage Staff");
+    status.className = "status ok"; status.textContent = "✅ Deleted.";
+    await loadEmployees();
+  }catch(err){
+    status.className = "status err";
+    status.textContent = "❌ Could not delete: " + (err.message || err);
+  }
 }
 
 function toggleAddPanel(force){
@@ -306,24 +369,29 @@ function toggleAddPanel(force){
 async function addEmployee(){
   const status = document.getElementById("add_status");
   if(!CAN_MANAGE){ status.className="status err"; status.textContent="Adding staff is limited to HR-designated staff for this Branch."; return; }
+  const isAgriwatt = isAgriwattBranch(WORKING_BRANCH);
   const employeeId = document.getElementById("new_employee_id").value.trim();
   const fullName   = document.getElementById("new_full_name").value.trim();
   const email      = document.getElementById("new_email").value.trim() || null;
   const phone      = document.getElementById("new_phone").value.trim();
+  // Department, Unit, Rank and bank details don't apply to AgriWatt — the
+  // fields are hidden there (applyBranchFieldVisibility), and the values
+  // are forced to null here too, regardless of anything left over in the
+  // (hidden) inputs from a previous Branch.
   const deptSel    = document.getElementById("new_department");
-  const deptName   = deptSel.value ? deptSel.options[deptSel.selectedIndex].text : null;
+  const deptName   = isAgriwatt ? null : (deptSel.value ? deptSel.options[deptSel.selectedIndex].text : null);
   const unitSel    = document.getElementById("new_unit");
-  const unitName   = unitSel.value || null;
-  const rank       = document.getElementById("new_rank").value.trim() || null;
-  const bankName   = document.getElementById("new_bank_name").value.trim() || null;
-  const bankAcct   = document.getElementById("new_bank_account_number").value.trim() || null;
-  const sortCode   = document.getElementById("new_sort_code").value.trim() || null;
+  const unitName   = isAgriwatt ? null : (unitSel.value || null);
+  const rank       = isAgriwatt ? null : (document.getElementById("new_rank").value.trim() || null);
+  const bankName   = isAgriwatt ? null : (document.getElementById("new_bank_name").value.trim() || null);
+  const bankAcct   = isAgriwatt ? null : (document.getElementById("new_bank_account_number").value.trim() || null);
+  const sortCode   = isAgriwatt ? null : (document.getElementById("new_sort_code").value.trim() || null);
 
   if(!employeeId){ status.className="status err"; status.textContent="Employee ID is required."; return; }
   if(!fullName){ status.className="status err"; status.textContent="Full Name is required."; return; }
   if(!phone){ status.className="status err"; status.textContent="Phone Number is required."; return; }
   if(email && !/^\S+@\S+\.\S+$/.test(email)){ status.className="status err"; status.textContent="Enter a valid email address, or leave it blank."; return; }
-  if(!deptName){ status.className="status err"; status.textContent="Select a Department."; return; }
+  if(!isAgriwatt && !deptName){ status.className="status err"; status.textContent="Select a Department."; return; }
 
   status.className = "status"; status.textContent = "Adding...";
   try{
@@ -402,6 +470,7 @@ function enterEditMode(empId){
     alert("Editing staff records is limited to HR-designated staff for this Branch.");
     return openDetail(empId);
   }
+  const isAgriwatt = isAgriwattBranch(e.branch);
   const wrap = document.getElementById("listWrap");
   const deptOptions = '<option value="">— none —</option>' + DEPARTMENTS.map(d=>`<option value="${esc(d.name)}" ${d.name===e.department?"selected":""}>${esc(d.name)}</option>`).join("");
   const ranks = [...new Set(EMPLOYEES.map(x=>x.rank).filter(Boolean))].sort();
@@ -414,26 +483,30 @@ function enterEditMode(empId){
     </div>`;
   html += `<div class="row">
       <div><label>Branch <span style="color:var(--muted);font-weight:normal;">(cannot be changed here)</span></label><input value="${esc(e.branch)}" disabled></div>
-      <div><label>Department</label><select id="edit_department" onchange="onEditDeptChange()">${deptOptions}</select></div>
-      <div><label>Unit</label><select id="edit_unit"><option value="">— none —</option></select></div>
-    </div>`;
-  html += `<div class="row">
-      <div><label>Rank</label><input id="edit_rank" list="edit_rank_list" value="${esc(e.rank)}"><datalist id="edit_rank_list">${ranks.map(r=>`<option value="${esc(r)}">`).join("")}</datalist></div>
       <div><label>Email</label><input id="edit_email" type="email" value="${esc(e.email)}"></div>
       <div><label>Phone Number</label><input id="edit_phone" value="${esc(e.phone)}"></div>
     </div>`;
-  html += `<div class="row">
-      <div><label>Bank Name</label><input id="edit_bank_name" value="${esc(e.bank_name)}"></div>
-      <div><label>Bank Account Number</label><input id="edit_bank_account_number" value="${esc(e.bank_account_number)}"></div>
-      <div><label>Sort Code</label><input id="edit_sort_code" value="${esc(e.sort_code)}"></div>
-    </div>`;
+  if(!isAgriwatt){
+    html += `<div class="row">
+        <div><label>Department</label><select id="edit_department" onchange="onEditDeptChange()">${deptOptions}</select></div>
+        <div><label>Unit</label><select id="edit_unit"><option value="">— none —</option></select></div>
+        <div><label>Rank</label><input id="edit_rank" list="edit_rank_list" value="${esc(e.rank)}"><datalist id="edit_rank_list">${ranks.map(r=>`<option value="${esc(r)}">`).join("")}</datalist></div>
+      </div>`;
+    html += `<div class="row">
+        <div><label>Bank Name</label><input id="edit_bank_name" value="${esc(e.bank_name)}"></div>
+        <div><label>Bank Account Number</label><input id="edit_bank_account_number" value="${esc(e.bank_account_number)}"></div>
+        <div><label>Sort Code</label><input id="edit_sort_code" value="${esc(e.sort_code)}"></div>
+      </div>`;
+  }
   html += `<button onclick="saveEdit(${e.id})">SAVE</button>
     <button class="ghost" onclick="openDetail(${e.id})">Cancel</button>
     <div class="status" id="edit_status"></div>`;
 
   wrap.innerHTML = html;
-  const dept = DEPARTMENTS.find(d=>d.name===e.department);
-  loadUnitsForDept(dept ? dept.id : null, "edit_unit", e.unit);
+  if(!isAgriwatt){
+    const dept = DEPARTMENTS.find(d=>d.name===e.department);
+    loadUnitsForDept(dept ? dept.id : null, "edit_unit", e.unit);
+  }
 }
 function onEditDeptChange(){
   const deptName = document.getElementById("edit_department").value;
@@ -446,17 +519,26 @@ async function saveEdit(empId){
   const e = EMPLOYEES.find(x=>x.id===empId);
   if(!e) return;
   if(!CAN_MANAGE){ status.className="status err"; status.textContent="Editing staff records is limited to HR-designated staff for this Branch."; return; }
+  const isAgriwatt = isAgriwattBranch(e.branch);
 
   const fullName = document.getElementById("edit_full_name").value.trim();
   if(!fullName){ status.className="status err"; status.textContent="Full Name is required."; return; }
-  const department = document.getElementById("edit_department").value || null;
-  const unit = document.getElementById("edit_unit").value || null;
-  const rank = document.getElementById("edit_rank").value.trim() || null;
+  // Fields not rendered at all for AgriWatt (see enterEditMode) — force null
+  // rather than reading a missing element.
+  const deptEl = document.getElementById("edit_department");
+  const unitEl = document.getElementById("edit_unit");
+  const rankEl = document.getElementById("edit_rank");
+  const bankNameEl = document.getElementById("edit_bank_name");
+  const bankAcctEl = document.getElementById("edit_bank_account_number");
+  const sortCodeEl = document.getElementById("edit_sort_code");
+  const department = (!isAgriwatt && deptEl) ? (deptEl.value || null) : null;
+  const unit = (!isAgriwatt && unitEl) ? (unitEl.value || null) : null;
+  const rank = (!isAgriwatt && rankEl) ? (rankEl.value.trim() || null) : null;
   const email = document.getElementById("edit_email").value.trim() || null;
   const phone = document.getElementById("edit_phone").value.trim() || null;
-  const bankName = document.getElementById("edit_bank_name").value.trim() || null;
-  const bankAcct = document.getElementById("edit_bank_account_number").value.trim() || null;
-  const sortCode = document.getElementById("edit_sort_code").value.trim() || null;
+  const bankName = (!isAgriwatt && bankNameEl) ? (bankNameEl.value.trim() || null) : null;
+  const bankAcct = (!isAgriwatt && bankAcctEl) ? (bankAcctEl.value.trim() || null) : null;
+  const sortCode = (!isAgriwatt && sortCodeEl) ? (sortCodeEl.value.trim() || null) : null;
   if(email && !/^\S+@\S+\.\S+$/.test(email)){ status.className="status err"; status.textContent="Enter a valid email address, or leave it blank."; return; }
 
   status.className = "status"; status.textContent = "Saving…";
@@ -472,27 +554,6 @@ async function saveEdit(empId){
     setTimeout(()=>openDetail(empId), 400);
   }catch(err){
     status.className = "status err"; status.textContent = "❌ " + (err.message || err);
-  }
-}
-
-// =========================================================
-// DELETE EMPLOYEE — gated on CAN_MANAGE; requires confirmation before
-// removing the record from the employees table permanently.
-// =========================================================
-async function deleteEmployee(empId){
-  const e = EMPLOYEES.find(x=>x.id===empId);
-  if(!e) return;
-  if(!CAN_MANAGE){ alert("Deleting staff records is limited to HR-designated staff for this Branch."); return; }
-  const confirmed = confirm(`Delete employee "${e.full_name}" (${e.employee_id})?\n\nThis cannot be undone.`);
-  if(!confirmed) return;
-  try{
-    const { error } = await sb.from("employees").delete().eq("id", empId);
-    if(error) throw error;
-    await logActivity("employee_deleted", ME.username + " deleted employee \"" + e.full_name + "\" (" + e.employee_id + ") via HR Manage Staff");
-    EMPLOYEES = EMPLOYEES.filter(x=>x.id!==empId);
-    renderList();
-  }catch(err){
-    alert("❌ Could not delete: " + (err.message || err));
   }
 }
 
@@ -653,13 +714,14 @@ async function processBulkUpload(){
   if(resultsEl) resultsEl.innerHTML = "";
   if(!CAN_MANAGE){ statusEl.className="status err"; statusEl.textContent="Adding staff is limited to HR-designated staff for this Branch."; return; }
 
+  const isAgriwatt = isAgriwattBranch(WORKING_BRANCH);
   const deptSel = document.getElementById("bulk_department");
-  const department = deptSel.value ? deptSel.options[deptSel.selectedIndex].text : null;
+  const department = isAgriwatt ? null : (deptSel.value ? deptSel.options[deptSel.selectedIndex].text : null);
   const unitSel = document.getElementById("bulk_unit");
-  const unit = unitSel && unitSel.value ? unitSel.value : null;
+  const unit = isAgriwatt ? null : (unitSel && unitSel.value ? unitSel.value : null);
   const text = document.getElementById("bulk_text").value || "";
 
-  if(!department){ statusEl.className="status err"; statusEl.textContent="Choose the Department all these staff belong to."; return; }
+  if(!isAgriwatt && !department){ statusEl.className="status err"; statusEl.textContent="Choose the Department all these staff belong to."; return; }
   if(!text.trim()){ statusEl.className="status err"; statusEl.textContent="Paste some rows or upload a CSV file first."; return; }
 
   const rows = parseCsvRows(text);
@@ -701,23 +763,25 @@ async function processBulkUpload(){
     if(existingIds.has(idKey)){ errors.push({ line: lineNo, id: employeeId, reason: "Employee ID already exists" }); return; }
     if(seenInFile.has(idKey)){ errors.push({ line: lineNo, id: employeeId, reason: "Duplicate Employee ID within this file" }); return; }
     seenInFile.add(idKey);
-    const acct = cellAt(row, "bank_account_number");
+    // Rank and bank details don't apply to AgriWatt — ignored even if the
+    // file has values in those columns, same as the single Add form.
+    const acct = isAgriwatt ? "" : cellAt(row, "bank_account_number");
     if(looksMangledAccount(acct)) warnings.push({ line: lineNo, id: employeeId, value: acct });
     valid.push({
       employee_id: employeeId, full_name: fullName, branch: WORKING_BRANCH, department, unit,
-      rank: cellAt(row, "rank") || null,
+      rank: isAgriwatt ? null : (cellAt(row, "rank") || null),
       email: cellAt(row, "email") || null,
       phone: cellAt(row, "phone") || null,
-      bank_name: cellAt(row, "bank_name") || null,
+      bank_name: isAgriwatt ? null : (cellAt(row, "bank_name") || null),
       bank_account_number: acct || null,
-      sort_code: cellAt(row, "sort_code") || null
+      sort_code: isAgriwatt ? null : (cellAt(row, "sort_code") || null)
     });
   });
 
   const renderReport = (addedCount) => {
     let h = "";
     h += "<p class=\"sub\" style=\"margin:0 0 6px;\"><b>" + addedCount + "</b> added &middot; <b>" + errors.length + "</b> skipped" +
-         " into <b>" + esc(WORKING_BRANCH) + " / " + esc(department) + (unit ? " / " + esc(unit) : "") + "</b></p>";
+         " into <b>" + esc(WORKING_BRANCH) + (department ? " / " + esc(department) : "") + (unit ? " / " + esc(unit) : "") + "</b></p>";
     if(errors.length){
       h += "<table><tr><th>Line</th><th>Employee ID</th><th>Problem</th></tr>";
       h += errors.map(e=>"<tr><td>" + e.line + "</td><td>" + esc(e.id) + "</td><td>" + esc(e.reason) + "</td></tr>").join("");
@@ -744,10 +808,10 @@ async function processBulkUpload(){
     const { error } = await sb.from("employees").insert(valid);
     if(error) throw error;
     statusEl.className = "status ok";
-    statusEl.textContent = "✅ Added " + valid.length + " staff to " + WORKING_BRANCH + " / " + department + (unit ? " / " + unit : "") +
+    statusEl.textContent = "✅ Added " + valid.length + " staff to " + WORKING_BRANCH + (department ? " / " + department : "") + (unit ? " / " + unit : "") +
       (errors.length ? (". " + errors.length + " row(s) were skipped — see below.") : ".");
     renderReport(valid.length);
-    await logActivity("staff_bulk_uploaded", ME.username + " bulk-added " + valid.length + " staff to " + WORKING_BRANCH + " / " + department + (errors.length ? (" (" + errors.length + " skipped)") : "") + " via HR Manage Staff");
+    await logActivity("staff_bulk_uploaded", ME.username + " bulk-added " + valid.length + " staff to " + WORKING_BRANCH + (department ? " / " + department : "") + (errors.length ? (" (" + errors.length + " skipped)") : "") + " via HR Manage Staff");
     document.getElementById("bulk_text").value = "";
     const fileInput = document.getElementById("bulk_file"); if(fileInput) fileInput.value = "";
     await loadEmployees();
