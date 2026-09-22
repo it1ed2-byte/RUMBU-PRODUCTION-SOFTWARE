@@ -2024,16 +2024,19 @@ function renderEmployeeDirectory(){
   const rows = getSuperFilteredRows();
 
   let html = "<p class='sub' style='margin:0 0 8px;'>Click a row to open the full staff profile.</p>";
-  html += "<table><tr><th>ID</th><th>Name</th><th>Email</th><th>Access</th></tr>";
+  html += "<table><tr><th>ID</th><th>Name</th><th>Email</th><th>Access</th><th style='width:120px;'>Actions</th></tr>";
   rows.forEach(e=>{
     const accessCell = e.has_system_access
       ? "<span class=\"badge\">" + esc(e.linked_role || "access") + "</span>"
       : "<span style=\"color:var(--muted);\">No access</span>";
+    const editBtn = "<button class=\"ghost\" style=\"padding:3px 9px;font-size:11px;margin-right:4px;\" onclick=\"event.stopPropagation();enterEmployeeEditMode(" + e.id + ")\">Edit</button>";
+    const delBtn  = "<button class=\"ghost\" style=\"padding:3px 9px;font-size:11px;color:var(--bad,#c0392b);border-color:var(--bad,#c0392b);\" onclick=\"event.stopPropagation();deleteEmployeeRecord(" + e.id + ")\">Delete</button>";
     html += "<tr style=\"cursor:pointer;\" onclick=\"openEmployeeDetail(" + e.id + ")\">" +
       "<td>" + esc(e.employee_id) + "</td>" +
       "<td>" + esc(e.full_name) + "</td>" +
       "<td>" + (e.email ? esc(e.email) : "<span style=\"color:var(--muted);\">—</span>") + "</td>" +
-      "<td>" + accessCell + "</td></tr>";
+      "<td>" + accessCell + "</td>" +
+      "<td style=\"white-space:nowrap;\">" + editBtn + delBtn + "</td></tr>";
   });
   html += "</table>";
   wrap.innerHTML = rows.length ? html : "<p class='sub'>No employees match.</p>";
@@ -2053,16 +2056,19 @@ function renderAdminEmployeeDirectory(){
   const rows = getAdminFilteredRows();
 
   let html = "<p class='sub' style='margin:0 0 8px;'>Click a row to open the full staff profile.</p>";
-  html += "<table><tr><th>ID</th><th>Name</th><th>Email</th><th>Access</th></tr>";
+  html += "<table><tr><th>ID</th><th>Name</th><th>Email</th><th>Access</th><th style='width:120px;'>Actions</th></tr>";
   rows.forEach(e=>{
     const accessCell = e.has_system_access
       ? "<span class=\"badge\">" + esc(e.linked_role || "access") + "</span>"
       : "<span style=\"color:var(--muted);\">No access</span>";
+    const editBtn = ME_IS_HR ? "<button class=\"ghost\" style=\"padding:3px 9px;font-size:11px;margin-right:4px;\" onclick=\"event.stopPropagation();enterEmployeeEditMode(" + e.id + ")\">Edit</button>" : "";
+    const delBtn  = ME_IS_HR ? "<button class=\"ghost\" style=\"padding:3px 9px;font-size:11px;color:var(--bad,#c0392b);border-color:var(--bad,#c0392b);\" onclick=\"event.stopPropagation();deleteEmployeeRecord(" + e.id + ")\">Delete</button>" : "";
     html += "<tr style=\"cursor:pointer;\" onclick=\"openEmployeeDetail(" + e.id + ")\">" +
       "<td>" + esc(e.employee_id) + "</td>" +
       "<td>" + esc(e.full_name) + "</td>" +
       "<td>" + (e.email ? esc(e.email) : "<span style=\"color:var(--muted);\">—</span>") + "</td>" +
-      "<td>" + accessCell + "</td></tr>";
+      "<td>" + accessCell + "</td>" +
+      "<td style=\"white-space:nowrap;\">" + editBtn + delBtn + "</td></tr>";
   });
   html += "</table>";
   wrap.innerHTML = rows.length ? html : "<p class='sub'>No employees match in your Branch(es).</p>";
@@ -2402,6 +2408,35 @@ window.closeEmployeeDetail = closeEmployeeDetail;
 window.enterEmployeeEditMode = enterEmployeeEditMode;
 window.saveEmployeeDetails = saveEmployeeDetails;
 window.onEditBranchChange = onEditBranchChange;
+
+// =========================================================
+// DELETE EMPLOYEE — gated on canManageStaff (Super Admin, or Admin who
+// is HR Admin for the employee's Branch). Requires confirmation.
+// Removes the record from the employees table permanently.
+// =========================================================
+async function deleteEmployeeRecord(empId){
+  const e = EMPLOYEES.find(x=>x.id === empId);
+  if(!e) return;
+  const isSuperAdmin = ME.role === "super_admin";
+  const isAdminHR    = ME.role === "admin" && ME_IS_HR;
+  if(!isSuperAdmin && !isAdminHR){
+    alert("Deleting employee records is limited to Super Admin or HR Admin for this Branch.");
+    return;
+  }
+  const confirmed = confirm("Delete employee \"" + e.full_name + "\" (" + e.employee_id + ")?\n\nThis cannot be undone.");
+  if(!confirmed) return;
+  try{
+    const { error } = await sb.from("employees").delete().eq("id", empId);
+    if(error) throw error;
+    await logActivity("employee_deleted", ME.username + " deleted employee \"" + e.full_name + "\" (" + e.employee_id + ") via Manage Accounts");
+    EMPLOYEES = EMPLOYEES.filter(x=>x.id !== empId);
+    if(ME.role === "admin") renderAdminEmployeeDirectory();
+    else renderEmployeeDirectory();
+  }catch(err){
+    alert("❌ Could not delete: " + (err.message || err));
+  }
+}
+window.deleteEmployeeRecord = deleteEmployeeRecord;
 window.onEditDeptChange = onEditDeptChange;
 
 // =========================================================
