@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Production Summary Report</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+  :root{--navy:var(--heading);}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:16px;}
+  .card{max-width:1800px;margin:0 auto 16px;background:var(--card);border-radius:12px;
+        box-shadow:0 4px 12px rgba(0,0,0,.15);padding:20px;overflow-x:auto;}
+  h2{text-align:center;color:var(--navy);border-bottom:2px solid var(--navy);padding-bottom:10px;}
+  h3{background:var(--navy);color:#fff;padding:6px;text-align:center;margin-top:20px;border-radius:4px;}
+  label{font-weight:600;margin-top:8px;display:block;font-size:13px;}
+  input,select{width:100%;padding:8px;margin-top:4px;border:1px solid var(--line);border-radius:6px;font-size:13px;}
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;}
+  .btn-row{display:flex;gap:10px;margin-top:14px;}
+  button{flex:1;padding:11px;border:none;border-radius:8px;background:var(--navy);color:#fff;font-weight:bold;cursor:pointer;}
+  button.alt{background:#38761d;}
+  button.sm{padding:6px 12px;font-size:12px;flex:none;}
+  #status{margin-top:10px;font-weight:bold;font-size:13px;}
+  .report-wrap{overflow-x:auto;}
+  table{width:100%;border-collapse:collapse;font-size:12px;margin-top:6px;min-width:1400px;}
+  th,td{border:1px solid #555;padding:5px 7px;text-align:center;}
+  th{background:var(--navy);color:#fff;}
+  tr:nth-child(even) td{background:rgba(0,0,0,.03);}
+  .total-row td{font-weight:bold;background:#b4c6e7 !important;color:#000;}
+  .chart-wrap{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:20px;}
+  canvas{max-height:320px;}
+  .shed-box{border:1px solid var(--line);border-radius:6px;padding:8px;
+            display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin-top:4px;font-size:13px;}
+  .shed-box label{font-weight:500;margin:0;display:flex;align-items:center;gap:4px;cursor:pointer;}
+  .shed-btns{display:flex;gap:8px;margin-top:6px;}
+  @media(max-width:700px){.grid{grid-template-columns:1fr 1fr;}.shed-box{grid-template-columns:1fr 1fr;}.chart-wrap{grid-template-columns:1fr;}}
+  @media print{.no-print{display:none !important;} .card{box-shadow:none;}}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="../../auth.js"></script>
+<script src="../../table-resolver.js"></script>
+</head>
+<body>
+
+<div class="card no-print">
+  <h2>🧶 Production Summary Report</h2>
+  <div class="grid">
+    <div><label>From Date</label><input type="date" id="fromDate"></div>
+    <div><label>To Date</label><input type="date" id="toDate"></div>
+    <div><label>Shift</label>
+      <select id="shift">
+        <option value="All">All</option>
+        <option value="Morning">Morning</option>
+        <option value="Night">Night</option>
+      </select>
+    </div>
+    <div><label>Group</label>
+      <select id="group">
+        <option value="All">All</option>
+        <option value="A">A</option>
+        <option value="B">B</option>
+      </select>
+    </div>
+    <div><label>Section</label>
+      <select id="section">
+        <option value="All">All</option>
+        <option value="Rumbu">Rumbu</option>
+        <option value="MamaSannu">Mama Sannu</option>
+      </select>
+    </div>
+    <div><label>Mat Type</label>
+      <select id="matType">
+        <option value="All">All</option>
+        <option value="No.1">No.1</option>
+        <option value="No.2">No.2</option>
+        <option value="No.3">No.3</option>
+        <option value="No.4">No.4</option>
+        <option value="Prayer Mat">Prayer Mat</option>
+        <option value="Hajj Mat">Hajj Mat</option>
+      </select>
+    </div>
+    <div><label>Work Type</label>
+      <select id="workType">
+        <option value="All">All</option>
+        <option value="Overtime">Holiday Days</option>
+        <option value="Normal">Working Days</option>
+        <option value="B grade">B Grade Days</option>
+      </select>
+    </div>
+    <div><label>Work Duration</label>
+      <select id="workMinutes">
+        <option value="660">11 hours</option>
+        <option value="600">10 hours</option>
+        <option value="540">9 hours</option>
+      </select>
+    </div>
+  </div>
+
+  <div style="margin-top:10px;">
+    <label>Shed</label>
+    <div class="shed-btns">
+      <button class="sm" type="button" onclick="selectAllSheds()">Select All</button>
+      <button class="sm alt" type="button" onclick="clearAllSheds()">Clear All</button>
+    </div>
+    <div class="shed-box" id="shedType">
+      <label><input type="checkbox" value="All" checked> All</label>
+      <label><input type="checkbox" value="1"> Shed 1</label>
+      <label><input type="checkbox" value="2"> Shed 2</label>
+      <label><input type="checkbox" value="3"> Shed 3</label>
+      <label><input type="checkbox" value="4"> Shed 4</label>
+      <label><input type="checkbox" value="5"> Shed 5</label>
+      <label><input type="checkbox" value="6"> Shed 6</label>
+      <label><input type="checkbox" value="MamaSannu"> Mama Sannu</label>
+    </div>
+  </div>
+
+  <div class="btn-row" style="margin-top:14px;">
+    <button onclick="generate()">Generate Report</button>
+    <button class="alt" onclick="window.print()">Print / Save PDF</button>
+  </div>
+  <div id="status">Connecting to Supabase...</div>
+</div>
+
+<div id="reportArea"></div>
+
+<script>
+// ── Supabase credentials (from auth.js globals) ─────────────────────────────
+let MW_ROWS = [], CTRL_ROWS = [], EXCLUDED_JOB_CODES = new Set();
+let MW_TABLE = "mat_weaving"; // resolved properly in init() below
+
+// Workshop job codes (match GAS: WSP01/WSP02/STR01 — case-insensitive)
+const WORKSHOP_CODES = new Set(['WSP01','WSP02','STR01','WSP001','WSP002','STR001']);
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+function parseDT(v){
+  if(!v) return null;
+  // Strip trailing Z/+00:00 to parse as local-ish (WAT)
+  const s = String(v).replace(/Z$|\+00:00$/, '').replace(' ','T');
+  const d = new Date(s);
+  return isNaN(d) ? null : d;
+}
+function minutesBetween(a,b){ return (!a||!b) ? 0 : (b-a)/60000; }
+function extractNumber(v){ const m=String(v||'').match(/\d+(\.\d+)?/); return m?Number(m[0]):0; }
+function norm(v){ return String(v||'').toUpperCase().trim(); }
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
+
+async function fetchAllRows(table, select, query){
+  let all = [], offset = 0; const pageSize = 1000;
+  const q = query || "";
+  while(true){
+    const hdrs = Object.assign({}, authHeaders(), {"Range-Unit":"items","Range":offset+"-"+(offset+pageSize-1)});
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=" + (select||"*") + q + "&order=id.asc", { headers: hdrs });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+// ── Shed checkbox logic ──────────────────────────────────────────────────────
+document.querySelectorAll('#shedType input[type="checkbox"]').forEach(cb=>{
+  cb.addEventListener('change', function(){
+    if(this.value==="All" && this.checked){
+      document.querySelectorAll('#shedType input').forEach(c=>{ if(c.value!=="All") c.checked=false; });
+    } else if(this.value!=="All" && this.checked){
+      document.querySelector('#shedType input[value="All"]').checked=false;
+    }
+  });
+});
+function selectAllSheds(){ document.querySelectorAll('#shedType input').forEach(cb=>cb.checked=true); }
+function clearAllSheds(){ document.querySelectorAll('#shedType input').forEach(cb=>cb.checked=false); }
+function getSelectedSheds(){
+  const sel = Array.from(document.querySelectorAll('#shedType input:checked')).map(c=>c.value);
+  if(sel.includes("All")||sel.length===0) return ["All"];
+  return sel;
+}
+
+// ── Init: load data on page load ─────────────────────────────────────────────
+async function init(){
+  const status = document.getElementById("status");
+  try{
+    // Every other page in this app gates on login before loading data —
+    // this page was missing that check entirely, which meant it could be
+    // opened and would load real production data even by someone not
+    // logged in at all, since the underlying tables also grant anon read
+    // access. This closes that gap to match the rest of the app.
+    const me = await requireAuth("../../login.html");
+    if(!me) return;
+
+    MW_TABLE = await resolveWeavingTable();
+
+    // Set default dates (today)
+    const today = new Date().toISOString().slice(0,10);
+    document.getElementById("fromDate").value = today;
+    document.getElementById("toDate").value   = today;
+
+    // Pre-load job_table exclusion codes
+    const [mw, ctrl, jobRes] = await Promise.all([
+      fetchAllRows(MW_TABLE,"*",""),
+      fetchAllRows("control","*",""),
+      fetch(SUPABASE_URL + "/rest/v1/job_table?select=job_code", { headers: authHeaders() })
+    ]);
+    MW_ROWS   = mw;
+    CTRL_ROWS = ctrl;
+    if(jobRes.ok){
+      const jr = await jobRes.json();
+      EXCLUDED_JOB_CODES = new Set(jr.map(r=>r.job_code));
+    }
+    status.style.color = "var(--accent)";
+    status.textContent = "Connected. Production rows: " + MW_ROWS.length + " | Maintenance rows: " + CTRL_ROWS.length + ".";
+  }catch(e){
+    status.style.color = "#e53935";
+    status.textContent = "Connection error: " + (e.message||e);
+  }
+}
+
+// ── Read form filters ────────────────────────────────────────────────────────
+function getFilters(){
+  return {
+    fromDate:    document.getElementById("fromDate").value,
+    toDate:      document.getElementById("toDate").value,
+    shift:       document.getElementById("shift").value,
+    group:       document.getElementById("group").value,
+    section:     document.getElementById("section").value,
+    matType:     document.getElementById("matType").value,
+    workType:    document.getElementById("workType").value,
+    shedType:    getSelectedSheds(),
+    workMinutes: Number(document.getElementById("workMinutes").value) || 660
+  };
+}
+
+// ── Filter production rows ────────────────────────────────────────────────────
+// Mirrors GAS whereProd with UPPER(TRIM()) comparisons
+function filterProd(f){
+  const shedSet = f.shedType.includes("All") ? null : new Set(f.shedType);
+  return MW_ROWS.filter(r=>{
+    if((r.date_col||"") < f.fromDate || (r.date_col||"") > f.toDate) return false;
+    if(f.shift   !=="All" && norm(r.shift)     !== norm(f.shift))    return false;
+    if(f.group   !=="All" && norm(r.group_name)!== norm(f.group))    return false;
+    if(f.section !=="All" && norm(r.section)   !== norm(f.section))  return false;
+    if(f.matType !=="All" && norm(r.mat_type)  !== norm(f.matType))  return false;
+    if(f.workType!=="All" && norm(r.work_type) !== norm(f.workType)) return false;
+    if(shedSet && !shedSet.has(String(r.shed||""))) return false;
+    return true;
+  });
+}
+
+// ── Filter maintenance rows ──────────────────────────────────────────────────
+// Mirrors GAS whereMaint with UPPER(TRIM()) comparisons
+function filterMaint(f){
+  const shedSet = f.shedType.includes("All") ? null : new Set(f.shedType);
+  return CTRL_ROWS.filter(r=>{
+    if((r.date_col||"") < f.fromDate || (r.date_col||"") > f.toDate) return false;
+    if(f.shift  !=="All" && norm(r.shift)   !== norm(f.shift))   return false;
+    if(f.section!=="All" && norm(r.section) !== norm(f.section)) return false;
+    if(shedSet && !shedSet.has(String(r.shed||""))) return false;
+    const stop = parseDT(r.stop_time), finish = parseDT(r.finish_time);
+    return !!(stop && finish);
+  });
+}
+
+// ── Core calculation — mirrors GAS BigQuery CTEs ─────────────────────────────
+// Groups prod and maint rows by date (matching GAS GROUP BY Date)
+// Returns array of per-date objects with all columns from calc_daily + SELECT
+function calcByDate(f){
+  const wm = f.workMinutes;
+  const prod   = filterProd(f);
+  const maint  = filterMaint(f);
+
+  // Accumulate production by date (matches prod_daily CTE)
+  const prodByDate = {};
+  prod.forEach(r=>{
+    const d = r.date_col;
+    if(!prodByDate[d]) prodByDate[d] = { Assets:new Set(), A:0, B:0, C:0, Total:0, Target:0 };
+    const p = prodByDate[d];
+    p.Assets.add(r.assets);
+    p.A      += extractNumber(r.a_double) + extractNumber(r.a_single);
+    p.B      += extractNumber(r.b);
+    p.C      += extractNumber(r.c);
+    p.Total  += extractNumber(r.total);
+    p.Target += extractNumber(r.target);
+  });
+
+  // Accumulate maintenance by date (matches downtime_daily CTE)
+  // Workshop codes: WSP01/WSP02/STR01 — others are Engineering
+  const maintByDate = {};
+  maint.forEach(r=>{
+    const d = r.date_col || (r.date||"");
+    if(!maintByDate[d]) maintByDate[d] = {
+      Downtime:0, WorkshopDowntime:0, EngDowntime:0,
+      EstimatedDuration:0, ERT:0,
+      AAM:new Set(), WAM:new Set(), EAM:new Set()
+    };
+    const m = maintByDate[d];
+    const stop   = parseDT(r.stop_time);
+    const start  = parseDT(r.starting_time);
+    const finish = parseDT(r.finish_time);
+    if(!stop || !finish) return;
+
+    const isWorkshop = WORKSHOP_CODES.has(norm(r.job_code));
+    const dtMin  = minutesBetween(stop, finish);
+    const ertMin = (start && finish) ? minutesBetween(start, finish) : 0;
+
+    m.Downtime += dtMin;
+    m.EstimatedDuration += extractNumber(r.extimated_time || r.estimated_time || r.estimated_duration);
+    m.AAM.add(r.assets);
+
+    if(isWorkshop){
+      m.WorkshopDowntime += dtMin;
+      m.WAM.add(r.assets);
+    } else {
+      m.EngDowntime += dtMin;
+      m.ERT         += ertMin;
+      m.EAM.add(r.assets);
+    }
+  });
+
+  // Build per-date result rows (matches calc_daily + final SELECT)
+  const allDates = new Set([...Object.keys(prodByDate), ...Object.keys(maintByDate)]);
+  const rows = [];
+
+  Array.from(allDates).sort().forEach(d=>{
+    const p = prodByDate[d];
+    const m = maintByDate[d];
+    if(!p) return; // skip dates with only maintenance and no production
+
+    const AssetsUsed = p.Assets.size;
+    const A = Math.round(p.A), B = Math.round(p.B), C = Math.round(p.C);
+    const Total = Math.round(p.Total), Target = Math.round(p.Target);
+
+    const Downtime         = m ? Math.round(m.Downtime)         : 0;
+    const WorkshopDowntime = m ? Math.round(m.WorkshopDowntime) : 0;
+    const EngDowntime      = m ? Math.round(m.EngDowntime)      : 0;
+    const EstimatedDuration= m ? Math.round(m.EstimatedDuration): 0;
+    const ERT              = m ? Math.round(m.ERT)              : 0;
+    const EWT              = Math.max(EngDowntime - ERT, 0);     // matches GAS GREATEST(EngDowntime-ERT, 0)
+    const TechnicalLoss    = ERT - EstimatedDuration;            // matches GAS ERT - EstimatedDuration
+
+    const AAM = m ? m.AAM.size : 0;
+    const WAM = m ? m.WAM.size : 0;
+    const EAM = m ? m.EAM.size : 0;
+
+    // MLD = ROUND(SUM((Target * Downtime) / (wm * AssetCountDaily)))
+    const MLD = AssetsUsed > 0
+      ? Math.round((Target * Downtime) / (wm * AssetsUsed))
+      : 0;
+
+    // WMLD/EMLD proportional share of MLD (matches GAS formula)
+    const WMLD = Downtime > 0 ? Math.round((WorkshopDowntime / Downtime) * MLD) : 0;
+    const EMLD = Downtime > 0 ? Math.round((EngDowntime      / Downtime) * MLD) : 0;
+    const TLM  = Downtime > 0 ? Math.round((TechnicalLoss    / Downtime) * MLD) : 0;
+
+    const ATG = Target - MLD;
+    const MLU = Math.abs(Total - ATG);
+
+    // EngEfficiency = EstimatedDuration / ERT * 100 (matches F2)
+    const EngEfficiency = ERT > 0 ? Math.round((EstimatedDuration / ERT) * 100) : 0;
+
+    // pA, pB, pC as % of Total (matches F2)
+    const pA = Total > 0 ? Math.round((A / Total) * 100 * 100) / 100 : 0;
+    const pB = Total > 0 ? Math.round((B / Total) * 100 * 100) / 100 : 0;
+    const pC = Total > 0 ? Math.round((C / Total) * 100 * 100) / 100 : 0;
+    // pP = Total / Target * 100 (matches F2)
+    const pP = Target > 0 ? Math.round((Total / Target) * 100) : 0;
+
+    rows.push({ Date:d, AssetsUsed, AAM, WAM, EAM,
+      A, B, C, Total, Target,
+      Downtime, WorkshopDowntime, EngDowntime,
+      ERT, EWT, EstimatedDuration, TechnicalLoss, TLM,
+      MLD, WMLD, EMLD, ATG, MLU,
+      EngEfficiency, pA, pB, pC, pP });
+  });
+
+  return rows;
+}
+
+// ── Generate report ──────────────────────────────────────────────────────────
+function generate(){
+  const f = getFilters();
+  const status = document.getElementById("status");
+  const area   = document.getElementById("reportArea");
+  area.innerHTML = "";
+
+  if(!f.fromDate || !f.toDate){ alert("Please select both dates."); return; }
+  if(!MW_ROWS.length){ alert("No data loaded. Check connection."); return; }
+
+  status.textContent = "Calculating...";
+
+  try{
+    const rows = calcByDate(f);
+    if(!rows.length){ area.innerHTML = '<div class="card"><p style="text-align:center;">No data found for the selected filters.</p></div>'; status.textContent="Done."; return; }
+
+    // ── Totals accumulation ────────────────────────────────────────────────
+    const tot = { AssetsUsed:0,AAM:0,WAM:0,EAM:0,A:0,B:0,C:0,Total:0,Target:0,
+      Downtime:0,WorkshopDowntime:0,EngDowntime:0,ERT:0,EWT:0,
+      EstimatedDuration:0,TechnicalLoss:0,TLM:0,
+      MLD:0,WMLD:0,EMLD:0,ATG:0,MLU:0,EngEff:0 };
+    rows.forEach(r=>{
+      tot.AssetsUsed+=r.AssetsUsed; tot.AAM+=r.AAM; tot.WAM+=r.WAM; tot.EAM+=r.EAM;
+      tot.A+=r.A; tot.B+=r.B; tot.C+=r.C; tot.Total+=r.Total; tot.Target+=r.Target;
+      tot.Downtime+=r.Downtime; tot.WorkshopDowntime+=r.WorkshopDowntime;
+      tot.EngDowntime+=r.EngDowntime; tot.ERT+=r.ERT; tot.EWT+=r.EWT;
+      tot.EstimatedDuration+=r.EstimatedDuration;
+      tot.TechnicalLoss+=r.TechnicalLoss; tot.TLM+=r.TLM;
+      tot.MLD+=r.MLD; tot.WMLD+=r.WMLD; tot.EMLD+=r.EMLD;
+      tot.ATG+=r.ATG; tot.MLU+=r.MLU; tot.EngEff+=r.EngEfficiency;
+    });
+    const wPA = tot.Total>0 ? Math.round((tot.A/tot.Total)*100*100)/100 : 0;
+    const wPB = tot.Total>0 ? Math.round((tot.B/tot.Total)*100*100)/100 : 0;
+    const wPC = tot.Total>0 ? Math.round((tot.C/tot.Total)*100*100)/100 : 0;
+    const wPP = tot.Target>0 ? Math.round((tot.Total/tot.Target)*100) : 0;
+    const avgEng = rows.length>0 ? Math.round(tot.EngEff/rows.length) : 0;
+
+    // ── Table header — F2 columns ─────────────────────────────────────────
+    // Columns: Date | TAU | WAM | EAM | A | B | C | Total | Target |
+    //          DT | WDT | ERT | EWT | ET | MLD | ATG | MLU | Eng | %A | %B | %C | %P
+    const headers = ["Date","TAU","WAM","EAM","A","B","C","Total","Target",
+                     "DT","WDT","ERT","EWT","ET","MLD","ATG","MLU","Eng%","%A","%B","%C","%P"];
+
+    let tableHTML = `<table>
+      <thead><tr>${headers.map(h=>`<th>${h}</th>`).join("")}</tr></thead>
+      <tbody>`;
+
+    const dates=[], totals=[], mlus=[], mlds=[], assets=[];
+
+    rows.forEach(r=>{
+      tableHTML += `<tr>
+        <td>${r.Date}</td>
+        <td>${r.AssetsUsed}</td>
+        <td>${r.WAM}</td>
+        <td>${r.EAM}</td>
+        <td>${r.A}</td>
+        <td>${r.B}</td>
+        <td>${r.C}</td>
+        <td>${r.Total}</td>
+        <td>${r.Target}</td>
+        <td>${r.Downtime}</td>
+        <td>${r.WorkshopDowntime}</td>
+        <td>${r.ERT}</td>
+        <td>${r.EWT}</td>
+        <td>${r.EstimatedDuration}</td>
+        <td>${r.MLD}</td>
+        <td>${r.ATG}</td>
+        <td>${r.MLU}</td>
+        <td>${r.EngEfficiency}%</td>
+        <td>${r.pA}%</td>
+        <td>${r.pB}%</td>
+        <td>${r.pC}%</td>
+        <td>${r.pP}%</td>
+      </tr>`;
+      dates.push(r.Date); totals.push(r.Total); mlus.push(r.MLU); mlds.push(r.MLD); assets.push(r.AssetsUsed);
+    });
+
+    // Totals row
+    tableHTML += `<tr class="total-row">
+      <td>TOTAL</td>
+      <td>${tot.AssetsUsed}</td>
+      <td>${tot.WAM}</td>
+      <td>${tot.EAM}</td>
+      <td>${tot.A}</td>
+      <td>${tot.B}</td>
+      <td>${tot.C}</td>
+      <td>${tot.Total}</td>
+      <td>${tot.Target}</td>
+      <td>${tot.Downtime}</td>
+      <td>${tot.WorkshopDowntime}</td>
+      <td>${tot.ERT}</td>
+      <td>${tot.EWT}</td>
+      <td>${tot.EstimatedDuration}</td>
+      <td>${tot.MLD}</td>
+      <td>${tot.ATG}</td>
+      <td>${tot.MLU}</td>
+      <td>${avgEng}%</td>
+      <td>${wPA}%</td>
+      <td>${wPB}%</td>
+      <td>${wPC}%</td>
+      <td>${wPP}%</td>
+    </tr>`;
+
+    tableHTML += "</tbody></table>";
+
+    // ── Column header legend ──────────────────────────────────────────────
+    const legend = `<p style="font-size:11px;color:var(--muted);margin-top:6px;">
+      <b>TAU</b>=Total Assets Used &nbsp;|&nbsp;
+      <b>WAM</b>=Workshop Asset Machines &nbsp;|&nbsp;
+      <b>EAM</b>=Engineering Asset Machines &nbsp;|&nbsp;
+      <b>DT</b>=Total Downtime &nbsp;|&nbsp;
+      <b>WDT</b>=Workshop Downtime &nbsp;|&nbsp;
+      <b>ERT</b>=Eng Repair Time &nbsp;|&nbsp;
+      <b>EWT</b>=Eng Waiting Time &nbsp;|&nbsp;
+      <b>ET</b>=Estimated Time &nbsp;|&nbsp;
+      <b>MLD</b>=Mat Loss by Downtime &nbsp;|&nbsp;
+      <b>ATG</b>=Actual Target &nbsp;|&nbsp;
+      <b>MLU</b>=Mat Loss Unaccounted &nbsp;|&nbsp;
+      <b>Eng%</b>=Engineering Efficiency
+    </p>`;
+
+    // ── Build report HTML ─────────────────────────────────────────────────
+    const shedLabel = f.shedType.includes("All") ? "All" : f.shedType.join(", ");
+    area.innerHTML = `
+      <div class="card">
+        <h2>🧶 Production Summary Report</h2>
+        <p style="text-align:center;font-size:13px;">
+          ${f.fromDate} → ${f.toDate} &nbsp;|&nbsp;
+          Shift: ${f.shift} &nbsp;|&nbsp; Group: ${f.group} &nbsp;|&nbsp;
+          Section: ${f.section} &nbsp;|&nbsp; Mat Type: ${f.matType} &nbsp;|&nbsp;
+          Work Type: ${f.workType} &nbsp;|&nbsp; Shed: ${shedLabel} &nbsp;|&nbsp;
+          Work: ${f.workMinutes/60} hrs
+        </p>
+        <div class="report-wrap">${tableHTML}</div>
+        ${legend}
+        <div class="chart-wrap">
+          <canvas id="totalChart"></canvas>
+          <canvas id="mluChart"></canvas>
+          <canvas id="mldChart"></canvas>
+          <canvas id="assetChart"></canvas>
+        </div>
+      </div>`;
+
+    // ── Charts ────────────────────────────────────────────────────────────
+    const chartOpts = { responsive:true, scales:{y:{beginAtZero:true}} };
+    new Chart(document.getElementById("totalChart"), {
+      type:"line",
+      data:{ labels:dates, datasets:[{ label:"Total Production", data:totals,
+        borderColor:"#e69138", backgroundColor:"rgba(230,145,56,.2)", fill:true, tension:.2 }] },
+      options:chartOpts
+    });
+    new Chart(document.getElementById("mluChart"), {
+      type:"bar",
+      data:{ labels:dates, datasets:[{ label:"MLU (Mat Loss Unaccounted)", data:mlus, backgroundColor:"#0b5394" }] },
+      options:chartOpts
+    });
+    new Chart(document.getElementById("mldChart"), {
+      type:"bar",
+      data:{ labels:dates, datasets:[{ label:"MLD (Mat Loss by Downtime)", data:mlds, backgroundColor:"#f4b084" }] },
+      options:chartOpts
+    });
+    new Chart(document.getElementById("assetChart"), {
+      type:"bar",
+      data:{ labels:dates, datasets:[{ label:"Assets Used (TAU)", data:assets, backgroundColor:"#6aa84f" }] },
+      options:chartOpts
+    });
+
+    status.textContent = `Done. ${rows.length} day(s) of data | Total Production: ${tot.Total} | Total MLD: ${tot.MLD} | Total MLU: ${tot.MLU}`;
+  }catch(e){
+    status.style.color="#e53935";
+    status.textContent = "Error: " + (e.message||e);
+    console.error(e);
+  }
+}
+
+// ── Boot ─────────────────────────────────────────────────────────────────────
+window.addEventListener("DOMContentLoaded", init);
+</script>
+</body>
+</html>
