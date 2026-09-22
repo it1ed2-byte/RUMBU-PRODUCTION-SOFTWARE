@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>View Task</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;--amber:#b7791f;}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;color:var(--text);}
+  .wrap{max-width:920px;margin:0 auto;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;}
+  .card h3{color:var(--navy);margin:0 0 4px;font-size:16px;}
+  .card .sub{color:var(--blue);font-size:12px;margin:0 0 14px;}
+  label{display:block;font-size:12px;font-weight:bold;color:var(--text);margin:8px 0 4px;}
+  input,textarea,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;}
+  textarea{resize:vertical;min-height:55px;}
+  button{padding:9px 14px;border:none;border-radius:8px;font-weight:bold;font-size:13px;cursor:pointer;background:var(--blue);color:#fff;margin-top:8px;}
+  button:hover{background:var(--blue-dark);}
+  button.success{background:var(--green);} button.grey{background:var(--muted);}
+  .status{margin-top:8px;font-weight:bold;font-size:12px;min-height:14px;}
+  .status.ok{color:var(--green);} .status.err{color:var(--red);}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;}
+  .hidden{display:none;}
+  .badge{display:inline-block;padding:3px 9px;border-radius:5px;font-size:11px;font-weight:bold;color:#fff;}
+  .badge.pending{background:var(--muted);} .badge.in_progress{background:var(--amber);} .badge.complete{background:var(--green);}
+  .badge.approved{background:var(--navy);}
+  .filter-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;}
+  .filter-tab{padding:6px 12px;border-radius:16px;background:#eef2f7;border:1px solid var(--line);font-size:12px;font-weight:bold;color:var(--muted);cursor:pointer;margin:0;}
+  .filter-tab.active{background:var(--blue);color:#fff;border-color:var(--blue);}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  table{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px;}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;}
+  thead th{background:var(--navy);color:#fff;font-size:12px;}
+  tbody tr:nth-child(even){background:#f6f8fb;}
+  tbody tr{cursor:pointer;} tbody tr:hover{background:#eaf0f8;}
+  .assignee-row{display:flex;align-items:flex-start;gap:8px;padding:8px 0;border-bottom:1px solid #eee;}
+  .assignee-row:last-child{border-bottom:none;}
+  .assignee-row .info{flex:1;}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<div id="connStatus">Checking your session...</div>
+
+<div id="breadcrumb"></div>
+<div id="content"></div>
+</div>
+
+<script>
+let ME = null;
+let CURRENT = { level: "tasks", taskId: null, todoId: null };
+
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c])); }
+function fmtDate(d){ return d || "-"; }
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    status.classList.add("hidden");
+    await showTaskList("all");
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "Could not load: " + (e.message||e);
+  }
+}
+
+function computeFilterStatus(approved, total, completed){
+  if(approved) return "approved";
+  if(total === 0) return "pending";
+  if(completed === total) return "complete";
+  return "in_progress";
+}
+
+function renderFilterTabs(current, onClick){
+  const labels = { all:"All", pending:"Pending", in_progress:"In Progress", complete:"Complete", approved:"Approved" };
+  return `<div class="filter-tabs">` + Object.keys(labels).map(k=>
+    `<button class="filter-tab ${k===current?'active':''}" onclick="${onClick}('${k}')">${labels[k]}</button>`
+  ).join("") + `</div>`;
+}
+
+// =========================================================
+// LEVEL 1: TASKS
+// =========================================================
+async function showTaskList(filter){
+  document.getElementById("breadcrumb").innerHTML = "";
+  const content = document.getElementById("content");
+  content.innerHTML = "Loading...";
+
+  const { data: tasks, error } = await sb.from("tasks").select("*").order("created_at", { ascending:false });
+  if(error){ content.innerHTML = "Error: " + error.message; return; }
+
+  const taskIds = (tasks||[]).map(t=>t.id);
+  let progressByTask = {};
+  if(taskIds.length){
+    const { data: prog } = await sb.from("task_assignee_progress").select("task_id, completed").in("task_id", taskIds);
+    (prog||[]).forEach(p=>{
+      if(!progressByTask[p.task_id]) progressByTask[p.task_id] = { total:0, completed:0 };
+      progressByTask[p.task_id].total++;
+      if(p.completed) progressByTask[p.task_id].completed++;
+    });
+  }
+
+  const rows = (tasks||[]).map(t=>{
+    const pr = progressByTask[t.id] || { total:0, completed:0 };
+    return { ...t, _filterStatus: computeFilterStatus(t.approved, pr.total, pr.completed) };
+  });
+
+  const fromDate = document.getElementById("filter_start")?.value || "";
+  const toDate = document.getElementById("filter_due")?.value || "";
+
+  let html = `<div class="card">
+    <h3>Tasks</h3>
+    ${renderFilterTabs(filter, "showTaskList")}
+    <div class="grid">
+      <div><label>Start Date From</label><input type="date" id="filter_start" onchange="showTaskList('${filter}')" value="${fromDate}"></div>
+      <div><label>Due Date To</label><input type="date" id="filter_due" onchange="showTaskList('${filter}')" value="${toDate}"></div>
+    </div>
+  `;
+
+  let filtered = rows;
+  if(filter !== "all") filtered = filtered.filter(t=>t._filterStatus === filter);
+  if(fromDate) filtered = filtered.filter(t=>!t.start_date || t.start_date >= fromDate);
+  if(toDate) filtered = filtered.filter(t=>!t.due_date || t.due_date <= toDate);
+
+  if(!filtered.length){
+    html += "<p class='sub'>No Tasks match this filter.</p>";
+  } else {
+    html += "<table><tr><th>Title</th><th>Start</th><th>Due</th><th>Status</th></tr>";
+    filtered.forEach(t=>{
+      html += `<tr onclick="showTaskDetail(${t.id})"><td>${esc(t.title)}</td><td>${fmtDate(t.start_date)}</td><td>${fmtDate(t.due_date)}</td><td><span class="badge ${t._filterStatus}">${t._filterStatus.replace('_',' ')}</span></td></tr>`;
+    });
+    html += "</table>";
+  }
+  html += "</div>";
+  content.innerHTML = html;
+}
+
+// =========================================================
+// TASK DETAIL + its TODOS list
+// =========================================================
+async function showTaskDetail(taskId){
+  CURRENT = { level:"todos", taskId, todoId:null };
+  document.getElementById("breadcrumb").innerHTML = `<button class="grey" onclick="showTaskList('all')">&larr; All Tasks</button>`;
+
+  const content = document.getElementById("content");
+  content.innerHTML = "Loading...";
+
+  const { data: task, error } = await sb.from("tasks").select("*").eq("id", taskId).single();
+  if(error){ content.innerHTML = "Error: " + error.message; return; }
+
+  const { data: assignees } = await sb.from("task_assignees").select("profile_id, profiles(username, role)").eq("task_id", taskId);
+  const { data: progress } = await sb.from("task_assignee_progress").select("*").eq("task_id", taskId);
+  const progressByProfile = {}; (progress||[]).forEach(p=>progressByProfile[p.profile_id] = p);
+
+  const iAmAssignee = (assignees||[]).some(a=>a.profile_id === ME.id);
+  const total = (assignees||[]).length;
+  const completed = (progress||[]).filter(p=>p.completed).length;
+  const filterStatus = computeFilterStatus(task.approved, total, completed);
+  const canApprove = ME.role === "super_admin" || task.created_by === ME.id || ME.role === "admin";
+
+  let html = `<div class="card">
+    <h3>${esc(task.title)} <span class="badge ${filterStatus}">${filterStatus.replace('_',' ')}</span></h3>
+    <p>${esc(task.description||"")}</p>
+    <p style="font-size:12px;color:#6b7280;">Start: ${fmtDate(task.start_date)} &nbsp;|&nbsp; Due: ${fmtDate(task.due_date)}</p>
+
+    <h3 style="margin-top:16px;">Assignees &amp; Reports</h3>
+    <div id="assigneeWrap"></div>
+    ${(!task.approved && filterStatus === "complete" && canApprove) ? `<button class="success" onclick="approveLevel('task', ${task.id})">APPROVE TASK</button>` : ""}
+    <div class="status" id="status_approve_task_${task.id}"></div>
+  </div>`;
+
+  content.innerHTML = html;
+  renderAssigneeList("assigneeWrap", "task", task.id, assignees||[], progressByProfile, iAmAssignee);
+
+  await showTodoList(taskId, "all");
+}
+
+// =========================================================
+// LEVEL 2: TODOS under a Task
+// =========================================================
+async function showTodoList(taskId, filter){
+  CURRENT = { level:"todos", taskId, todoId:null };
+
+  const { data: todos, error } = await sb.from("todos").select("*").eq("task_id", taskId).order("created_at", { ascending:false });
+  if(error){ return; }
+
+  const todoIds = (todos||[]).map(t=>t.id);
+  let progressByTodo = {};
+  if(todoIds.length){
+    const { data: prog } = await sb.from("todo_assignee_progress").select("todo_id, completed").in("todo_id", todoIds);
+    (prog||[]).forEach(p=>{
+      if(!progressByTodo[p.todo_id]) progressByTodo[p.todo_id] = { total:0, completed:0 };
+      progressByTodo[p.todo_id].total++;
+      if(p.completed) progressByTodo[p.todo_id].completed++;
+    });
+  }
+
+  const rows = (todos||[]).map(t=>{
+    const pr = progressByTodo[t.id] || { total:0, completed:0 };
+    return { ...t, _filterStatus: computeFilterStatus(t.approved, pr.total, pr.completed) };
+  });
+
+  let filtered = rows;
+  if(filter && filter !== "all") filtered = filtered.filter(t=>t._filterStatus === filter);
+
+  const canAdd = await canManageAtLevel(taskId);
+
+  let html = document.getElementById("content").innerHTML + `<div class="card" id="todosCard">
+    <h3>Todos</h3>
+    ${renderFilterTabs(filter||"all", "refreshTodoList")}
+    <div id="todosListWrap"></div>
+    ${canAdd ? `
+      <label>Add Todo — Title</label><input id="new_todo_title">
+      <label>Description</label><textarea id="new_todo_desc"></textarea>
+      <label>Assign To</label>
+      <div id="new_todo_assignees" style="max-height:160px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:8px;"></div>
+      <button onclick="addTodo(${taskId})">ADD TODO</button>
+      <div class="status" id="status_addtodo"></div>
+    ` : ""}
+  </div>`;
+  document.getElementById("content").innerHTML = html;
+  if(canAdd) await populateAssigneePicker("new_todo_assignees");
+
+  let listHtml = "";
+  if(!filtered.length){
+    listHtml = "<p class='sub'>No Todos match this filter.</p>";
+  } else {
+    listHtml = "<table><tr><th>Title</th><th>Status</th></tr>";
+    filtered.forEach(t=>{
+      listHtml += `<tr onclick="showTodoDetail(${t.id}, ${taskId})"><td>${esc(t.title)}</td><td><span class="badge ${t._filterStatus}">${t._filterStatus.replace('_',' ')}</span></td></tr>`;
+    });
+    listHtml += "</table>";
+  }
+  document.getElementById("todosListWrap").innerHTML = listHtml;
+}
+
+function refreshTodoList(filter){ showTodoList(CURRENT.taskId, filter); }
+
+async function populateAssigneePicker(containerId){
+  const wrap = document.getElementById(containerId);
+  let rows = [];
+  if(ME.role === "super_admin"){
+    const { data } = await sb.from("profiles").select("id, username, role").in("role", ["admin","user"]).order("username");
+    rows = data || [];
+  } else if(ME.role === "admin" && ME.sectionIds && ME.sectionIds.length){
+    const { data: ps } = await sb.from("profile_sections").select("profile_id").in("section_id", ME.sectionIds);
+    const ids = [...new Set((ps||[]).map(r=>r.profile_id))];
+    if(ids.length){
+      const { data } = await sb.from("profiles").select("id, username, role").in("id", ids).order("username");
+      rows = data || [];
+    }
+  }
+  wrap.innerHTML = rows.map(r=>`<label style="display:block;font-weight:normal;font-size:12px;"><input type="checkbox" class="assignee-pick" value="${r.id}" style="width:auto;"> ${r.username} (${r.role})</label>`).join("") || "<p class='sub'>No one available.</p>";
+}
+
+async function addTodo(taskId){
+  const status = document.getElementById("status_addtodo");
+  const title = document.getElementById("new_todo_title").value.trim();
+  const description = document.getElementById("new_todo_desc").value.trim();
+  const assigneeIds = Array.from(document.querySelectorAll("#new_todo_assignees .assignee-pick:checked")).map(el=>el.value);
+  if(!title){ status.className="status err"; status.textContent="Enter a title."; return; }
+  status.className="status"; status.textContent="Adding...";
+  try{
+    const { data: todo, error } = await sb.from("todos").insert({ task_id: taskId, title, description, created_by: ME.id }).select().single();
+    if(error) throw error;
+    if(assigneeIds.length){
+      const rows = assigneeIds.map(id=>({ todo_id: todo.id, profile_id: id }));
+      const { error: aErr } = await sb.from("todo_assignees").insert(rows);
+      if(aErr) throw aErr;
+    }
+    await showTaskDetail(taskId);
+  }catch(e){
+    status.className="status err"; status.textContent="❌ " + e.message;
+  }
+}
+
+// =========================================================
+// TODO DETAIL + its SUB-TODOS list
+// =========================================================
+async function showTodoDetail(todoId, taskId){
+  CURRENT = { level:"subtodos", taskId, todoId };
+  document.getElementById("breadcrumb").innerHTML = `
+    <button class="grey" onclick="showTaskList('all')">&larr; All Tasks</button>
+    <button class="grey" onclick="showTaskDetail(${taskId})">&larr; Back to Todos</button>
+  `;
+
+  const content = document.getElementById("content");
+  content.innerHTML = "Loading...";
+
+  const { data: todo, error } = await sb.from("todos").select("*").eq("id", todoId).single();
+  if(error){ content.innerHTML = "Error: " + error.message; return; }
+
+  const { data: assignees } = await sb.from("todo_assignees").select("profile_id, profiles(username, role)").eq("todo_id", todoId);
+  const { data: progress } = await sb.from("todo_assignee_progress").select("*").eq("todo_id", todoId);
+  const progressByProfile = {}; (progress||[]).forEach(p=>progressByProfile[p.profile_id] = p);
+
+  const iAmAssignee = (assignees||[]).some(a=>a.profile_id === ME.id);
+  const total = (assignees||[]).length;
+  const completed = (progress||[]).filter(p=>p.completed).length;
+  const filterStatus = computeFilterStatus(todo.approved, total, completed);
+  const canApprove = ME.role === "super_admin" || todo.created_by === ME.id || ME.role === "admin";
+  const canAdd = await canManageAtLevel(taskId);
+
+  let html = `<div class="card">
+    <h3>${esc(todo.title)} <span class="badge ${filterStatus}">${filterStatus.replace('_',' ')}</span></h3>
+    <p>${esc(todo.description||"")}</p>
+
+    <h3 style="margin-top:16px;">Assignees &amp; Reports</h3>
+    <div id="assigneeWrap"></div>
+    ${(!todo.approved && filterStatus === "complete" && canApprove) ? `<button class="success" onclick="approveLevel('todo', ${todo.id})">APPROVE TODO</button>` : ""}
+    <div class="status" id="status_approve_todo_${todo.id}"></div>
+  </div>
+
+  <div class="card" id="subsCard">
+    <h3>Sub-todos</h3>
+    <div id="subsFilterWrap">${renderFilterTabs("all", "refreshSubtodoList")}</div>
+    <div id="subsListWrap"></div>
+    ${canAdd ? `
+      <label>Add Sub-todo — Title</label><input id="new_sub_title">
+      <label>Description</label><textarea id="new_sub_desc"></textarea>
+      <label>Assign To</label>
+      <div id="new_sub_assignees" style="max-height:160px;overflow-y:auto;border:1px solid var(--line);border-radius:8px;padding:8px;"></div>
+      <button onclick="addSubtodo(${todoId})">ADD SUB-TODO</button>
+      <div class="status" id="status_addsub"></div>
+    ` : ""}
+  </div>`;
+
+  content.innerHTML = html;
+  renderAssigneeList("assigneeWrap", "todo", todo.id, assignees||[], progressByProfile, iAmAssignee);
+  if(canAdd) await populateAssigneePicker("new_sub_assignees");
+
+  await showSubtodoList(todoId, taskId, "all");
+}
+
+async function showSubtodoList(todoId, taskId, filter){
+  const { data: subs, error } = await sb.from("subtodos").select("*").eq("todo_id", todoId).order("created_at", { ascending:false });
+  if(error) return;
+
+  const subIds = (subs||[]).map(s=>s.id);
+  let progressBySub = {};
+  if(subIds.length){
+    const { data: prog } = await sb.from("subtodo_assignee_progress").select("subtodo_id, completed").in("subtodo_id", subIds);
+    (prog||[]).forEach(p=>{
+      if(!progressBySub[p.subtodo_id]) progressBySub[p.subtodo_id] = { total:0, completed:0 };
+      progressBySub[p.subtodo_id].total++;
+      if(p.completed) progressBySub[p.subtodo_id].completed++;
+    });
+  }
+
+  const rows = (subs||[]).map(s=>{
+    const pr = progressBySub[s.id] || { total:0, completed:0 };
+    return { ...s, _filterStatus: computeFilterStatus(s.approved, pr.total, pr.completed) };
+  });
+
+  let filtered = rows;
+  if(filter && filter !== "all") filtered = filtered.filter(s=>s._filterStatus === filter);
+
+  document.getElementById("subsFilterWrap").innerHTML = renderFilterTabs(filter||"all", "refreshSubtodoList");
+
+  let listHtml = "";
+  if(!filtered.length){
+    listHtml = "<p class='sub'>No Sub-todos match this filter.</p>";
+  } else {
+    listHtml = "<table><tr><th>Title</th><th>Status</th></tr>";
+    filtered.forEach(s=>{
+      listHtml += `<tr onclick="showSubtodoDetail(${s.id}, ${todoId}, ${taskId})"><td>${esc(s.title)}</td><td><span class="badge ${s._filterStatus}">${s._filterStatus.replace('_',' ')}</span></td></tr>`;
+    });
+    listHtml += "</table>";
+  }
+  document.getElementById("subsListWrap").innerHTML = listHtml;
+}
+
+function refreshSubtodoList(filter){ showSubtodoList(CURRENT.todoId, CURRENT.taskId, filter); }
+
+async function addSubtodo(todoId){
+  const status = document.getElementById("status_addsub");
+  const title = document.getElementById("new_sub_title").value.trim();
+  const description = document.getElementById("new_sub_desc").value.trim();
+  const assigneeIds = Array.from(document.querySelectorAll("#new_sub_assignees .assignee-pick:checked")).map(el=>el.value);
+  if(!title){ status.className="status err"; status.textContent="Enter a title."; return; }
+  status.className="status"; status.textContent="Adding...";
+  try{
+    const { data: sub, error } = await sb.from("subtodos").insert({ todo_id: todoId, title, description, created_by: ME.id }).select().single();
+    if(error) throw error;
+    if(assigneeIds.length){
+      const rows = assigneeIds.map(id=>({ subtodo_id: sub.id, profile_id: id }));
+      const { error: aErr } = await sb.from("subtodo_assignees").insert(rows);
+      if(aErr) throw aErr;
+    }
+    await showTodoDetail(todoId, CURRENT.taskId);
+  }catch(e){
+    status.className="status err"; status.textContent="❌ " + e.message;
+  }
+}
+
+// =========================================================
+// SUB-TODO DETAIL (leaf level)
+// =========================================================
+async function showSubtodoDetail(subId, todoId, taskId){
+  document.getElementById("breadcrumb").innerHTML = `
+    <button class="grey" onclick="showTaskList('all')">&larr; All Tasks</button>
+    <button class="grey" onclick="showTaskDetail(${taskId})">&larr; Todos</button>
+    <button class="grey" onclick="showTodoDetail(${todoId}, ${taskId})">&larr; Back to Sub-todos</button>
+  `;
+  const content = document.getElementById("content");
+  content.innerHTML = "Loading...";
+
+  const { data: sub, error } = await sb.from("subtodos").select("*").eq("id", subId).single();
+  if(error){ content.innerHTML = "Error: " + error.message; return; }
+
+  const { data: assignees } = await sb.from("subtodo_assignees").select("profile_id, profiles(username, role)").eq("subtodo_id", subId);
+  const { data: progress } = await sb.from("subtodo_assignee_progress").select("*").eq("subtodo_id", subId);
+  const progressByProfile = {}; (progress||[]).forEach(p=>progressByProfile[p.profile_id] = p);
+
+  const iAmAssignee = (assignees||[]).some(a=>a.profile_id === ME.id);
+  const total = (assignees||[]).length;
+  const completed = (progress||[]).filter(p=>p.completed).length;
+  const filterStatus = computeFilterStatus(sub.approved, total, completed);
+  const canApprove = ME.role === "super_admin" || sub.created_by === ME.id || ME.role === "admin";
+
+  let html = `<div class="card">
+    <h3>${esc(sub.title)} <span class="badge ${filterStatus}">${filterStatus.replace('_',' ')}</span></h3>
+    <p>${esc(sub.description||"")}</p>
+    <h3 style="margin-top:16px;">Assignees &amp; Reports</h3>
+    <div id="assigneeWrap"></div>
+    ${(!sub.approved && filterStatus === "complete" && canApprove) ? `<button class="success" onclick="approveLevel('subtodo', ${sub.id})">APPROVE SUB-TODO</button>` : ""}
+    <div class="status" id="status_approve_subtodo_${sub.id}"></div>
+  </div>`;
+
+  content.innerHTML = html;
+  renderAssigneeList("assigneeWrap", "subtodo", sub.id, assignees||[], progressByProfile, iAmAssignee);
+}
+
+// =========================================================
+// SHARED: assignee list with per-person report + complete tick
+// =========================================================
+function renderAssigneeList(containerId, level, id, assignees, progressByProfile, iAmAssignee){
+  const container = document.getElementById(containerId);
+  if(!assignees.length){
+    container.innerHTML = "<p class='sub'>No one assigned yet. This item stays Pending until someone is.</p>";
+    return;
+  }
+
+  let html = "";
+  assignees.forEach(a=>{
+    const p = progressByProfile[a.profile_id] || {};
+    const isMe = a.profile_id === ME.id;
+    const uname = a.profiles ? a.profiles.username : "(unknown)";
+    const role = a.profiles ? a.profiles.role : "";
+    html += `<div class="assignee-row">
+      <input type="checkbox" ${p.completed?"checked":""} ${isMe ? `onchange="toggleMyProgress('${level}', ${id}, this.checked)"` : "disabled"}>
+      <div class="info">
+        <b>${esc(uname)}</b> (${role}) ${p.completed ? '<span class="badge complete">done</span>' : '<span class="badge pending">pending</span>'}
+        ${isMe ? `
+          <label>My Report</label>
+          <textarea id="myreport_text_${level}_${id}">${esc(p.report_text||"")}</textarea>
+          <input type="file" id="myreport_file_${level}_${id}">
+          <button onclick="saveMyReport('${level}', ${id})">SAVE MY REPORT</button>
+          <div class="status" id="status_myreport_${level}_${id}"></div>
+        ` : (p.report_text || p.report_file_path ? `
+          <p style="font-size:12px;">${esc(p.report_text||"")}</p>
+          ${p.report_file_path ? `<button onclick="downloadReport('${p.report_file_path}')">DOWNLOAD FILE</button>` : ""}
+        ` : `<p class="sub">No report submitted yet.</p>`)}
+      </div>
+    </div>`;
+  });
+  container.innerHTML = html;
+}
+
+function tableFor(level){ return level === "task" ? "task_assignee_progress" : level === "todo" ? "todo_assignee_progress" : "subtodo_assignee_progress"; }
+function idColFor(level){ return level === "task" ? "task_id" : level === "todo" ? "todo_id" : "subtodo_id"; }
+function parentTableFor(level){ return level === "task" ? "tasks" : level === "todo" ? "todos" : "subtodos"; }
+
+async function toggleMyProgress(level, id, checked){
+  try{
+    const table = tableFor(level); const col = idColFor(level);
+    const row = { [col]: id, profile_id: ME.id, completed: checked, completed_at: checked ? new Date().toISOString() : null };
+    const { error } = await sb.from(table).upsert(row, { onConflict: col + ",profile_id" });
+    if(error) throw error;
+    await recomputeStatus(level, id);
+    await refreshCurrentView();
+  }catch(e){
+    alert("❌ " + e.message);
+  }
+}
+
+async function saveMyReport(level, id){
+  const status = document.getElementById("status_myreport_" + level + "_" + id);
+  const text = document.getElementById("myreport_text_" + level + "_" + id).value;
+  const fileEl = document.getElementById("myreport_file_" + level + "_" + id);
+  const file = fileEl.files[0];
+
+  status.className="status"; status.textContent="Saving...";
+  try{
+    const table = tableFor(level); const col = idColFor(level);
+    const row = { [col]: id, profile_id: ME.id, report_text: text };
+    if(file){
+      const path = level + "_" + id + "/" + ME.id + "_" + Date.now() + "_" + file.name;
+      const { error: upErr } = await sb.storage.from("task-reports").upload(path, file);
+      if(upErr) throw upErr;
+      row.report_file_path = path;
+    }
+    const { error } = await sb.from(table).upsert(row, { onConflict: col + ",profile_id" });
+    if(error) throw error;
+    status.className="status ok"; status.textContent="✅ Saved.";
+  }catch(e){
+    status.className="status err"; status.textContent="❌ " + e.message;
+  }
+}
+
+async function downloadReport(path){
+  const { data, error } = await sb.storage.from("task-reports").createSignedUrl(path, 3600);
+  if(error){ alert("Could not open file: " + error.message); return; }
+  window.open(data.signedUrl, "_blank");
+}
+
+async function recomputeStatus(level, id){
+  const table = tableFor(level); const col = idColFor(level); const parentTable = parentTableFor(level);
+  const { data: rows } = await sb.from(table).select("completed").eq(col, id);
+  const total = (rows||[]).length;
+  const completed = (rows||[]).filter(r=>r.completed).length;
+  const newStatus = total === 0 ? "pending" : (completed === total ? "completed" : "in_progress");
+  await sb.from(parentTable).update({ status: newStatus }).eq("id", id);
+}
+
+async function approveLevel(level, id){
+  if(!confirm("Approve this " + level + "? This confirms you've reviewed the reports.")) return;
+  try{
+    const table = parentTableFor(level);
+    const { error } = await sb.from(table).update({ approved: true, approved_by: ME.id, approved_at: new Date().toISOString() }).eq("id", id);
+    if(error) throw error;
+    await refreshCurrentView();
+  }catch(e){
+    alert("❌ " + e.message);
+  }
+}
+
+async function canManageAtLevel(taskId){
+  if(ME.role === "super_admin" || ME.role === "admin") return true;
+  if(!ME.canSelfManageTodos) return false;
+  const { data } = await sb.from("task_assignees").select("profile_id").eq("task_id", taskId).eq("profile_id", ME.id);
+  return !!(data && data.length);
+}
+
+async function refreshCurrentView(){
+  if(CURRENT.level === "subtodos" && CURRENT.todoId) await showTodoDetail(CURRENT.todoId, CURRENT.taskId);
+  else if(CURRENT.taskId) await showTaskDetail(CURRENT.taskId);
+  else await showTaskList("all");
+}
+
+init();
+</script>
+</body>
+</html>

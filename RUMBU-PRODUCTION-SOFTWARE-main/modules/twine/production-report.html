@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Twine Production Report</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme") || "navy"); }catch(e){} })();
+  window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme){ document.documentElement.setAttribute("data-theme", e.data.rumbuTheme); } });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1200px;margin:0 auto;}
+  #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);}
+
+  /* View selector pill bar */
+  .view-bar{display:flex;gap:0;margin-bottom:14px;border-radius:8px;overflow:hidden;border:1px solid var(--line);width:fit-content;}
+  .view-btn{padding:8px 18px;border:none;background:var(--bg);color:var(--muted);font-weight:700;font-size:12px;cursor:pointer;font-family:inherit;letter-spacing:.3px;}
+  .view-btn.active{background:var(--primary);color:#fff;}
+  .view-btn:not(:last-child){border-right:1px solid var(--line);}
+
+  /* Summary bar */
+  .summary-bar{display:none;gap:14px;flex-wrap:wrap;margin:10px 0;padding:11px 14px;background:var(--bg);border-radius:var(--radius-sm);font-size:12.5px;border:1px solid var(--line);}
+  .summary-bar b{color:var(--heading);}
+
+  /* Table colours */
+  .g{color:var(--ok);font-weight:700;}
+  .w{color:var(--warn);font-weight:700;}
+  .b{color:var(--bad);font-weight:700;}
+  td.g,td.w,td.b{font-weight:700;}
+
+  /* Operator grouped rows */
+  .subtotal-row td{font-weight:700;background:var(--bg);}
+  .group-start td{border-top:2px solid var(--line-2);}
+
+  /* Print-only header */
+  .print-only{display:none;}
+
+  @media print{
+    body{background:#fff;padding:8px;}
+    .no-print{display:none !important;}
+    .print-only{display:block !important;}
+    #printLetterhead{display:flex;justify-content:space-between;align-items:flex-end;
+      border-bottom:3px solid #1F3864;padding-bottom:10px;margin-bottom:6px;}
+    #printLetterhead .co{font-size:11pt;font-weight:bold;letter-spacing:.5px;color:#1F3864;}
+    #printLetterhead .dt{font-size:10pt;color:#555;}
+    #printTitle{text-align:center;color:#1F3864;font-size:16pt;font-weight:bold;margin:10px 0 4px;}
+    #printFilters{font-size:9.5pt;color:#333;border:1px solid #ccc;border-radius:4px;
+      padding:7px 12px;background:#f8fafc;margin-bottom:14px;
+      display:grid;grid-template-columns:1fr 1fr 1fr;gap:3px 18px;}
+    #printFilters span{display:block;}
+    #printFilters b{color:#1F3864;}
+    #printGenerated{font-size:8pt;color:#888;text-align:right;margin-top:4px;}
+    #printFooter{margin-top:20px;padding-top:8px;border-top:1px solid #d7dde5;
+      display:flex;justify-content:space-between;font-size:8pt;color:#777;}
+    .summary-bar{background:#fff;border:1px solid #ccc;}
+    table{font-size:9pt;}
+    th,td{padding:5px 4px;}
+    .card-panel{border:none;padding:0;box-shadow:none;margin-bottom:8px;}
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <div id="connStatus">Loading...</div>
+
+  <!-- Filter panel -->
+  <div class="card-panel no-print">
+    <h3>Twine Production Report</h3>
+
+    <!-- View selector -->
+    <div class="view-bar" style="margin-bottom:16px;">
+      <button class="view-btn active" id="vbRecords"  onclick="setView('records')">Records (Detail)</button>
+      <button class="view-btn"        id="vbAsset"    onclick="setView('asset')">By Asset</button>
+      <button class="view-btn"        id="vbOperator" onclick="setView('operator')">By Operator</button>
+    </div>
+
+    <div class="filters">
+      <div class="f"><label>From Date</label><input type="date" id="fStart"></div>
+      <div class="f"><label>To Date</label><input type="date" id="fEnd"></div>
+      <div class="f">
+        <label>Shift</label>
+        <select id="fShift"><option value="">All</option><option>Morning</option><option>Night</option></select>
+      </div>
+      <div class="f">
+        <label>Section</label>
+        <select id="fSection">
+          <option value="">All</option>
+          <option value="Rumbu">Rumbu</option>
+          <option value="MamaSannu">Mama Sannu</option>
+        </select>
+      </div>
+      <div class="f">
+        <label>Operator</label>
+        <select id="fOperatorSelect"><option value="">All</option></select>
+      </div>
+      <div class="f">
+        <label>Asset</label>
+        <select id="fAsset"><option value="">All</option></select>
+      </div>
+      <div class="f">
+        <label>Twine Type</label>
+        <select id="fType"><option value="">All</option></select>
+      </div>
+      <div class="f f-min"><button onclick="fetchReport()">Fetch Report</button></div>
+      <div class="f f-min"><button class="btn-ghost" onclick="clearFilters()">Clear</button></div>
+      <div class="f f-min"><button class="btn-ghost" onclick="window.print()">Print / PDF</button></div>
+    </div>
+  </div>
+
+  <!-- Print-only header -->
+  <div class="print-only">
+    <div id="printLetterhead">
+      <div class="co">RUMBU INDUSTRIES GROUP</div>
+      <div class="dt">Twine Production Report</div>
+    </div>
+    <div id="printTitle">TWINE PRODUCTION REPORT</div>
+    <div id="printFilters"></div>
+    <div id="printGenerated"></div>
+  </div>
+
+  <!-- Summary bar -->
+  <div class="summary-bar" id="summaryBar"></div>
+
+  <!-- Table -->
+  <div class="table-wrap">
+    <div class="table-scroll">
+      <table id="reportTable">
+        <thead><tr id="headerRow">
+          <th>Date</th><th>Shift</th><th>Type</th><th>Asset</th>
+          <th>Operator</th><th>Section</th><th>Bags</th><th>Remainder</th><th>Target</th>
+        </tr></thead>
+        <tbody id="reportBody">
+          <tr><td colspan="9" style="text-align:center;color:var(--muted);padding:20px;">
+            Select a date range and click Fetch Report.
+          </td></tr>
+        </tbody>
+        <tfoot id="reportFoot"></tfoot>
+      </table>
+    </div>
+  </div>
+
+  <!-- Print footer -->
+  <div class="print-only" id="printFooter">
+    <div>CONFIDENTIAL — Rumbu Industries Group</div>
+    <div id="printFooterGenerated"></div>
+  </div>
+
+  <div class="status" id="status" style="display:none;"></div>
+</div>
+
+<script>
+// ── State ─────────────────────────────────────────────────
+let CURRENT_VIEW = "records"; // records | asset | operator
+
+// ── View switcher ─────────────────────────────────────────
+function setView(v){
+  CURRENT_VIEW = v;
+  document.querySelectorAll(".view-btn").forEach(b=>b.classList.remove("active"));
+  document.getElementById("vb" + v.charAt(0).toUpperCase() + v.slice(1)).classList.add("active");
+  // Clear output so stale data from a different view doesn't show
+  resetTable();
+  document.getElementById("summaryBar").style.display = "none";
+}
+
+// ── Auth helpers ──────────────────────────────────────────
+function authHeaders(){
+  return {"apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY};
+}
+
+// ── Pagination fetch — handles > 1000 rows ────────────────
+async function fetchAllProduction(f){
+  let url = SUPABASE_URL + "/rest/v1/twine_production?select=*";
+  if(f.from)     url += "&production_date=gte." + f.from;
+  if(f.to)       url += "&production_date=lte." + f.to;
+  if(f.shift)    url += "&shift=eq."            + encodeURIComponent(f.shift);
+  if(f.section)  url += "&section=eq."          + encodeURIComponent(f.section);
+  if(f.asset)    url += "&asset_code=eq."       + encodeURIComponent(f.asset);
+  if(f.type)     url += "&twine_type=eq."       + encodeURIComponent(f.type);
+  if(f.operator) url += "&operator_id=eq."      + encodeURIComponent(f.operator);
+  url += "&order=production_date.desc,shift.asc";
+
+  let all = [], offset = 0, pageSize = 1000;
+  for(let guard = 0; guard < 100; guard++){
+    const headers = Object.assign({}, authHeaders(), {
+      "Range-Unit": "items",
+      "Range": offset + "-" + (offset + pageSize - 1)
+    });
+    const res = await fetch(url, { headers });
+    if(!res.ok) throw new Error("twine_production: HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+// ── Control table fetch (for downtime) ───────────────────
+// Fetches all control rows for the date range + section.
+// No shift filter at fetch level — both shifts needed for per-shift map.
+// No job_table exclusion — all Twine stoppages count.
+async function fetchControlRows(f){
+  let url = SUPABASE_URL +
+    "/rest/v1/control?select=date_col,shift,assets,section,stop_time,finish_time";
+  if(f.from)    url += "&date_col=gte." + f.from;
+  if(f.to)      url += "&date_col=lte." + f.to;
+  if(f.section) url += "&section=eq."  + encodeURIComponent(f.section);
+
+  let all = [], offset = 0, pageSize = 1000;
+  for(let guard = 0; guard < 100; guard++){
+    const headers = Object.assign({}, authHeaders(), {
+      "Range-Unit": "items",
+      "Range": offset + "-" + (offset + pageSize - 1)
+    });
+    const res = await fetch(url, { headers });
+    if(!res.ok) throw new Error("control: HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+// ── Build downtime map — key: assets + "||" + shift ──────
+// Per-shift keying means Morning stoppages only affect Morning targets
+// and Night stoppages only affect Night targets.
+function buildDowntimeMap(ctrlRows){
+  const map = {};
+  ctrlRows.forEach(r=>{
+    if(!r.stop_time || !r.finish_time) return;
+    const stop   = new Date(r.stop_time);
+    const finish = new Date(r.finish_time);
+    if(isNaN(stop) || isNaN(finish)) return;
+    const mins = Math.round((finish - stop) / 60000);
+    if(mins <= 0) return; // skip zero or negative durations
+    const key = (r.assets||"") + "||" + (r.shift||"");
+    map[key] = (map[key]||0) + mins;
+  });
+  return map;
+}
+
+// ── Formatting helpers ────────────────────────────────────
+function escH(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+function fmt(v){ return Math.round(Number(v)||0).toLocaleString(); }
+function fmtSign(v){ const r=Math.round(Number(v)||0); return (r>0?"+":"") + r.toLocaleString(); }
+function fmtReward(v){ return "₦" + Math.round(Number(v)||0).toLocaleString(); }
+function signCls(v){ return v>0?"g":v<0?"b":""; }
+function effCls(v){
+  if(v===null||v===undefined) return "";
+  return v>=100?"g":v>=80?"w":"b";
+}
+function effTxt(v){
+  if(v===null||v===undefined) return "—";
+  return v.toFixed(1) + "%";
+}
+
+// ── Init ─────────────────────────────────────────────────
+async function init(){
+  const cs = document.getElementById("connStatus");
+  try{
+    const me = await requireAuth("../../login.html");
+    if(!me) return;
+
+    // Load asset, type and operator dropdowns via Supabase client
+    const [{ data: assets }, { data: types }, { data: operators }] = await Promise.all([
+      sb.from("twine_assets").select("asset_code").order("asset_code"),
+      sb.from("twine_types").select("type_code").order("type_code"),
+      sb.from("employees").select("employee_id, full_name")
+        .eq("department","Production").eq("unit","Twine").order("full_name")
+    ]);
+
+    document.getElementById("fAsset").innerHTML = '<option value="">All</option>' +
+      (assets||[]).map(a=>`<option value="${a.asset_code}">${a.asset_code}</option>`).join("");
+
+    document.getElementById("fType").innerHTML = '<option value="">All</option>' +
+      (types||[]).map(t=>`<option value="${t.type_code}">${t.type_code}</option>`).join("");
+
+    document.getElementById("fOperatorSelect").innerHTML = '<option value="">All</option>' +
+      (operators||[]).map(o=>`<option value="${o.employee_id}">${o.full_name} (${o.employee_id})</option>`).join("");
+
+    cs.style.color = "var(--ok)"; cs.textContent = "✔ Connected.";
+  }catch(e){
+    cs.style.color = "var(--bad)"; cs.textContent = "Could not load: " + e.message;
+  }
+}
+
+// ── Collect filters ───────────────────────────────────────
+function getFilters(){
+  return {
+    from:     document.getElementById("fStart").value,
+    to:       document.getElementById("fEnd").value,
+    shift:    document.getElementById("fShift").value,
+    section:  document.getElementById("fSection").value,
+    operator: document.getElementById("fOperatorSelect").value,
+    asset:    document.getElementById("fAsset").value,
+    type:     document.getElementById("fType").value
+  };
+}
+
+// ── Main fetch + dispatch ─────────────────────────────────
+async function fetchReport(){
+  const f = getFilters();
+  const statusEl = document.getElementById("status");
+
+  if(!f.from && !f.to){
+    statusEl.style.display = "block"; statusEl.className = "status err";
+    statusEl.textContent = "Select a From Date and/or To Date, then click Fetch Report.";
+    return;
+  }
+  if(CURRENT_VIEW === "operator" && (!f.from || !f.to)){
+    statusEl.style.display = "block"; statusEl.className = "status err";
+    statusEl.textContent = "By Operator view requires both a From Date and a To Date (needed for attendance-based target).";
+    return;
+  }
+  statusEl.style.display = "none";
+
+  const connStatus = document.getElementById("connStatus");
+  connStatus.textContent = "Loading..."; connStatus.style.color = "var(--muted)";
+
+  try{
+    // Fetch production rows + control rows in parallel for By Asset view
+    const [rows, ctrlRows] = await Promise.all([
+      fetchAllProduction(f),
+      CURRENT_VIEW === "asset"
+        ? fetchControlRows(f).catch(e=>{ console.warn("control fetch skipped:", e.message); return []; })
+        : Promise.resolve([])
+    ]);
+
+    // Build downtime map only when needed
+    const dtMap = CURRENT_VIEW === "asset" ? buildDowntimeMap(ctrlRows) : {};
+
+    connStatus.style.color = "var(--ok)";
+    connStatus.textContent = rows.length.toLocaleString() + " record(s) loaded." +
+      (CURRENT_VIEW === "asset" && ctrlRows.length
+        ? "  Downtime: " + ctrlRows.length + " control row(s) found."
+        : CURRENT_VIEW === "asset" ? "  No downtime logged yet (D = 0)." : "");
+
+    if(!rows.length){
+      resetTable();
+      document.getElementById("summaryBar").style.display = "none";
+      document.getElementById("reportBody").innerHTML =
+        `<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:20px;">No records match the selected filters.</td></tr>`;
+      updatePrintHeader(f, 0);
+      return;
+    }
+
+    updatePrintHeader(f, rows.length);
+
+    if(CURRENT_VIEW === "asset")         renderByAsset(rows, f, dtMap);
+    else if(CURRENT_VIEW === "operator") renderByOperator(rows, f);
+    else                                 renderRecords(rows, f);
+
+  }catch(e){
+    connStatus.style.color = "var(--bad)";
+    connStatus.textContent = "❌ " + e.message;
+  }
+}
+
+// ── Reset table ───────────────────────────────────────────
+function resetTable(){
+  document.getElementById("headerRow").innerHTML =
+    "<th>Date</th><th>Shift</th><th>Type</th><th>Asset</th>" +
+    "<th>Operator</th><th>Section</th><th>Bags</th><th>Remainder</th><th>Target</th>";
+  document.getElementById("reportBody").innerHTML =
+    `<tr><td colspan="10" style="text-align:center;color:var(--muted);padding:20px;">Select a date range and click Fetch Report.</td></tr>`;
+  document.getElementById("reportFoot").innerHTML = "";
+}
+
+// ── VIEW 1: Raw records ───────────────────────────────────
+function renderRecords(rows, f){
+  document.getElementById("headerRow").innerHTML =
+    "<th>Date</th><th>Shift</th><th>Type</th><th>Asset</th>" +
+    "<th>Operator</th><th>Section</th><th>Bags</th><th>Remainder</th><th>Target</th>";
+
+  let totalBags=0, totalRem=0, totalTarget=0;
+  const html = rows.map(r=>{
+    totalBags    += Number(r.bags||0);
+    totalRem     += Number(r.remainder||0);
+    totalTarget  += Number(r.target||0);
+    return `<tr>
+      <td>${r.production_date}</td>
+      <td>${r.shift}</td>
+      <td>${escH(r.twine_type)}</td>
+      <td>${escH(r.asset_code)}</td>
+      <td>${escH(r.operator_name||"")}</td>
+      <td>${escH(r.section)}</td>
+      <td>${r.bags}</td>
+      <td>${r.remainder}</td>
+      <td>${r.target}</td>
+    </tr>`;
+  }).join("");
+
+  document.getElementById("reportBody").innerHTML = html;
+  document.getElementById("reportFoot").innerHTML =
+    `<tr><td colspan="6" style="text-align:right;font-weight:700;">Total</td>` +
+    `<td>${fmt(totalBags)}</td><td>${fmt(totalRem)}</td><td>${fmt(totalTarget)}</td></tr>`;
+
+  const bar = document.getElementById("summaryBar");
+  bar.style.display = "flex";
+  bar.innerHTML = `<span>Records: <b>${rows.length.toLocaleString()}</b></span>` +
+    `<span>Total Bags: <b>${fmt(totalBags)}</b></span>` +
+    `<span>Total Target: <b>${fmt(totalTarget)}</b></span>` +
+    `<span>Total Remainder: <b>${fmt(totalRem)}</b></span>`;
+}
+
+// ── VIEW 2: By Asset (with per-shift downtime) ────────────
+// Strategy:
+//   Step 1 — sub-group by asset_code + section + shift
+//   Step 2 — compute TLD (Twine Loss Due to Downtime) per sub-group
+//            using that sub-group's own shift downtime only
+//   Step 3 — aggregate sub-groups up to asset + section for display
+//
+// WM = 660 min (11-hour shift), matching Weaving convention.
+// dtMap key = assets + "||" + shift  (set by buildDowntimeMap).
+// When no stoppages are logged, D = 0 → TLD = 0 → ATG = Target → same as unadjusted.
+function renderByAsset(rows, f, dtMap){
+  const WM = 660;
+
+  document.getElementById("headerRow").innerHTML =
+    "<th style='text-align:left;'>Asset</th>" +
+    "<th>Section</th>" +
+    "<th>Total Bags</th>" +
+    "<th>Total Target</th>" +
+    "<th>Total Remainder</th>" +
+    "<th>Downtime (min)</th>" +
+    "<th title='Twine Loss Due to Downtime'>TLD</th>" +
+    "<th title='Adjusted Target'>ATG</th>" +
+    "<th title='Twine Loss Per Unit'>TLU</th>" +
+    "<th>Adj Efficiency %</th>";
+
+  // ── Step 1: sub-group by asset + section + shift ──────
+  const subGroups = {};
+  rows.forEach(r=>{
+    const k = r.asset_code + "||" + r.section + "||" + r.shift;
+    if(!subGroups[k]) subGroups[k] = {
+      asset:r.asset_code, section:r.section, shift:r.shift,
+      bags:0, target:0, remainder:0, occ:0
+    };
+    const sg = subGroups[k];
+    sg.bags      += Number(r.bags||0);
+    sg.target    += Number(r.target||0);
+    sg.remainder += Number(r.remainder||0);
+    sg.occ       += 1;
+  });
+
+  // ── Step 2 + 3: TLD per sub-group, aggregate to asset ─
+  const assets = {};
+  Object.values(subGroups).forEach(sg=>{
+    // D is the total downtime in minutes for this specific asset + shift
+    const D   = dtMap[sg.asset + "||" + sg.shift] || 0;
+    // TLD: portion of target that was impossible to hit due to downtime
+    const TLD = sg.occ > 0 ? Math.round((sg.target * D) / (WM * sg.occ)) : 0;
+    const ATG = sg.target - TLD;
+
+    const ak = sg.asset + "||" + sg.section;
+    if(!assets[ak]) assets[ak] = {
+      asset:sg.asset, section:sg.section,
+      bags:0, target:0, remainder:0, D:0, TLD:0, ATG:0
+    };
+    const a = assets[ak];
+    a.bags      += sg.bags;
+    a.target    += sg.target;
+    a.remainder += sg.remainder;
+    a.D         += D;
+    a.TLD       += TLD;
+    a.ATG       += ATG;
+  });
+
+  // ── Step 3: render ────────────────────────────────────
+  const data = Object.values(assets).sort((a,b)=>a.asset.localeCompare(b.asset));
+  let gBags=0, gTarget=0, gRem=0, gD=0, gTLD=0, gATG=0;
+
+  const html = data.map(d=>{
+    const TLU    = d.bags - d.ATG;
+    const adjEff = d.ATG > 0 ? (d.bags / d.ATG * 100) : null;
+    gBags   += d.bags;   gTarget += d.target; gRem  += d.remainder;
+    gD      += d.D;      gTLD    += d.TLD;    gATG  += d.ATG;
+    return `<tr>
+      <td style="text-align:left;font-weight:700;">${escH(d.asset)}</td>
+      <td>${escH(d.section)}</td>
+      <td>${fmt(d.bags)}</td>
+      <td>${fmt(d.target)}</td>
+      <td class="${d.remainder>=0?"g":"b"}">${fmtSign(d.remainder)}</td>
+      <td>${fmt(d.D)}</td>
+      <td>${fmt(d.TLD)}</td>
+      <td>${fmt(d.ATG)}</td>
+      <td class="${signCls(TLU)}">${fmtSign(TLU)}</td>
+      <td class="${effCls(adjEff)}">${effTxt(adjEff)}</td>
+    </tr>`;
+  }).join("");
+
+  document.getElementById("reportBody").innerHTML = html;
+
+  const grandTLU = gBags - gATG;
+  const grandEff = gATG > 0 ? (gBags / gATG * 100) : null;
+  document.getElementById("reportFoot").innerHTML =
+    `<tr>
+      <td colspan="2" style="font-weight:700;">Grand Total (${data.length} asset${data.length!==1?"s":""})</td>
+      <td><b>${fmt(gBags)}</b></td>
+      <td><b>${fmt(gTarget)}</b></td>
+      <td class="${gRem>=0?"g":"b"}"><b>${fmtSign(gRem)}</b></td>
+      <td><b>${fmt(gD)}</b></td>
+      <td><b>${fmt(gTLD)}</b></td>
+      <td><b>${fmt(gATG)}</b></td>
+      <td class="${signCls(grandTLU)}"><b>${fmtSign(grandTLU)}</b></td>
+      <td class="${effCls(grandEff)}"><b>${effTxt(grandEff)}</b></td>
+    </tr>`;
+
+  const bar = document.getElementById("summaryBar");
+  bar.style.display = "flex";
+  bar.innerHTML =
+    `<span>Assets: <b>${data.length}</b></span>` +
+    `<span>Grand Bags: <b>${fmt(gBags)}</b></span>` +
+    `<span>Grand Target: <b>${fmt(gTarget)}</b></span>` +
+    `<span>Total Downtime: <b>${fmt(gD)} min</b></span>` +
+    `<span>Grand ATG: <b>${fmt(gATG)}</b></span>` +
+    `<span>Grand TLU: <b class="${signCls(grandTLU)}">${fmtSign(grandTLU)}</b></span>` +
+    `<span>Adj Efficiency: <b class="${effCls(grandEff)}">${effTxt(grandEff)}</b></span>`;
+}
+
+// ── VIEW 3: By Operator ───────────────────────────────────
+// Target logic mirrors Apps Script:
+//   Per operator, per twine type:
+//     dailyRate  = target value from first record (ANY_VALUE equivalent)
+//     daysWorked = count of distinct production_dates
+//     typeTarget = dailyRate × daysWorked
+//   Roll up across types per operator.
+function renderByOperator(rows, f){
+  document.getElementById("headerRow").innerHTML =
+    "<th>S/N</th><th>Operator</th><th>ID</th><th>Twine Type</th>" +
+    "<th>Type Target</th><th>Production (Bags)</th><th>Excess</th><th>Reward</th><th>Efficiency %</th>";
+
+  // Step 1: group by operator → type
+  const ops = {};
+  rows.forEach(r=>{
+    const opKey = r.operator_id || r.operator_name || "Unknown";
+    if(!ops[opKey]){
+      ops[opKey] = { name: r.operator_name||"Unknown", id: r.operator_id||"", types:{} };
+    }
+    const tk = r.twine_type;
+    if(!ops[opKey].types[tk]){
+      ops[opKey].types[tk] = { bags:0, dates: new Set(), dailyRate: Number(r.target||0) };
+    }
+    ops[opKey].types[tk].bags += Number(r.bags||0);
+    ops[opKey].types[tk].dates.add(r.production_date);
+    // dailyRate: first value seen (ANY_VALUE equivalent — do not overwrite)
+  });
+
+  // Step 2: build structured array sorted by operator name
+  const opData = Object.values(ops).sort((a,b)=>a.name.localeCompare(b.name)).map(op=>{
+    const typeRows = Object.entries(op.types)
+      .sort((a,b)=>a[0].localeCompare(b[0]))
+      .map(([type, d])=>{
+        const typeTarget  = d.dailyRate * d.dates.size;
+        const typeExcess  = d.bags - typeTarget;
+        const typeReward  = typeExcess * 100;
+        const typeEff     = typeTarget > 0 ? (d.bags / typeTarget * 100) : null;
+        return { type, bags:d.bags, target:typeTarget, excess:typeExcess, reward:typeReward, eff:typeEff };
+      });
+    const totalBags   = typeRows.reduce((s,r)=>s+r.bags,  0);
+    const totalTarget = typeRows.reduce((s,r)=>s+r.target, 0);
+    const totalExcess = totalBags - totalTarget;
+    const totalReward = totalExcess * 100;
+    const totalEff    = totalTarget > 0 ? (totalBags / totalTarget * 100) : null;
+    return { name:op.name, id:op.id, typeRows, totalBags, totalTarget, totalExcess, totalReward, totalEff };
+  });
+
+  // Step 3: render HTML with rowspan per operator block
+  let html = "";
+  let gTarget=0, gProd=0, gExcess=0, gReward=0;
+
+  opData.forEach((op, idx)=>{
+    const k    = op.typeRows.length;
+    const span = k + 1; // types + 1 subtotal row
+    const grpCls = idx > 0 ? " class='group-start'" : "";
+
+    // One row per type
+    op.typeRows.forEach((tr, i)=>{
+      const rowOpen  = i===0 ? `<tr${grpCls}>` : "<tr>";
+      // SN / Name / ID only on first row, spanning all type rows + subtotal
+      const idCells = i===0
+        ? `<td rowspan="${span}" style="vertical-align:top;">${idx+1}</td>` +
+          `<td rowspan="${span}" style="vertical-align:top;font-weight:700;">${escH(op.name)}</td>` +
+          `<td rowspan="${span}" style="vertical-align:top;">${escH(op.id)}</td>`
+        : "";
+      html += rowOpen + idCells +
+        `<td>${escH(tr.type)}</td>` +
+        `<td>${fmt(tr.target)}</td>` +
+        `<td>${fmt(tr.bags)}</td>` +
+        `<td class="${signCls(tr.excess)}">${fmtSign(tr.excess)}</td>` +
+        `<td class="${signCls(tr.reward)}">${fmtReward(tr.reward)}</td>` +
+        `<td class="${effCls(tr.eff)}">${effTxt(tr.eff)}</td>` +
+        "</tr>";
+    });
+
+    // Subtotal row — SN/Name/ID covered by rowspan above
+    html += `<tr class="subtotal-row">` +
+      `<td style="font-weight:700;text-align:left;">Subtotal</td>` +
+      `<td><b>${fmt(op.totalTarget)}</b></td>` +
+      `<td><b>${fmt(op.totalBags)}</b></td>` +
+      `<td class="${signCls(op.totalExcess)}"><b>${fmtSign(op.totalExcess)}</b></td>` +
+      `<td class="${signCls(op.totalReward)}"><b>${fmtReward(op.totalReward)}</b></td>` +
+      `<td class="${effCls(op.totalEff)}"><b>${effTxt(op.totalEff)}</b></td>` +
+      "</tr>";
+
+    gTarget  += op.totalTarget;
+    gProd    += op.totalBags;
+    gExcess  += op.totalExcess;
+    gReward  += op.totalReward;
+  });
+
+  document.getElementById("reportBody").innerHTML = html;
+
+  // Grand total footer
+  const grandEff = gTarget > 0 ? (gProd / gTarget * 100) : null;
+  document.getElementById("reportFoot").innerHTML =
+    `<tr>
+      <td colspan="4" style="font-weight:700;">Grand Total (${opData.length} operator${opData.length!==1?"s":""})</td>
+      <td><b>${fmt(gTarget)}</b></td>
+      <td><b>${fmt(gProd)}</b></td>
+      <td class="${signCls(gExcess)}"><b>${fmtSign(gExcess)}</b></td>
+      <td class="${signCls(gReward)}"><b>${fmtReward(gReward)}</b></td>
+      <td class="${effCls(grandEff)}"><b>${effTxt(grandEff)}</b></td>
+    </tr>`;
+
+  // Summary bar
+  const bar = document.getElementById("summaryBar");
+  bar.style.display = "flex";
+  bar.innerHTML =
+    `<span>Operators: <b>${opData.length}</b></span>` +
+    `<span>Grand Total Target: <b>${fmt(gTarget)}</b></span>` +
+    `<span>Grand Production: <b>${fmt(gProd)}</b></span>` +
+    `<span>Grand Excess: <b class="${signCls(gExcess)}">${fmtSign(gExcess)}</b></span>` +
+    `<span>Grand Reward: <b class="${signCls(gReward)}">${fmtReward(gReward)}</b></span>` +
+    `<span>Overall Efficiency: <b class="${effCls(grandEff)}">${effTxt(grandEff)}</b></span>`;
+}
+
+// ── Print header ──────────────────────────────────────────
+function updatePrintHeader(f, count){
+  const viewLabel = {records:"Records (Detail)", asset:"By Asset", operator:"By Operator"}[CURRENT_VIEW] || "";
+  const fmtDate = d => {
+    if(!d) return "—";
+    return new Date(d).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"});
+  };
+  const opSel = document.getElementById("fOperatorSelect");
+  const opLabel = f.operator ? (opSel.options[opSel.selectedIndex]?.text || f.operator) : "All";
+
+  document.getElementById("printFilters").innerHTML =
+    `<span><b>View:</b> ${viewLabel}</span>` +
+    `<span><b>Period:</b> ${fmtDate(f.from)} – ${fmtDate(f.to)}</span>` +
+    `<span><b>Records:</b> ${count.toLocaleString()}</span>` +
+    `<span><b>Shift:</b> ${f.shift||"All"}</span>` +
+    `<span><b>Section:</b> ${f.section||"All"}</span>` +
+    `<span><b>Asset:</b> ${f.asset||"All"}</span>` +
+    `<span><b>Operator:</b> ${opLabel}</span>` +
+    `<span><b>Twine Type:</b> ${f.type||"All"}</span>`;
+
+  const ts = new Date().toLocaleString("en-GB",{
+    day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"
+  });
+  document.getElementById("printGenerated").textContent = "Generated: " + ts + " (WAT)";
+  document.getElementById("printFooterGenerated").textContent = "Generated: " + ts;
+}
+
+// ── Clear ──────────────────────────────────────────────────
+function clearFilters(){
+  ["fStart","fEnd"].forEach(id=>document.getElementById(id).value="");
+  ["fShift","fSection","fOperatorSelect","fAsset","fType"].forEach(id=>{
+    document.getElementById(id).selectedIndex = 0;
+  });
+  resetTable();
+  document.getElementById("summaryBar").style.display = "none";
+  document.getElementById("status").style.display = "none";
+}
+
+init();
+</script>
+</body>
+</html>

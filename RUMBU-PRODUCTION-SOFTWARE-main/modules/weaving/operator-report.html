@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Operator Report</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+  :root{--navy:var(--heading);--blue:var(--accent);}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;color:var(--text);}
+  .card{max-width:1100px;margin:0 auto 16px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px;}
+  h2{color:var(--navy);margin:0 0 4px;}
+  .sub{color:var(--blue);font-size:12px;margin:0 0 14px;}
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;}
+  label{display:block;font-size:12px;font-weight:bold;margin-bottom:4px;}
+  input,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6px;font-size:13px;}
+  .btn-row{display:flex;gap:10px;margin-top:14px;}
+  button{flex:1;padding:11px;border:none;border-radius:8px;background:var(--blue);color:#fff;font-weight:bold;cursor:pointer;}
+  button.alt{background:#1d8a4e;}
+  #status{margin-top:10px;font-size:13px;font-weight:bold;}
+  #status.ok{color:#1d8a4e;} #status.err{color:#c0392b;}
+  .table-scroll{overflow-x:auto;}
+  table{width:100%;border-collapse:collapse;font-size:12px;margin-top:6px;}
+  th,td{border:1px solid var(--line);padding:5px 7px;text-align:center;white-space:nowrap;}
+  th{background:var(--navy);color:#fff;}
+  .colorHigh{background:#d9ead3;} .colorMedium{background:#fce5cd;} .colorLow{background:#f4cccc;}
+  .grandtotal{font-weight:bold;background:#38761d;color:#fff;}
+  .note{font-size:12px;color:#6b7280;margin-top:10px;}
+  @media (max-width:700px){ .grid{grid-template-columns:1fr 1fr;} }
+  @media print{ .no-print{display:none !important;} }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="../../table-resolver.js"></script>
+</head>
+<body>
+
+
+<div class="card no-print">
+  <h2>Operator Report</h2>
+  <p class="sub">Live from Supabase &middot; read only</p>
+  <div class="grid">
+    <div><label>From Date</label><input type="date" id="fromDate"></div>
+    <div><label>To Date</label><input type="date" id="toDate"></div>
+    <div><label>Shift</label><select id="shift"><option value="All">All</option><option>Morning</option><option>Night</option></select></div>
+    <div><label>Group</label><select id="group"><option value="All">All</option><option>A</option><option>B</option></select></div>
+    <div><label>Section</label><select id="section"><option value="All">All</option></select></div>
+    <div><label>Work Duration (min)</label><select id="workMinutes"><option value="660">11 hours</option><option value="600">10 hours</option><option value="540">9 hours</option></select></div>
+    <div><label>Min %A for Reward</label><input type="number" id="minPercent" value="93"></div>
+    <div><label>Min Work Days</label><input type="number" id="minDays" value="5"></div>
+    <div><label>Reward Low (₦)</label><input type="number" id="rewardLow" value="2500"></div>
+    <div><label>Reward High (₦)</label><input type="number" id="rewardHigh" value="5000"></div>
+  </div>
+  <div class="btn-row">
+    <button onclick="generate()">Generate Report</button>
+    <button class="alt" onclick="window.print()">Print / Save as PDF</button>
+  </div>
+  <div id="status">Connecting to Supabase...</div>
+</div>
+
+<div id="reportArea"></div>
+
+<p class="note no-print" style="max-width:1100px;margin:0 auto;">
+  job_table exclusion is now applied: downtime with an excluded Job_Code is left out of the calculation,
+  matching the original script.
+</p>
+
+<script>
+const SECTION_LABEL = { "Rumbu": "Rumbu", "MamaSannu": "Mama Sannu" };
+
+let MW_TABLE = "mat_weaving"; // resolved properly in init() below
+let MW_ROWS = [], CTRL_ROWS = [], EXCLUDED_JOB_CODES = new Set(); CTRL_ROWS.forEach(normalizeControlRow);
+
+function parseDT(v){ const d=new Date(v); return isNaN(d)?null:d; }
+function minutesBetween(a,b){ return (!a||!b) ? 0 : Math.round((b-a)/60000); }
+
+
+// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
+async function fetchAllRows(table, select, query){
+  let all = [], offset = 0; const pageSize = 1000;
+  const q = query || "";
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=" + (select||"*") + q, { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+async function fetchRangeData(fromDate, toDate){
+  const [mw, ctrl] = await Promise.all([
+    fetchAllRows(MW_TABLE,"*", "&date_col=gte."+fromDate+"&date_col=lte."+toDate),
+    fetchAllRows("control","*", "&date=gte."+fromDate+"&date=lte."+toDate)
+  ]);
+  MW_ROWS = mw;
+  CTRL_ROWS = ctrl; CTRL_ROWS.forEach(normalizeControlRow);
+}
+
+function normalizeControlRow(r){  if(r.date_col === undefined) r.date_col = r.date;
+  if(r.names === undefined) r.names = r.nurse_name;
+  if(r.stop_time === undefined) r.stop_time = r.mc_stoppage_time;
+  if(r.extimated_time === undefined) r.extimated_time = r.estimated_duration;
+  if(r.discription === undefined) r.discription = r.description;
+  return r;
+}
+
+async function init(){
+  const status = document.getElementById("status");
+  try{
+    const me = await requireAuth("../../login.html");
+    if(!me) return;
+    MW_TABLE = await resolveWeavingTable();
+
+    const mySections = (me.sectionNames && me.sectionNames.length) ? me.sectionNames : ["Rumbu","MamaSannu"];
+    document.getElementById("section").innerHTML = '<option value="All">All</option>' +
+      mySections.map(s=>`<option value="${s}">${SECTION_LABEL[s]||s}</option>`).join("");
+    // Default-select and lock the dropdown to the user's own Section when they only have one.
+    if(mySections.length === 1){
+      document.getElementById("section").value = mySections[0];
+      document.getElementById("section").disabled = true;
+    }
+
+    const jobRes = await fetch(SUPABASE_URL + "/rest/v1/job_table?select=job_code", { headers: authHeaders() });
+    if(jobRes.ok){
+      const jobRows = await jobRes.json();
+      EXCLUDED_JOB_CODES = new Set(jobRows.map(r => r.job_code));
+    }
+    status.className="ok";
+    status.textContent = "Ready. Select a date range and click Generate.";
+  }catch(e){
+    status.className="err"; status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
+
+
+async function generate(){
+  const fromDate = document.getElementById("fromDate").value;
+  const toDate = document.getElementById("toDate").value;
+  const shift = document.getElementById("shift").value;
+  const group = document.getElementById("group").value;
+  const section = document.getElementById("section").value;
+  const workMinutes = Number(document.getElementById("workMinutes").value) || 660;
+  const minPct = Number(document.getElementById("minPercent").value) || 93;
+  const minDay = Number(document.getElementById("minDays").value) || 5;
+  const rewardLow = Number(document.getElementById("rewardLow").value) || 2500;
+  const rewardHigh = Number(document.getElementById("rewardHigh").value) || 5000;
+
+  if(!fromDate || !toDate){ alert("Please choose both From and To dates."); return; }
+
+  const status = document.getElementById("status");
+  if(status){ status.className=""; status.textContent = "Loading "+fromDate+" to "+toDate+"…"; }
+  try{ await fetchRangeData(fromDate, toDate); }
+  catch(e){ if(status){ status.className="err"; status.textContent="Could not read data: "+(e.message||e); } return; }
+  if(status){ status.className="ok"; status.textContent = ""; }
+
+  if(!MW_ROWS.length){
+    document.getElementById("reportArea").innerHTML =
+      "<div class='card'><p>No production records found for this date range.</p></div>";
+    return;
+  }
+
+  // ---- filter production rows (Mat_Weaving) ----
+  const prod = MW_ROWS.filter(r=>{
+    if(r.date_col < fromDate || r.date_col > toDate) return false;
+    if(section !== "All" && r.section !== section) return false;
+    if(shift !== "All" && r.shift !== shift) return false;
+    if(group !== "All" && r.group_name !== group) return false;
+    return true;
+  });
+
+  if(!prod.length){
+    document.getElementById("reportArea").innerHTML = `<div class='card'><p style='color:red'>❌ No record found. ` +
+      `Mat_Weaving had ${MW_ROWS.length} rows total, but none matched: date ${fromDate} to ${toDate}, ` +
+      `shift=${shift}, group=${group}, section=${section}. Check the date range and that section/shift ` +
+      `values match exactly (e.g. "Mama Sannu" vs "MamaSannu").</p></div>`;
+    return;
+  }
+
+  // ---- matched downtime: control rows in date range, grouped by assets+date+shift ----
+  const downtimeMap = {};
+  CTRL_ROWS.forEach(r=>{
+    if(r.date_col < fromDate || r.date_col > toDate) return;
+    if(EXCLUDED_JOB_CODES.has(r.job_code)) return;
+    const stop = parseDT(r.stop_time), finish = parseDT(r.finish_time);
+    if(!stop || !finish) return;
+    const key = [r.assets, r.date_col, r.shift].join("||");
+    downtimeMap[key] = (downtimeMap[key] || 0) + minutesBetween(stop, finish);
+  });
+
+  // ---- group production by operator ----
+  const byOp = {};
+  prod.forEach(r=>{
+    const id = r.operator_id || "(blank)";
+    if(!byOp[id]) byOp[id] = {
+      id, name:"", rank:"", dates:new Set(), mats:new Set(),
+      mcWork:new Set(), mcCover:new Set(),
+      A:0, B:0, C:0, total:0, target:0, downtime:0
+    };
+    const o = byOp[id];
+    o.name = r.operator_name || o.name;
+    o.rank = r.rank || o.rank;
+    o.dates.add(r.date_col);
+    if(r.mat_type) o.mats.add(r.mat_type);
+    const workKey = r.assets + "||" + r.date_col;
+    if((r.work_type||"") !== "Cover duty") o.mcWork.add(workKey); else o.mcCover.add(workKey);
+    o.A += Number(r.a_double||0) + Number(r.a_single||0);
+    o.B += Number(r.b||0);
+    o.C += Number(r.c||0);
+    o.total += Number(r.total||0);
+    o.target += Number(r.target||0);
+    if((r.work_type||"") !== "Cover duty"){
+      const dkey = [r.assets, r.date_col, r.shift].join("||");
+      o.downtime += downtimeMap[dkey] || 0;
+    }
+  });
+
+  // ---- compute metrics + reward per operator ----
+  let totalReward = 0;
+  const rows = Object.values(byOp).map(o=>{
+    const workDays = o.dates.size;
+    const mcWork = o.mcWork.size;
+    const MLD = o.target ? Math.round((o.target * o.downtime) / (workMinutes * (mcWork||1))) : 0;
+    const ATG = Math.round(o.target - MLD);
+    const MLU = Math.round(o.A - ATG);
+    const pA = ATG ? Math.round((o.A/ATG)*100) : 0;
+    const pB = ATG ? Math.round((o.B/ATG)*100) : 0;
+    const pC = ATG ? Math.round((o.C/ATG)*100) : 0;
+    const pP = ATG ? Math.round((o.total/ATG)*100) : 0;
+
+    const matsArr = [...o.mats];
+    const highSet = ["No.2","No.3","No.4"];
+    const onlyHighGroup = matsArr.length > 0 && matsArr.every(m => highSet.includes(m));
+    let reward = 0;
+    if(workDays >= minDay && pA >= minPct) reward = onlyHighGroup ? rewardHigh : rewardLow;
+    totalReward += reward;
+
+    return { id:o.id, name:o.name, rank:o.rank, workDays, mcWork, mcCover:o.mcCover.size,
+      A:Math.round(o.A), B:Math.round(o.B), C:Math.round(o.C), total:Math.round(o.total),
+      target:Math.round(o.target), down:Math.round(o.downtime), MLD, ATG, MLU, pA, pB, pC, pP, reward };
+  });
+
+  rows.sort((a,b)=>b.pA-a.pA);
+
+  function colorClass(v){ return v >= minPct ? "colorHigh" : v >= 85 ? "colorMedium" : "colorLow"; }
+
+  const headers = ["S/N","Operator ID","Operator Name","Rank","Days","Work","Cover","A","B","C","Total","Target","Down","MLD","ATG","MLU","%A","%B","%C","%P","Reward (₦)"];
+  let html = `<div class="card"><h2>Operator Report</h2><p class="sub">${fromDate} to ${toDate} &middot; Shift: ${shift} &middot; Section: ${section}</p>`;
+  html += "<div class='table-scroll'><table><tr>" + headers.map(h=>`<th>${h}</th>`).join("") + "</tr>";
+  rows.forEach((r,i)=>{
+    html += `<tr><td>${i+1}</td><td>${r.id}</td><td>${r.name}</td><td>${r.rank}</td><td>${r.workDays}</td>` +
+      `<td>${r.mcWork}</td><td>${r.mcCover}</td><td>${r.A}</td><td>${r.B}</td><td>${r.C}</td><td>${r.total}</td>` +
+      `<td>${r.target}</td><td>${r.down}</td><td>${r.MLD}</td><td>${r.ATG}</td><td>${r.MLU}</td>` +
+      `<td class="${colorClass(r.pA)}">${r.pA}</td><td class="${colorClass(r.pB)}">${r.pB}</td>` +
+      `<td class="${colorClass(r.pC)}">${r.pC}</td><td class="${colorClass(r.pP)}">${r.pP}</td><td>${r.reward.toLocaleString()}</td></tr>`;
+  });
+  html += `<tr><td colspan="${headers.length}" class="grandtotal">GRAND TOTAL REWARD = ₦${totalReward.toLocaleString()}</td></tr>`;
+  html += "</table></div></div>";
+  document.getElementById("reportArea").innerHTML = html;
+}
+
+init();
+</script>
+<script src="../../assets/letterhead.js"></script>
+</body>
+</html>

@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>HR — Create Query / Memo</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;color:var(--text);}
+  .wrap{max-width:820px;margin:0 auto;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;}
+  .card h3{color:var(--navy);margin:0 0 4px;font-size:16px;}
+  .card .sub{color:var(--blue);font-size:12px;margin:0 0 14px;}
+  label{display:block;font-size:12px;font-weight:bold;color:var(--text);margin:10px 0 4px;}
+  input,textarea,select{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;}
+  textarea{resize:vertical;min-height:60px;}
+  .row{display:flex;gap:12px;flex-wrap:wrap;}
+  .row > div{flex:1;min-width:180px;}
+  button{padding:11px 16px;border:none;border-radius:8px;font-weight:bold;font-size:14px;cursor:pointer;background:var(--blue);color:#fff;margin-top:14px;}
+  button:hover{background:var(--blue-dark);}
+  button.secondary{background:#6b7280;}
+  button.secondary:hover{background:#4b5563;}
+  button:disabled{opacity:.6;cursor:not-allowed;}
+  .status{margin-top:10px;font-weight:bold;font-size:13px;min-height:16px;}
+  .status.ok{color:var(--green);} .status.err{color:var(--red);}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;}
+  .hidden{display:none;}
+  .preview{border:1px solid var(--line);border-radius:8px;padding:14px;margin-top:12px;background:#fafcff;font-size:13px;line-height:1.5;}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<div id="connStatus">Loading...</div>
+
+<div class="card">
+  <h3>Create Query / Memo</h3>
+  <p class="sub" id="branchNote"></p>
+
+  <div class="row">
+    <div>
+      <label>Letter Type</label>
+      <select id="type" onchange="onTypeChange()">
+        <option value="QUERY">QUERY</option>
+        <option value="LAST WARNING">LAST WARNING</option>
+        <option value="SURCHARGE">SURCHARGE</option>
+        <option value="CUSTOM QUERY">CUSTOM QUERY</option>
+      </select>
+    </div>
+    <div>
+      <label>Memo Date</label>
+      <input type="date" id="memoDate">
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <label>Branch (this memo is for)</label>
+      <select id="branch"></select>
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <label>Employee Name</label>
+      <input type="text" id="name" placeholder="Full name">
+    </div>
+    <div>
+      <label>Employee ID</label>
+      <input type="text" id="empId" placeholder="e.g. EMP123">
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <label>Department (of employee)</label>
+      <input type="text" id="department" placeholder="e.g. Weaving">
+    </div>
+    <div>
+      <label>From (memo sender line)</label>
+      <input type="text" id="memoFrom" placeholder="e.g. Head, H.R.">
+    </div>
+  </div>
+
+  <!-- QUERY fields -->
+  <div id="fld-query">
+    <div class="row">
+      <div>
+        <label>Title (offence)</label>
+        <input type="text" id="title" placeholder="e.g. Lateness to work">
+      </div>
+      <div>
+        <label>Hours to respond</label>
+        <input type="number" id="hours" placeholder="e.g. 24">
+      </div>
+    </div>
+    <label>Details</label>
+    <textarea id="details" placeholder="Describe the incident / misconduct"></textarea>
+    <label>Condition-of-Service Section reference</label>
+    <input type="text" id="serviceSection" placeholder="e.g. 4.2">
+  </div>
+
+  <!-- LAST WARNING fields -->
+  <div id="fld-warning" class="hidden">
+    <label>Details</label>
+    <textarea id="warnDetails" placeholder="Reason for the last warning"></textarea>
+  </div>
+
+  <!-- SURCHARGE fields -->
+  <div id="fld-surcharge" class="hidden">
+    <div class="row">
+      <div>
+        <label>Original Query Date</label>
+        <input type="date" id="queryDate">
+      </div>
+      <div>
+        <label>Surcharge Amount (₦)</label>
+        <input type="number" step="0.01" id="amount" placeholder="e.g. 5000">
+      </div>
+    </div>
+    <label>Details</label>
+    <textarea id="surDetails" placeholder="Reason for the surcharge"></textarea>
+  </div>
+
+  <!-- CUSTOM QUERY fields -->
+  <div id="fld-custom" class="hidden">
+    <label>Custom Subject</label>
+    <input type="text" id="customSubject" placeholder="Subject line">
+    <label>Body Paragraph 1</label>
+    <textarea id="para1"></textarea>
+    <label>Body Paragraph 2 (optional)</label>
+    <textarea id="para2"></textarea>
+    <label>Body Paragraph 3 (optional)</label>
+    <textarea id="para3"></textarea>
+    <label>Body Paragraph 4 (optional)</label>
+    <textarea id="para4"></textarea>
+    <label>Body Paragraph 5 (optional)</label>
+    <textarea id="para5"></textarea>
+  </div>
+
+  <div>
+    <button class="secondary" onclick="doPreview()">Preview</button>
+    <button onclick="saveAndPrint()">Save &amp; Generate PDF</button>
+  </div>
+  <div class="status" id="status"></div>
+
+  <div id="previewBox" class="preview hidden"></div>
+</div>
+</div>
+
+<script>
+let ME = null;
+const COMPANY = "Rumbu Industries Limited";
+
+function todayISO(){ return new Date().toISOString().slice(0,10); }
+
+async function logActivity(actionType, description){
+  try{
+    await sb.from("activity_log").insert({
+      actor_id: ME.id, actor_username: ME.username, actor_role: ME.role,
+      section_id: ME.sectionId, action_type: actionType, description: description
+    });
+  }catch(e){ console.warn("Activity log write failed (non-fatal):", e); }
+}
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+
+    document.getElementById("memoDate").value = todayISO();
+    populateBranches();
+    document.getElementById("branchNote").textContent = "Signed in as " + ME.username;
+
+    status.style.color = "#1d8a4e";
+    status.textContent = "Connected.";
+    onTypeChange();
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "❌ " + e.message;
+    console.error(e);
+  }
+}
+
+function onTypeChange(){
+  const t = document.getElementById("type").value;
+  document.getElementById("fld-query").classList.toggle("hidden", t !== "QUERY");
+  document.getElementById("fld-warning").classList.toggle("hidden", t !== "LAST WARNING");
+  document.getElementById("fld-surcharge").classList.toggle("hidden", t !== "SURCHARGE");
+  document.getElementById("fld-custom").classList.toggle("hidden", t !== "CUSTOM QUERY");
+}
+
+// Populate the Branch dropdown with ONLY the branches this person is
+// assigned to, so a memo can never be created for an unassigned branch.
+// Super Admin (no/all branches) can pick from every branch instead.
+function populateBranches(){
+  const sel = document.getElementById("branch");
+  sel.innerHTML = "";
+
+  if(ME.role === "super_admin"){
+    // Super Admin isn't tied to a branch — let them pick any, loaded live.
+    sb.from("app_sections").select("name").order("name").then(({data})=>{
+      (data || []).forEach(s=>{
+        const o = document.createElement("option");
+        o.value = s.name; o.textContent = s.name;
+        sel.appendChild(o);
+      });
+    });
+    sel.disabled = false;
+    return;
+  }
+
+  const mine = ME.sectionNames || [];
+  if(!mine.length){
+    const o = document.createElement("option");
+    o.value = ""; o.textContent = "— no branch assigned —";
+    sel.appendChild(o);
+    sel.disabled = true;
+    return;
+  }
+
+  mine.forEach(name=>{
+    const o = document.createElement("option");
+    o.value = name; o.textContent = name;
+    sel.appendChild(o);
+  });
+  // Single branch -> auto-select and lock, matching the pattern used elsewhere.
+  sel.disabled = (mine.length === 1);
+}
+
+// Collect the form into a clean object
+function collect(){
+  const t = document.getElementById("type").value;
+  const g = id => document.getElementById(id).value.trim();
+  return {
+    type: t,
+    branch: g("branch"),
+    name: g("name"),
+    empId: g("empId"),
+    department: g("department"),
+    memoFrom: g("memoFrom"),
+    memoDate: g("memoDate"),
+    title: g("title"),
+    details: t === "QUERY" ? g("details") : (t === "LAST WARNING" ? g("warnDetails") : g("surDetails")),
+    serviceSection: g("serviceSection"),
+    hours: g("hours"),
+    queryDate: g("queryDate"),
+    amount: g("amount"),
+    customSubject: g("customSubject"),
+    paras: [g("para1"), g("para2"), g("para3"), g("para4"), g("para5")]
+  };
+}
+
+// Year-wise sequential tracking number, read from Supabase
+async function nextTracking(){
+  const year = new Date().getFullYear().toString();
+  const { data, error } = await sb
+    .from("hr_queries")
+    .select("tracking_number")
+    .like("tracking_number", year + "%")
+    .order("tracking_number", { ascending: false })
+    .limit(1);
+  if(error) throw error;
+  let seq = 1;
+  if(data && data.length){
+    const last = data[0].tracking_number;
+    seq = parseInt(last.slice(4), 10) + 1;
+  }
+  return year + String(seq).padStart(4, "0");
+}
+
+// Build the memo body based on type (mirrors the original letter formats)
+function buildBody(d){
+  if(d.type === "QUERY"){
+    return `
+<p style="text-align:center; font-weight:bold; font-size:16pt; margin:20px 0;">Subject: QUERY</p>
+<p style="line-height:1.6;">Could you explain within <b>${d.hours} hours</b> why disciplinary action should not be taken against you for <b>${d.title} (${d.details})</b>?</p>
+<p style="line-height:1.6;">This is viewed as misconduct. Reference to Section <b>${d.serviceSection}</b> of the Condition of Service, which attracts disciplinary action as this attitude will not be condoned by management.</p>`;
+  } else if(d.type === "LAST WARNING"){
+    return `
+<p style="text-align:center; font-weight:bold; font-size:16pt; margin:20px 0;">Subject: LAST WARNING</p>
+<p style="line-height:1.6;">It has come to the attention of Management with dismay for ${d.details}.</p>
+<p style="line-height:1.6;">This letter is hereby issued to you as a <b>LAST WARNING</b>. Further occurrence will lead to stricter disciplinary action. It is hoped you will adjust your attitude to work going forward.</p>`;
+  } else if(d.type === "SURCHARGE"){
+    return `
+<p style="text-align:center; font-weight:bold; font-size:16pt; margin:20px 0;">Subject: SURCHARGE</p>
+<p style="line-height:1.6;">Having gone through your reply to the query issued on <b>${d.queryDate}</b> for ${d.details}. You are hereby surcharged <b>₦${d.amount}</b> to be deducted from your salary.</p>
+<p style="line-height:1.6;">It is hoped this will serve as a deterrent in the future.</p>`;
+  } else if(d.type === "CUSTOM QUERY"){
+    return `
+<p style="text-align:center; font-weight:bold; font-size:16pt; margin:20px 0;">Subject: ${d.customSubject}</p>
+${d.paras.filter(p=>p).map(p=>`<p style="line-height:1.6;">${p}</p>`).join("")}`;
+  }
+  return "";
+}
+
+const CC_BLOCK = `
+<div style="margin-top:60px;">
+Kingsley Onulaka<br>
+Head, H.R.<br>
+Cc: Chairman &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Sign: &hellip;.&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;..<br>
+Vice Chairman<br>
+Admin Directors &nbsp;&nbsp;&nbsp; Name: &hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;...<br>
+Executive Directors<br>
+Heads of Corporate<br>
+Heads of Admin/Departments<br>
+C.S.O.
+</div>`;
+
+function buildMemoHTML(d, tracking){
+  return `
+<html>
+<head>
+<style>
+@page { size:A4; margin:40pt 50pt 40pt 50pt; }
+body { font-family:"Times New Roman", serif; font-size:12pt; line-height:1.6; margin:0; padding:40px; }
+h2 { text-align:center; font-size:18pt; margin-bottom:5px; }
+h3 { text-align:center; font-size:14pt; margin-top:0; margin-bottom:20px; }
+p { margin:10px 0; }
+.right { text-align:right; }
+</style>
+</head>
+<body>
+<h2>${COMPANY}</h2>
+<h3>MEMO</h3>
+<div class="right">
+<p><b>Tracking No:</b> ${tracking}</p>
+<p>${d.memoFrom || ""}</p>
+<p><b>Date:</b> ${d.memoDate}</p>
+</div>
+<p><b>To:</b> ${d.name} (${d.empId})</p>
+<p><b>Department:</b> ${d.department}</p>
+${buildBody(d)}
+${CC_BLOCK}
+</body>
+</html>`;
+}
+
+function doPreview(){
+  const d = collect();
+  const box = document.getElementById("previewBox");
+  let body = "";
+  if(d.type === "CUSTOM QUERY"){
+    body = `<b>Subject:</b> ${d.customSubject}<br>` + d.paras.filter(p=>p).map(p=>`<p>${p}</p>`).join("");
+  } else {
+    body = `<b>${d.type}:</b> ${d.details || ""}`;
+  }
+  box.classList.remove("hidden");
+  box.innerHTML = `
+    <h4 style="text-align:center;margin:0 0 8px;">${d.type} Memo Preview</h4>
+    <p><b>Tracking No:</b> (auto-generated on save)</p>
+    <p><b>Employee:</b> ${d.name} (${d.empId})</p>
+    <p><b>Date:</b> ${d.memoDate}</p>
+    <p><b>Department:</b> ${d.department}</p>
+    <hr>${body}`;
+}
+
+function validate(d){
+  if(!d.name){ return "Employee name is required."; }
+  if(!d.memoDate){ return "Memo date is required."; }
+  if(d.type === "QUERY" && (!d.title || !d.details)){ return "Query needs a title and details."; }
+  if(d.type === "LAST WARNING" && !d.details){ return "Last warning needs details."; }
+  if(d.type === "SURCHARGE" && (!d.amount || !d.details)){ return "Surcharge needs an amount and details."; }
+  if(d.type === "CUSTOM QUERY" && (!d.customSubject || !d.paras[0])){ return "Custom query needs a subject and at least one paragraph."; }
+  return null;
+}
+
+async function saveAndPrint(){
+  const status = document.getElementById("status");
+  const d = collect();
+
+  const err = validate(d);
+  if(err){ status.className = "status err"; status.textContent = err; return; }
+  if(!d.branch){
+    status.className = "status err";
+    status.textContent = "No Branch available — ask your Super Admin to assign you a Branch.";
+    return;
+  }
+  // Safety: a non-super-admin can only ever create for a branch they hold.
+  if(ME.role !== "super_admin" && (ME.sectionNames || []).indexOf(d.branch) === -1){
+    status.className = "status err";
+    status.textContent = "You are not assigned to that Branch.";
+    return;
+  }
+
+  status.className = "status"; status.textContent = "Saving...";
+  try{
+    const tracking = await nextTracking();
+
+    const row = {
+      tracking_number: tracking,
+      branch: d.branch,
+      employee_name: d.name,
+      employee_id: d.empId || null,
+      letter_type: d.type,
+      department: d.department || null,
+      memo_from: d.memoFrom || null,
+      memo_date: d.memoDate || null,
+      title: d.title || null,
+      details: d.details || null,
+      service_section: d.serviceSection || null,
+      hours: d.hours ? parseInt(d.hours, 10) : null,
+      query_date: d.queryDate || null,
+      amount: d.amount ? parseFloat(d.amount) : null,
+      custom_subject: d.customSubject || null,
+      para1: d.paras[0] || null,
+      para2: d.paras[1] || null,
+      para3: d.paras[2] || null,
+      para4: d.paras[3] || null,
+      para5: d.paras[4] || null,
+      created_by_username: ME.username
+    };
+
+    const { error } = await sb.from("hr_queries").insert(row);
+    if(error) throw error;
+
+    await logActivity("hr_query_created", ME.username + " created a " + d.type + " memo for " + d.name + " (" + tracking + ")");
+
+    status.className = "status ok";
+    status.textContent = "✅ Saved as " + tracking + ". Opening PDF...";
+
+    // Open the memo in a new window and trigger the browser's print-to-PDF
+    const w = window.open("", "_blank");
+    w.document.write(buildMemoHTML(d, tracking));
+    w.document.close();
+    w.onload = function(){ w.focus(); w.print(); };
+
+    // Reset the light fields, keep type/date for convenience
+    ["name","empId","department","title","details","serviceSection","hours","queryDate","amount","customSubject","para1","para2","para3","para4","para5","warnDetails","surDetails"]
+      .forEach(id => { const el = document.getElementById(id); if(el) el.value = ""; });
+    document.getElementById("previewBox").classList.add("hidden");
+  }catch(e){
+    status.className = "status err";
+    status.textContent = "❌ " + e.message;
+  }
+}
+
+init();
+</script>
+</body>
+</html>

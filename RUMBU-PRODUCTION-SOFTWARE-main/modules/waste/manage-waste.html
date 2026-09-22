@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Manage Waste</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--red-dark:#a5281b;--green:#1d8a4e;--green-dark:#156d3d;}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;color:var(--text);}
+  .wrap{max-width:960px;margin:0 auto;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;}
+  .card h3{color:var(--navy);margin:0 0 4px;font-size:16px;}
+  .card .sub{color:var(--blue);font-size:12px;margin:0 0 14px;}
+  label{display:block;font-size:12px;font-weight:bold;color:var(--text);margin:0 0 4px;}
+  .req{color:var(--red);}
+  input,select{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;}
+  .grid-5{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;}
+  .btn-row{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap;}
+  button.primary,button.success{padding:12px 16px;border:none;border-radius:8px;font-weight:bold;font-size:15px;cursor:pointer;font-family:inherit;color:#fff;}
+  button.primary{background:var(--blue);} button.primary:hover{background:var(--blue-dark);}
+  button.success{background:var(--green);} button.success:hover{background:var(--green-dark);}
+  button:disabled{opacity:.6;cursor:not-allowed;}
+  .badge{display:inline-block;background:var(--navy);color:#fff;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:bold;}
+  .status{margin-top:12px;font-weight:bold;font-size:14px;min-height:18px;}
+  .status.ok{color:var(--green);} .status.err{color:var(--red);}
+  table{width:100%;border-collapse:collapse;margin-top:16px;font-size:13px;}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;white-space:nowrap;}
+  thead th{background:var(--navy);color:#fff;font-size:12px;}
+  tbody tr:nth-child(even){background:#f6f8fb;}
+  .row-del{background:var(--red);color:#fff;border:none;padding:5px 12px;border-radius:5px;cursor:pointer;font-family:inherit;}
+  .row-del:hover{background:var(--red-dark);}
+  .hint{font-size:12px;color:var(--muted);margin-top:8px;}
+  .hidden{display:none;}
+  .gate-card{max-width:420px;margin:20px auto;}
+  #connStatus{text-align:center;font-size:12px;font-weight:bold;margin-bottom:10px;}
+  #printArea{display:none;}
+  @media print{
+    .wrap{display:none !important;}
+    #printArea{display:block;padding:10px;}
+    #printArea .grp{font-size:11pt;letter-spacing:1px;color:#000;font-weight:bold;}
+    #printArea h1{font-size:16pt;color:#000;margin:0;}
+    #printArea .meta{font-size:10pt;margin:6px 0 12px;color:#222;}
+    #printArea table{width:100%;border-collapse:collapse;font-size:9pt;}
+    #printArea th,#printArea td{border:1px solid #444;padding:5px 7px;text-align:left;}
+    #printArea thead th{background:#1F3864 !important;color:#fff !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+  }
+  @media(max-width:800px){.grid-5{grid-template-columns:1fr 1fr;}}
+  @media(max-width:480px){.grid-5{grid-template-columns:1fr;}}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+</head>
+<body>
+<div class="wrap">
+<div id="connStatus">Checking your session...</div>
+
+<div class="card hidden" id="panel">
+  <h3>Records <span class="badge" id="deptBadge"></span></h3>
+  <p class="sub">Filter by date range, shift, department, or measured by — only your Section's records are shown</p>
+
+  <div class="grid-5">
+    <div><label>From Date <span class="req">*</span></label><input type="date" id="fromDate" onchange="loadRecords()"></div>
+    <div><label>To Date <span class="req">*</span></label><input type="date" id="toDate" onchange="loadRecords()"></div>
+    <div><label>Shift</label><select id="shift" onchange="loadRecords()"><option value="">All</option><option value="Morning">Morning</option><option value="Night">Night</option></select></div>
+    <div><label>Department</label><select id="department" onchange="loadRecords()"><option value="">All</option></select></div>
+    <div><label>Measured By</label><select id="measuredBy" onchange="loadRecords()"><option value="">All</option></select></div>
+  </div>
+  <div class="btn-row">
+    <button class="primary" onclick="loadRecords()">FILTER</button>
+  </div>
+
+  <div class="btn-row" id="exportRow" style="display:none;">
+    <button class="success" onclick="exportCSV()">EXPORT CSV</button>
+    <button class="success" onclick="exportPDF()">EXPORT PDF</button>
+  </div>
+
+  <div id="tableWrap"></div>
+  <div class="hint" id="hint"></div>
+</div>
+</div>
+
+<div id="printArea"></div>
+
+<script>
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY, "Content-Type": "application/json" }; }
+const SECTION_DISPLAY_MAP = { "Rumbu": "Rumbu", "MamaSannu": "Mama Sannu" };
+const DEPARTMENT_OPTIONS = ["Extruder 1","Extruder 2","Extruder","Weaving","Twine","Finishing","Recycling"];
+const MEASURED_BY_OPTIONS = ["Extruder 1","Extruder 2","Extruder","Weaving","Twine","Finishing","Recycling"];
+
+let WASTE_ROWS = [];
+let ME = null, mySections = [], deptLabel = "", lastRows = [];
+
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c])); }
+
+// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
+// `query` may include extra params like "&order=col.desc" (no leading select).
+async function fetchAllRows(table, query){
+  let all = [], offset = 0; const pageSize = 1000;
+  const q = query || "";
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=*" + q, { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+function nigeriaDateISO(){
+  const now = new Date();
+  const utcMs = now.getTime() + now.getTimezoneOffset()*60000;
+  const wat = new Date(utcMs + 1*3600000);
+  return wat.getFullYear()+"-"+String(wat.getMonth()+1).padStart(2,"0")+"-"+String(wat.getDate()).padStart(2,"0");
+}
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+
+    mySections = (ME.sectionNames && ME.sectionNames.length)
+      ? ME.sectionNames.map(s => SECTION_DISPLAY_MAP[s] || s)
+      : [];
+    deptLabel = mySections.length ? mySections.join(", ") : "your Section";
+    document.getElementById("deptBadge").textContent = deptLabel;
+
+    document.getElementById("department").innerHTML = '<option value="">All</option>' + DEPARTMENT_OPTIONS.map(d=>`<option>${d}</option>`).join("");
+    document.getElementById("measuredBy").innerHTML = '<option value="">All</option>' + MEASURED_BY_OPTIONS.map(m=>`<option>${m}</option>`).join("");
+
+    const today = nigeriaDateISO();
+    document.getElementById("fromDate").value = today;
+    document.getElementById("toDate").value = today;
+
+    WASTE_ROWS = await fetchAllRows("waste_table", "");
+    document.getElementById("connStatus").classList.add("hidden");
+    document.getElementById("panel").classList.remove("hidden");
+    loadRecords();
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+function canDelete(){
+  // Deletion by actual role now, not a shared passcode: Super Admin and
+  // Admin can delete; a plain User can only view and export.
+  return ME && (ME.role === "super_admin" || ME.role === "admin");
+}
+
+function loadRecords(){
+  const fromDate = document.getElementById("fromDate").value;
+  const toDate = document.getElementById("toDate").value;
+  const shift = document.getElementById("shift").value;
+  const department = document.getElementById("department").value;
+  const measuredBy = document.getElementById("measuredBy").value;
+  const hint = document.getElementById("hint");
+  const wrap = document.getElementById("tableWrap");
+
+  if(!fromDate || !toDate){ wrap.innerHTML=""; lastRows=[]; document.getElementById("exportRow").style.display="none"; hint.textContent="Select both a From and To date."; return; }
+
+  lastRows = WASTE_ROWS.filter(r=>
+    r.date_col >= fromDate && r.date_col <= toDate &&
+    (mySections.length === 0 || mySections.indexOf(r.section) !== -1) &&
+    (!shift || r.shift === shift) &&
+    (!department || r.department === department) &&
+    (!measuredBy || r.measured_by === measuredBy)
+  ).sort((a,b)=> (b.date_col||"").localeCompare(a.date_col||"") || (b.recorded_at||"").localeCompare(a.recorded_at||""));
+
+  renderTable(fromDate, toDate);
+}
+
+function renderTable(fromDate, toDate){
+  const wrap = document.getElementById("tableWrap");
+  const hint = document.getElementById("hint");
+  const allowDelete = canDelete();
+
+  if(!lastRows.length){ wrap.innerHTML=""; document.getElementById("exportRow").style.display="none"; hint.textContent="No records found for "+fromDate+" to "+toDate+" with this filter."; return; }
+
+  let head = "<tr><th>Date</th><th>Shift</th><th>Section</th><th>Department</th><th>Waste Type</th><th>Weight (kg)</th><th>Measured By</th><th>Recorded</th>" + (allowDelete ? "<th>Action</th>" : "") + "</tr>";
+  let body = "";
+  lastRows.forEach((r,i)=>{
+    body += `<tr><td>${esc(r.date_col)}</td><td>${esc(r.shift)}</td><td>${esc(r.section)}</td><td>${esc(r.department)}</td>` +
+      `<td>${esc(r.waste_type)}</td><td>${esc(r.waste_weight)}</td><td>${esc(r.measured_by)}</td><td>${esc(r.recorded_at)}</td>` +
+      (allowDelete ? `<td><button class="row-del" data-i="${i}">Delete</button></td>` : "") + "</tr>";
+  });
+  wrap.innerHTML = "<table><thead>" + head + "</thead><tbody>" + body + "</tbody></table>";
+  document.getElementById("exportRow").style.display = "flex";
+  hint.textContent = lastRows.length + " record(s)." + (allowDelete ? "" : " Only Admins and Super Admins can delete records.");
+}
+
+document.getElementById("tableWrap").addEventListener("click", async function(e){
+  const b = e.target.closest(".row-del");
+  if(!b) return;
+  if(!canDelete()){ alert("❌ You are not authorised to delete records"); return; }
+  const r = lastRows[Number(b.getAttribute("data-i"))];
+  if(!r) return;
+  if(!confirm("Delete this record permanently?\n\n"+r.date_col+" | "+r.shift+" | "+r.waste_type+" | "+r.waste_weight+" kg\n\nThis cannot be undone.")) return;
+
+  try{
+    const url = SUPABASE_URL + "/rest/v1/waste_table?date_col=eq."+r.date_col+"&shift=eq."+encodeURIComponent(r.shift)+"&section=eq."+encodeURIComponent(r.section)+
+      "&department=eq."+encodeURIComponent(r.department)+"&waste_type=eq."+encodeURIComponent(r.waste_type)+"&measured_by=eq."+encodeURIComponent(r.measured_by);
+    const res = await fetch(url, { method:"delete", headers: authHeaders() });
+    if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
+    alert("🗑️ Record deleted successfully");
+    WASTE_ROWS = WASTE_ROWS.filter(x=>x!==r);
+    loadRecords();
+  }catch(err){ alert("Error: " + (err.message||err)); }
+});
+
+function filterSummary(){
+  const parts = [];
+  const shift = document.getElementById("shift").value;
+  const department = document.getElementById("department").value;
+  const measuredBy = document.getElementById("measuredBy").value;
+  if(shift) parts.push("Shift: "+shift);
+  if(department) parts.push("Department: "+department);
+  if(measuredBy) parts.push("Measured By: "+measuredBy);
+  return parts.length ? parts.join(" | ") : "All Shifts/Departments/Measured By";
+}
+
+function exportCSV(){
+  if(!lastRows.length){ alert("Load records first."); return; }
+  const fromDate = document.getElementById("fromDate").value, toDate = document.getElementById("toDate").value;
+  let lines = ['"Rumbu Industries Group - Waste Records"', '"Section","'+deptLabel+'","Date Range","'+fromDate+' to '+toDate+'","Filter","'+filterSummary()+'"', ""];
+  lines.push(['"Date"','"Shift"','"Section"','"Department"','"Waste Type"','"Weight (kg)"','"Measured By"','"Recorded"'].join(","));
+  lastRows.forEach(r=>{
+    lines.push(['"'+r.date_col+'"','"'+r.shift+'"','"'+r.section+'"','"'+r.department+'"','"'+r.waste_type+'"',Number(r.waste_weight||0),'"'+r.measured_by+'"','"'+r.recorded_at+'"'].join(","));
+  });
+  const blob = new Blob([lines.join("\n")], { type:"text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a"); a.href = url; a.download = "Waste_Records_"+deptLabel.replace(/\s+/g,"_")+"_"+fromDate+"_to_"+toDate+".csv";
+  document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+
+function exportPDF(){
+  if(!lastRows.length){ alert("Load records first."); return; }
+  const fromDate = document.getElementById("fromDate").value, toDate = document.getElementById("toDate").value;
+  let head = "<tr><th>Date</th><th>Shift</th><th>Section</th><th>Department</th><th>Waste Type</th><th>Weight (kg)</th><th>Measured By</th><th>Recorded</th></tr>";
+  let body = "";
+  lastRows.forEach(r=>{
+    body += `<tr><td>${esc(r.date_col)}</td><td>${esc(r.shift)}</td><td>${esc(r.section)}</td><td>${esc(r.department)}</td>` +
+      `<td>${esc(r.waste_type)}</td><td>${esc(r.waste_weight)}</td><td>${esc(r.measured_by)}</td><td>${esc(r.recorded_at)}</td></tr>`;
+  });
+  document.getElementById("printArea").innerHTML =
+    '<div class="grp">RUMBU INDUSTRIES GROUP</div><h1>Waste Records</h1>' +
+    '<div class="meta">Section: '+esc(deptLabel)+' &nbsp;|&nbsp; '+esc(fromDate)+' to '+esc(toDate)+' &nbsp;|&nbsp; '+esc(filterSummary())+'</div>' +
+    '<table><thead>'+head+'</thead><tbody>'+body+'</tbody></table>';
+  window.print();
+}
+
+init();
+</script>
+<script src="../../assets/letterhead.js"></script>
+</body>
+</html>

@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Secure Backup</title>
+<link rel="stylesheet" href="../../styles.css">
+<script src="../../table-resolver.js"></script>
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+body { font-family:var(--sans); padding: 20px; background:var(--bg); margin:0; }
+.box { max-width: 400px; margin: auto; background:var(--card); padding: 20px; border-radius: 10px; text-align: center; }
+input, select, button { width: 100%; padding: 12px; margin-top: 10px; font-size: 16px; box-sizing:border-box; }
+button { background:var(--primary); color: white; border: none; cursor: pointer; border-radius:6px; }
+button:hover { background:var(--primary-2); }
+#status { font-size:13px; font-weight:bold; margin-top:10px; }
+</style>
+</head>
+<body>
+
+<div class="box">
+  <h2>Backup</h2>
+  <div id="status">Connecting to Supabase...</div>
+
+  <input type="date" id="date">
+
+  <select id="table">
+    <option value="">Select Table</option>
+    <option value="matweaving">Mat_Weaving</option>
+    <option value="control">Maintenance_Log</option>
+  </select>
+
+
+  <button onclick="download()">Download CSV</button>
+</div>
+
+<script>
+const SUPABASE_URL = "https://betfhunzmhtdzgvufmfk.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp";
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
+
+let MW_ROWS = [], CTRL_ROWS = [];
+let MW_TABLE = "mat_weaving"; // resolved properly in init() below
+
+async function fetchAllRows(table){
+  const pageSize = 1000; let all = [], offset = 0;
+  while(true){
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=*&limit=" + pageSize + "&offset=" + offset, { headers: authHeaders() });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const page = await res.json();
+    all = all.concat(page);
+    if(page.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+async function init(){
+  const status = document.getElementById("status");
+  try{
+    MW_TABLE = await resolveWeavingTable();
+    const [mw, ctrl] = await Promise.all([fetchAllRows(MW_TABLE), fetchAllRows("control")]);
+    MW_ROWS = mw; CTRL_ROWS = ctrl;
+    status.style.color = "#1d8a4e";
+    status.textContent = "Connected. Mat_Weaving: " + MW_ROWS.length + " rows, Maintenance_Log: " + CTRL_ROWS.length + " rows.";
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+function toCSV(rows){
+  if(!rows.length) return "";
+  const headers = Object.keys(rows[0]);
+  let csv = headers.join(",") + "\n";
+  rows.forEach(row=>{
+    const values = headers.map(h=>{
+      let val = row[h];
+      if(val === null || val === undefined) val = "";
+      val = String(val);
+      if(val.includes(",") || val.includes('"') || val.includes("\n")){
+        val = '"' + val.replace(/"/g, '""') + '"';
+      }
+      return val;
+    });
+    csv += values.join(",") + "\n";
+  });
+  return csv;
+}
+
+function download(){
+  const date = document.getElementById("date").value;
+  const table = document.getElementById("table").value;
+
+  if(!date || !table){ alert("Please select a date and table."); return; }
+
+  const sourceRows = table === "matweaving" ? MW_ROWS : CTRL_ROWS;
+  if(!sourceRows.length){ alert("Table not loaded yet — please wait for the connection status above."); return; }
+
+  const rows = sourceRows.filter(r => r.date_col === date);
+  const csv = toCSV(rows);
+
+  if(!csv){ alert("No data found"); return; }
+
+  const label = table === "matweaving" ? "Mat_Weaving" : "Maintenance_Log";
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = label + "_" + date + ".csv";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+init();
+</script>
+</body>
+</html>

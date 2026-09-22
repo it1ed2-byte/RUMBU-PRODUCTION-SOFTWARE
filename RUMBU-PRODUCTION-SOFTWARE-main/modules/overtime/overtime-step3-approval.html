@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Overtime — Approval Page</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;--amber:#d97706;}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:22px 18px;color:var(--text);}
+  .wrap{max-width:920px;margin:0 auto;}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:14px;color:var(--muted);}
+
+  .form-head{text-align:center;margin-bottom:16px;}
+  .form-head .co{font-size:15px;font-weight:800;letter-spacing:.4px;color:var(--navy);}
+  .form-head .ti{font-size:12px;font-weight:700;letter-spacing:2px;color:var(--blue);margin-top:2px;text-transform:uppercase;}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 22px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.04);}
+  .card > h3{color:var(--navy);margin:0 0 2px;font-size:14px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;}
+  .card > .sub{color:var(--muted);font-size:12px;margin:0 0 16px;}
+
+  label{display:block;font-size:11.5px;font-weight:700;color:var(--text);margin:0 0 5px;}
+  input,select,textarea{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;background:var(--card);color:var(--text);}
+  input:focus,select:focus,textarea:focus{outline:2px solid var(--blue);border-color:var(--blue);}
+  textarea{resize:vertical;min-height:60px;}
+
+  button{padding:10px 15px;border:none;border-radius:8px;font-weight:700;font-size:13px;cursor:pointer;background:var(--blue);color:#fff;}
+  button:hover{background:var(--blue-dark);}
+  button.mini{padding:6px 11px;font-size:12px;}
+  button.green{background:var(--green);} button.green:hover{background:#166a2c;}
+  button.red{background:var(--red);} button.red:hover{background:#96242e;}
+  button.grey{background:#6b7280;} button.grey:hover{background:#565d68;}
+  .link-btn{background:none;border:none;color:var(--blue);font-weight:700;cursor:pointer;font-size:13px;padding:0;text-decoration:underline;}
+  .toolbar{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:6px;}
+  .toolbar .grow{flex:1;min-width:180px;}
+  .links{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px;}
+  .btnbar{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px;}
+  .backbar{margin-bottom:10px;}
+
+  .status{margin-top:10px;font-weight:700;font-size:13px;min-height:16px;}
+  .status.ok{color:var(--green);} .status.err{color:var(--red);}
+  .loading,.empty{font-size:12.5px;color:var(--muted);}
+
+  table{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px;}
+  th,td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top;}
+  thead th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.3px;border-bottom:2px solid var(--line);}
+  tbody tr:hover td{background:var(--bg);}
+  .clickrow{cursor:pointer;}
+
+  .tag{display:inline-block;padding:2px 9px;border-radius:10px;font-size:11px;font-weight:700;color:#fff;}
+  .tag.new{background:var(--amber);}
+  .tag.rejected{background:var(--red);}
+  .tag.approved{background:var(--green);}
+  .noaccess{color:var(--red);font-weight:bold;text-align:center;padding:30px;}
+  .rejbox{background:#fdecea;border:1px solid var(--red);border-radius:8px;padding:10px 14px;margin-bottom:14px;color:#7a1f1f;font-size:13px;}
+  .noteBox{background:#eaf6ee;border:1px solid var(--green);border-radius:8px;padding:10px 14px;margin-bottom:14px;color:#1d5c31;font-size:13px;}
+  .infobox{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:13px;line-height:1.7;}
+  .progress{font-size:12px;color:var(--muted);margin:6px 0 12px;}
+  .voted{color:var(--green);font-weight:bold;}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<div id="connStatus">Loading…</div>
+
+<div class="form-head">
+  <div class="co">Rumbu Industries Limited</div>
+  <div class="ti">Overtime Approval Page</div>
+</div>
+
+<div id="appArea" style="display:none;">
+
+  <!-- ===== QUEUE: only what needs my approval ===== -->
+  <div id="queueView">
+    <div class="card">
+      <h3>Approval Page</h3>
+      <p class="sub" id="scopeNote"></p>
+      <div class="links">
+        <button class="link-btn" onclick="openActivityLog()">Activity Log →</button>
+        <button class="link-btn" onclick="openHistory()">My Approval History →</button>
+      </div>
+      <div class="toolbar">
+        <div class="grow"><label>Department</label><select id="deptFilter" onchange="renderQueue()"><option value="all">All</option></select></div>
+        <div style="flex:0 0 auto;"><button class="mini grey" onclick="loadQueue()">Refresh</button></div>
+      </div>
+      <div id="queueWrap"></div>
+    </div>
+  </div>
+
+  <!-- ===== REVIEW one entry ===== -->
+  <div id="reviewView" style="display:none;">
+    <div class="backbar"><button class="mini grey" onclick="backToQueue()">← Back to list</button></div>
+    <div class="card">
+      <h3 id="workTitle">Review</h3>
+      <div id="rejBanner"></div>
+      <div id="entryInfo"></div>
+      <div id="progressInfo" class="progress"></div>
+      <h4 style="color:var(--navy);font-size:13px;margin:0 0 4px;">Employees</h4>
+      <div id="employeesListWrap"></div>
+      <div id="responseNoteWrap" style="display:none;margin-top:10px;">
+        <label>Response to Rejection <span style="color:var(--red);">*</span></label>
+        <textarea id="responseNoteInput" placeholder="Explain what was corrected before re-approving"></textarea>
+      </div>
+      <div id="actionArea" class="btnbar"></div>
+      <div class="status" id="actionStatus"></div>
+    </div>
+  </div>
+
+  <!-- ===== ACTIVITY LOG ===== -->
+  <div id="activityLogView" style="display:none;">
+    <div class="backbar"><button class="mini grey" onclick="backToQueue()">← Back to Approval Page</button></div>
+    <div class="card">
+      <h3>Approval Activity Log</h3>
+      <p class="sub">A running record of every approval and rejection on this page.</p>
+      <div class="toolbar">
+        <div><label>From Date</label><input type="date" id="logFrom"></div>
+        <div><label>To Date</label><input type="date" id="logTo"></div>
+        <div style="flex:0 0 auto;"><button class="mini grey" onclick="loadActivityLog()">Refresh</button></div>
+        <div style="flex:0 0 auto;"><button class="mini" onclick="printActivityLog()">Print PDF</button></div>
+      </div>
+      <div id="logWrap"></div>
+    </div>
+  </div>
+
+  <!-- ===== MY APPROVAL HISTORY ===== -->
+  <div id="historyView" style="display:none;">
+    <div class="backbar"><button class="mini grey" onclick="backToQueue()">← Back to Approval Page</button></div>
+    <div class="card">
+      <h3>My Approval History</h3>
+      <p class="sub">Forms you have already approved or rejected. Click any row to view it.</p>
+      <div class="toolbar">
+        <div><label>From Date</label><input type="date" id="histFrom"></div>
+        <div><label>To Date</label><input type="date" id="histTo"></div>
+        <div style="flex:0 0 auto;"><button class="mini grey" onclick="loadHistory()">Refresh</button></div>
+      </div>
+      <div id="historyWrap"></div>
+    </div>
+  </div>
+
+  <!-- ===== HISTORY DETAIL (read-only) ===== -->
+  <div id="historyDetailView" style="display:none;">
+    <div class="backbar"><button class="mini grey" onclick="openHistory()">← Back to History</button></div>
+    <div class="card"><div id="historyDetailBody"></div></div>
+  </div>
+
+</div>
+
+<div id="noAccess" class="noaccess" style="display:none;">
+  You are not assigned as a Step 3 approver for any Branch. Ask your Super Admin to assign you in Overtime Approver Setup.
+</div>
+</div>
+
+<script>
+let ME = null;
+let MY_SECTIONS = [];
+let IS_SUPER_ADMIN_BLANKET = false;
+let MY_EMPLOYEE_ID = null;
+let QUEUE_ROWS = [];       // entries needing my approval (already filtered)
+let CURRENT_ENTRY = null;
+let LOG_ROWS = [];
+let HISTORY_ROWS = [];
+const COMPANY = "Rumbu Industries Limited";
+
+function esc(s){
+  if(s === null || s === undefined) return "";
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+}
+function fmtDate(iso){
+  if(!iso) return "";
+  const p = String(iso).split("-"); if(p.length !== 3) return iso;
+  const months=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return p[2] + " " + (months[parseInt(p[1],10)-1] || p[1]) + " " + p[0];
+}
+
+async function logActivity(actionType, description){
+  try{
+    await sb.from("activity_log").insert({
+      actor_id: ME.id, actor_username: ME.username, actor_role: ME.role,
+      section_id: ME.sectionId, action_type: actionType, description: description
+    });
+  }catch(e){ console.warn("Activity log write failed (non-fatal):", e); }
+}
+
+function showView(id){
+  ["queueView","reviewView","activityLogView","historyView","historyDetailView"].forEach(v=>{
+    const el = document.getElementById(v); if(el) el.style.display = (v === id) ? "block" : "none";
+  });
+  try{ window.scrollTo({ top:0, behavior:"smooth" }); }catch(e){}
+}
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    await loadMySections();
+    if(!MY_SECTIONS.length && !IS_SUPER_ADMIN_BLANKET){
+      status.textContent = "Connected.";
+      document.getElementById("noAccess").style.display = "block";
+      return;
+    }
+    document.getElementById("appArea").style.display = "block";
+    document.getElementById("scopeNote").textContent = IS_SUPER_ADMIN_BLANKET
+      ? "Super Admin — showing every Branch."
+      : "Your assigned Branch(es): " + MY_SECTIONS.join(", ");
+    status.textContent = "Connected.";
+    await loadQueue();
+  }catch(e){
+    status.style.color = "#c0392b"; status.textContent = "❌ " + e.message;
+    console.error(e);
+  }
+}
+
+async function loadMySections(){
+  MY_SECTIONS = [];
+  if(ME.role === "super_admin"){ IS_SUPER_ADMIN_BLANKET = true; return; }
+  const { data: emp } = await sb.from("employees").select("id").eq("linked_profile_id", ME.id).maybeSingle();
+  if(!emp) return;
+  MY_EMPLOYEE_ID = emp.id;
+  const { data: scopes } = await sb.from("overtime_step_approvers").select("section").eq("employee_id", emp.id).eq("step", 3);
+  MY_SECTIONS = [...new Set((scopes||[]).map(s=>s.section))];
+}
+
+// ===== QUEUE: only entries that still need MY approval =====
+async function loadQueue(){
+  showView("queueView");
+  const wrap = document.getElementById("queueWrap");
+  wrap.innerHTML = "<p class='loading'>Loading…</p>";
+  try{
+    let q = sb.from("overtime_department_entries")
+      .select("*, overtime_initiations(form_number, overtime_date, propose_hours)")
+      .in("status", ["awaiting_step3","rejected_to_step3"])
+      .order("created_at", { ascending: false });
+    if(!IS_SUPER_ADMIN_BLANKET) q = q.in("section", MY_SECTIONS);
+    const { data, error } = await q;
+    if(error) throw error;
+    let rows = data || [];
+
+    // Hide entries I have already decided in their current cycle -> "needs my approval" only.
+    const ids = rows.map(r=>r.id);
+    if(ids.length){
+      const { data: mine } = await sb.from("overtime_approvals")
+        .select("department_entry_id, cycle")
+        .eq("approver_profile_id", ME.id).eq("step", 3).in("department_entry_id", ids);
+      const votedByEntry = {};
+      (mine||[]).forEach(v => { (votedByEntry[v.department_entry_id] = votedByEntry[v.department_entry_id] || new Set()).add(v.cycle); });
+      rows = rows.filter(r => !(votedByEntry[r.id] && votedByEntry[r.id].has(r.cycle)));
+    }
+    QUEUE_ROWS = rows;
+
+    // Department filter options from what's actually pending for me.
+    const deptSel = document.getElementById("deptFilter");
+    const depts = [...new Set(QUEUE_ROWS.map(r=>r.department))].sort();
+    const current = deptSel.value;
+    deptSel.innerHTML = '<option value="all">All</option>' + depts.map(d=>`<option value="${esc(d)}">${esc(d)}</option>`).join("");
+    if(depts.indexOf(current) !== -1) deptSel.value = current;
+
+    renderQueue();
+  }catch(e){
+    wrap.innerHTML = "<p class='status err'>❌ " + esc(e.message) + "</p>";
+  }
+}
+
+function renderQueue(){
+  const wrap = document.getElementById("queueWrap");
+  const deptFilter = document.getElementById("deptFilter").value;
+  const rows = (deptFilter === "all") ? QUEUE_ROWS : QUEUE_ROWS.filter(r=>r.department===deptFilter);
+  if(!rows.length){ wrap.innerHTML = "<p class='empty'>Nothing is waiting for your approval right now.</p>"; return; }
+
+  let html = "<table><thead><tr><th>Form No.</th><th>Department</th><th>Units</th><th>Overtime Date</th><th>Hours</th><th>Status</th><th></th></tr></thead><tbody>";
+  rows.forEach(r=>{
+    const isRejected = r.status === "rejected_to_step3";
+    html += "<tr class=\"clickrow\" onclick=\"openEntry(" + r.id + ")\">" +
+      "<td><b>" + esc(r.overtime_initiations?.form_number||"") + "</b></td>" +
+      "<td>" + esc(r.department) + "</td>" +
+      "<td>" + esc(r.units || "ALL") + "</td>" +
+      "<td>" + fmtDate(r.overtime_initiations?.overtime_date||"") + "</td>" +
+      "<td>" + esc(r.overtime_initiations?.propose_hours||"") + "</td>" +
+      "<td><span class=\"tag " + (isRejected?"rejected":"new") + "\">" + (isRejected?"NEEDS CORRECTION":"NEW") + "</span></td>" +
+      "<td><button class=\"mini\" onclick=\"event.stopPropagation();openEntry(" + r.id + ")\">Review</button></td>" +
+      "</tr>";
+  });
+  html += "</tbody></table>";
+  wrap.innerHTML = html;
+}
+
+// ===== REVIEW one entry =====
+async function openEntry(entryId){
+  const { data: entry, error } = await sb.from("overtime_department_entries")
+    .select("*, overtime_initiations(form_number, form_date, overtime_date, propose_hours, initiator_username)")
+    .eq("id", entryId).single();
+  if(error){ alert("Could not open entry: " + error.message); return; }
+
+  CURRENT_ENTRY = entry;
+  showView("reviewView");
+  document.getElementById("workTitle").textContent = "Review " + (entry.overtime_initiations?.form_number||"") + " — " + entry.department;
+  document.getElementById("entryInfo").innerHTML = "<div class=\"infobox\">" +
+    "<b>Form No.:</b> " + esc(entry.overtime_initiations?.form_number||"") + " &nbsp;|&nbsp; " +
+    "<b>Department:</b> " + esc(entry.department) + " &nbsp;|&nbsp; <b>Units:</b> " + esc(entry.units || "ALL") + "<br>" +
+    "<b>Overtime Date:</b> " + fmtDate(entry.overtime_initiations?.overtime_date||"") + " &nbsp;|&nbsp; " +
+    "<b>Initiator:</b> " + esc(entry.overtime_initiations?.initiator_username||"") +
+  "</div>";
+
+  const rejBanner = document.getElementById("rejBanner");
+  const responseWrap = document.getElementById("responseNoteWrap");
+  let noteHtml = entry.correction_note ? ("<div class=\"noteBox\"><b>📝 Response Note:</b> " + esc(entry.correction_note) + "</div>") : "";
+  if(entry.status === "rejected_to_step3"){
+    const { data: rej } = await sb.from("overtime_approvals").select("reason, approver_username, decided_at")
+      .eq("department_entry_id", entryId).eq("step", 4).eq("decision", "rejected")
+      .order("decided_at", { ascending: false }).limit(1).maybeSingle();
+    rejBanner.innerHTML = noteHtml + "<div class=\"rejbox\"><b>⚠ Rejected by Step 4 (" + esc(rej?.approver_username||"") + "):</b> " + esc(rej?.reason || "No reason given.") + "</div>";
+    responseWrap.style.display = "block";
+  } else {
+    rejBanner.innerHTML = noteHtml;
+    responseWrap.style.display = "none";
+  }
+  document.getElementById("responseNoteInput").value = "";
+  document.getElementById("actionStatus").textContent = "";
+
+  const { data: emps } = await sb.from("overtime_employees").select("*").eq("department_entry_id", entryId).order("created_at");
+  const listWrap = document.getElementById("employeesListWrap");
+  if(!emps || !emps.length){
+    listWrap.innerHTML = "<p class='empty'>No employees on this request.</p>";
+  } else {
+    let html = "<table><thead><tr><th>ID</th><th>Name</th><th>Reason for Overtime</th></tr></thead><tbody>";
+    emps.forEach(e=>{ html += "<tr><td>" + esc(e.employee_code) + "</td><td>" + esc(e.employee_name) + "</td><td>" + esc(e.reason_for_overtime) + "</td></tr>"; });
+    html += "</tbody></table>";
+    listWrap.innerHTML = html;
+  }
+
+  await renderApprovalProgress(entry);
+}
+
+function backToQueue(){
+  CURRENT_ENTRY = null;
+  loadQueue();
+}
+
+async function renderApprovalProgress(entry){
+  const { data: requiredLinks } = await sb.from("overtime_step_approvers")
+    .select("employee_id, employees(linked_profile_id, full_name)")
+    .eq("section", entry.section).eq("step", 3);
+  const requiredProfileIds = (requiredLinks||[]).map(r => r.employees?.linked_profile_id).filter(Boolean);
+  const requiredCount = requiredProfileIds.length;
+
+  const { data: votes } = await sb.from("overtime_approvals")
+    .select("approver_profile_id, decision")
+    .eq("department_entry_id", entry.id).eq("step", 3).eq("cycle", entry.cycle);
+  const approvedIds = new Set((votes||[]).filter(v=>v.decision==="approved").map(v=>v.approver_profile_id));
+  const iHaveVoted = (votes||[]).some(v=>v.approver_profile_id===ME.id);
+
+  document.getElementById("progressInfo").textContent =
+    approvedIds.size + " of " + requiredCount + " required approver(s) have signed off so far." +
+    (IS_SUPER_ADMIN_BLANKET ? " (As Super Admin, your approval completes this step immediately.)" : "");
+
+  const actionWrap = document.getElementById("actionArea");
+  const amRequired = IS_SUPER_ADMIN_BLANKET || requiredProfileIds.indexOf(ME.id) !== -1;
+  if(iHaveVoted){
+    actionWrap.innerHTML = "<p class='voted'>✅ You have already reviewed this entry this round.</p>";
+  } else if(!amRequired){
+    actionWrap.innerHTML = "<p class='empty'>You are viewing this as Super Admin, but are not a required approver for this Branch.</p>";
+  } else {
+    actionWrap.innerHTML =
+      "<button class=\"green\" onclick=\"voteEntry('approved')\">Approve</button>" +
+      "<button class=\"red\" onclick=\"voteEntry('rejected')\">Reject</button>";
+  }
+}
+
+async function voteEntry(decision){
+  const status = document.getElementById("actionStatus");
+  if(!CURRENT_ENTRY) return;
+
+  let reason = null;
+  if(decision === "rejected"){
+    reason = prompt("Reason for rejecting this entry back to Step 2:", "");
+    if(reason === null) return;
+    if(!reason.trim()){ status.className="status err"; status.textContent="A reason is required to reject."; return; }
+  } else {
+    if(CURRENT_ENTRY.status === "rejected_to_step3"){
+      const note = document.getElementById("responseNoteInput").value.trim();
+      if(!note){ status.className="status err"; status.textContent="Enter a Response to Rejection before approving."; return; }
+    }
+    if(!confirm("Approve this overtime entry?")) return;
+  }
+
+  status.className="status"; status.textContent="Saving…";
+  try{
+    const { error: voteErr } = await sb.from("overtime_approvals").insert({
+      department_entry_id: CURRENT_ENTRY.id, step: 3, cycle: CURRENT_ENTRY.cycle,
+      approver_profile_id: ME.id, approver_username: ME.username,
+      decision, reason: decision==="rejected" ? reason : null
+    });
+    if(voteErr) throw voteErr;
+
+    if(decision === "rejected"){
+      const { error: updErr } = await sb.from("overtime_department_entries").update({
+        status: "rejected_to_step2", cycle: CURRENT_ENTRY.cycle + 1, updated_at: new Date().toISOString()
+      }).eq("id", CURRENT_ENTRY.id);
+      if(updErr) throw updErr;
+      await logActivity("overtime_step3_rejected", ME.username + " rejected overtime entry #" + CURRENT_ENTRY.id + " (" + CURRENT_ENTRY.section + " / " + CURRENT_ENTRY.department + ") back to Step 2. Reason: " + reason);
+      status.className = "status ok"; status.textContent = "Rejected and sent back to Step 2.";
+      setTimeout(backToQueue, 700);
+      return;
+    }
+
+    let allApproved = (ME.role === "super_admin");
+    if(!allApproved){
+      const { data: requiredLinks } = await sb.from("overtime_step_approvers")
+        .select("employee_id, employees(linked_profile_id)")
+        .eq("section", CURRENT_ENTRY.section).eq("step", 3);
+      const requiredProfileIds = (requiredLinks||[]).map(r=>r.employees?.linked_profile_id).filter(Boolean);
+      const { data: votes } = await sb.from("overtime_approvals")
+        .select("approver_profile_id, decision")
+        .eq("department_entry_id", CURRENT_ENTRY.id).eq("step", 3).eq("cycle", CURRENT_ENTRY.cycle);
+      const approvedIds = new Set((votes||[]).filter(v=>v.decision==="approved").map(v=>v.approver_profile_id));
+      allApproved = requiredProfileIds.length > 0 && requiredProfileIds.every(id => approvedIds.has(id));
+    }
+
+    await logActivity("overtime_step3_approved", ME.username + " approved overtime entry #" + CURRENT_ENTRY.id + " (" + CURRENT_ENTRY.section + " / " + CURRENT_ENTRY.department + ")");
+
+    if(allApproved){
+      const updateFields = { status: "awaiting_step4", updated_at: new Date().toISOString() };
+      if(CURRENT_ENTRY.status === "rejected_to_step3") updateFields.correction_note = document.getElementById("responseNoteInput").value.trim();
+      const { error: updErr } = await sb.from("overtime_department_entries").update(updateFields).eq("id", CURRENT_ENTRY.id);
+      if(updErr) throw updErr;
+      status.className = "status ok"; status.textContent = "✅ All approvers signed off — sent to Step 4.";
+    } else {
+      status.className = "status ok"; status.textContent = "✅ Your approval was recorded. Awaiting other approver(s).";
+    }
+    setTimeout(backToQueue, 800);
+  }catch(e){
+    status.className = "status err"; status.textContent = "❌ " + e.message;
+  }
+}
+
+// ===== ACTIVITY LOG =====
+function openActivityLog(){ showView("activityLogView"); loadActivityLog(); }
+
+async function loadActivityLog(){
+  const wrap = document.getElementById("logWrap");
+  const from = document.getElementById("logFrom").value;
+  const to = document.getElementById("logTo").value;
+  wrap.innerHTML = "<p class='loading'>Loading…</p>";
+  try{
+    const { data, error } = await sb.from("activity_log").select("*")
+      .in("action_type", ["overtime_step3_approved","overtime_step3_rejected"])
+      .order("created_at", { ascending: false });
+    if(error) throw error;
+    let rows = data || [];
+    if(from) rows = rows.filter(r => (r.created_at||"").slice(0,10) >= from);
+    if(to)   rows = rows.filter(r => (r.created_at||"").slice(0,10) <= to);
+    LOG_ROWS = rows;
+    if(!rows.length){ wrap.innerHTML = "<p class='empty'>No approval activity in this range.</p>"; return; }
+    let html = "<table><thead><tr><th>Date</th><th>By</th><th>Action</th></tr></thead><tbody>";
+    rows.forEach(r=>{ html += "<tr><td>" + esc(new Date(r.created_at).toLocaleString()) + "</td><td>" + esc(r.actor_username) + "</td><td>" + esc(r.description) + "</td></tr>"; });
+    html += "</tbody></table>";
+    wrap.innerHTML = html;
+  }catch(e){
+    wrap.innerHTML = "<p class='status err'>❌ " + esc(e.message) + "</p>";
+  }
+}
+
+function printActivityLog(){
+  if(!LOG_ROWS.length){ alert("No log rows to print — refresh first."); return; }
+  const rowsHtml = LOG_ROWS.map(r => "<tr><td>" + esc(new Date(r.created_at).toLocaleString()) + "</td><td>" + esc(r.actor_username) + "</td><td>" + esc(r.description) + "</td></tr>").join("");
+  const html = "<html><head><style>" +
+    "@page{size:A4 landscape;margin:30pt 40pt;} body{font-family:'Times New Roman',serif;font-size:11pt;margin:0;padding:30px;color:#000;}" +
+    "h2{text-align:center;font-size:16pt;margin:0 0 4px;} h3{text-align:center;font-size:12pt;margin:0 0 20px;letter-spacing:1px;}" +
+    "table{width:100%;border-collapse:collapse;margin-top:10px;} td,th{padding:6px 8px;border:1px solid #000;text-align:left;vertical-align:top;}" +
+    "</style></head><body><h2>" + esc(COMPANY) + "</h2><h3>OVERTIME — APPROVAL ACTIVITY LOG</h3>" +
+    "<table><thead><tr><th>Date</th><th>By</th><th>Action</th></tr></thead><tbody>" + rowsHtml + "</tbody></table></body></html>";
+  const w = window.open("", "_blank");
+  if(!w){ alert("Please allow pop-ups to print."); return; }
+  w.document.write(html); w.document.close();
+  w.onload = function(){ w.focus(); w.print(); };
+}
+
+// ===== MY APPROVAL HISTORY (forms I have already decided) =====
+function openHistory(){ showView("historyView"); loadHistory(); }
+
+async function loadHistory(){
+  const wrap = document.getElementById("historyWrap");
+  const from = document.getElementById("histFrom").value;
+  const to = document.getElementById("histTo").value;
+  wrap.innerHTML = "<p class='loading'>Loading…</p>";
+  try{
+    const { data: myVotes, error } = await sb.from("overtime_approvals")
+      .select("department_entry_id, decision, reason, decided_at, cycle")
+      .eq("approver_profile_id", ME.id).eq("step", 3)
+      .order("decided_at", { ascending: false });
+    if(error) throw error;
+    let votes = myVotes || [];
+    if(from) votes = votes.filter(v => (v.decided_at||"").slice(0,10) >= from);
+    if(to)   votes = votes.filter(v => (v.decided_at||"").slice(0,10) <= to);
+
+    const ids = [...new Set(votes.map(v=>v.department_entry_id))];
+    let entryMap = {};
+    if(ids.length){
+      const { data: entries } = await sb.from("overtime_department_entries")
+        .select("id, section, department, units, status, overtime_initiations(form_number, overtime_date)")
+        .in("id", ids);
+      (entries||[]).forEach(e => entryMap[e.id] = e);
+    }
+    HISTORY_ROWS = votes.map(v => ({ ...v, entry: entryMap[v.department_entry_id] || null }));
+
+    if(!HISTORY_ROWS.length){ wrap.innerHTML = "<p class='empty'>You have not approved or rejected any forms yet.</p>"; return; }
+
+    let html = "<table><thead><tr><th>Form No.</th><th>Department</th><th>Overtime Date</th><th>My Decision</th><th>Decided</th><th></th></tr></thead><tbody>";
+    HISTORY_ROWS.forEach((h, i)=>{
+      const e = h.entry;
+      const tag = h.decision === "approved" ? "approved" : "rejected";
+      html += "<tr class=\"clickrow\" onclick=\"openHistoryDetail(" + i + ")\">" +
+        "<td><b>" + esc(e?.overtime_initiations?.form_number||"—") + "</b></td>" +
+        "<td>" + esc(e?.department||"—") + "</td>" +
+        "<td>" + fmtDate(e?.overtime_initiations?.overtime_date||"") + "</td>" +
+        "<td><span class=\"tag " + tag + "\">" + h.decision.toUpperCase() + "</span></td>" +
+        "<td>" + esc(h.decided_at ? new Date(h.decided_at).toLocaleDateString() : "") + "</td>" +
+        "<td><button class=\"mini\" onclick=\"event.stopPropagation();openHistoryDetail(" + i + ")\">View</button></td>" +
+        "</tr>";
+    });
+    html += "</tbody></table>";
+    wrap.innerHTML = html;
+  }catch(e){
+    wrap.innerHTML = "<p class='status err'>❌ " + esc(e.message) + "</p>";
+  }
+}
+
+async function openHistoryDetail(idx){
+  const h = HISTORY_ROWS[idx];
+  if(!h) return;
+  const e = h.entry;
+  showView("historyDetailView");
+  const body = document.getElementById("historyDetailBody");
+  body.innerHTML = "<p class='loading'>Loading…</p>";
+  const { data: emps } = await sb.from("overtime_employees").select("*").eq("department_entry_id", h.department_entry_id).order("created_at");
+  const list = emps || [];
+
+  let html = "<h3 style=\"color:var(--navy);\">" + esc(e?.overtime_initiations?.form_number||"") + " — " + esc(e?.department||"") + "</h3>";
+  html += "<div class=\"infobox\">" +
+    "<b>Section:</b> " + esc(e?.section||"") + " &nbsp;|&nbsp; <b>Department:</b> " + esc(e?.department||"") + " &nbsp;|&nbsp; <b>Units:</b> " + esc(e?.units||"ALL") + "<br>" +
+    "<b>Overtime Date:</b> " + fmtDate(e?.overtime_initiations?.overtime_date||"") + " &nbsp;|&nbsp; " +
+    "<b>My Decision:</b> <span class=\"tag " + (h.decision==="approved"?"approved":"rejected") + "\">" + h.decision.toUpperCase() + "</span>" +
+    (h.reason ? (" &nbsp;|&nbsp; <b>Reason:</b> " + esc(h.reason)) : "") +
+  "</div>";
+  html += "<h4 style=\"color:var(--navy);font-size:13px;margin:0 0 4px;\">Employees</h4>";
+  if(!list.length){
+    html += "<p class='empty'>No employees on this form.</p>";
+  } else {
+    html += "<table><thead><tr><th>ID</th><th>Name</th><th>Reason</th></tr></thead><tbody>";
+    list.forEach(x=>{ html += "<tr><td>" + esc(x.employee_code) + "</td><td>" + esc(x.employee_name) + "</td><td>" + esc(x.reason_for_overtime) + "</td></tr>"; });
+    html += "</tbody></table>";
+  }
+  body.innerHTML = html;
+}
+
+init();
+</script>
+<script src="../../assets/letterhead.js"></script>
+</body>
+</html>

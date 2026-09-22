@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Fuel Management — Logistics</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme")||"navy"); }catch(e){} })();
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) document.documentElement.setAttribute("data-theme",e.data.rumbuTheme); });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="review-modal.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<style>
+  body{padding:18px;}
+  .wrap{max-width:1200px;margin:0 auto;}
+  label{font-size:12px;font-weight:700;display:block;margin:10px 0 4px;color:var(--muted);}
+  input,select,textarea{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);}
+  .form-row-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;}
+  .form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;}
+  th{text-align:left;padding:7px 8px;border-bottom:2px solid var(--line);color:var(--heading);white-space:nowrap;}
+  td{padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top;}
+  .badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10.5px;font-weight:700;}
+  .b-normal{background:#dcfce7;color:#166534;} .b-abnormal{background:#fee2e2;color:#991b1b;} .b-first{background:#e5e7eb;color:#374151;}
+  .btn-ghost{background:var(--bg);color:var(--heading);border:1px solid var(--line);}
+  .hidden{display:none;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back</button>
+  <div id="connStatus" style="font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);">Loading...</div>
+
+  <div class="card-panel">
+    <h3 style="color:var(--heading);margin:0 0 4px;">Current Fuel Price</h3>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">One current value, used to prefill new fuel purchases below, and used by Trip Dispatch to calculate fuel to issue and by Trip Closure to estimate cost. Update it whenever the market price changes.</p>
+    <div class="form-row">
+      <div><label>Price per Litre (NGN)</label><input type="number" step="0.01" id="currentPriceInput"></div>
+      <div style="display:flex;align-items:flex-end;"><button onclick="saveCurrentPrice()">Save Current Price</button></div>
+    </div>
+    <p style="font-size:12px;color:var(--muted);margin:6px 0 0;" id="currentPriceNote"></p>
+    <div class="status" id="priceStatus"></div>
+  </div>
+
+  <div class="card-panel" style="margin-top:16px;">
+    <h3 style="color:var(--heading);margin:0 0 4px;">Fuel Management</h3>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 16px;">Independent of Trip Dispatch's Fuel Issued field — this is the general fuel log (station fill-ups, vendor purchases). No approval needed, records straight in.</p>
+
+    <button onclick="toggleForm()">+ Log Fuel Purchase</button>
+
+    <div class="hidden" id="formPanel" style="border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin:14px 0;">
+      <h4 style="margin-top:0;">Log Fuel Purchase</h4>
+      <div class="form-row-3">
+        <div><label>Date &amp; Time *</label><input type="datetime-local" id="f_datetime"></div>
+        <div><label>Vehicle *</label><select id="f_vehicle" onchange="onVehiclePick()"><option value="">— Select —</option></select></div>
+        <div><label>Driver Responsible *</label><select id="f_driver"><option value="">— Select —</option></select></div>
+      </div>
+      <div class="form-row-3">
+        <div><label>Fuel Quantity Purchased (litres) *</label><input type="number" step="0.01" id="f_quantity" oninput="computeTotal()"></div>
+        <div><label>Price per Litre (NGN) *</label><input type="number" step="0.01" id="f_price" oninput="computeTotal()"></div>
+        <div><label>Total Fuel Cost (NGN)</label><input type="number" id="f_total" readonly></div>
+      </div>
+      <div class="form-row-3">
+        <div><label>Odometer Reading at Fuelling (km) *</label><input type="number" step="0.1" id="f_odometer"></div>
+        <div><label>Fuel Station / Vendor *</label><input id="f_vendor"></div>
+        <div><label>Approved Fuel Quantity (litres)</label><input type="number" step="0.01" id="f_approved_qty" placeholder="Optional — pre-authorized cap"></div>
+      </div>
+      <p style="font-size:12px;color:var(--muted);margin:4px 0 0;" id="consumptionPreview"></p>
+
+      <button onclick="submitFuel()" style="margin-top:14px;">Save Fuel Record</button>
+      <button class="btn-ghost" onclick="toggleForm()">Cancel</button>
+      <div class="status" id="formStatus"></div>
+    </div>
+  </div>
+
+  <div class="card-panel" style="margin-top:16px;">
+    <h3 style="color:var(--heading);margin:0 0 4px;">Fuel Report</h3>
+    <div class="form-row-3">
+      <div><label>From Date</label><input type="date" id="rFrom" onchange="loadReport()"></div>
+      <div><label>To Date</label><input type="date" id="rTo" onchange="loadReport()"></div>
+      <div><label>Vehicle</label><select id="rVehicle" onchange="loadReport()"><option value="">All</option></select></div>
+    </div>
+    <div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap;">
+      <button class="btn-ghost" onclick="clearReportFilters()">Clear Filters</button>
+      <button onclick="downloadPdf()">⬇ Download PDF</button>
+    </div>
+    <div id="reportWrap" style="margin-top:14px;overflow-x:auto;"></div>
+    <div class="status" id="reportStatus"></div>
+  </div>
+</div>
+
+<script>
+let ME = null;
+let VEHICLES = [];
+let DRIVERS = [];
+let REPORT_ROWS = [];
+let CURRENT_PRICE = null;
+
+async function loadCurrentPrice(){
+  const { data } = await sb.from("logistics_fuel_price").select("price_per_litre,updated_at").eq("id",1).maybeSingle();
+  CURRENT_PRICE = data ? data.price_per_litre : null;
+  document.getElementById("currentPriceInput").value = CURRENT_PRICE!=null ? CURRENT_PRICE : "";
+  document.getElementById("currentPriceNote").textContent = data ? "Last updated " + new Date(data.updated_at).toLocaleString("en-GB") : "Not set yet — Dispatch's fuel calculation needs this to work.";
+}
+
+async function saveCurrentPrice(){
+  const status = document.getElementById("priceStatus");
+  const val = document.getElementById("currentPriceInput").value;
+  if(val===""){ status.className="status err"; status.textContent="Enter a price first."; return; }
+  status.className="status"; status.textContent="Saving...";
+  try{
+    const { error } = await sb.from("logistics_fuel_price").upsert({ id:1, price_per_litre: Number(val), updated_by: ME.id, updated_at: new Date().toISOString() });
+    if(error) throw error;
+    status.className="status ok"; status.textContent="✅ Current fuel price updated.";
+    await loadCurrentPrice();
+  }catch(e){
+    status.className="status err"; status.textContent="❌ " + e.message;
+  }
+}
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+
+    const [{ data: vData },{ data: dData }] = await Promise.all([
+      sb.from("logistics_vehicles").select("id,registration_number,current_mileage,expected_consumption_km_per_litre").order("registration_number"),
+      sb.from("logistics_drivers").select("id,employees(full_name,employee_id)").order("id")
+    ]);
+    VEHICLES = vData || [];
+    DRIVERS = dData || [];
+    document.getElementById("f_vehicle").innerHTML = '<option value="">— Select —</option>' + VEHICLES.map(v=>`<option value="${v.id}">${v.registration_number}</option>`).join("");
+    document.getElementById("f_driver").innerHTML = '<option value="">— Select —</option>' + DRIVERS.map(d=>{ const e=d.employees||{}; return `<option value="${d.id}">${e.full_name||"—"} (${e.employee_id||"—"})</option>`; }).join("");
+    document.getElementById("rVehicle").innerHTML = '<option value="">All</option>' + VEHICLES.map(v=>`<option value="${v.id}">${v.registration_number}</option>`).join("");
+
+    const today = new Date().toISOString().slice(0,10);
+    const monthAgo = new Date(Date.now() - 30*86400000).toISOString().slice(0,10);
+    document.getElementById("rFrom").value = monthAgo;
+    document.getElementById("rTo").value = today;
+    document.getElementById("f_datetime").value = new Date().toISOString().slice(0,16);
+
+    await loadCurrentPrice();
+    await loadReport();
+    status.style.color="var(--ok)"; status.textContent="Connected.";
+  }catch(e){
+    status.style.color="var(--bad)"; status.textContent="Error: "+e.message;
+  }
+}
+
+function toggleForm(){
+  document.getElementById("formPanel").classList.toggle("hidden");
+  document.getElementById("formStatus").textContent = "";
+  document.getElementById("consumptionPreview").textContent = "";
+}
+
+function computeTotal(){
+  const qty = parseFloat(document.getElementById("f_quantity").value)||0;
+  const price = parseFloat(document.getElementById("f_price").value)||0;
+  document.getElementById("f_total").value = (qty*price).toFixed(2);
+}
+
+async function onVehiclePick(){
+  const vehicleId = document.getElementById("f_vehicle").value;
+  const note = document.getElementById("consumptionPreview");
+  if(!vehicleId){ note.textContent = ""; return; }
+  if(CURRENT_PRICE!=null && document.getElementById("f_price").value===""){
+    document.getElementById("f_price").value = CURRENT_PRICE;
+    computeTotal();
+  }
+  const v = VEHICLES.find(x=>x.id===Number(vehicleId));
+  const { data: last } = await sb.from("logistics_fuel_records").select("odometer_reading,fuelled_at")
+    .eq("vehicle_id", vehicleId).order("fuelled_at",{ascending:false}).limit(1).maybeSingle();
+  if(last){
+    note.textContent = "Last fuel record for this vehicle: " + last.odometer_reading + " km on " + new Date(last.fuelled_at).toLocaleDateString("en-GB") +
+      (v && v.expected_consumption_km_per_litre ? " | Expected consumption: " + v.expected_consumption_km_per_litre + " km/litre" : "");
+  } else {
+    note.textContent = "No previous fuel record for this vehicle yet — this will be the baseline reading.";
+  }
+}
+
+function submitFuel(){
+  const status = document.getElementById("formStatus");
+  const required = [
+    ["f_datetime","Date & Time"], ["f_vehicle","Vehicle"], ["f_driver","Driver Responsible"],
+    ["f_quantity","Fuel Quantity Purchased"], ["f_price","Price per Litre"], ["f_odometer","Odometer Reading"], ["f_vendor","Fuel Station / Vendor"]
+  ];
+  for(const [id,label] of required){
+    if(document.getElementById(id).value===""){ status.className="status err"; status.textContent=`"${label}" is required.`; return; }
+  }
+
+  const vehSel = document.getElementById("f_vehicle");
+  const drvSel = document.getElementById("f_driver");
+  status.textContent = "";
+  showReviewModal({
+    title: "Review Before Saving",
+    subtitle: vehSel.options[vehSel.selectedIndex]?.text||"",
+    mode: "submit",
+    sections: [{ rows: [
+      ["Date & Time", document.getElementById("f_datetime").value],
+      ["Vehicle", vehSel.options[vehSel.selectedIndex]?.text||""],
+      ["Driver Responsible", drvSel.options[drvSel.selectedIndex]?.text||""],
+      ["Fuel Quantity Purchased (litres)", document.getElementById("f_quantity").value],
+      ["Price per Litre (NGN)", document.getElementById("f_price").value],
+      ["Total Fuel Cost (NGN)", document.getElementById("f_total").value],
+      ["Odometer Reading (km)", document.getElementById("f_odometer").value],
+      ["Fuel Station / Vendor", document.getElementById("f_vendor").value],
+      ["Approved Fuel Quantity (litres)", document.getElementById("f_approved_qty").value],
+    ]}],
+    onConfirm: proceedWithFuelSubmit
+  });
+}
+window.submitFuel = submitFuel;
+
+async function proceedWithFuelSubmit(){
+  const status = document.getElementById("formStatus");
+  status.className="status"; status.textContent="Saving...";
+  try{
+    const vehicleId = Number(document.getElementById("f_vehicle").value);
+    const odometer = Number(document.getElementById("f_odometer").value);
+    const quantity = Number(document.getElementById("f_quantity").value);
+
+    // Consumption for this fill cycle = distance since the last fuel record
+    // for this same vehicle ÷ litres purchased now — compared against the
+    // vehicle's own expected benchmark (set on the Vehicle profile) to flag
+    // abnormal usage, per the proposal.
+    const { data: last } = await sb.from("logistics_fuel_records").select("odometer_reading")
+      .eq("vehicle_id", vehicleId).order("fuelled_at",{ascending:false}).limit(1).maybeSingle();
+    let distanceSinceLast = null, consumptionKmPerLitre = null, consumptionFlag = "first_record";
+    if(last){
+      distanceSinceLast = odometer - Number(last.odometer_reading);
+      if(distanceSinceLast > 0 && quantity > 0){
+        consumptionKmPerLitre = distanceSinceLast / quantity;
+        const v = VEHICLES.find(x=>x.id===vehicleId);
+        const expected = v ? v.expected_consumption_km_per_litre : null;
+        consumptionFlag = (expected && consumptionKmPerLitre < expected*0.8) ? "abnormal" : "normal";
+      }
+    }
+
+    const payload = {
+      fuelled_at: new Date(document.getElementById("f_datetime").value).toISOString(),
+      vehicle_id: vehicleId,
+      driver_id: Number(document.getElementById("f_driver").value),
+      quantity_purchased: quantity,
+      price_per_litre: Number(document.getElementById("f_price").value),
+      total_cost: Number(document.getElementById("f_total").value),
+      odometer_reading: odometer,
+      vendor: document.getElementById("f_vendor").value.trim(),
+      approved_quantity: document.getElementById("f_approved_qty").value ? Number(document.getElementById("f_approved_qty").value) : null,
+      distance_since_last: distanceSinceLast,
+      consumption_km_per_litre: consumptionKmPerLitre,
+      consumption_flag: consumptionFlag,
+      logged_by: ME.id
+    };
+
+    const { data: inserted, error } = await sb.from("logistics_fuel_records").insert(payload).select("id").single();
+    if(error) throw error;
+    await sb.from("logistics_activity_log").insert({
+      entity_type:"fuel", entity_id:inserted.id, action:"logged",
+      actor_profile_id: ME.id, actor_username: ME.username,
+      description: ME.username + " logged a fuel purchase (" + quantity + "L) for vehicle #" + vehicleId
+    });
+
+    status.className="status ok"; status.textContent="✅ Fuel record saved.";
+    await loadReport();
+    setTimeout(()=>{ document.getElementById("formPanel").classList.add("hidden"); }, 700);
+  }catch(e){
+    status.className="status err"; status.textContent="❌ " + e.message;
+  }
+}
+
+function clearReportFilters(){
+  document.getElementById("rFrom").value = "";
+  document.getElementById("rTo").value = "";
+  document.getElementById("rVehicle").value = "";
+  loadReport();
+}
+
+function flagBadge(flag){
+  if(flag==="abnormal") return `<span class="badge b-abnormal">Abnormal</span>`;
+  if(flag==="normal") return `<span class="badge b-normal">Normal</span>`;
+  return `<span class="badge b-first">Baseline</span>`;
+}
+
+async function loadReport(){
+  const from = document.getElementById("rFrom").value;
+  const to = document.getElementById("rTo").value;
+  const vehicleId = document.getElementById("rVehicle").value;
+  const wrap = document.getElementById("reportWrap");
+  const status = document.getElementById("reportStatus");
+
+  let q = sb.from("logistics_fuel_records")
+    .select("*, logistics_vehicles(registration_number), logistics_drivers(employees(full_name))")
+    .order("fuelled_at",{ascending:false});
+  if(from) q = q.gte("fuelled_at", from+"T00:00:00");
+  if(to) q = q.lte("fuelled_at", to+"T23:59:59");
+  if(vehicleId) q = q.eq("vehicle_id", vehicleId);
+
+  const { data, error } = await q;
+  if(error){ wrap.innerHTML = "Error: " + error.message; return; }
+  REPORT_ROWS = data||[];
+  status.className=""; status.textContent = REPORT_ROWS.length + " record(s) match these filters.";
+
+  if(!REPORT_ROWS.length){ wrap.innerHTML = "<p style='color:var(--muted);font-size:13px;'>No fuel records match.</p>"; return; }
+  wrap.innerHTML = `<table>
+    <thead><tr><th>Date</th><th>Vehicle</th><th>Driver</th><th>Quantity (L)</th><th>Price/L</th><th>Total Cost</th>
+      <th>Odometer</th><th>Vendor</th><th>Distance Since Last</th><th>Consumption (km/L)</th><th>Status</th></tr></thead>
+    <tbody>${REPORT_ROWS.map(r=>{
+      const veh = r.logistics_vehicles ? r.logistics_vehicles.registration_number : "—";
+      const drv = (r.logistics_drivers && r.logistics_drivers.employees) ? r.logistics_drivers.employees.full_name : "—";
+      return `<tr>
+        <td>${new Date(r.fuelled_at).toLocaleString("en-GB")}</td>
+        <td>${veh}</td><td>${drv}</td>
+        <td>${r.quantity_purchased}</td><td>${r.price_per_litre}</td><td>${r.total_cost}</td>
+        <td>${r.odometer_reading}</td><td>${r.vendor}</td>
+        <td>${r.distance_since_last!=null?r.distance_since_last:"—"}</td>
+        <td>${r.consumption_km_per_litre!=null?r.consumption_km_per_litre.toFixed(2):"—"}</td>
+        <td>${flagBadge(r.consumption_flag)}</td>
+      </tr>`;
+    }).join("")}</tbody>
+  </table>`;
+}
+
+function downloadPdf(){
+  if(!REPORT_ROWS.length){ alert("Nothing to export — no records match the current filters."); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
+  const navy = [31, 56, 100];
+
+  doc.setFillColor(navy[0], navy[1], navy[2]);
+  doc.rect(0, 0, doc.internal.pageSize.getWidth(), 56, "F");
+  doc.setTextColor(255,255,255);
+  doc.setFont("helvetica","bold"); doc.setFontSize(13);
+  doc.text("RUMBU INDUSTRIES GROUP", 30, 24);
+  doc.setFont("helvetica","normal"); doc.setFontSize(10);
+  doc.text("Logistics — Fuel Report", 30, 40);
+  doc.text("Printed " + new Date().toLocaleString("en-GB"), doc.internal.pageSize.getWidth()-30, 24, { align: "right" });
+
+  doc.setTextColor(60,60,60); doc.setFontSize(9);
+  const from = document.getElementById("rFrom").value || "—";
+  const to = document.getElementById("rTo").value || "—";
+  const vehSel = document.getElementById("rVehicle");
+  const veh = vehSel.value ? vehSel.options[vehSel.selectedIndex].text : "All";
+  doc.text(`Date range: ${from} to ${to}   |   Vehicle: ${veh}   |   ${REPORT_ROWS.length} records`, 30, 72);
+
+  const body = REPORT_ROWS.map(r=>{
+    const veh2 = r.logistics_vehicles ? r.logistics_vehicles.registration_number : "—";
+    const drv = (r.logistics_drivers && r.logistics_drivers.employees) ? r.logistics_drivers.employees.full_name : "—";
+    return [
+      new Date(r.fuelled_at).toLocaleString("en-GB"), veh2, drv,
+      r.quantity_purchased, r.price_per_litre, r.total_cost, r.odometer_reading, r.vendor,
+      r.distance_since_last!=null?r.distance_since_last:"—",
+      r.consumption_km_per_litre!=null?r.consumption_km_per_litre.toFixed(2):"—",
+      r.consumption_flag||"—"
+    ];
+  });
+
+  doc.autoTable({
+    startY: 84,
+    head: [["Date","Vehicle","Driver","Qty (L)","Price/L","Total Cost","Odometer","Vendor","Dist. Since Last","Consumption (km/L)","Status"]],
+    body,
+    styles: { fontSize: 7.5, cellPadding: 4 },
+    headStyles: { fillColor: navy, textColor: 255, fontStyle: "bold" },
+    alternateRowStyles: { fillColor: [240, 244, 249] },
+    margin: { left: 30, right: 30 },
+    didDrawPage: function(){
+      const pageCount = doc.internal.getNumberOfPages();
+      doc.setFontSize(8); doc.setTextColor(120,120,120);
+      doc.text("CONFIDENTIAL", 30, doc.internal.pageSize.getHeight()-16);
+      doc.text("Page " + doc.internal.getCurrentPageInfo().pageNumber + " of " + pageCount,
+        doc.internal.pageSize.getWidth()-30, doc.internal.pageSize.getHeight()-16, { align: "right" });
+    }
+  });
+
+  doc.save("Logistics_Fuel_Report_" + new Date().toISOString().slice(0,10) + ".pdf");
+}
+
+init();
+</script>
+</body>
+</html>

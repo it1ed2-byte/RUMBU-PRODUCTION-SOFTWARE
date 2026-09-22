@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Visitor Attendance — Enter Visitor</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;color:var(--text);}
+  .wrap{max-width:720px;margin:0 auto;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;}
+  .card h3{color:var(--navy);margin:0 0 4px;font-size:16px;}
+  .card .sub{color:var(--blue);font-size:12px;margin:0 0 14px;}
+  label{display:block;font-size:12px;font-weight:bold;color:var(--text);margin:10px 0 4px;}
+  input,textarea,select{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;}
+  textarea{resize:vertical;min-height:60px;}
+  .row{display:flex;gap:12px;flex-wrap:wrap;}
+  .row > div{flex:1;min-width:180px;}
+  button{padding:11px 16px;border:none;border-radius:8px;font-weight:bold;font-size:14px;cursor:pointer;background:var(--blue);color:#fff;margin-top:14px;}
+  button:hover{background:var(--blue-dark);}
+  .status{margin-top:10px;font-weight:bold;font-size:13px;min-height:16px;}
+  .status.ok{color:var(--green);} .status.err{color:var(--red);}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;margin-bottom:12px;background:var(--navy);">&larr; Back to Menu</button>
+<div id="connStatus">Loading...</div>
+
+<div class="card">
+  <h3>Enter Visitor</h3>
+  <p class="sub" id="branchNote"></p>
+
+  <div class="row">
+    <div>
+      <label>Branch</label>
+      <select id="branch"></select>
+    </div>
+    <div>
+      <label>Date</label>
+      <input type="date" id="visitDate">
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <label>Visitor Name</label>
+      <input type="text" id="visitorName" placeholder="Full name">
+    </div>
+    <div>
+      <label>Phone</label>
+      <input type="text" id="phone" placeholder="e.g. 0803...">
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <label>Company / Organization (optional)</label>
+      <input type="text" id="company" placeholder="e.g. ABC Ltd">
+    </div>
+    <div>
+      <label>Person / Department Visiting</label>
+      <input type="text" id="visiting" placeholder="Who / which dept">
+    </div>
+  </div>
+
+  <label>Purpose of Visit</label>
+  <textarea id="purpose" placeholder="Reason for the visit"></textarea>
+
+  <button onclick="save()">Check In Visitor</button>
+  <div class="status" id="status"></div>
+</div>
+</div>
+
+<script>
+let ME = null;
+function todayISO(){ return new Date().toISOString().slice(0,10); }
+
+async function logActivity(actionType, description){
+  try{
+    await sb.from("activity_log").insert({
+      actor_id: ME.id, actor_username: ME.username, actor_role: ME.role,
+      section_id: ME.sectionId, action_type: actionType, description: description
+    });
+  }catch(e){ console.warn("Activity log write failed (non-fatal):", e); }
+}
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    document.getElementById("visitDate").value = todayISO();
+    populateBranches();
+    document.getElementById("branchNote").textContent = "Signed in as " + ME.username;
+    status.style.color = "#1d8a4e"; status.textContent = "Connected.";
+  }catch(e){
+    status.style.color = "#c0392b"; status.textContent = "❌ " + e.message; console.error(e);
+  }
+}
+
+function populateBranches(){
+  const sel = document.getElementById("branch");
+  sel.innerHTML = "";
+  if(ME.role === "super_admin"){
+    sb.from("app_sections").select("name").order("name").then(({data})=>{
+      (data || []).forEach(s=>{
+        const o = document.createElement("option"); o.value = s.name; o.textContent = s.name; sel.appendChild(o);
+      });
+    });
+    sel.disabled = false; return;
+  }
+  const mine = ME.sectionNames || [];
+  if(!mine.length){
+    const o = document.createElement("option"); o.value = ""; o.textContent = "— no branch assigned —"; sel.appendChild(o);
+    sel.disabled = true; return;
+  }
+  mine.forEach(name=>{
+    const o = document.createElement("option"); o.value = name; o.textContent = name; sel.appendChild(o);
+  });
+  sel.disabled = (mine.length === 1);
+}
+
+async function save(){
+  const status = document.getElementById("status");
+  const g = id => document.getElementById(id).value.trim();
+  const branch = g("branch");
+  const visitorName = g("visitorName");
+
+  if(!visitorName){ status.className = "status err"; status.textContent = "Visitor name is required."; return; }
+  if(!branch){ status.className = "status err"; status.textContent = "No Branch available — ask your Super Admin to assign you a Branch."; return; }
+  if(ME.role !== "super_admin" && (ME.sectionNames || []).indexOf(branch) === -1){
+    status.className = "status err"; status.textContent = "You are not assigned to that Branch."; return;
+  }
+
+  status.className = "status"; status.textContent = "Saving...";
+  try{
+    const { error } = await sb.from("visitor_attendance").insert({
+      branch: branch,
+      visit_date: g("visitDate") || todayISO(),
+      visitor_name: visitorName,
+      phone: g("phone") || null,
+      company: g("company") || null,
+      visiting: g("visiting") || null,
+      purpose: g("purpose") || null,
+      time_in: new Date().toISOString(),
+      status: "inside",
+      created_by_username: ME.username
+    });
+    if(error) throw error;
+    await logActivity("visitor_checkin", ME.username + " checked in visitor " + visitorName);
+    status.className = "status ok"; status.textContent = "✅ " + visitorName + " checked in.";
+    ["visitorName","phone","company","visiting","purpose"].forEach(id => document.getElementById(id).value = "");
+    document.getElementById("visitDate").value = todayISO();
+  }catch(e){
+    status.className = "status err"; status.textContent = "❌ " + e.message;
+  }
+}
+
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  body{font-family:'Inter',sans-serif;margin:0;padding:20px;background:var(--bg);color:var(--text);}
+  h2{text-align:center;color:var(--heading);margin-bottom:20px;}
+  .card{background:var(--card);padding:20px;border-radius:12px;box-shadow:0 3px 8px rgba(0,0,0,.1);margin-bottom:20px;max-width:520px;margin-left:auto;margin-right:auto;}
+  .controls label{font-weight:600;display:block;margin-top:10px;}
+  .controls input,.controls select{padding:6px 10px;border-radius:6px;border:1px solid var(--line);width:100%;margin-top:5px;box-sizing:border-box;}
+  .controls .button-group{display:flex;gap:10px;margin-top:15px;}
+  .controls button{flex:1;padding:10px 16px;border:none;border-radius:6px;background:var(--accent);color:#fff;font-weight:600;cursor:pointer;transition:.2s;}
+  .controls button:hover{background:#2980b9;}
+  #reportContainer{max-width:1000px;margin:20px auto 0;background:var(--card);padding:20px;border-radius:12px;box-shadow:0 3px 8px rgba(0,0,0,.1);overflow-x:auto;}
+  .dropdown-list{position:absolute;background:var(--card);border:1px solid var(--line);max-height:150px;overflow-y:auto;z-index:10;width:100%;max-width:480px;display:none;border-radius:6px;}
+  .dropdown-item{padding:5px 10px;cursor:pointer;}
+  .dropdown-item:hover,.dropdown-item.active{background:#ecf0f1;}
+  #status{text-align:center;font-size:12px;font-weight:bold;margin-bottom:10px;}
+  table{width:100%;border-collapse:collapse;margin-top:15px;font-size:13px;}
+  th,td{border:1px solid var(--line);padding:8px 12px;text-align:center;}
+  th{background:#ecf0f1;font-weight:600;}
+  tr.total{background:#d6eaf8;font-weight:bold;}
+  tr.avg{background:#f7f7f7;font-weight:bold;}
+  @media print{ .no-print{display:none !important;} }
+</style>
+</head>
+<body>
+
+<h2 class="no-print">🛠️ Stop Asset Report</h2>
+<div id="status" class="no-print">Connecting to Supabase...</div>
+
+<div class="card controls no-print">
+  <label>Start Date</label><input type="date" id="start" onchange="clearReport()">
+  <label>End Date</label><input type="date" id="end" onchange="clearReport()">
+
+  <label>Staff ID (Asset ID)</label>
+  <input type="text" id="staff" placeholder="Type Staff/Asset ID" oninput="filterStaff()" autocomplete="off" onkeydown="navigateDropdown(event,'staffList','staff')">
+  <div id="staffList" class="dropdown-list"></div>
+
+  <label>Job Code</label>
+  <select id="job" onchange="clearReport()">
+    <option>All</option>
+    <option>No Repair</option>
+    <option>No Repair (Bad Loading)</option>
+    <option>Short Stop</option>
+    <option>No Operator</option>
+    <option>No Repair (Bad Pipe)</option>
+  </select>
+
+  <label>Asset</label>
+  <input type="text" id="asset" placeholder="Type Asset" oninput="filterAsset()" autocomplete="off" onkeydown="navigateDropdown(event,'assetList','asset')">
+  <div id="assetList" class="dropdown-list"></div>
+
+  <label>Shift</label>
+  <select id="shift" onchange="clearReport()"><option>All</option><option>Morning</option><option>Night</option></select>
+
+  <div class="button-group">
+    <button onclick="run()">VIEW REPORT</button>
+    <button onclick="window.print()">🖨️ PRINT</button>
+  </div>
+</div>
+
+<div id="reportContainer"></div>
+
+<script>
+const SUPABASE_URL = "https://betfhunzmhtdzgvufmfk.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp";
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
+function parseDT(v){ const d=new Date(v); return isNaN(d)?null:d; }
+function minutesBetween(a,b){ return (!a||!b)?0:Math.round((b-a)/60000); }
+
+let MON_ROWS = [], STAFF_LIST = [], ASSET_LIST = [];
+
+// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
+// `query` may include extra params like "&order=col.desc" (no leading select).
+async function fetchAllRows(table, query){
+  let all = [], offset = 0; const pageSize = 1000;
+  const q = query || "";
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=*" + q, { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+
+
+async function init(){
+  const status = document.getElementById("status");
+  try{
+    MON_ROWS = await fetchAllRows("monitoring", "");
+    STAFF_LIST = ["All", ...new Set(MON_ROWS.map(r=>r.asset_id).filter(Boolean))].sort();
+    ASSET_LIST = ["All", ...new Set(MON_ROWS.map(r=>r.assets).filter(Boolean))].sort();
+    status.style.color = "#1d8a4e";
+    status.textContent = "Connected. monitoring: " + MON_ROWS.length + " rows.";
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+function clearReport(){ document.getElementById("reportContainer").innerHTML = ""; }
+
+function showDropdown(id, list, onClick){
+  const container = document.getElementById(id);
+  if(!list.length){ container.style.display = "none"; return; }
+  container.innerHTML = list.map(v=>`<div class="dropdown-item">${v}</div>`).join("");
+  Array.from(container.children).forEach((el,i)=>{ el.onclick = ()=>{ onClick(list[i]); }; });
+  container.style.display = "block";
+}
+function hideDropdown(id){ document.getElementById(id).style.display = "none"; }
+
+function filterStaff(){
+  const val = document.getElementById("staff").value.toLowerCase();
+  const filtered = STAFF_LIST.filter(i=>String(i).toLowerCase().includes(val));
+  showDropdown("staffList", filtered, v=>{ document.getElementById("staff").value = v; hideDropdown("staffList"); });
+}
+function filterAsset(){
+  const val = document.getElementById("asset").value.toLowerCase();
+  const filtered = ASSET_LIST.filter(i=>String(i).toLowerCase().includes(val));
+  showDropdown("assetList", filtered, v=>{ document.getElementById("asset").value = v; hideDropdown("assetList"); });
+}
+
+function navigateDropdown(event, listId, inputId){
+  const container = document.getElementById(listId);
+  if(container.style.display === "none") return;
+  let items = Array.from(container.children);
+  let activeIndex = items.findIndex(i=>i.classList.contains("active"));
+  if(event.key === "ArrowDown"){
+    event.preventDefault();
+    if(activeIndex>=0) items[activeIndex].classList.remove("active");
+    activeIndex = (activeIndex+1) % items.length;
+    items[activeIndex].classList.add("active");
+  } else if(event.key === "ArrowUp"){
+    event.preventDefault();
+    if(activeIndex>=0) items[activeIndex].classList.remove("active");
+    activeIndex = (activeIndex-1+items.length) % items.length;
+    items[activeIndex].classList.add("active");
+  } else if(event.key === "Enter"){
+    event.preventDefault();
+    if(activeIndex>=0){
+      document.getElementById(inputId).value = items[activeIndex].innerText;
+      hideDropdown(listId);
+    }
+  }
+}
+
+function run(){
+  if(!MON_ROWS.length){ alert("monitoring returned 0 rows — check its read policy."); return; }
+  const start = document.getElementById("start").value;
+  const end = document.getElementById("end").value;
+  const staff = document.getElementById("staff").value || "All";
+  const job = document.getElementById("job").value || "All";
+  const asset = document.getElementById("asset").value || "All";
+  const shift = document.getElementById("shift").value || "All";
+  if(!start || !end){ alert("Please fill Start and End Dates"); return; }
+
+  const rows = MON_ROWS.filter(r=>{
+    if(r.date_col < start || r.date_col > end) return false;
+    if(staff !== "All" && r.asset_id !== staff) return false;
+    if(job !== "All" && r.job_code !== job) return false;
+    if(asset !== "All" && r.assets !== asset) return false;
+    if(shift !== "All" && r.shift !== shift) return false;
+    return true;
+  }).sort((a,b)=>(a.date_col||"").localeCompare(b.date_col||""));
+
+  if(!rows.length){
+    document.getElementById("reportContainer").innerHTML = "<h3 style='text-align:center'>No data found</h3>";
+    return;
+  }
+
+  let totalRepair=0, totalDowntime=0, totalWaiting=0;
+  const dataRows = rows.map(r=>{
+    const stop=parseDT(r.m_c_stoppage_time), start_t=parseDT(r.starting_time), finish=parseDT(r.finish_time);
+    const repair = minutesBetween(start_t, finish);
+    const downtime = minutesBetween(stop, finish);
+    const waiting = minutesBetween(stop, start_t);
+    totalRepair+=repair; totalDowntime+=downtime; totalWaiting+=waiting;
+    return [r.date_col, r.assets, r.asset_id, r.operator_name, repair, downtime, waiting, r.job_code, r.descripttion, r.shift];
+  });
+
+  const n = dataRows.length;
+  const avgRepair = totalRepair/n, avgDowntime = totalDowntime/n, avgWaiting = totalWaiting/n;
+
+  let html = `<table><tr>
+    <th>Date</th><th>Asset</th><th>ID</th><th>Operator Name</th>
+    <th>Repair</th><th>Downtime</th><th>Waiting</th>
+    <th>Job</th><th>Description</th><th>Shift</th></tr>`;
+
+  dataRows.forEach(r=>{
+    html += "<tr>" + r.map(v=>`<td>${v??""}</td>`).join("") + "</tr>";
+  });
+
+  html += `<tr class="total"><td colspan="4">TOTAL</td>
+    <td>${totalRepair}</td><td>${totalDowntime}</td><td>${totalWaiting}</td>
+    <td colspan="3">Jobs: ${n}</td></tr>`;
+
+  html += `<tr class="avg"><td colspan="4">AVERAGE</td>
+    <td>${avgRepair.toFixed(1)}</td><td>${avgDowntime.toFixed(1)}</td><td>${avgWaiting.toFixed(1)}</td>
+    <td colspan="3"></td></tr>`;
+
+  html += "</table>";
+  document.getElementById("reportContainer").innerHTML = html;
+}
+
+init();
+</script>
+<script src="../../assets/letterhead.js"></script>
+</body>
+</html>

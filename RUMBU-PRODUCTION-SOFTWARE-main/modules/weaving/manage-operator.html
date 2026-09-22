@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Manage Operator</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme") || "navy"); }catch(e){}
+  })();
+  window.addEventListener("message", function(e){
+    if(e.data && e.data.rumbuTheme){ document.documentElement.setAttribute("data-theme", e.data.rumbuTheme); }
+  });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1200px;margin:0 auto;}
+  .tab-bar{display:flex;gap:6px;flex-wrap:wrap;border-bottom:2px solid var(--line);margin-bottom:16px;}
+  .tab-btn{background:none;border:none;padding:10px 14px;font-weight:700;font-size:13px;color:var(--muted);cursor:pointer;margin:0;border-bottom:3px solid transparent;}
+  .tab-btn:hover{background:var(--bg);color:var(--heading);}
+  .tab-btn.active{color:var(--heading);border-bottom-color:var(--accent);}
+  .tab-content{display:none;}
+  .tab-content.active{display:block;}
+  .readonly-banner{background:rgba(154,107,0,.12);color:var(--warn);padding:10px 14px;border-radius:var(--radius-sm);font-size:13px;font-weight:600;margin-bottom:14px;}
+  #changePanel{display:none;}
+  #changePanel.show{display:block;}
+  .emp-result{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;border:1px solid var(--line);border-radius:8px;margin-top:6px;cursor:pointer;background:var(--card);}
+  .emp-result:hover{background:var(--bg);}
+  .emp-result .n{font-weight:700;color:var(--heading);}
+  .emp-result .m{font-size:12px;color:var(--muted);}
+  .picked-box{background:var(--bg);border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:12px 14px;margin-top:10px;}
+  .picked-box.empty{color:var(--muted);font-size:13px;}
+  #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);}
+  .tag-trainee{background:var(--warn);}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div id="connStatus">Loading...</div>
+<div id="roBanner" class="readonly-banner" style="display:none;">You have read-only access to this page. Adding and changing operators is limited to Admin and Super Admin.</div>
+
+<div class="tab-bar">
+  <button class="tab-btn active" data-tab="tab-ops" onclick="showTab('tab-ops')">Unit Operators</button>
+  <button class="tab-btn" data-tab="tab-initiate" onclick="showTab('tab-initiate')">Initiate Production</button>
+  <button class="tab-btn" data-tab="tab-log" onclick="showTab('tab-log')">Activity Log</button>
+</div>
+
+<!-- ============ OPERATORS TAB ============ -->
+<div class="tab-content active" id="tab-ops">
+
+  <div class="card-panel" id="changePanel">
+    <h3 id="changePanelTitle">Change Operator</h3>
+    <p class="sub" id="changePanelSub"></p>
+
+    <div class="form-row" id="addUnitGroupRow" style="display:none;">
+      <div class="field">
+        <label>Unit</label>
+        <select id="f_unit_code"><option value="">Select unit...</option></select>
+      </div>
+      <div class="field">
+        <label>Group</label>
+        <select id="f_group_name"><option value="A">Group A</option><option value="B">Group B</option></select>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Search Employee (name or Staff ID)</label>
+      <input type="text" id="empSearch" placeholder="Start typing a name or ID..." oninput="searchEmployees()">
+      <div id="empResults"></div>
+    </div>
+
+    <div class="picked-box empty" id="pickedBox">No employee selected yet.</div>
+
+    <div class="row-actions" style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">
+      <button onclick="saveOperatorChange()" id="btnConfirm">Confirm Change</button>
+      <button class="btn-ghost" onclick="markAsTrainee()" id="btnTrainee">Mark as Trainee / Vacant</button>
+      <button class="btn-ghost" onclick="closeChangePanel()">Cancel</button>
+    </div>
+    <div class="status" id="changeStatus" style="display:none;"></div>
+  </div>
+
+  <div class="filters">
+    <div class="f"><label>Section</label><select id="filt_section" onchange="populateShedFilter(); loadOperators();"><option value="">All</option><option>Rumbu</option><option>MamaSannu</option></select></div>
+    <div class="f"><label>Shed</label><select id="filt_shed" onchange="loadOperators()"><option value="">All</option></select></div>
+    <div class="f"><label>Group</label><select id="filt_group" onchange="loadOperators()"><option value="">All</option><option>A</option><option>B</option></select></div>
+    <div class="f"><label>Search Unit / Operator</label><input type="text" id="filt_search" placeholder="e.g. WA01-03 or a name" oninput="loadOperators()"></div>
+    <div class="f f-min"><button id="btnAddOperator" onclick="openAddOperator()">+ Add New Operator</button></div>
+  </div>
+
+  <div class="table-wrap">
+    <div class="table-scroll">
+      <table id="opsTable">
+        <thead><tr><th>Unit</th><th>Shed</th><th>Section</th><th>Group</th><th>Operator</th><th>Rank</th><th></th></tr></thead>
+        <tbody id="opsBody"><tr><td colspan="7">Loading...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ============ INITIATE PRODUCTION TAB ============ -->
+<div class="tab-content" id="tab-initiate">
+  <div class="card-panel">
+    <h3>Initiate Production</h3>
+    <p class="sub">Only two initiations are allowed per day for each Work Type — one per shift. E.g. Normal can have a Morning and a Night initiation the same day; separately, B Grade can also have its own Morning and Night initiation that same day. Any initiation still Pending 24 hours after it was started is automatically Suspended — no entries are accepted until the original initiator revokes the suspension.</p>
+    <div class="form-row-3">
+      <div class="field"><label>Production Date</label><input type="date" id="init_date"></div>
+      <div class="field"><label>Shift</label><select id="init_shift"><option>Morning</option><option>Night</option></select></div>
+      <div class="field">
+        <label>Work Type</label>
+        <select id="init_work_type">
+          <option>Normal</option><option>B Grade</option><option>Cover Duty</option>
+          <option>Overtime</option><option>Extra Operators</option><option>Breakdown</option>
+        </select>
+      </div>
+    </div>
+    <button id="btnInitiate" onclick="initiateProduction()">Initiate</button>
+    <div class="status" id="initiateStatus" style="display:none;"></div>
+  </div>
+
+  <div class="filters">
+    <div class="f"><label>Status</label><select id="init_filt_status" onchange="loadInitiations()"><option value="">All</option><option>Pending</option><option>Suspended</option><option>Completed</option></select></div>
+    <div class="f"><label>From Date</label><input type="date" id="init_filt_from" onchange="loadInitiations()"></div>
+    <div class="f"><label>To Date</label><input type="date" id="init_filt_to" onchange="loadInitiations()"></div>
+  </div>
+  <div class="table-wrap">
+    <div class="table-scroll">
+      <table id="initTable">
+        <thead><tr><th>Date</th><th>Shift</th><th>Work Type</th><th>Status</th><th>Initiated By</th><th>Completed By</th><th></th></tr></thead>
+        <tbody id="initBody"><tr><td colspan="7">Loading...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ============ ACTIVITY LOG TAB ============ -->
+<div class="tab-content" id="tab-log">
+  <div class="filters">
+    <div class="f"><label>From Date</label><input type="date" id="log_from"></div>
+    <div class="f"><label>To Date</label><input type="date" id="log_to"></div>
+    <div class="f"><label>Action Type</label><select id="log_action_type"><option value="">All</option></select></div>
+    <div class="f"><label>Search (actor or description)</label><input type="text" id="log_search" placeholder="e.g. Sulaiman, WA01-03"></div>
+    <div class="f f-min"><button onclick="applyLogFilter()">Filter</button></div>
+  </div>
+  <div class="table-wrap">
+    <div class="table-scroll">
+      <table id="logTable">
+        <thead><tr><th>When</th><th>By</th><th>Action</th><th>Details</th></tr></thead>
+        <tbody id="logBody"><tr><td colspan="4">Use the filters above and click Filter.</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+</div>
+
+<script>
+let ME = null;
+let UNITS = [];
+let OPS = [];             // current filtered view of weaving_unit_operators_full
+let EDIT_TARGET = null;   // { unit_code, group_name, before? } of the row being changed/added
+let PANEL_MODE = "edit";  // "edit" | "add"
+let PICKED_EMPLOYEE = null; // {employee_id, full_name, rank, department, branch}
+let LOG_ROWS = [];
+const ACTION_TYPES = ["weaving_operator_added","weaving_operator_changed","weaving_operator_marked_trainee","weaving_production_initiated","weaving_production_completed","weaving_production_suspension_revoked"];
+// Only staff in this department can be searched/assigned as an operator here,
+// to keep employees from other departments (Admin, HR, IT, etc.) from being
+// picked by mistake. Change this one value if your department label differs.
+const OPERATOR_DEPARTMENT = "Production";
+const OPERATOR_UNIT = "Weaving";
+
+function canWrite(){ return ME && (ME.role === "admin" || ME.role === "super_admin"); }
+
+function showTab(id){
+  document.querySelectorAll(".tab-content").forEach(t=>t.classList.toggle("active", t.id===id));
+  document.querySelectorAll(".tab-btn").forEach(b=>b.classList.toggle("active", b.getAttribute("data-tab")===id));
+}
+
+async function logActivity(actionType, description){
+  try{
+    await sb.from("activity_log").insert({
+      actor_id: ME.id, actor_username: ME.username, actor_role: ME.role,
+      section_id: ME.sectionId, action_type: actionType, description: description
+    });
+  }catch(e){ console.warn("Activity log write failed (non-fatal):", e); }
+}
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+
+    if(!canWrite()){
+      document.getElementById("roBanner").style.display = "block";
+      document.getElementById("btnAddOperator").style.display = "none";
+      document.getElementById("btnInitiate").style.display = "none";
+    }
+
+    document.getElementById("init_date").value = new Date().toISOString().slice(0,10);
+
+    const { data: unitRows, error: uErr } = await sb.from("weaving_units").select("unit_code,shed,section").order("section").order("unit_code");
+    if(uErr) throw uErr;
+    UNITS = unitRows || [];
+    populateShedFilter();
+    populateUnitDropdown();
+
+    status.style.color = "var(--ok)"; status.textContent = "Connected.";
+    await loadOperators();
+    await loadInitiations();
+  }catch(e){
+    status.style.color = "var(--bad)"; status.textContent = "Could not load: " + e.message;
+  }
+}
+
+function populateShedFilter(){
+  const section = document.getElementById("filt_section").value;
+  const sheds = [...new Set(UNITS.filter(u=>!section || u.section===section).map(u=>u.shed))].sort();
+  document.getElementById("filt_shed").innerHTML = '<option value="">All</option>' + sheds.map(s=>`<option>${s}</option>`).join("");
+}
+
+function populateUnitDropdown(){
+  const sel = document.getElementById("f_unit_code");
+  sel.innerHTML = '<option value="">Select unit...</option>' +
+    UNITS.map(u=>`<option value="${u.unit_code}">${u.unit_code} (${u.section} / Shed ${u.shed})</option>`).join("");
+}
+
+async function loadOperators(){
+  const section = document.getElementById("filt_section").value;
+  const shed = document.getElementById("filt_shed").value;
+  const group = document.getElementById("filt_group").value;
+  const q = document.getElementById("filt_search").value.trim();
+
+  let query = sb.from("weaving_unit_operators_full").select("*").order("section").order("shed").order("unit_code").order("group_name");
+  if(section) query = query.eq("section", section);
+  if(shed) query = query.eq("shed", shed);
+  if(group) query = query.eq("group_name", group);
+  if(q) query = query.or(`unit_code.ilike.%${q}%,operator_name.ilike.%${q}%`);
+
+  const { data, error } = await query;
+  const body = document.getElementById("opsBody");
+  if(error){ body.innerHTML = `<tr><td colspan="7">Error: ${error.message}</td></tr>`; return; }
+  OPS = data || [];
+  if(!OPS.length){ body.innerHTML = `<tr><td colspan="7">No assignments match these filters.</td></tr>`; return; }
+
+  body.innerHTML = OPS.map(o => `
+    <tr>
+      <td><b>${o.unit_code}</b></td>
+      <td>${o.shed}</td>
+      <td>${o.section}</td>
+      <td>${o.group_name}</td>
+      <td>${o.operator_name}${o.is_trainee ? ' <span class="tag tag-trainee">Trainee</span>' : ''}</td>
+      <td>${o.rank || "—"}</td>
+      <td>${canWrite() ? `<button class="btn-sm btn-ghost" onclick="openChange('${o.unit_code}','${o.group_name}')">Change</button>` : ""}</td>
+    </tr>`).join("");
+}
+
+function openChange(unitCode, groupName){
+  const o = OPS.find(x=>x.unit_code===unitCode && x.group_name===groupName);
+  if(!o) return;
+  PANEL_MODE = "edit";
+  EDIT_TARGET = { unit_code: unitCode, group_name: groupName, before: o };
+  PICKED_EMPLOYEE = null;
+  document.getElementById("addUnitGroupRow").style.display = "none";
+  document.getElementById("changePanelTitle").textContent = "Change Operator — " + unitCode + " (Group " + groupName + ")";
+  document.getElementById("changePanelSub").textContent = "Currently: " + o.operator_name + (o.rank ? " (" + o.rank + ")" : "");
+  document.getElementById("btnConfirm").textContent = "Confirm Change";
+  document.getElementById("empSearch").value = "";
+  document.getElementById("empResults").innerHTML = "";
+  document.getElementById("pickedBox").className = "picked-box empty";
+  document.getElementById("pickedBox").textContent = "No employee selected yet.";
+  document.getElementById("changeStatus").style.display = "none";
+  document.getElementById("changePanel").classList.add("show");
+  window.scrollTo({top:0, behavior:"smooth"});
+}
+
+function openAddOperator(){
+  PANEL_MODE = "add";
+  EDIT_TARGET = null;
+  PICKED_EMPLOYEE = null;
+  document.getElementById("addUnitGroupRow").style.display = "grid";
+  document.getElementById("f_unit_code").value = "";
+  document.getElementById("f_group_name").value = "A";
+  document.getElementById("changePanelTitle").textContent = "Add New Operator";
+  document.getElementById("changePanelSub").textContent = "Pick the Unit and Group, then search and select the employee to assign.";
+  document.getElementById("btnConfirm").textContent = "Add Operator";
+  document.getElementById("empSearch").value = "";
+  document.getElementById("empResults").innerHTML = "";
+  document.getElementById("pickedBox").className = "picked-box empty";
+  document.getElementById("pickedBox").textContent = "No employee selected yet.";
+  document.getElementById("changeStatus").style.display = "none";
+  document.getElementById("changePanel").classList.add("show");
+  window.scrollTo({top:0, behavior:"smooth"});
+}
+
+function closeChangePanel(){
+  document.getElementById("changePanel").classList.remove("show");
+  document.getElementById("addUnitGroupRow").style.display = "none";
+  PANEL_MODE = "edit";
+  EDIT_TARGET = null;
+  PICKED_EMPLOYEE = null;
+}
+
+let searchTimer = null;
+function searchEmployees(){
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(runEmployeeSearch, 250);
+}
+
+async function runEmployeeSearch(){
+  const q = document.getElementById("empSearch").value.trim();
+  const resultsEl = document.getElementById("empResults");
+  if(q.length < 2){ resultsEl.innerHTML = ""; return; }
+  try{
+    const { data, error } = await sb.from("employees")
+      .select("employee_id, full_name, department, branch, rank")
+      .eq("department", OPERATOR_DEPARTMENT).eq("unit", OPERATOR_UNIT)
+      .or(`full_name.ilike.%${q}%,employee_id.ilike.%${q}%`)
+      .order("full_name")
+      .limit(12);
+    if(error) throw error;
+    if(!data || !data.length){ resultsEl.innerHTML = `<p class="sub">No matching employee found in ${OPERATOR_DEPARTMENT} / ${OPERATOR_UNIT}.</p>`; return; }
+    resultsEl.innerHTML = data.map(e => `
+      <div class="emp-result" onclick='pickEmployee(${JSON.stringify(e).replace(/'/g,"&apos;")})'>
+        <div><div class="n">${e.full_name}</div><div class="m">${e.employee_id} · ${e.department}${e.branch ? " · " + e.branch : ""}</div></div>
+        <div class="m">${e.rank || "no rank on file"}</div>
+      </div>`).join("");
+  }catch(e){
+    resultsEl.innerHTML = `<p class="sub">Search error: ${e.message}</p>`;
+  }
+}
+
+function pickEmployee(emp){
+  PICKED_EMPLOYEE = emp;
+  const box = document.getElementById("pickedBox");
+  box.className = "picked-box";
+  box.innerHTML = `Selected: <b>${emp.full_name}</b> (${emp.employee_id}) — ${emp.rank || "no rank on file"}, ${emp.department}${emp.branch ? ", " + emp.branch : ""}`;
+  document.getElementById("empResults").innerHTML = "";
+  document.getElementById("empSearch").value = emp.full_name;
+}
+
+async function saveOperatorChange(){
+  if(!canWrite()) return;
+  const statusEl = document.getElementById("changeStatus");
+  statusEl.style.display = "block"; statusEl.className = "status"; statusEl.textContent = "Saving...";
+
+  if(!PICKED_EMPLOYEE){ statusEl.className="status err"; statusEl.textContent="Search and select an employee first, or use \"Mark as Trainee / Vacant\"."; return; }
+
+  if(PANEL_MODE === "add"){
+    const unitCode = document.getElementById("f_unit_code").value;
+    const groupName = document.getElementById("f_group_name").value;
+    if(!unitCode){ statusEl.className="status err"; statusEl.textContent="Select a Unit."; return; }
+    if(!groupName){ statusEl.className="status err"; statusEl.textContent="Select a Group."; return; }
+
+    try{
+      const { error } = await sb.from("weaving_unit_operators").insert({
+        unit_code: unitCode, group_name: groupName,
+        employee_id: PICKED_EMPLOYEE.employee_id,
+        operator_name: PICKED_EMPLOYEE.full_name,
+        is_trainee: false
+      });
+      if(error) throw error;
+
+      await logActivity("weaving_operator_added",
+        ME.username + " added operator \"" + PICKED_EMPLOYEE.full_name + "\" (" + PICKED_EMPLOYEE.employee_id + ") to unit " +
+        unitCode + " (Group " + groupName + ")");
+
+      statusEl.className = "status ok"; statusEl.textContent = "Operator added.";
+      await loadOperators();
+      setTimeout(closeChangePanel, 700);
+    }catch(e){
+      statusEl.className = "status err";
+      statusEl.textContent = (e.message && e.message.indexOf("duplicate") !== -1)
+        ? "This unit already has an operator assigned for that Group — use \"Change\" on the existing row instead."
+        : "Error: " + e.message;
+    }
+    return;
+  }
+
+  // ---- edit mode ----
+  if(!EDIT_TARGET) return;
+  try{
+    const { error } = await sb.from("weaving_unit_operators").update({
+      employee_id: PICKED_EMPLOYEE.employee_id,
+      operator_name: PICKED_EMPLOYEE.full_name,
+      is_trainee: false
+    }).eq("unit_code", EDIT_TARGET.unit_code).eq("group_name", EDIT_TARGET.group_name);
+    if(error) throw error;
+
+    await logActivity("weaving_operator_changed",
+      ME.username + " changed operator for unit " + EDIT_TARGET.unit_code + " (Group " + EDIT_TARGET.group_name + ") from \"" +
+      EDIT_TARGET.before.operator_name + "\" to \"" + PICKED_EMPLOYEE.full_name + "\" (" + PICKED_EMPLOYEE.employee_id + ")");
+
+    statusEl.className = "status ok"; statusEl.textContent = "Operator changed.";
+    await loadOperators();
+    setTimeout(closeChangePanel, 700);
+  }catch(e){
+    statusEl.className = "status err"; statusEl.textContent = "Error: " + e.message;
+  }
+}
+
+async function markAsTrainee(){
+  if(!canWrite()) return;
+  const statusEl = document.getElementById("changeStatus");
+  statusEl.style.display = "block"; statusEl.className = "status"; statusEl.textContent = "Saving...";
+
+  if(PANEL_MODE === "add"){
+    const unitCode = document.getElementById("f_unit_code").value;
+    const groupName = document.getElementById("f_group_name").value;
+    if(!unitCode){ statusEl.className="status err"; statusEl.textContent="Select a Unit."; return; }
+    if(!groupName){ statusEl.className="status err"; statusEl.textContent="Select a Group."; return; }
+
+    try{
+      const { error } = await sb.from("weaving_unit_operators").insert({
+        unit_code: unitCode, group_name: groupName,
+        employee_id: null, operator_name: "Trainee", is_trainee: true
+      });
+      if(error) throw error;
+
+      await logActivity("weaving_operator_added",
+        ME.username + " added unit " + unitCode + " (Group " + groupName + ") as Trainee/Vacant");
+
+      statusEl.className = "status ok"; statusEl.textContent = "Added as Trainee / Vacant.";
+      await loadOperators();
+      setTimeout(closeChangePanel, 700);
+    }catch(e){
+      statusEl.className = "status err";
+      statusEl.textContent = (e.message && e.message.indexOf("duplicate") !== -1)
+        ? "This unit already has an operator assigned for that Group — use \"Change\" on the existing row instead."
+        : "Error: " + e.message;
+    }
+    return;
+  }
+
+  // ---- edit mode ----
+  if(!EDIT_TARGET) return;
+  try{
+    const { error } = await sb.from("weaving_unit_operators").update({
+      employee_id: null, operator_name: "Trainee", is_trainee: true
+    }).eq("unit_code", EDIT_TARGET.unit_code).eq("group_name", EDIT_TARGET.group_name);
+    if(error) throw error;
+
+    await logActivity("weaving_operator_marked_trainee",
+      ME.username + " marked unit " + EDIT_TARGET.unit_code + " (Group " + EDIT_TARGET.group_name + ") as Trainee/Vacant (was \"" + EDIT_TARGET.before.operator_name + "\")");
+
+    statusEl.className = "status ok"; statusEl.textContent = "Marked as Trainee / Vacant.";
+    await loadOperators();
+    setTimeout(closeChangePanel, 700);
+  }catch(e){
+    statusEl.className = "status err"; statusEl.textContent = "Error: " + e.message;
+  }
+}
+
+// ---------- Initiate Production ----------
+async function initiateProduction(){
+  if(!canWrite()) return;
+  const statusEl = document.getElementById("initiateStatus");
+  statusEl.style.display = "block"; statusEl.className = "status"; statusEl.textContent = "Checking...";
+
+  const date = document.getElementById("init_date").value;
+  const shift = document.getElementById("init_shift").value;
+  const workType = document.getElementById("init_work_type").value;
+  if(!date){ statusEl.className="status err"; statusEl.textContent="Select a Production Date."; return; }
+
+  try{
+    // Pre-check for a friendlier message than the raw unique-constraint error
+    const { data: existing, error: exErr } = await sb.from("weaving_production_initiations")
+      .select("id,status").eq("production_date", date).eq("shift", shift).eq("work_type", workType).maybeSingle();
+    if(exErr) throw exErr;
+    if(existing){
+      statusEl.className = "status err";
+      statusEl.textContent = `An initiation for ${date} (${shift}, ${workType}) already exists — status: ${existing.status}. Only one initiation is allowed per date, shift, and work type.`;
+      return;
+    }
+
+    statusEl.textContent = "Initiating...";
+    const { error } = await sb.from("weaving_production_initiations").insert({
+      production_date: date, shift: shift, work_type: workType,
+      status: "Pending", initiated_by: ME.username
+    });
+    if(error) throw error;
+
+    await logActivity("weaving_production_initiated",
+      ME.username + " initiated production for " + date + " (" + shift + ", " + workType + ")");
+
+    statusEl.className = "status ok"; statusEl.textContent = "Initiated. Operators can now use \"Enter Production\" for this shift.";
+    await loadInitiations();
+  }catch(e){
+    statusEl.className = "status err";
+    statusEl.textContent = (e.message && e.message.indexOf("duplicate") !== -1)
+      ? "An initiation already exists for that date, shift, and work type."
+      : "Error: " + e.message;
+  }
+}
+
+async function loadInitiations(){
+  try{ await sb.rpc("auto_suspend_stale_initiations"); }catch(e){ console.warn("Auto-suspend sweep failed (non-fatal):", e); }
+
+  const status = document.getElementById("init_filt_status").value;
+  const from = document.getElementById("init_filt_from").value;
+  const to = document.getElementById("init_filt_to").value;
+
+  let query = sb.from("weaving_production_initiations").select("*").order("production_date", {ascending:false}).order("shift").limit(200);
+  if(status) query = query.eq("status", status);
+  if(from) query = query.gte("production_date", from);
+  if(to) query = query.lte("production_date", to);
+
+  const { data, error } = await query;
+  const body = document.getElementById("initBody");
+  if(error){ body.innerHTML = `<tr><td colspan="7">Error: ${error.message}</td></tr>`; return; }
+  const rows = data || [];
+  if(!rows.length){ body.innerHTML = `<tr><td colspan="7">No initiations match these filters.</td></tr>`; return; }
+
+  function statusTag(s){
+    if(s === "Pending") return '<span class="tag" style="background:var(--warn);">Pending</span>';
+    if(s === "Suspended") return '<span class="tag" style="background:var(--bad);">Suspended</span>';
+    return '<span class="tag" style="background:var(--ok);">Completed</span>';
+  }
+
+  body.innerHTML = rows.map(r => {
+    let action = "";
+    if(canWrite() && r.status === "Pending"){
+      action = `<button class="btn-sm btn-ghost" onclick="completeInitiation(${r.id},'${r.production_date}','${r.shift}')">Mark Completed</button>`;
+    } else if(r.status === "Suspended" && ME.username === r.initiated_by){
+      action = `<button class="btn-sm btn-ghost" onclick="revokeSuspension(${r.id},'${r.production_date}','${r.shift}')">Revoke Suspension</button>`;
+    }
+    return `
+    <tr>
+      <td>${r.production_date}</td>
+      <td>${r.shift}</td>
+      <td>${r.work_type}</td>
+      <td>${statusTag(r.status)}</td>
+      <td>${r.initiated_by || "—"}</td>
+      <td>${r.completed_by || "—"}</td>
+      <td>${action}</td>
+    </tr>`;
+  }).join("");
+}
+
+async function revokeSuspension(id, date, shift){
+  if(!confirm(`Revoke the suspension on the ${shift} initiation for ${date}? It will become Pending again and its 24-hour window restarts from now.`)) return;
+  try{
+    const { error } = await sb.rpc("revoke_initiation_suspension", { p_id: id });
+    if(error) throw error;
+    await logActivity("weaving_production_suspension_revoked", ME.username + " revoked suspension on production for " + date + " (" + shift + ")");
+    await loadInitiations();
+  }catch(e){
+    alert("Error: " + (e.message || e));
+  }
+}
+
+async function completeInitiation(id, date, shift){
+  if(!canWrite()) return;
+  if(!confirm(`Mark the ${shift} initiation for ${date} as Completed?\n\nNo further production entries will be accepted for this shift once completed.`)) return;
+  try{
+    const { error } = await sb.from("weaving_production_initiations").update({
+      status: "Completed", completed_by: ME.username, completed_at: new Date().toISOString()
+    }).eq("id", id);
+    if(error) throw error;
+    await logActivity("weaving_production_completed", ME.username + " marked production for " + date + " (" + shift + ") as Completed");
+    await loadInitiations();
+  }catch(e){
+    alert("Error: " + e.message);
+  }
+}
+
+// ---------- Activity Log (filtered display only — no raw dumps) ----------
+async function applyLogFilter(){
+  const from = document.getElementById("log_from").value;
+  const to = document.getElementById("log_to").value;
+  const actionType = document.getElementById("log_action_type").value;
+  const q = document.getElementById("log_search").value.trim();
+
+  let query = sb.from("activity_log")
+    .select("actor_username, actor_role, action_type, description, created_at")
+    .in("action_type", ACTION_TYPES)
+    .order("created_at", { ascending: false })
+    .limit(500);
+  if(from) query = query.gte("created_at", from + "T00:00:00");
+  if(to) query = query.lte("created_at", to + "T23:59:59");
+  if(actionType) query = query.eq("action_type", actionType);
+  if(q) query = query.or(`actor_username.ilike.%${q}%,description.ilike.%${q}%`);
+
+  const { data, error } = await query;
+  const body = document.getElementById("logBody");
+  if(error){ body.innerHTML = `<tr><td colspan="4">Error: ${error.message}</td></tr>`; return; }
+  LOG_ROWS = data || [];
+  if(!LOG_ROWS.length){ body.innerHTML = `<tr><td colspan="4">No activity matches these filters.</td></tr>`; return; }
+  body.innerHTML = LOG_ROWS.map(r=>{
+    const when = new Date(r.created_at).toLocaleString();
+    return `<tr><td>${when}</td><td>${r.actor_username||""} (${r.actor_role||""})</td><td>${r.action_type||""}</td><td>${r.description||""}</td></tr>`;
+  }).join("");
+}
+
+document.getElementById("log_action_type").innerHTML = '<option value="">All</option>' +
+  ACTION_TYPES.map(t=>`<option value="${t}">${t}</option>`).join("");
+
+init();
+</script>
+</body>
+</html>

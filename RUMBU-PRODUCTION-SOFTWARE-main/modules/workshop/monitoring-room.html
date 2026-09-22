@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Monitoring Room - Live TV Dashboard</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+:root{--scale: min(1.2vw, 1.2vh);--sans:"Inter","Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+body{font-family:var(--sans);background:#0f172a;color:#fff;min-height:100vh;overflow-x:hidden;}
+h1{text-align:center;font-size:calc(2.2 * var(--scale));padding:1.2vh;color:#38bdf8;}
+.controls{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;padding:0 1vh 1vh;}
+.controls button, .controls select, .controls input{
+  padding:0.6vh 1.2vh;border:none;border-radius:0.6vh;background:#2563eb;color:#fff;
+  cursor:pointer;font-size:calc(0.9 * var(--scale));
+}
+.controls button.active{background:#22c55e;}
+#status{ text-align:center; font-size:calc(0.9*var(--scale)); padding-bottom:6px; color:#94a3b8; }
+#status.bad{ color:#f87171; }
+.dashboard{display:grid;grid-template-columns:1fr 1fr 1fr;grid-auto-rows:minmax(28vh, auto);gap:1vh;padding:1vh;}
+#kpi{grid-column:1/span 3;display:grid;grid-template-columns:repeat(7,1fr);gap:0.8vh;}
+.card{background:#1e293b;border-radius:1vh;padding:1vh 0.5vh;text-align:center;display:flex;flex-direction:column;justify-content:center;min-height:9vh;}
+.card p{font-size:calc(1.5*var(--scale));font-weight:700;color:#cbd5e1;line-height:1.2;}
+.card h2{font-size:calc(2.6*var(--scale));color:#22c55e;margin-top:4px;}
+.section{background:#1e293b;border-radius:1vh;padding:0.8vh;display:flex;flex-direction:column;overflow:hidden;min-height:30vh;}
+.section h2{font-size:calc(1.8*var(--scale));margin-bottom:0.5vh;color:#38bdf8;}
+.table-wrap{overflow:auto;max-height:40vh;}
+table{width:100%;border-collapse:collapse;font-size:calc(1.5*var(--scale));}
+th,td{padding:0.5vh 0.6vh;text-align:left;}
+th{background:#334155;position:sticky;top:0;}
+tr:nth-child(even){background:#25324a;}
+@media (max-width:780px){
+  .dashboard{grid-template-columns:1fr;}
+  #kpi{grid-column:1;grid-template-columns:repeat(3,1fr);}
+}
+/* ---- TV Full-Screen mode ---- */
+body.tv-mode{ --scale: min(1.35vw, 1.35vh); overflow:hidden; }
+body.tv-mode .controls{ display:none; }         /* hide controls on the wall display */
+body.tv-mode #status{ display:none; }
+body.tv-mode h1{ padding:0.6vh; }
+body.tv-mode .dashboard{ height:calc(100vh - 5vh); padding:0.8vh; gap:0.8vh; }
+body.tv-mode .table-wrap{ max-height:34vh; }
+#exitHint{
+  display:none; position:fixed; top:8px; right:12px; z-index:9999;
+  background:rgba(124,58,237,.9); color:#fff; padding:6px 12px; border-radius:8px;
+  font-size:13px; cursor:pointer;
+}
+body.tv-mode #exitHint{ display:block; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+</head>
+<body>
+
+<div id="exitHint" onclick="toggleFullscreen()">✕ Exit TV View (Esc)</div>
+
+<h1>RUMBU INDUSTRIES GROUP — Monitoring Room (Live)</h1>
+
+<div class="controls">
+  <button id="btnMorning" onclick="setShift('Morning')">Morning</button>
+  <button id="btnNight" onclick="setShift('Night')">Night</button>
+  <button id="btnAll" onclick="setShift('All')">All</button>
+  <input type="date" id="fromDate" onchange="loadDashboard()">
+  <input type="date" id="toDate" onchange="loadDashboard()">
+  <button id="btnFull" onclick="toggleFullscreen()" style="background:#7c3aed;">📺 TV Full Screen</button>
+</div>
+<div id="status">Connecting to Supabase...</div>
+
+<div class="dashboard">
+  <div id="kpi"></div>
+  <div class="section"><h2>Department</h2>
+    <div class="table-wrap"><table id="dept_table"></table></div>
+  </div>
+  <div class="section"><h2>Shed</h2>
+    <div class="table-wrap"><table id="shed_table"></table></div>
+  </div>
+  <div class="section"><h2>Nurse Ranking (current shift)</h2>
+    <div class="table-wrap"><table id="nurse_table"></table></div>
+  </div>
+  <div class="section"><h2>Previous Shift Nurses</h2>
+    <div class="table-wrap"><table id="prev_nurse_table"></table></div>
+  </div>
+  <div class="section"><h2>No Repair — selected range</h2>
+    <div class="table-wrap"><table id="norepair_today"></table></div>
+  </div>
+  <div class="section"><h2>By Operator (extra — not in original TV)</h2>
+    <div class="table-wrap"><table id="operator_rank"></table></div>
+  </div>
+</div>
+
+<p style="text-align:center;font-size:12px;color:#8899ab;padding:6px 10px;">
+  Column mapping assumption for Department/Shed/Nurse tables (from the "control" table):
+  <code>names</code> = Nurse/technician name, <code>morning</code> = Shift value. Please confirm
+  these are correct — tell me if not and I will correct the mapping.
+</p>
+
+<p style="text-align:center;font-size:12px;color:#64748b;padding:10px;">
+  Reads live from Supabase: "monitoring" and "treated_table" (read only). A job is counted
+  "Repaired" if its Asset Id appears in treated_table, otherwise "Waiting". Department view
+  (from the "control" table) can be added next if needed.
+</p>
+
+<script>
+// ---- TV Full-Screen mode ----
+function toggleFullscreen(){
+  const el = document.documentElement;
+  if(!document.fullscreenElement){
+    (el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen).call(el);
+  } else {
+    (document.exitFullscreen || document.webkitExitFullscreen || document.msExitFullscreen).call(document);
+  }
+}
+// Sync the tv-mode class with the actual fullscreen state (also handles Esc key).
+["fullscreenchange","webkitfullscreenchange","msfullscreenchange"].forEach(function(ev){
+  document.addEventListener(ev, function(){
+    document.body.classList.toggle("tv-mode", !!document.fullscreenElement);
+  });
+});
+
+// ---- shared connection (same as config.js) ----
+const TABLE_NAME = "monitoring";
+const TREATED_TABLE = "treated_table";
+const CONTROL_TABLE = "control";
+
+let currentShift = "All";
+let ALL_ROWS = [];
+let CONTROL_ROWS = [];
+let TREATED_IDS = new Set();
+
+// Same exclusion / grouping rules as the original Apps Script.
+const EXCLUDED_CODES = ["QL01","QL02","QL03","LV01","LV02","LV03","LV04","LV05"];
+const DEPARTMENTS_SHOWN = ["FEEDING","ELEC MAT WEAVING","BEAMING","QUALITY CONTROL",
+  "DESIGN CARD","TECHNICAL","TRANSMISSION","DELIVERY","OILING","Technical"];
+const SHEDS_FOR_DEPT = ["1","2","3","4","5","6"];
+const SHEDS_FOR_SHED_TABLE = ["1","2","3","4","5","6","MamaSannu"];
+
+function setShift(shift){
+  currentShift = shift;
+  ["Morning","Night","All"].forEach(s=>{
+    document.getElementById("btn"+s).classList.toggle("active", s===shift);
+  });
+  render();
+}
+
+async function loadDashboard(){
+  const status = document.getElementById("status");
+  try{
+    const me = await requireAuth("../../login.html");
+    if(!me) return;
+
+    const url = SUPABASE_URL + "/rest/v1/" + TABLE_NAME + "?select=*";
+    const res = await fetch(url, { headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }});
+    if(!res.ok){ throw new Error("HTTP " + res.status + " - " + await res.text()); }
+    ALL_ROWS = await res.json();
+
+    // Load treated_table so we know which jobs (by asset_id / id_number) are treated.
+    const turl = SUPABASE_URL + "/rest/v1/" + TREATED_TABLE + "?select=id_number";
+    const tres = await fetch(turl, { headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }});
+    if(tres.ok){
+      const trows = await tres.json();
+      TREATED_IDS = new Set(trows.map(r => String(r.id_number)));
+    } else {
+      TREATED_IDS = new Set();
+    }
+
+    // Load control table (= maintenance_log) for Department / Shed / Nurse Ranking.
+    const curl = SUPABASE_URL + "/rest/v1/" + CONTROL_TABLE + "?select=*";
+    const cres = await fetch(curl, { headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }});
+    CONTROL_ROWS = cres.ok ? await cres.json() : [];
+
+    status.className=""; status.textContent = "Connected. Monitoring rows: " + ALL_ROWS.length + " | Control rows: " + CONTROL_ROWS.length;
+    render();
+  }catch(e){
+    status.className="bad"; status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+function parseDT(v){
+  if(!v) return null;
+  const d = new Date(v);
+  return isNaN(d.getTime()) ? null : d;
+}
+function minutesBetween(a,b){
+  if(!a || !b) return 0;
+  return Math.round((b - a) / 60000);
+}
+function extractNumber(v){
+  if(v === null || v === undefined) return 0;
+  const m = String(v).match(/\d+(\.\d+)?/);
+  return m ? Number(m[0]) : 0;
+}
+function inDateRangeControl(row){
+  const from = document.getElementById("fromDate").value;
+  const to = document.getElementById("toDate").value;
+  if(!from && !to) return true;
+  const d = row.date_col;
+  if(!d) return true;
+  if(from && d < from) return false;
+  if(to && d > to) return false;
+  return true;
+}
+function filteredControlRowsForShift(shiftValue){
+  // "morning" column assumed to hold the Shift value (see confirmation note on screen).
+  return CONTROL_ROWS.filter(r=>{
+    if(shiftValue !== "All" && r.morning !== shiftValue) return false;
+    return inDateRangeControl(r);
+  });
+}
+function inDateRange(row){
+  const from = document.getElementById("fromDate").value;
+  const to = document.getElementById("toDate").value;
+  if(!from && !to) return true;
+  const d = row.date_col;
+  if(!d) return true;
+  if(from && d < from) return false;
+  if(to && d > to) return false;
+  return true;
+}
+function filteredRows(){
+  return ALL_ROWS.filter(r=>{
+    if(currentShift !== "All" && r.shift !== currentShift) return false;
+    return inDateRange(r);
+  });
+}
+
+function render(){
+  if(!ALL_ROWS.length) return;
+  const rows = filteredRows();
+
+  // ---- KPI (computed from timestamps already in the monitoring table) ----
+  let totalDowntime=0, totalRepair=0, totalWaiting=0, count=0;
+  rows.forEach(r=>{
+    const stop = parseDT(r.m_c_stoppage_time);
+    const start = parseDT(r.starting_time);
+    const finish = parseDT(r.finish_time);
+    if(stop && finish) totalDowntime += minutesBetween(stop, finish);
+    if(start && finish) totalRepair += minutesBetween(start, finish);
+    if(stop && start) totalWaiting += minutesBetween(stop, start);
+    count++;
+  });
+  const efficiency = totalRepair ? Math.round((totalRepair/(totalDowntime||1))*100) : 0;
+
+  // ---- Machine Status: waiting vs repaired, via treated_table (id_number) ----
+  let waiting = 0, repaired = 0;
+  rows.forEach(r=>{
+    const key = String(r.asset_id || "");
+    if(TREATED_IDS.has(key)) repaired++; else waiting++;
+  });
+
+  document.getElementById("kpi").innerHTML = `
+    <div class="card"><p>Records</p><h2>${count}</h2></div>
+    <div class="card"><p>Total Downtime (min)</p><h2>${totalDowntime}</h2></div>
+    <div class="card"><p>Repair Time (min)</p><h2>${totalRepair}</h2></div>
+    <div class="card"><p>Waiting Time (min)</p><h2>${totalWaiting}</h2></div>
+    <div class="card"><p>Repair Share</p><h2>${efficiency}%</h2></div>
+    <div class="card"><p>Waiting (jobs)</p><h2 style="color:#f59e0b">${waiting}</h2></div>
+    <div class="card"><p>Repaired (jobs)</p><h2>${repaired}</h2></div>
+  `;
+
+  // ---- No Repair (Job_Code = "No Repair" style, but generalised: blank/NULL description rows) ----
+  const noRepair = {};
+  rows.forEach(r=>{
+    const isNoRepair = (r.job_code && r.job_code.trim().toLowerCase() === "no repair");
+    if(!isNoRepair) return;
+    const key = (r.asset_id || "unknown") + "||" + (r.operator_name || "");
+    if(!noRepair[key]) noRepair[key] = { id: r.asset_id||"", name: r.operator_name||"", count: 0 };
+    noRepair[key].count++;
+  });
+  let nrHtml = "<tr><th>Asset/Operator ID</th><th>Name</th><th>Count</th></tr>";
+  Object.values(noRepair).sort((a,b)=>b.count-a.count).forEach(r=>{
+    const style = r.count >= 5 ? " style='color:#f87171;font-weight:bold'" : "";
+    nrHtml += `<tr${style}><td>${r.id}</td><td>${r.name}</td><td>${r.count}</td></tr>`;
+  });
+  document.getElementById("norepair_today").innerHTML = nrHtml;
+
+  // ---- Operator ranking (by number of jobs + total repair minutes) ----
+  const byOp = {};
+  rows.forEach(r=>{
+    const key = r.operator_name || "(blank)";
+    if(!byOp[key]) byOp[key] = { name:key, jobs:0, repair:0 };
+    byOp[key].jobs++;
+    const start=parseDT(r.starting_time), finish=parseDT(r.finish_time);
+    byOp[key].repair += minutesBetween(start, finish);
+  });
+  let opHtml = "<tr><th>#</th><th>Operator</th><th>Jobs</th><th>Repair (min)</th></tr>";
+  Object.values(byOp).sort((a,b)=>b.jobs-a.jobs).slice(0,9).forEach((r,i)=>{
+    opHtml += `<tr><td>${i+1}</td><td>${r.name}</td><td>${r.jobs}</td><td>${r.repair}</td></tr>`;
+  });
+  document.getElementById("operator_rank").innerHTML = opHtml;
+
+  // ---- By Shed (extra, from monitoring — kept as bonus context) ----
+  const byShed = {};
+  rows.forEach(r=>{
+    const key = r.shed !== undefined && r.shed !== null ? String(r.shed) : "(blank)";
+    if(!byShed[key]) byShed[key] = { shed:key, jobs:0, downtime:0 };
+    byShed[key].jobs++;
+    const stop=parseDT(r.m_c_stoppage_time), finish=parseDT(r.finish_time);
+    byShed[key].downtime += minutesBetween(stop, finish);
+  });
+
+  // =========================================================
+  // Sections sourced from the CONTROL table (= maintenance_log)
+  // =========================================================
+
+  // ---- Department ----
+  const deptFiltered = filteredControlRowsForShift(currentShift).filter(r=>
+    r.finish_time && SHEDS_FOR_DEPT.includes(String(r.shed)) &&
+    !EXCLUDED_CODES.includes(r.job_code) && DEPARTMENTS_SHOWN.includes(r.department)
+  );
+  const byDept = {};
+  deptFiltered.forEach(r=>{
+    const key = r.department || "(blank)";
+    if(!byDept[key]) byDept[key] = { department:key, downtime:0, repair:0, waiting:0, est:0 };
+    const stop=parseDT(r.stop_time), start=parseDT(r.starting_time), finish=parseDT(r.finish_time);
+    byDept[key].downtime += minutesBetween(stop, finish);
+    byDept[key].repair += minutesBetween(start, finish);
+    byDept[key].waiting += minutesBetween(stop, start);
+    byDept[key].est += extractNumber(r.extimated_time);
+  });
+  let deptHtml = "<tr><th>Dept</th><th>D</th><th>R</th><th>W</th><th>E</th><th>%</th></tr>";
+  Object.values(byDept).sort((a,b)=>b.downtime-a.downtime).forEach(r=>{
+    const pct = r.repair ? Math.round((r.est/r.repair)*100) : 0;
+    deptHtml += `<tr><td>${r.department}</td><td>${r.downtime}</td><td>${r.repair}</td><td>${r.waiting}</td><td>${Math.round(r.est)}</td><td>${pct}%</td></tr>`;
+  });
+  document.getElementById("dept_table").innerHTML = deptHtml;
+
+  // ---- Shed (from control, matches original getShed) ----
+  const shedFiltered = filteredControlRowsForShift(currentShift).filter(r=>
+    r.finish_time && SHEDS_FOR_SHED_TABLE.includes(String(r.shed)) && !EXCLUDED_CODES.includes(r.job_code)
+  );
+  const byShedControl = {};
+  shedFiltered.forEach(r=>{
+    const key = String(r.shed || "(blank)");
+    if(!byShedControl[key]) byShedControl[key] = { shed:key, downtime:0, repair:0, waiting:0, est:0 };
+    const stop=parseDT(r.stop_time), start=parseDT(r.starting_time), finish=parseDT(r.finish_time);
+    byShedControl[key].downtime += minutesBetween(stop, finish);
+    byShedControl[key].repair += minutesBetween(start, finish);
+    byShedControl[key].waiting += minutesBetween(stop, start);
+    byShedControl[key].est += extractNumber(r.extimated_time);
+  });
+  let shedCtlHtml = "<tr><th>Shed</th><th>D</th><th>R</th><th>W</th><th>E</th><th>%</th></tr>";
+  Object.values(byShedControl).sort((a,b)=>b.downtime-a.downtime).forEach(r=>{
+    const pct = r.repair ? Math.round((r.est/r.repair)*100) : 0;
+    shedCtlHtml += `<tr><td>${r.shed}</td><td>${r.downtime}</td><td>${r.repair}</td><td>${r.waiting}</td><td>${Math.round(r.est)}</td><td>${pct}%</td></tr>`;
+  });
+  document.getElementById("shed_table").innerHTML = shedCtlHtml;
+
+  // ---- Nurse Ranking (current shift), Department = Technical ----
+  function buildNurseRanking(shiftValue){
+    const nrows = filteredControlRowsForShift(shiftValue).filter(r=>
+      r.finish_time && String(r.department).toLowerCase() === "technical"
+    );
+    // "persisting" = repeat visit to the same Date+Shift+Assets+Job_Code, ordered by starting_time
+    const groups = {};
+    nrows.forEach(r=>{
+      const gkey = [r.date_col, r.morning, r.assets, r.job_code].join("||");
+      if(!groups[gkey]) groups[gkey] = [];
+      groups[gkey].push(r);
+    });
+    Object.values(groups).forEach(list=>{
+      list.sort((a,b)=> (a.starting_time||"").localeCompare(b.starting_time||""));
+      list.forEach((r,i)=> r.__persisting = i > 0);
+    });
+
+    const byNurse = {};
+    nrows.forEach(r=>{
+      const key = r.names || "(blank)";
+      if(!byNurse[key]) byNurse[key] = { nurse:key, repairs:0, persisting:0, repair:0, est:0 };
+      byNurse[key].repairs++;
+      if(r.__persisting) byNurse[key].persisting++;
+      const start=parseDT(r.starting_time), finish=parseDT(r.finish_time);
+      byNurse[key].repair += minutesBetween(start, finish);
+      byNurse[key].est += extractNumber(r.extimated_time);
+    });
+    return Object.values(byNurse).sort((a,b)=>b.repairs-a.repairs).slice(0,9);
+  }
+
+  function renderNurseTable(elId, list){
+    let html = "<tr><th>#</th><th>Name</th><th>F</th><th>PR</th><th>R</th><th>E</th><th>%</th></tr>";
+    list.forEach((r,i)=>{
+      const pct = r.repair ? Math.round((r.est/r.repair)*100) : 0;
+      html += `<tr><td>${i+1}</td><td>${r.nurse}</td><td>${r.repairs}</td><td>${r.persisting}</td><td>${r.repair}</td><td>${Math.round(r.est)}</td><td>${pct}%</td></tr>`;
+    });
+    document.getElementById(elId).innerHTML = html;
+  }
+
+  renderNurseTable("nurse_table", buildNurseRanking(currentShift));
+  if(currentShift === "All"){
+    document.getElementById("prev_nurse_table").innerHTML = "<tr><th colspan='7'>Select Morning or Night to see the opposite shift's nurses</th></tr>";
+  } else {
+    renderNurseTable("prev_nurse_table", buildNurseRanking(oppositeShift(currentShift)));
+  }
+}
+
+setShift("All");
+loadDashboard();
+</script>
+</body>
+</html>

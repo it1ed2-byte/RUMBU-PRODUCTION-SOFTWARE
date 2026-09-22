@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>KWP — Reports</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme") || "navy"); }catch(e){}
+  })();
+  window.addEventListener("message", function(e){
+    if(e.data && e.data.rumbuTheme){ document.documentElement.setAttribute("data-theme", e.data.rumbuTheme); }
+  });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1150px;margin:0 auto;}
+  .tab-bar{display:flex;gap:6px;flex-wrap:wrap;border-bottom:2px solid var(--line);margin-bottom:16px;}
+  .tab-btn{background:none;border:none;padding:10px 14px;font-weight:700;font-size:13px;color:var(--muted);cursor:pointer;margin:0;border-bottom:3px solid transparent;}
+  .tab-btn:hover{background:var(--bg);color:var(--heading);}
+  .tab-btn.active{color:var(--heading);border-bottom-color:var(--accent);}
+  .tab-content{display:none;}
+  .tab-content.active{display:block;}
+  #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);}
+  .pending-note{background:rgba(154,107,0,.10);border:1px dashed var(--warn);color:var(--warn);border-radius:var(--radius-sm);padding:10px 14px;font-size:12.5px;margin-bottom:14px;}
+  .toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px;}
+  .toolbar .f{min-width:150px;}
+  .toolbar label{display:block;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px;}
+  .report-sheet{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px 22px;}
+  .report-title{text-align:center;font-weight:800;color:var(--heading);font-size:15px;letter-spacing:.4px;margin-bottom:14px;}
+  .report-grid{display:grid;grid-template-columns:1fr 1fr;gap:2px 24px;margin-bottom:16px;}
+  .report-row{display:flex;justify-content:space-between;border-bottom:1px dotted var(--line);padding:4px 0;font-size:13px;}
+  .report-row .k{color:var(--muted);}
+  .report-row .v{font-weight:700;color:var(--heading);}
+  .section-title{font-size:12px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:16px 0 8px;padding-bottom:4px;border-bottom:1px solid var(--line);}
+  .summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:10px;}
+  .summary-cell{background:var(--bg);border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:10px 12px;text-align:center;}
+  .summary-cell .n{font-size:17px;font-weight:800;color:var(--heading);}
+  .summary-cell .l{font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;margin-top:2px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div id="connStatus">Loading...</div>
+
+<div class="tab-bar">
+  <button class="tab-btn active" data-tab="tab-shift" onclick="showTab('tab-shift')">Shift Report</button>
+  <button class="tab-btn" data-tab="tab-daily" onclick="showTab('tab-daily')">Daily Report</button>
+  <button class="tab-btn" data-tab="tab-weekly" onclick="showTab('tab-weekly')">Weekly Report</button>
+  <button class="tab-btn" data-tab="tab-monthly" onclick="showTab('tab-monthly')">Monthly Report</button>
+</div>
+
+<!-- ============ SHIFT REPORT ============ -->
+<div class="tab-content active" id="tab-shift">
+  <div class="toolbar">
+    <div class="f"><label>Date</label><input type="date" id="sh_date" onchange="loadShiftReport()"></div>
+    <div class="f"><label>Shift</label><select id="sh_shift" onchange="loadShiftReport()"><option>Morning</option><option>Night</option></select></div>
+    <div class="f"><label>Machine</label><select id="sh_machine" onchange="loadShiftReport()"></select></div>
+  </div>
+  <div id="shiftReportBody"></div>
+</div>
+
+<!-- ============ DAILY REPORT ============ -->
+<div class="tab-content" id="tab-daily">
+  <div class="toolbar">
+    <div class="f"><label>Date</label><input type="date" id="dr_date" onchange="loadDailyReport()"></div>
+    <div class="f"><label>Machine</label><select id="dr_machine" onchange="loadDailyReport()"></select></div>
+  </div>
+  <div id="dailyReportBody"></div>
+</div>
+
+<!-- ============ WEEKLY REPORT ============ -->
+<div class="tab-content" id="tab-weekly">
+  <div class="toolbar">
+    <div class="f"><label>From</label><input type="date" id="wk_from" onchange="loadPeriodReport('weekly')"></div>
+    <div class="f"><label>To</label><input type="date" id="wk_to" onchange="loadPeriodReport('weekly')"></div>
+    <div class="f"><label>Machine</label><select id="wk_machine" onchange="loadPeriodReport('weekly')"><option value="">All Machines</option></select></div>
+  </div>
+  <div id="weeklyReportBody"></div>
+</div>
+
+<!-- ============ MONTHLY REPORT ============ -->
+<div class="tab-content" id="tab-monthly">
+  <div class="toolbar">
+    <div class="f"><label>From</label><input type="date" id="mo_from" onchange="loadPeriodReport('monthly')"></div>
+    <div class="f"><label>To</label><input type="date" id="mo_to" onchange="loadPeriodReport('monthly')"></div>
+    <div class="f"><label>Machine</label><select id="mo_machine" onchange="loadPeriodReport('monthly')"><option value="">All Machines</option></select></div>
+  </div>
+  <div id="monthlyReportBody"></div>
+</div>
+
+</div>
+
+<script>
+let ME = null;
+let MACHINES = [];
+
+function showTab(id){
+  document.querySelectorAll(".tab-content").forEach(el=>el.classList.toggle("active", el.id === id));
+  document.querySelectorAll(".tab-btn").forEach(el=>el.classList.toggle("active", el.getAttribute("data-tab") === id));
+}
+window.showTab = showTab;
+
+function n(v, d=2){ return v==null ? "—" : Number(v).toFixed(d); }
+function pct(v){ return v==null ? "—" : Number(v).toFixed(2)+"%"; }
+function row(k,v){ return `<div class="report-row"><span class="k">${k}</span><span class="v">${v}</span></div>`; }
+function isoWeekOf(dateStr){
+  const d = new Date(dateStr + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay()||7));
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(),0,1));
+  return Math.ceil((((d - yearStart) / 86400000) + 1)/7);
+}
+function mondayOf(dateStr){
+  const d = new Date(dateStr + "T00:00:00Z");
+  const day = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() - day + 1);
+  return d.toISOString().slice(0,10);
+}
+function sundayOf(dateStr){
+  const m = new Date(mondayOf(dateStr) + "T00:00:00Z");
+  m.setUTCDate(m.getUTCDate()+6);
+  return m.toISOString().slice(0,10);
+}
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    status.style.color = "#1d8a4e"; status.textContent = "Connected.";
+
+    const { data: m } = await sb.from("kwp_machines").select("*").eq("status","Active").order("code");
+    MACHINES = m || [];
+    const opts = MACHINES.map(x=>`<option value="${x.id}">${x.code}</option>`).join("");
+    document.getElementById("sh_machine").innerHTML = opts;
+    document.getElementById("dr_machine").innerHTML = opts;
+    document.getElementById("wk_machine").innerHTML = '<option value="">All Machines</option>' + opts;
+    document.getElementById("mo_machine").innerHTML = '<option value="">All Machines</option>' + opts;
+
+    const today = new Date().toISOString().slice(0,10);
+    document.getElementById("sh_date").value = today;
+    document.getElementById("dr_date").value = today;
+    document.getElementById("wk_from").value = mondayOf(today);
+    document.getElementById("wk_to").value = sundayOf(today);
+    const firstOfMonth = today.slice(0,8) + "01";
+    const lastOfMonth = new Date(Number(today.slice(0,4)), Number(today.slice(5,7)), 0).toISOString().slice(0,10);
+    document.getElementById("mo_from").value = firstOfMonth;
+    document.getElementById("mo_to").value = lastOfMonth;
+
+    await Promise.all([loadShiftReport(), loadDailyReport(), loadPeriodReport("weekly"), loadPeriodReport("monthly")]);
+  }catch(e){
+    status.style.color = "#c0392b"; status.textContent = "❌ " + e.message;
+    console.error(e);
+  }
+}
+
+// ---------------- SHIFT REPORT ----------------
+async function loadShiftReport(){
+  const dateVal = document.getElementById("sh_date").value;
+  const shiftVal = document.getElementById("sh_shift").value;
+  const machineVal = document.getElementById("sh_machine").value;
+  const body = document.getElementById("shiftReportBody");
+  if(!dateVal || !machineVal){ body.innerHTML = ""; return; }
+  body.innerHTML = "<p class='sub'>Loading…</p>";
+
+  const { data: entry } = await sb.from("kwp_production_entries_calculated")
+    .select("*").eq("production_date", dateVal).eq("shift", shiftVal).eq("machine_id", machineVal).maybeSingle();
+  if(!entry){ body.innerHTML = "<div class='pending-note'>No production entry found for this Date/Shift/Machine.</div>"; return; }
+
+  const { data: roster } = await sb.rpc("kwp_expected_staff_for_shift", { p_date: dateVal, p_shift: shiftVal });
+  const { data: att } = await sb.from("kwp_attendance").select("status").eq("attendance_date", dateVal).eq("shift", shiftVal);
+  const expected = (roster||[]).length;
+  const present = (att||[]).filter(a=>a.status==="Present"||a.status==="Late").length;
+  const absent = (att||[]).filter(a=>a.status==="Absent").length;
+
+  const { data: quality } = await sb.from("kwp_quality_records").select("*").eq("production_entry_id", entry.id);
+  const issues = (quality||[]).filter(q=>q.result_status==="Fail"||q.result_status==="Warning");
+
+  body.innerHTML = `
+    <div class="report-sheet">
+      <div class="report-title">KANO WASH PLANT DAILY PRODUCTION REPORT</div>
+      <div class="report-grid">
+        <div>${row("Date", entry.production_date)}${row("Week","Week "+isoWeekOf(entry.production_date))}${row("Machine", entry.machine_code||"—")}${row("Shift", entry.shift+(entry.shift_team?" (Shift "+entry.shift_team+")":""))}</div>
+        <div>${row("Input (kg)", n(entry.input_kg))}${row("A Grade - Food Grade (kg)", n(entry.a_grade_kg))}${row("B Grade - PSF (kg)", n(entry.b_grade_kg))}${row("Total Finished Output (kg)", n(entry.total_output_kg))}</div>
+      </div>
+      <div class="section-title">Production</div>
+      <div class="report-grid">
+        <div>${row("Production Time (hrs)", n(entry.production_hours))}${row("Downtime (min)", n(entry.downtime_minutes,0))}${row("Production Rate (kg/hr)", n(entry.production_rate_kg_hr))}</div>
+        <div>${row("Yield", pct(entry.yield_percent))}${row("Loss (kg)", n(entry.loss_kg))}${row("Achievement", pct(entry.achievement_percent))}</div>
+      </div>
+      <div class="section-title">Workforce</div>
+      <div class="report-grid">
+        <div>${row("Expected Staff", expected)}${row("Present", present)}</div>
+        <div>${row("Absent", absent)}${row("Attendance %", expected?pct(present/expected*100):"—")}</div>
+      </div>
+      <div class="section-title">Quality</div>
+      ${issues.length ? issues.map(q=>row(q.quality_type, (q.value!=null?q.value+" ":"")+q.result_status+(q.remarks?" — "+q.remarks:""))).join("") : "<p class='sub'>No quality issues logged for this shift.</p>"}
+      <div class="section-title">Production Status</div>
+      <div class="report-grid"><div>${row("Status", entry.status)}</div><div>${row("Remarks", entry.remarks||"—")}</div></div>
+    </div>`;
+}
+window.loadShiftReport = loadShiftReport;
+
+// ---------------- DAILY REPORT (Morning + Night consolidation) ----------------
+async function loadDailyReport(){
+  const dateVal = document.getElementById("dr_date").value;
+  const machineVal = document.getElementById("dr_machine").value;
+  const body = document.getElementById("dailyReportBody");
+  if(!dateVal || !machineVal){ body.innerHTML = ""; return; }
+  body.innerHTML = "<p class='sub'>Loading…</p>";
+
+  const { data: daily } = await sb.from("kwp_daily_report").select("*").eq("production_date", dateVal).eq("machine_id", machineVal).maybeSingle();
+  const { data: shifts } = await sb.from("kwp_production_entries_calculated").select("*")
+    .eq("production_date", dateVal).eq("machine_id", machineVal).in("status",["Submitted","Approved"]);
+  const morning = (shifts||[]).find(s=>s.shift==="Morning");
+  const night = (shifts||[]).find(s=>s.shift==="Night");
+
+  if(!daily && !morning && !night){
+    body.innerHTML = "<div class='pending-note'>No Submitted/Approved production entries found for this Date/Machine yet.</div>";
+    return;
+  }
+
+  const rows = [
+    ["Input (kg)", morning?.input_kg, night?.input_kg, daily?.total_input_kg],
+    ["A Grade (kg)", morning?.a_grade_kg, night?.a_grade_kg, daily?.total_a_grade_kg],
+    ["B Grade (kg)", morning?.b_grade_kg, night?.b_grade_kg, daily?.total_b_grade_kg],
+    ["Total Output (kg)", morning?.total_output_kg, night?.total_output_kg, daily?.total_output_kg],
+    ["Production Hours", morning?.production_hours, night?.production_hours, daily?.total_production_minutes!=null?(daily.total_production_minutes/60).toFixed(2):null],
+    ["Downtime (min)", morning?.downtime_minutes, night?.downtime_minutes, daily?.total_downtime_minutes],
+    ["Yield %", morning?.yield_percent, night?.yield_percent, daily?.yield_percent],
+  ];
+
+  body.innerHTML = `
+    <div class="report-sheet">
+      <div class="report-title">KWP DAILY PRODUCTION REPORT — ${dateVal}</div>
+      <p class="sub">Morning + Night = Daily. Rates and percentages below are recalculated from the combined totals, not averaged.</p>
+      <div class="table-wrap"><div class="table-scroll">
+        <table>
+          <thead><tr><th>KPI</th><th>Morning</th><th>Night</th><th>Total</th></tr></thead>
+          <tbody>${rows.map(r=>`<tr><td>${r[0]}</td><td>${r[1]!=null?Number(r[1]).toFixed(2):"—"}</td><td>${r[2]!=null?Number(r[2]).toFixed(2):"—"}</td><td><b>${r[3]!=null?Number(r[3]).toFixed(2):"—"}</b></td></tr>`).join("")}</tbody>
+        </table>
+      </div></div>
+    </div>`;
+}
+window.loadDailyReport = loadDailyReport;
+
+// ---------------- WEEKLY / MONTHLY (shared) ----------------
+async function loadPeriodReport(kind){
+  const prefix = kind === "weekly" ? "wk" : "mo";
+  const from = document.getElementById(prefix+"_from").value;
+  const to = document.getElementById(prefix+"_to").value;
+  const machineVal = document.getElementById(prefix+"_machine").value || null;
+  const bodyEl = document.getElementById(kind+"ReportBody");
+  if(!from || !to) return;
+  bodyEl.innerHTML = "<p class='sub'>Loading…</p>";
+
+  const { data: summaryRows, error: sumErr } = await sb.rpc("kwp_period_summary", { p_from: from, p_to: to, p_machine_id: machineVal ? Number(machineVal) : null });
+  if(sumErr){ bodyEl.innerHTML = "Error: " + sumErr.message; return; }
+  const s = (summaryRows && summaryRows[0]) || {};
+
+  let entriesQ = sb.from("kwp_production_entries_calculated").select("*")
+    .gte("production_date", from).lte("production_date", to).in("status",["Submitted","Approved"]);
+  if(machineVal) entriesQ = entriesQ.eq("machine_id", machineVal);
+  const { data: entries } = await entriesQ.order("production_date");
+
+  let dtQ = sb.from("kwp_downtime_events").select("*").gte("production_date", from).lte("production_date", to);
+  if(machineVal) dtQ = dtQ.eq("machine_id", machineVal);
+  const { data: downtime } = await dtQ;
+
+  const { data: attendance } = await sb.from("kwp_attendance").select("*").gte("attendance_date", from).lte("attendance_date", to);
+
+  let qQ = sb.from("kwp_quality_records").select("*, kwp_production_entries!inner(production_date, shift, machine_id)")
+    .gte("kwp_production_entries.production_date", from).lte("kwp_production_entries.production_date", to);
+  if(machineVal) qQ = qQ.eq("kwp_production_entries.machine_id", machineVal);
+  const { data: quality } = await qQ;
+
+  const targetRate = await sb.rpc("kwp_target_for", { p_type:"production_rate_kg_hr", p_date: from, p_shift: null }).then(r=>r.data);
+  const weeklyTargetOutput = (targetRate && s.total_production_minutes) ? (targetRate * (s.total_production_minutes/60)) : null;
+
+  // Daily Breakdown
+  const dailyMap = {};
+  (entries||[]).forEach(e=>{
+    const k = e.production_date;
+    if(!dailyMap[k]) dailyMap[k] = [];
+    dailyMap[k].push(e);
+  });
+  const dailyRowsHtml = Object.keys(dailyMap).sort().map(d =>
+    dailyMap[d].map(e => `<tr><td>${d}</td><td>${e.shift}</td><td>${n(e.input_kg)}</td><td>${n(e.a_grade_kg)}</td><td>${n(e.b_grade_kg)}</td><td>${n(e.total_output_kg)}</td><td>${n(e.production_hours)}</td><td>${n(e.production_rate_kg_hr)}</td><td>${pct(e.yield_percent)}</td><td>${n(e.downtime_minutes,0)}</td></tr>`).join("")
+  ).join("");
+
+  // Shift Performance
+  ["Morning","Night"].forEach(()=>{});
+  const byShift = {"Morning":{input:0,output:0,mins:0,dt:0,cnt:0},"Night":{input:0,output:0,mins:0,dt:0,cnt:0}};
+  (entries||[]).forEach(e=>{
+    const b = byShift[e.shift]; if(!b) return;
+    b.input += Number(e.input_kg)||0; b.output += Number(e.total_output_kg)||0;
+    b.mins += Number(e.production_minutes)||0; b.dt += Number(e.downtime_minutes)||0; b.cnt++;
+  });
+  const shiftPerfHtml = ["Morning","Night"].map(sh=>{
+    const b = byShift[sh];
+    const rate = b.mins>0 ? b.output/(b.mins/60) : null;
+    const yieldPct = b.input>0 ? b.output/b.input*100 : null;
+    const achv = (rate!=null && targetRate) ? rate/targetRate*100 : null;
+    return `<tr><td>${sh}</td><td>${n(b.input)}</td><td>${n(b.output)}</td><td>${n(rate)}</td><td>${pct(yieldPct)}</td><td>${pct(achv)}</td><td>${n(b.dt,0)}</td></tr>`;
+  }).join("");
+
+  // Quality
+  const qualityHtml = (quality||[]).map(q => `<tr><td>${q.kwp_production_entries.production_date}</td><td>${q.kwp_production_entries.shift}</td><td>${q.quality_type}</td><td>${q.grade||"—"}</td><td>${q.value??"—"}</td><td>${q.result_status}</td></tr>`).join("");
+
+  // Workforce (by shift, over the whole period)
+  const attByShift = {"Morning":{p:0,a:0,t:0},"Night":{p:0,a:0,t:0}};
+  (attendance||[]).forEach(a=>{
+    const b = attByShift[a.shift]; if(!b) return;
+    b.t++;
+    if(a.status==="Present"||a.status==="Late") b.p++;
+    else if(a.status==="Absent") b.a++;
+  });
+  const workforceHtml = ["Morning","Night"].map(sh=>{
+    const b = attByShift[sh];
+    return `<tr><td>${sh}</td><td>${b.t}</td><td>${b.p}</td><td>${b.a}</td><td>${b.t?pct(b.p/b.t*100):"—"}</td></tr>`;
+  }).join("");
+
+  // Downtime by category
+  const dtByCategory = {};
+  (downtime||[]).forEach(d=>{
+    if(!dtByCategory[d.category]) dtByCategory[d.category] = { events:0, minutes:0 };
+    dtByCategory[d.category].events++;
+    dtByCategory[d.category].minutes += Number(d.duration_minutes)||0;
+  });
+  const downtimeHtml = Object.keys(dtByCategory).map(c => `<tr><td>${c}</td><td>${dtByCategory[c].events}</td><td>${(dtByCategory[c].minutes/60).toFixed(2)}</td></tr>`).join("");
+
+  // Problems / Actions — open/in-progress downtime events
+  const problems = (downtime||[]).filter(d=>d.status==="Open"||d.status==="In Progress");
+  const problemsHtml = problems.map(d => `<tr><td>${d.category} — ${d.production_date}</td><td>${d.duration_minutes!=null?Math.round(d.duration_minutes)+" min":"Ongoing"}</td><td>${d.action_taken||"—"}</td><td>${d.owner||"—"}</td><td>${d.status}</td></tr>`).join("");
+
+  bodyEl.innerHTML = `
+    <div class="report-sheet">
+      <div class="report-title">KWP ${kind.toUpperCase()} REPORT — ${from} to ${to}</div>
+
+      <div class="section-title">Executive Summary</div>
+      <div class="summary-grid">
+        <div class="summary-cell"><div class="n">${n(weeklyTargetOutput,0)}</div><div class="l">Target Output (kg)*</div></div>
+        <div class="summary-cell"><div class="n">${n(s.total_output_kg,0)}</div><div class="l">Actual Output (kg)</div></div>
+        <div class="summary-cell"><div class="n">${weeklyTargetOutput?pct(s.total_output_kg/weeklyTargetOutput*100):"—"}</div><div class="l">Achievement</div></div>
+        <div class="summary-cell"><div class="n">${n(s.total_production_minutes?s.total_production_minutes/60:null)}</div><div class="l">Production Hours</div></div>
+        <div class="summary-cell"><div class="n">${n(s.production_rate_kg_hr)}</div><div class="l">Avg Rate (kg/hr)</div></div>
+        <div class="summary-cell"><div class="n">${pct(s.yield_percent)}</div><div class="l">Yield</div></div>
+        <div class="summary-cell"><div class="n">${n(s.loss_kg,0)}</div><div class="l">Loss (kg)</div></div>
+        <div class="summary-cell"><div class="n">${pct(s.a_grade_percent)}</div><div class="l">A Grade %</div></div>
+        <div class="summary-cell"><div class="n">${pct(s.b_grade_percent)}</div><div class="l">B Grade %</div></div>
+        <div class="summary-cell"><div class="n">${n(s.total_downtime_minutes,0)}</div><div class="l">Total Downtime (min)</div></div>
+      </div>
+      <p class="sub">*Target Output is estimated as the configured production-rate target × total production hours for the period — an approximation for periods where the target rate itself may have changed. Counts only Submitted/Approved entries.</p>
+
+      <div class="section-title">Daily Breakdown</div>
+      <div class="table-wrap"><div class="table-scroll"><table>
+        <thead><tr><th>Date</th><th>Shift</th><th>Input</th><th>A Grade</th><th>B Grade</th><th>Total Output</th><th>Hours</th><th>Rate</th><th>Yield</th><th>Downtime</th></tr></thead>
+        <tbody>${dailyRowsHtml || "<tr><td colspan='10'>No entries in this range.</td></tr>"}</tbody>
+      </table></div></div>
+
+      <div class="section-title">Shift Performance</div>
+      <div class="table-wrap"><div class="table-scroll"><table>
+        <thead><tr><th>Shift</th><th>Input</th><th>Output</th><th>Rate</th><th>Yield</th><th>Achievement</th><th>Downtime (min)</th></tr></thead>
+        <tbody>${shiftPerfHtml}</tbody>
+      </table></div></div>
+
+      <div class="section-title">Quality</div>
+      <div class="table-wrap"><div class="table-scroll"><table>
+        <thead><tr><th>Date</th><th>Shift</th><th>Type</th><th>Grade</th><th>Value</th><th>Result</th></tr></thead>
+        <tbody>${qualityHtml || "<tr><td colspan='6'>No quality records in this range.</td></tr>"}</tbody>
+      </table></div></div>
+
+      <div class="section-title">Workforce</div>
+      <div class="table-wrap"><div class="table-scroll"><table>
+        <thead><tr><th>Shift</th><th>Expected (Logged)</th><th>Present</th><th>Absent</th><th>Attendance %</th></tr></thead>
+        <tbody>${workforceHtml}</tbody>
+      </table></div></div>
+
+      <div class="section-title">Downtime</div>
+      <div class="table-wrap"><div class="table-scroll"><table>
+        <thead><tr><th>Category</th><th>Events</th><th>Hours</th></tr></thead>
+        <tbody>${downtimeHtml || "<tr><td colspan='3'>No downtime in this range.</td></tr>"}</tbody>
+      </table></div></div>
+
+      <div class="section-title">Problems / Actions (still Open or In Progress)</div>
+      <div class="table-wrap"><div class="table-scroll"><table>
+        <thead><tr><th>Problem</th><th>Duration</th><th>Action</th><th>Owner</th><th>Status</th></tr></thead>
+        <tbody>${problemsHtml || "<tr><td colspan='5'>No open issues in this range.</td></tr>"}</tbody>
+      </table></div></div>
+    </div>`;
+}
+window.loadPeriodReport = loadPeriodReport;
+
+init();
+</script>
+</body>
+</html>

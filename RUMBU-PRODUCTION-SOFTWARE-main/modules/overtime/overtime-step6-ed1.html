@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Overtime — Accounting</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="../../auth.js"></script>
+<style>
+  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;--amber:#d97706;}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:22px 18px;color:var(--text);}
+  .wrap{max-width:1000px;margin:0 auto;}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:14px;color:var(--muted);}
+
+  .form-head{text-align:center;margin-bottom:16px;}
+  .form-head .co{font-size:15px;font-weight:800;letter-spacing:.4px;color:var(--navy);}
+  .form-head .ti{font-size:12px;font-weight:700;letter-spacing:2px;color:var(--blue);margin-top:2px;text-transform:uppercase;}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 22px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.04);}
+  .card > h3{color:var(--navy);margin:0 0 2px;font-size:14px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;}
+  .card > .sub{color:var(--muted);font-size:12px;margin:0 0 16px;}
+  h4{color:var(--navy);margin:16px 0 6px;font-size:13px;}
+
+  label{display:block;font-size:11.5px;font-weight:700;color:var(--text);margin:0 0 5px;}
+  input,select{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;background:var(--card);color:var(--text);}
+  input:focus,select:focus{outline:2px solid var(--blue);border-color:var(--blue);}
+
+  button{padding:10px 15px;border:none;border-radius:8px;font-weight:700;font-size:13px;cursor:pointer;background:var(--blue);color:#fff;}
+  button:hover{background:var(--blue-dark);}
+  button.mini{padding:6px 11px;font-size:12px;}
+  button.green{background:var(--green);} button.green:hover{background:#166a2c;}
+  button.grey{background:#6b7280;} button.grey:hover{background:#565d68;}
+  .link-btn{background:none;border:none;color:var(--blue);font-weight:700;cursor:pointer;font-size:13px;padding:0;text-decoration:underline;}
+  .links{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px;}
+  .toolbar{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:6px;}
+  .toolbar .grow{flex:1;min-width:180px;}
+  .btnbar{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px;}
+  .backbar{margin-bottom:10px;}
+
+  .status{margin-top:10px;font-weight:700;font-size:13px;min-height:16px;}
+  .status.ok{color:var(--green);} .status.err{color:var(--red);}
+  .loading,.empty{font-size:12.5px;color:var(--muted);}
+
+  table{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px;}
+  th,td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top;}
+  thead th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.3px;border-bottom:2px solid var(--line);}
+  tbody tr:hover td{background:var(--bg);}
+  tfoot td{font-weight:800;border-top:2px solid var(--line);}
+  .clickrow{cursor:pointer;}
+  .num{text-align:right;white-space:nowrap;}
+  .pay-table{font-size:12px;}
+  .pay-table th,.pay-table td{padding:6px 8px;white-space:nowrap;}
+
+  .tag{display:inline-block;padding:2px 9px;border-radius:10px;font-size:11px;font-weight:700;color:#fff;}
+  .tag.new{background:var(--amber);}
+  .tag.done{background:var(--green);}
+  .tag.approved{background:var(--green);}
+  .tag.rejected{background:var(--red);}
+  .noaccess{color:var(--red);font-weight:bold;text-align:center;padding:30px;}
+  .infobox{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:13px;line-height:1.7;}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<div id="connStatus">Loading…</div>
+
+<div class="form-head">
+  <div class="co">Rumbu Industries Limited</div>
+  <div class="ti">Overtime Accounting</div>
+</div>
+
+<div id="appArea" style="display:none;">
+
+  <!-- ===== QUEUE: forms ready for payment ===== -->
+  <div id="queueView">
+    <div class="card">
+      <h3>Accounting</h3>
+      <p class="sub" id="scopeNote">Forms fully approved and ready for payment processing.</p>
+      <div class="links">
+        <button class="link-btn" onclick="openPaidRecord()">Paid Record →</button>
+        <button class="link-btn" onclick="openActivityLog()">My Activity Log →</button>
+      </div>
+      <div class="toolbar">
+        <div class="grow"><label>Branch</label><select id="branchFilter" onchange="renderQueue()"><option value="all">All</option></select></div>
+        <div style="flex:0 0 auto;"><button class="mini grey" onclick="loadQueue()">Refresh</button></div>
+      </div>
+      <div id="queueWrap"></div>
+    </div>
+  </div>
+
+  <!-- ===== FORM: per-unit cost summary by department ===== -->
+  <div id="formView" style="display:none;">
+    <div class="backbar"><button class="mini grey" id="formBackBtn" onclick="backFromForm()">← Back to list</button></div>
+    <div class="card">
+      <h3 id="formTitle">Form</h3>
+      <div id="formInfo"></div>
+      <h4>Cost by Department &amp; Unit</h4>
+      <p class="sub">Click a Unit to open its staff payment sheet and download it for the bank.</p>
+      <div id="summaryWrap"></div>
+      <div class="btnbar">
+        <button class="green" id="markPaidBtn" onclick="markFormPaid()">Mark this form as Paid</button>
+      </div>
+      <div class="status" id="formStatus"></div>
+    </div>
+  </div>
+
+  <!-- ===== UNIT: staff payment sheet ===== -->
+  <div id="unitView" style="display:none;">
+    <div class="backbar"><button class="mini grey" onclick="backToForm()">← Back to summary</button></div>
+    <div class="card">
+      <h3 id="unitTitle">Unit</h3>
+      <div id="unitInfo"></div>
+      <div class="btnbar" style="margin-top:0;">
+        <button onclick="downloadUnitExcel()">⬇ Download as Excel</button>
+      </div>
+      <div style="overflow-x:auto;"><div id="unitTableWrap"></div></div>
+    </div>
+  </div>
+
+  <!-- ===== PAID RECORD ===== -->
+  <div id="paidRecordView" style="display:none;">
+    <div class="backbar"><button class="mini grey" onclick="backToQueue()">← Back to Accounting</button></div>
+    <div class="card">
+      <h3>Paid Record</h3>
+      <p class="sub">Forms you have marked as Paid, with the amount processed for each.</p>
+      <div class="toolbar">
+        <div class="grow"><label>Branch</label><select id="paidBranchFilter" onchange="renderPaidRecord()"><option value="all">All</option></select></div>
+        <div style="flex:0 0 auto;"><button class="mini grey" onclick="loadPaidRecord()">Refresh</button></div>
+      </div>
+      <div id="recordWrap"></div>
+    </div>
+  </div>
+
+  <!-- ===== MY ACTIVITY LOG ===== -->
+  <div id="activityLogView" style="display:none;">
+    <div class="backbar"><button class="mini grey" onclick="backToQueue()">← Back to Accounting</button></div>
+    <div class="card">
+      <h3>My Activity Log</h3>
+      <p class="sub">Your own overtime accounting actions.</p>
+      <div class="toolbar">
+        <div><label>From Date</label><input type="date" id="logFrom"></div>
+        <div><label>To Date</label><input type="date" id="logTo"></div>
+        <div style="flex:0 0 auto;"><button class="mini grey" onclick="loadActivityLog()">Refresh</button></div>
+      </div>
+      <div id="logWrap"></div>
+    </div>
+  </div>
+
+</div>
+
+<div id="noAccess" class="noaccess" style="display:none;">
+  You are not assigned to Overtime Accounting. Ask your Super Admin to assign you in Overtime Approver Setup.
+</div>
+</div>
+
+<script>
+let ME = null;
+let HAS_ACCESS = false;
+let IS_SUPER_ADMIN = false;
+let QUEUE_GROUPS = [];       // [{initiation_id, form_number, section, overtime_date, entries:[...], total}]
+let CURRENT_FORM = null;     // the open form group (enriched)
+let CURRENT_UNIT = null;     // { department, unit, staff:[], deptEntryId }
+let FORM_MODE = "queue";     // "queue" = payable form, "paid" = read-only paid record
+const COMPANY = "Rumbu Industries Limited";
+
+function esc(s){
+  if(s === null || s === undefined) return "";
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+}
+function fmtDate(iso){
+  if(!iso) return "";
+  const p = String(iso).split("-"); if(p.length !== 3) return iso;
+  const months=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return p[2] + " " + (months[parseInt(p[1],10)-1] || p[1]) + " " + p[0];
+}
+function ddmmyyyy(iso){
+  const d = iso ? new Date(iso) : new Date();
+  const p = n => String(n).padStart(2,"0");
+  return p(d.getDate()) + "/" + p(d.getMonth()+1) + "/" + d.getFullYear();
+}
+function fmtNaira(n){ return "₦" + Number(n||0).toLocaleString(undefined, { minimumFractionDigits:2, maximumFractionDigits:2 }); }
+
+async function logActivity(actionType, description){
+  try{
+    await sb.from("activity_log").insert({
+      actor_id: ME.id, actor_username: ME.username, actor_role: ME.role,
+      section_id: ME.sectionId, action_type: actionType, description: description
+    });
+  }catch(e){ console.warn("Activity log write failed (non-fatal):", e); }
+}
+
+function showView(id){
+  ["queueView","formView","unitView","paidRecordView","activityLogView"].forEach(v=>{
+    const el = document.getElementById(v); if(el) el.style.display = (v === id) ? "block" : "none";
+  });
+  try{ window.scrollTo({ top:0, behavior:"smooth" }); }catch(e){}
+}
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    await checkAccess();
+    if(!HAS_ACCESS){
+      status.textContent = "Connected.";
+      document.getElementById("noAccess").style.display = "block";
+      return;
+    }
+    document.getElementById("appArea").style.display = "block";
+    status.textContent = "Connected.";
+    await loadQueue();
+  }catch(e){
+    status.style.color = "#c0392b"; status.textContent = "❌ " + e.message;
+    console.error(e);
+  }
+}
+
+async function checkAccess(){
+  if(ME.role === "super_admin"){ IS_SUPER_ADMIN = true; HAS_ACCESS = true; return; }
+  const { data: emp } = await sb.from("employees").select("id").eq("linked_profile_id", ME.id).maybeSingle();
+  if(!emp) return;
+  const { data: scopes } = await sb.from("overtime_step_approvers").select("id").eq("employee_id", emp.id).eq("step", 6).eq("section", "ALL_BRANCHES");
+  HAS_ACCESS = !!(scopes && scopes.length);
+}
+
+// ===== QUEUE: entries at awaiting_step6 grouped into forms =====
+async function loadQueue(){
+  showView("queueView");
+  const wrap = document.getElementById("queueWrap");
+  wrap.innerHTML = "<p class='loading'>Loading…</p>";
+  try{
+    const { data, error } = await sb.from("overtime_department_entries")
+      .select("*, overtime_initiations(form_number, overtime_date, initiator_username)")
+      .eq("status", "awaiting_step6")
+      .order("created_at", { ascending: false });
+    if(error) throw error;
+    const rows = data || [];
+
+    // amounts per entry
+    const ids = rows.map(r=>r.id);
+    let amtByEntry = {};
+    if(ids.length){
+      const { data: emps } = await sb.from("overtime_employees").select("department_entry_id, actual_amount").in("department_entry_id", ids);
+      (emps||[]).forEach(e=>{ amtByEntry[e.department_entry_id] = (amtByEntry[e.department_entry_id]||0) + (Number(e.actual_amount)||0); });
+    }
+
+    // group by initiation
+    const map = {};
+    rows.forEach(r=>{
+      const k = r.initiation_id;
+      if(!map[k]) map[k] = { initiation_id:k, form_number:r.overtime_initiations?.form_number||"", section:r.section, overtime_date:r.overtime_initiations?.overtime_date||"", entries:[], total:0 };
+      map[k].entries.push(r);
+      map[k].total += (amtByEntry[r.id]||0);
+    });
+    QUEUE_GROUPS = Object.values(map);
+
+    const branchSel = document.getElementById("branchFilter");
+    const branches = [...new Set(QUEUE_GROUPS.map(g=>g.section))].sort();
+    const cur = branchSel.value;
+    branchSel.innerHTML = '<option value="all">All</option>' + branches.map(b=>`<option value="${esc(b)}">${esc(b)}</option>`).join("");
+    if(branches.indexOf(cur) !== -1) branchSel.value = cur;
+
+    renderQueue();
+  }catch(e){
+    wrap.innerHTML = "<p class='status err'>❌ " + esc(e.message) + "</p>";
+  }
+}
+
+function renderQueue(){
+  const wrap = document.getElementById("queueWrap");
+  const branch = document.getElementById("branchFilter").value;
+  const groups = (branch === "all") ? QUEUE_GROUPS : QUEUE_GROUPS.filter(g=>g.section===branch);
+  if(!groups.length){ wrap.innerHTML = "<p class='empty'>No forms are waiting for payment right now.</p>"; return; }
+
+  let html = "<table><thead><tr><th>Form No.</th><th>Branch</th><th>Overtime Date</th><th>Departments</th><th class=\"num\">Total</th><th></th></tr></thead><tbody>";
+  groups.forEach(g=>{
+    const depts = [...new Set(g.entries.map(e=>e.department))].join(", ");
+    html += "<tr class=\"clickrow\" onclick=\"openForm(" + g.initiation_id + ")\">" +
+      "<td><b>" + esc(g.form_number) + "</b></td>" +
+      "<td>" + esc(g.section) + "</td>" +
+      "<td>" + fmtDate(g.overtime_date) + "</td>" +
+      "<td>" + esc(depts) + "</td>" +
+      "<td class=\"num\">" + fmtNaira(g.total) + "</td>" +
+      "<td><button class=\"mini\" onclick=\"event.stopPropagation();openForm(" + g.initiation_id + ")\">Open</button></td>" +
+      "</tr>";
+  });
+  html += "</tbody></table>";
+  wrap.innerHTML = html;
+}
+
+// ===== FORM: build per-department, per-unit cost summary =====
+async function openForm(initiationId, paid){
+  FORM_MODE = paid ? "paid" : "queue";
+  showView("formView");
+  document.getElementById("formStatus").textContent = "";
+  // Paid forms are a read-only record: hide the "Mark as Paid" action and the back button returns to the Paid Record.
+  const markBtn = document.getElementById("markPaidBtn");
+  if(markBtn) markBtn.style.display = paid ? "none" : "";
+  const formBack = document.getElementById("formBackBtn");
+  if(formBack) formBack.textContent = paid ? "← Back to Paid Record" : "← Back to list";
+  const wrap = document.getElementById("summaryWrap");
+  wrap.innerHTML = "<p class='loading'>Loading…</p>";
+  try{
+    const wantStatus = paid ? "completed" : "awaiting_step6";
+    const { data: entries } = await sb.from("overtime_department_entries")
+      .select("*, overtime_initiations(form_number, overtime_date, initiator_username)")
+      .eq("initiation_id", initiationId).eq("status", wantStatus);
+    const entryList = entries || [];
+    const entryIds = entryList.map(e=>e.id);
+
+    let overtimeEmps = [];
+    if(entryIds.length){
+      const { data: oe } = await sb.from("overtime_employees").select("*").in("department_entry_id", entryIds).order("created_at");
+      overtimeEmps = oe || [];
+    }
+    const empInternalIds = [...new Set(overtimeEmps.map(e=>e.employee_id).filter(Boolean))];
+    let empMap = {};
+    if(empInternalIds.length){
+      const { data: staff } = await sb.from("employees").select("id, employee_id, full_name, unit, bank_account_number, sort_code, bank_name").in("id", empInternalIds);
+      (staff||[]).forEach(s=>{ empMap[s.id] = s; });
+    }
+    const deptByEntry = {}; entryList.forEach(e=>{ deptByEntry[e.id] = e.department; });
+
+    const meta = entryList[0]?.overtime_initiations || {};
+    CURRENT_FORM = {
+      initiation_id: initiationId,
+      form_number: meta.form_number || "",
+      overtime_date: meta.overtime_date || "",
+      section: entryList[0]?.section || "",
+      entryIds: entryIds,
+      staff: overtimeEmps.map(oe=>{
+        const s = empMap[oe.employee_id] || {};
+        return {
+          deptEntryId: oe.department_entry_id,
+          department: deptByEntry[oe.department_entry_id] || "",
+          unit: (s.unit && String(s.unit).trim()) ? s.unit : "(no unit)",
+          amount: Number(oe.actual_amount) || 0,
+          code: oe.employee_code || s.employee_id || "",
+          name: oe.employee_name || s.full_name || "",
+          account: s.bank_account_number || "",
+          sortcode: s.sort_code || "",
+          bank: s.bank_name || ""
+        };
+      })
+    };
+
+    document.getElementById("formTitle").textContent = "Form " + CURRENT_FORM.form_number;
+    document.getElementById("formInfo").innerHTML = "<div class=\"infobox\">" +
+      "<b>Form No.:</b> " + esc(CURRENT_FORM.form_number) + " &nbsp;|&nbsp; <b>Branch:</b> " + esc(CURRENT_FORM.section) + " &nbsp;|&nbsp; " +
+      "<b>Overtime Date:</b> " + fmtDate(CURRENT_FORM.overtime_date) +
+    "</div>";
+
+    // Group by department -> unit
+    const groups = {};
+    let grand = 0;
+    CURRENT_FORM.staff.forEach(st=>{
+      const key = st.deptEntryId + "||" + st.unit;
+      if(!groups[key]) groups[key] = { deptEntryId: st.deptEntryId, department: st.department, unit: st.unit, count: 0, total: 0 };
+      groups[key].count++; groups[key].total += st.amount; grand += st.amount;
+    });
+    const list = Object.values(groups).sort((a,b)=> (a.department+a.unit).localeCompare(b.department+b.unit));
+
+    if(!list.length){ wrap.innerHTML = "<p class='empty'>No staff/pay on this form.</p>"; return; }
+    let html = "<table><thead><tr><th>Department</th><th>Unit</th><th class=\"num\">Staff</th><th class=\"num\">Total</th><th></th></tr></thead><tbody>";
+    list.forEach(g=>{
+      html += "<tr class=\"clickrow\" onclick=\"openUnit(" + g.deptEntryId + ", '" + esc(g.unit).replace(/'/g,"\\'") + "')\">" +
+        "<td>" + esc(g.department) + "</td>" +
+        "<td><b>" + esc(g.unit) + "</b></td>" +
+        "<td class=\"num\">" + g.count + "</td>" +
+        "<td class=\"num\">" + fmtNaira(g.total) + "</td>" +
+        "<td><button class=\"mini\" onclick=\"event.stopPropagation();openUnit(" + g.deptEntryId + ", '" + esc(g.unit).replace(/'/g,"\\'") + "')\">View / Download</button></td>" +
+        "</tr>";
+    });
+    html += "</tbody><tfoot><tr><td colspan=\"3\" class=\"num\">GRAND TOTAL</td><td class=\"num\">" + fmtNaira(grand) + "</td><td></td></tr></tfoot></table>";
+    wrap.innerHTML = html;
+  }catch(e){
+    wrap.innerHTML = "<p class='status err'>❌ " + esc(e.message) + "</p>";
+  }
+}
+
+function backFromForm(){ CURRENT_FORM = null; if(FORM_MODE === "paid"){ FORM_MODE = "queue"; openPaidRecord(); } else { loadQueue(); } }
+function backToQueue(){ CURRENT_FORM = null; loadQueue(); }
+function backToForm(){ if(CURRENT_FORM) openForm(CURRENT_FORM.initiation_id, FORM_MODE === "paid"); else loadQueue(); }
+
+// ===== UNIT: staff payment sheet in the bank upload format =====
+function openUnit(deptEntryId, unit){
+  if(!CURRENT_FORM) return;
+  const staff = CURRENT_FORM.staff.filter(s => s.deptEntryId === deptEntryId && s.unit === unit);
+  const department = (staff[0] && staff[0].department) || "";
+  CURRENT_UNIT = { deptEntryId, unit, department, staff };
+  showView("unitView");
+  document.getElementById("unitTitle").textContent = department + " — " + unit;
+  const total = staff.reduce((s,r)=>s + r.amount, 0);
+  document.getElementById("unitInfo").innerHTML = "<div class=\"infobox\">" +
+    "<b>Form:</b> " + esc(CURRENT_FORM.form_number) + " &nbsp;|&nbsp; <b>Department:</b> " + esc(department) + " &nbsp;|&nbsp; <b>Unit:</b> " + esc(unit) + " &nbsp;|&nbsp; " +
+    "<b>Staff:</b> " + staff.length + " &nbsp;|&nbsp; <b>Total:</b> " + fmtNaira(total) +
+  "</div>";
+
+  const cols = ["AMOUNT","UPLOAD DATE","REFERENCE","NARRATION","BENEFICIARY_ID","BENEFICIARY_NAME","BANK_ACCOUNT_NO","CODE"];
+  const rows = buildPaymentRows();
+  let html = "<table class=\"pay-table\"><thead><tr>" + cols.map(c=>"<th>" + c + "</th>").join("") + "</tr></thead><tbody>";
+  if(!rows.length){
+    html += "<tr><td colspan=\"" + cols.length + "\" class=\"empty\">No staff in this unit.</td></tr>";
+  } else {
+    rows.forEach(r=>{
+      html += "<tr>" +
+        "<td class=\"num\">" + Number(r.AMOUNT).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}) + "</td>" +
+        "<td>" + esc(r["UPLOAD DATE"]) + "</td>" +
+        "<td>" + esc(r.REFERENCE) + "</td>" +
+        "<td>" + esc(r.NARRATION) + "</td>" +
+        "<td>" + esc(r.BENEFICIARY_ID) + "</td>" +
+        "<td>" + esc(r.BENEFICIARY_NAME) + "</td>" +
+        "<td>" + esc(r.BANK_ACCOUNT_NO) + "</td>" +
+        "<td>" + esc(r.CODE) + "</td>" +
+        "</tr>";
+    });
+  }
+  html += "</tbody></table>";
+  document.getElementById("unitTableWrap").innerHTML = html;
+}
+
+// Builds the exact payment rows for the open unit.
+function buildPaymentRows(){
+  if(!CURRENT_UNIT || !CURRENT_FORM) return [];
+  const uploadDate = ddmmyyyy(new Date());
+  return CURRENT_UNIT.staff.map(s=>({
+    "AMOUNT": Math.round(s.amount * 100) / 100,
+    "UPLOAD DATE": uploadDate,
+    "REFERENCE": "",
+    "NARRATION": "Overtime " + CURRENT_FORM.form_number + (CURRENT_FORM.overtime_date ? (" " + ddmmyyyy(CURRENT_FORM.overtime_date)) : "") + " " + CURRENT_UNIT.department + (CURRENT_UNIT.unit && CURRENT_UNIT.unit !== "(no unit)" ? (" / " + CURRENT_UNIT.unit) : ""),
+    "BENEFICIARY_ID": s.code,
+    "BENEFICIARY_NAME": s.name,
+    "BANK_ACCOUNT_NO": s.account,
+    "CODE": s.sortcode
+  }));
+}
+
+function downloadUnitExcel(){
+  if(typeof XLSX === "undefined"){ alert("The spreadsheet library did not load — check your connection and reopen this page."); return; }
+  const cols = ["AMOUNT","UPLOAD DATE","REFERENCE","NARRATION","BENEFICIARY_ID","BENEFICIARY_NAME","BANK_ACCOUNT_NO","CODE"];
+  const rows = buildPaymentRows();
+  const aoa = [cols].concat(rows.map(r => cols.map(c => r[c])));
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  // Keep account number + code as Text so leading zeros survive.
+  const textCols = [6, 7]; // BANK_ACCOUNT_NO, CODE
+  for(let ri=1; ri<aoa.length; ri++){
+    textCols.forEach(c=>{
+      const addr = XLSX.utils.encode_cell({ r: ri, c: c });
+      const cell = ws[addr];
+      if(cell){ cell.t = "s"; cell.z = "@"; if(cell.v !== undefined && cell.v !== null) cell.v = String(cell.v); }
+    });
+  }
+  ws["!cols"] = cols.map(h => ({ wch: Math.max(12, h.length + 2) }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Payment");
+  const safe = (CURRENT_FORM.form_number + "_" + CURRENT_UNIT.department + "_" + CURRENT_UNIT.unit).replace(/[^A-Za-z0-9._-]+/g, "_");
+  XLSX.writeFile(wb, "Overtime_Payment_" + safe + ".xlsx");
+  logActivity("overtime_payment_downloaded", ME.username + " downloaded the payment sheet for " + CURRENT_FORM.form_number + " — " + CURRENT_UNIT.department + " / " + CURRENT_UNIT.unit + " (" + CURRENT_UNIT.staff.length + " staff)");
+}
+
+// ===== Mark the whole form as Paid (completes its entries) =====
+async function markFormPaid(){
+  if(!CURRENT_FORM) return;
+  const status = document.getElementById("formStatus");
+  if(!confirm("Mark form " + CURRENT_FORM.form_number + " as Paid?\n\nThis closes the form (marks it Completed) once you have processed the payments.")) return;
+  status.className="status"; status.textContent="Saving…";
+  try{
+    const { error } = await sb.from("overtime_department_entries")
+      .update({ status: "completed", updated_at: new Date().toISOString() })
+      .in("id", CURRENT_FORM.entryIds);
+    if(error) throw error;
+    await logActivity("overtime_accounting_paid", ME.username + " marked overtime form " + CURRENT_FORM.form_number + " as Paid (completed)");
+    status.className="status ok"; status.textContent="✅ Marked as Paid.";
+    setTimeout(backToQueue, 800);
+  }catch(e){
+    status.className="status err"; status.textContent="❌ " + e.message;
+  }
+}
+
+// ===== PAID RECORD (forms marked Paid at this Accounting step) =====
+let PAID_FORMS = [];   // [{initiation_id, form_number, section, overtime_date, staff, total, paid_at}]
+
+function openPaidRecord(){ showView("paidRecordView"); loadPaidRecord(); }
+
+async function loadPaidRecord(){
+  const wrap = document.getElementById("recordWrap");
+  wrap.innerHTML = "<p class='loading'>Loading…</p>";
+  try{
+    const { data: entries } = await sb.from("overtime_department_entries")
+      .select("id, initiation_id, section, department, status, updated_at, overtime_initiations(form_number, overtime_date)")
+      .eq("status", "completed")
+      .order("updated_at", { ascending: false });
+    const entryList = entries || [];
+    const ids = entryList.map(e=>e.id);
+
+    let emps = [];
+    if(ids.length){
+      const { data: oe } = await sb.from("overtime_employees").select("department_entry_id, actual_amount").in("department_entry_id", ids);
+      emps = oe || [];
+    }
+    const amtByEntry = {}; const cntByEntry = {};
+    emps.forEach(e=>{
+      amtByEntry[e.department_entry_id] = (amtByEntry[e.department_entry_id] || 0) + (Number(e.actual_amount) || 0);
+      cntByEntry[e.department_entry_id] = (cntByEntry[e.department_entry_id] || 0) + 1;
+    });
+
+    // Group entries by their initiation (form)
+    const forms = {};
+    entryList.forEach(e=>{
+      const k = e.initiation_id;
+      if(!forms[k]){
+        forms[k] = {
+          initiation_id: k,
+          form_number: e.overtime_initiations?.form_number || "",
+          section: e.section || "",
+          overtime_date: e.overtime_initiations?.overtime_date || "",
+          staff: 0, total: 0, paid_at: e.updated_at || ""
+        };
+      }
+      forms[k].staff += (cntByEntry[e.id] || 0);
+      forms[k].total += (amtByEntry[e.id] || 0);
+      if(e.updated_at && e.updated_at > forms[k].paid_at) forms[k].paid_at = e.updated_at;
+    });
+    PAID_FORMS = Object.values(forms).sort((a,b)=> String(b.paid_at).localeCompare(String(a.paid_at)));
+
+    // Branch filter options
+    const bf = document.getElementById("paidBranchFilter");
+    const current = bf.value || "all";
+    const branches = [...new Set(PAID_FORMS.map(f=>f.section).filter(Boolean))].sort();
+    bf.innerHTML = "<option value=\"all\">All</option>" + branches.map(b=>"<option value=\"" + esc(b) + "\">" + esc(b) + "</option>").join("");
+    bf.value = branches.includes(current) ? current : "all";
+
+    renderPaidRecord();
+  }catch(e){
+    wrap.innerHTML = "<p class='status err'>❌ " + esc(e.message) + "</p>";
+  }
+}
+
+function renderPaidRecord(){
+  const wrap = document.getElementById("recordWrap");
+  const bf = document.getElementById("paidBranchFilter");
+  const branch = bf ? bf.value : "all";
+  const list = PAID_FORMS.filter(f => branch === "all" || f.section === branch);
+  if(!list.length){ wrap.innerHTML = "<p class='empty'>No paid forms yet.</p>"; return; }
+  let grand = 0;
+  let html = "<p class='sub'>Click a form to view its departments and units, then a unit to see the staff table.</p>";
+  html += "<div style='overflow-x:auto;'><table><thead><tr><th>Form No.</th><th>Branch</th><th>Overtime Date</th><th class=\"num\">Staff</th><th class=\"num\">Amount Paid</th><th>Marked Paid</th><th></th></tr></thead><tbody>";
+  list.forEach(f=>{
+    grand += f.total;
+    html += "<tr class=\"clickrow\" onclick=\"openForm(" + f.initiation_id + ", true)\">" +
+      "<td>" + esc(f.form_number) + "</td>" +
+      "<td>" + esc(f.section) + "</td>" +
+      "<td>" + fmtDate(f.overtime_date) + "</td>" +
+      "<td class=\"num\">" + f.staff + "</td>" +
+      "<td class=\"num\">" + fmtNaira(f.total) + "</td>" +
+      "<td>" + esc(f.paid_at ? new Date(f.paid_at).toLocaleString() : "") + "</td>" +
+      "<td><button class=\"mini\" onclick=\"event.stopPropagation();openForm(" + f.initiation_id + ", true)\">View staff</button></td></tr>";
+  });
+  html += "</tbody><tfoot><tr><td colspan=\"4\" class=\"num\">TOTAL PAID</td><td class=\"num\">" + fmtNaira(grand) + "</td><td colspan=\"2\"></td></tr></tfoot></table></div>";
+  wrap.innerHTML = html;
+}
+
+// ===== MY ACTIVITY LOG (this user's own actions) =====
+function openActivityLog(){ showView("activityLogView"); loadActivityLog(); }
+
+async function loadActivityLog(){
+  const wrap = document.getElementById("logWrap");
+  const from = document.getElementById("logFrom").value;
+  const to = document.getElementById("logTo").value;
+  wrap.innerHTML = "<p class='loading'>Loading…</p>";
+  try{
+    const { data, error } = await sb.from("activity_log").select("*")
+      .eq("actor_id", ME.id)
+      .order("created_at", { ascending: false });
+    if(error) throw error;
+    let rows = (data || []).filter(r => (r.action_type||"").indexOf("overtime") === 0);
+    if(from) rows = rows.filter(r => (r.created_at||"").slice(0,10) >= from);
+    if(to)   rows = rows.filter(r => (r.created_at||"").slice(0,10) <= to);
+    if(!rows.length){ wrap.innerHTML = "<p class='empty'>No activity in this range.</p>"; return; }
+    let html = "<table><thead><tr><th>Date</th><th>Action</th><th>Details</th></tr></thead><tbody>";
+    rows.forEach(r=>{ html += "<tr><td>" + esc(new Date(r.created_at).toLocaleString()) + "</td><td>" + esc(r.action_type) + "</td><td>" + esc(r.description) + "</td></tr>"; });
+    html += "</tbody></table>";
+    wrap.innerHTML = html;
+  }catch(e){
+    wrap.innerHTML = "<p class='status err'>❌ " + esc(e.message) + "</p>";
+  }
+}
+
+init();
+</script>
+<script src="../../assets/letterhead.js"></script>
+</body>
+</html>

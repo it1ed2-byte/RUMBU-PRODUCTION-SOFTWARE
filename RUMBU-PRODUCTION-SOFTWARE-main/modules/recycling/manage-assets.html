@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Recycling — Manage Assets</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  :root{
+    --navy:#1F3864; --blue:#2E75B6; --blue-dark:#245d92;
+    --line:#d8dee8; --bg:#eef2f7; --muted:#6b7280;
+    --red:#c0392b; --green:#1d8a4e; --amber:#d97706;
+  }
+  *{box-sizing:border-box;}
+  body{font-family:Arial,Helvetica,sans-serif;background:var(--bg);margin:0;padding:18px;color:#1f2430;}
+  .wrap{max-width:860px;margin:0 auto;}
+  .card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:22px;margin-bottom:16px;}
+  h3{color:var(--navy);margin:0 0 16px;font-size:16px;
+    border-bottom:2px solid var(--navy);padding-bottom:8px;}
+  label{display:block;font-size:12px;font-weight:bold;color:#374151;margin:0 0 4px;}
+  input{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;
+    font-size:14px;font-family:inherit;margin-bottom:14px;}
+  input:focus{outline:2px solid var(--blue);border-color:var(--blue);}
+  input.inline{width:90px;margin:0;padding:6px 8px;font-size:13px;}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;}
+  .row>div{flex:1;min-width:160px;}
+  button.main{padding:11px 18px;border:none;border-radius:8px;font-weight:bold;
+    font-size:13px;cursor:pointer;background:var(--blue);color:#fff;}
+  button.main:hover{background:var(--blue-dark);}
+  button.sm{padding:6px 12px;border:none;border-radius:6px;font-weight:bold;
+    font-size:12px;cursor:pointer;background:var(--blue);color:#fff;margin-left:4px;}
+  button.sm:hover{background:var(--blue-dark);}
+  button.sm.danger{background:var(--red);}   button.sm.danger:hover{background:#992b20;}
+  button.sm.success{background:var(--green);} button.sm.success:hover{background:#146b3b;}
+  button.sm.ghost{background:#e5e7eb;color:#374151;border:1px solid var(--line);}
+  .status{margin-top:10px;font-weight:bold;font-size:13px;
+    padding:10px 14px;border-radius:8px;display:none;}
+  .status.err{color:var(--red);background:#fef2f2;border:1px solid #fecaca;}
+  .status.ok{color:var(--green);background:#f0fdf4;border:1px solid #bbf7d0;}
+  .status.info{color:var(--navy);background:#eff6ff;border:1px solid #bfdbfe;}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;}
+
+  /* Assets table */
+  table{width:100%;border-collapse:collapse;font-size:13px;margin-top:8px;}
+  th,td{border:1px solid var(--line);padding:9px 10px;text-align:left;}
+  th{background:var(--navy);color:#fff;font-size:12px;}
+  tr:nth-child(even) td{background:#f8fafc;}
+  .badge{display:inline-block;padding:3px 9px;border-radius:12px;font-size:11px;font-weight:bold;}
+  .badge.active{background:#dcfce7;color:var(--green);}
+  .badge.inactive{background:#f3f4f6;color:var(--muted);}
+  td.actions{white-space:nowrap;text-align:right;}
+  tr.inactive-row td{color:var(--muted);}
+  .edit-area{display:inline-flex;align-items:center;gap:4px;}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <div id="connStatus">Loading...</div>
+
+  <div id="appArea" style="display:none;">
+
+    <!-- Add new machine -->
+    <div class="card">
+      <h3>➕ Add New Machine</h3>
+      <div class="row">
+        <div>
+          <label>Machine Code</label>
+          <input type="text" id="newCode" placeholder="e.g. RM4" maxlength="20">
+        </div>
+        <div>
+          <label>Machine Name</label>
+          <input type="text" id="newName" placeholder="e.g. RM 4">
+        </div>
+        <div>
+          <label>Target KG (per shift)</label>
+          <input type="number" id="newTarget" min="0" step="0.1" placeholder="0.0">
+        </div>
+        <div style="flex:0 0 auto;padding-bottom:14px;">
+          <label>&nbsp;</label>
+          <button class="main" onclick="addAsset()">Add Machine</button>
+        </div>
+      </div>
+      <div class="status" id="addStatus"></div>
+    </div>
+
+    <!-- Asset list -->
+    <div class="card">
+      <h3>🔧 All Machines</h3>
+      <div id="assetTableWrap">Loading...</div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+let ME = null;
+
+function authHeaders(){
+  return {
+    "apikey":        SUPABASE_ANON_KEY,
+    "Authorization": "Bearer " + SUPABASE_ANON_KEY,
+    "Content-Type":  "application/json"
+  };
+}
+
+// ── Init ──────────────────────────────────────────────────
+async function init(){
+  const cs = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    cs.style.color="#1d8a4e"; cs.textContent="✔ Connected.";
+    document.getElementById("appArea").style.display="block";
+    await loadAssets();
+  }catch(e){
+    cs.style.color="#c0392b"; cs.textContent="❌ "+e.message; console.error(e);
+  }
+}
+
+// ── Load and render all assets ─────────────────────────────
+async function loadAssets(){
+  const wrap = document.getElementById("assetTableWrap");
+  wrap.innerHTML="Loading...";
+  try{
+    const res = await fetch(
+      SUPABASE_URL+"/rest/v1/recycling_assets?select=*&order=asset_code.asc",
+      {headers:authHeaders()}
+    );
+    if(!res.ok) throw new Error("recycling_assets: HTTP "+res.status);
+    const assets = await res.json();
+
+    if(!assets.length){ wrap.innerHTML="<p style='color:var(--muted);'>No machines registered yet.</p>"; return; }
+
+    let html='<table>'+
+      '<thead><tr>'+
+      '<th>Code</th><th>Name</th>'+
+      '<th>Target KG (per shift)</th>'+
+      '<th>Status</th>'+
+      '<th style="text-align:right;">Actions</th>'+
+      '</tr></thead><tbody>';
+
+    assets.forEach(a=>{
+      const badge = a.is_active
+        ? '<span class="badge active">Active</span>'
+        : '<span class="badge inactive">Inactive</span>';
+      const rowCls = a.is_active ? "" : "inactive-row";
+      const toggleBtn = a.is_active
+        ? `<button class="sm danger" onclick="toggleAsset('${a.asset_code}',false)">Deactivate</button>`
+        : `<button class="sm success" onclick="toggleAsset('${a.asset_code}',true)">Activate</button>`;
+
+      html+=`<tr class="${rowCls}">
+        <td><b>${a.asset_code}</b></td>
+        <td>${a.asset_name}</td>
+        <td>
+          <span id="tgt_display_${a.asset_code}">
+            ${parseFloat(a.target_kg).toLocaleString(undefined,{maximumFractionDigits:1})} KG
+          </span>
+          <div class="edit-area" id="tgt_edit_${a.asset_code}" style="display:none;">
+            <input class="inline" type="number" id="tgt_input_${a.asset_code}"
+              value="${a.target_kg}" min="0" step="0.1">
+            <button class="sm" onclick="saveTarget('${a.asset_code}')">Save</button>
+            <button class="sm ghost" onclick="cancelEdit('${a.asset_code}')">✕</button>
+          </div>
+        </td>
+        <td>${badge}</td>
+        <td class="actions">
+          <button class="sm ghost" onclick="showEdit('${a.asset_code}')">Edit Target</button>
+          ${toggleBtn}
+        </td>
+      </tr>`;
+    });
+
+    html+="</tbody></table>";
+    wrap.innerHTML=html;
+
+  }catch(e){
+    wrap.innerHTML="<p style='color:var(--red);'>❌ "+e.message+"</p>";
+  }
+}
+
+// ── Add new machine ────────────────────────────────────────
+async function addAsset(){
+  const status = document.getElementById("addStatus");
+  const code   = document.getElementById("newCode").value.trim().toUpperCase();
+  const name   = document.getElementById("newName").value.trim();
+  const target = parseFloat(document.getElementById("newTarget").value);
+
+  if(!code)            { showStatus("addStatus","err","Enter a machine code."); return; }
+  if(!name)            { showStatus("addStatus","err","Enter a machine name."); return; }
+  if(isNaN(target)||target<0){ showStatus("addStatus","err","Enter a valid target KG."); return; }
+
+  showStatus("addStatus","info","Adding...");
+  try{
+    const res = await fetch(SUPABASE_URL+"/rest/v1/recycling_assets",{
+      method:"POST",
+      headers: Object.assign({},authHeaders(),{"Prefer":"return=minimal"}),
+      body: JSON.stringify({ asset_code:code, asset_name:name, target_kg:target, is_active:true })
+    });
+    if(res.status===409){ throw new Error("A machine with code "+code+" already exists."); }
+    if(!res.ok){
+      const j=await res.json().catch(()=>({}));
+      throw new Error(j.message||j.details||"Add failed (HTTP "+res.status+").");
+    }
+    showStatus("addStatus","ok","✅ "+code+" added.");
+    document.getElementById("newCode").value="";
+    document.getElementById("newName").value="";
+    document.getElementById("newTarget").value="";
+    await loadAssets();
+  }catch(e){
+    showStatus("addStatus","err","❌ "+e.message);
+  }
+}
+
+// ── Show / cancel inline target editor ────────────────────
+function showEdit(code){
+  document.getElementById("tgt_display_"+code).style.display="none";
+  document.getElementById("tgt_edit_"+code).style.display="inline-flex";
+  document.getElementById("tgt_input_"+code).focus();
+}
+
+function cancelEdit(code){
+  document.getElementById("tgt_display_"+code).style.display="";
+  document.getElementById("tgt_edit_"+code).style.display="none";
+}
+
+// ── Save updated target ────────────────────────────────────
+async function saveTarget(code){
+  const input  = document.getElementById("tgt_input_"+code);
+  const newTgt = parseFloat(input.value);
+  if(isNaN(newTgt)||newTgt<0){ alert("Enter a valid target KG."); return; }
+
+  try{
+    const res = await fetch(
+      SUPABASE_URL+"/rest/v1/recycling_assets?asset_code=eq."+encodeURIComponent(code),
+      {
+        method:"PATCH",
+        headers: Object.assign({},authHeaders(),{"Prefer":"return=minimal"}),
+        body: JSON.stringify({ target_kg: newTgt })
+      }
+    );
+    if(!res.ok){
+      const j=await res.json().catch(()=>({}));
+      throw new Error(j.message||"Update failed.");
+    }
+    await loadAssets(); // reload to refresh display
+  }catch(e){
+    alert("❌ "+e.message);
+  }
+}
+
+// ── Toggle active / inactive ───────────────────────────────
+async function toggleAsset(code, makeActive){
+  const label = makeActive ? "activate" : "deactivate";
+  if(!confirm("Are you sure you want to "+label+" machine "+code+"?")) return;
+
+  try{
+    const res = await fetch(
+      SUPABASE_URL+"/rest/v1/recycling_assets?asset_code=eq."+encodeURIComponent(code),
+      {
+        method:"PATCH",
+        headers: Object.assign({},authHeaders(),{"Prefer":"return=minimal"}),
+        body: JSON.stringify({ is_active: makeActive })
+      }
+    );
+    if(!res.ok){
+      const j=await res.json().catch(()=>({}));
+      throw new Error(j.message||"Update failed.");
+    }
+    await loadAssets();
+  }catch(e){
+    alert("❌ "+e.message);
+  }
+}
+
+// ── Status helper ──────────────────────────────────────────
+function showStatus(id,type,msg){
+  const el=document.getElementById(id);
+  el.className="status "+type;
+  el.textContent=msg;
+  el.style.display=msg?"block":"none";
+}
+
+init();
+</script>
+</body>
+</html>

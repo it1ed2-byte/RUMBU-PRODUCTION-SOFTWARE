@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Recycling — Enter Production</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  :root{
+    --navy:#1F3864; --blue:#2E75B6; --blue-dark:#245d92;
+    --line:#d8dee8; --bg:#eef2f7; --muted:#6b7280;
+    --red:#c0392b; --green:#1d8a4e;
+  }
+  *{box-sizing:border-box;}
+  body{font-family:Arial,Helvetica,sans-serif;background:var(--bg);margin:0;padding:18px;color:#1f2430;}
+  .wrap{max-width:520px;margin:0 auto;}
+  .card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:22px;margin-bottom:16px;}
+  h3{color:var(--navy);margin:0 0 16px;font-size:16px;
+    border-bottom:2px solid var(--navy);padding-bottom:8px;}
+  label{display:block;font-size:12px;font-weight:bold;color:#374151;margin:0 0 4px;}
+  input,select{
+    width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;
+    font-size:14px;font-family:inherit;margin-bottom:14px;
+  }
+  input:focus,select:focus{outline:2px solid var(--blue);border-color:var(--blue);}
+  input[readonly]{background:#f8fafc;color:var(--muted);cursor:default;}
+  button.main{
+    width:100%;padding:12px;border:none;border-radius:8px;
+    font-weight:bold;font-size:14px;cursor:pointer;
+    background:var(--blue);color:#fff;
+  }
+  button.main:hover{background:var(--blue-dark);}
+  button.main:disabled{background:#94a3b8;cursor:not-allowed;}
+  .status{
+    margin-top:10px;font-weight:bold;font-size:13px;
+    padding:10px 14px;border-radius:8px;display:none;
+  }
+  .status.err{color:var(--red);background:#fef2f2;border:1px solid #fecaca;}
+  .status.ok{color:var(--green);background:#f0fdf4;border:1px solid #bbf7d0;}
+  .status.info{color:var(--navy);background:#eff6ff;border:1px solid #bfdbfe;}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;}
+  .op-note{font-size:11px;color:var(--muted);margin-top:-10px;margin-bottom:12px;}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <div id="connStatus">Loading...</div>
+
+  <div id="appArea" style="display:none;">
+    <div class="card">
+      <h3>♻️ Enter Recycling Production</h3>
+
+      <label>Production Date</label>
+      <input type="date" id="prodDate">
+
+      <label>Shift</label>
+      <select id="shift">
+        <option value="">— Select Shift —</option>
+        <option value="Morning">Morning (7 am – 2 pm)</option>
+        <option value="Afternoon">Afternoon (2 pm – 10 pm)</option>
+        <option value="Night">Night (10 pm – 7 am)</option>
+      </select>
+
+      <label>Branch</label>
+      <select id="branch"></select>
+
+      <label>Machine</label>
+      <select id="asset" onchange="onAssetChange()">
+        <option value="">— Select Machine —</option>
+      </select>
+
+      <label>Target KG (per shift)</label>
+      <input type="text" id="targetKg" readonly
+             placeholder="Auto-filled when machine is selected">
+
+      <label>KG Produced</label>
+      <input type="number" id="kgProduced" min="0" step="0.1" placeholder="0.0">
+
+      <label>Operator</label>
+      <select id="operator">
+        <option value="">Loading operators...</option>
+      </select>
+      <div class="op-note" id="opNote"></div>
+
+      <button class="main" id="submitBtn" onclick="submitEntry()">
+        Save Production Entry
+      </button>
+      <div class="status" id="status"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+let ME = null, MY_SECTIONS = [], ASSETS = [];
+
+function authHeaders(){
+  return {
+    "apikey":        SUPABASE_ANON_KEY,
+    "Authorization": "Bearer " + SUPABASE_ANON_KEY,
+    "Content-Type":  "application/json"
+  };
+}
+
+function today(){
+  return new Date().toISOString().slice(0, 10);
+}
+
+// ── Init ──────────────────────────────────────────────────
+async function init(){
+  const cs = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+
+    MY_SECTIONS = (ME.sectionNames && ME.sectionNames.length)
+      ? ME.sectionNames.filter(s => ["Rumbu","MamaSannu"].includes(s))
+      : ["Rumbu","MamaSannu"];
+    if(!MY_SECTIONS.length) MY_SECTIONS = ["Rumbu","MamaSannu"];
+
+    // Branch dropdown
+    const branchSel = document.getElementById("branch");
+    branchSel.innerHTML = MY_SECTIONS.map(s =>
+      `<option value="${s}">${s === "MamaSannu" ? "Mama Sannu" : s}</option>`
+    ).join("");
+
+    document.getElementById("prodDate").value = today();
+
+    await loadAssets();
+    await loadOperators();
+
+    cs.style.color = "#1d8a4e";
+    cs.textContent = "✔ Connected.";
+    document.getElementById("appArea").style.display = "block";
+
+  }catch(e){
+    cs.style.color = "#c0392b";
+    cs.textContent = "❌ " + e.message;
+    console.error(e);
+  }
+}
+
+// ── Load active machines ───────────────────────────────────
+async function loadAssets(){
+  const res = await fetch(
+    SUPABASE_URL + "/rest/v1/recycling_assets" +
+    "?select=asset_code,asset_name,target_kg&is_active=eq.true&order=asset_code.asc",
+    { headers: authHeaders() }
+  );
+  if(!res.ok) throw new Error("recycling_assets: HTTP " + res.status);
+  ASSETS = await res.json();
+  const sel = document.getElementById("asset");
+  sel.innerHTML = '<option value="">— Select Machine —</option>' +
+    ASSETS.map(a =>
+      `<option value="${a.asset_code}" data-target="${a.target_kg}">${a.asset_name}</option>`
+    ).join("");
+}
+
+// ── Load recycling operators ───────────────────────────────
+async function loadOperators(){
+  const sel  = document.getElementById("operator");
+  const note = document.getElementById("opNote");
+  try{
+    const res = await fetch(
+      SUPABASE_URL + "/rest/v1/employees" +
+      "?select=employee_id,full_name" +
+      "&department=eq.Recycling&unit=eq.Recycling" +
+      "&order=full_name.asc",
+      { headers: authHeaders() }
+    );
+
+    if(!res.ok){
+      sel.innerHTML = '<option value="">— Select Operator —</option>';
+      note.textContent = "⚠️ Could not load operators (HTTP " + res.status + ").";
+      note.style.color = "#c0392b";
+      return;
+    }
+
+    const ops = await res.json();
+
+    if(!ops.length){
+      sel.innerHTML = '<option value="">— No operators registered —</option>';
+      note.textContent = "No Recycling operators found in the employees table.";
+      note.style.color = "#d97706";
+      return;
+    }
+
+    sel.innerHTML = '<option value="">— Select Operator —</option>' +
+      ops.map(o =>
+        `<option value="${o.employee_id}">${o.full_name} (${o.employee_id})</option>`
+      ).join("");
+    note.textContent = ops.length + " operator(s) loaded.";
+    note.style.color = "#1d8a4e";
+
+  }catch(e){
+    sel.innerHTML = '<option value="">— Select Operator —</option>';
+    note.textContent = "⚠️ Operator load error: " + e.message;
+    note.style.color = "#c0392b";
+  }
+}
+
+// ── Machine selection → auto-fill target ──────────────────
+function onAssetChange(){
+  const sel = document.getElementById("asset");
+  const opt = sel.options[sel.selectedIndex];
+  const tkg = opt && opt.dataset.target ? parseFloat(opt.dataset.target) : 0;
+  document.getElementById("targetKg").value = tkg
+    ? tkg.toLocaleString(undefined, { maximumFractionDigits: 1 }) + " KG"
+    : "";
+}
+
+// ── Submit — direct REST INSERT ────────────────────────────
+async function submitEntry(){
+  const btn  = document.getElementById("submitBtn");
+  const date = document.getElementById("prodDate").value;
+  const shift= document.getElementById("shift").value;
+  const branch=document.getElementById("branch").value;
+  const assetSel  = document.getElementById("asset");
+  const assetCode = assetSel.value;
+  const kg  = parseFloat(document.getElementById("kgProduced").value);
+  const opSel = document.getElementById("operator");
+  const operatorId   = opSel.value || null;
+  const operatorName = opSel.value
+    ? (opSel.options[opSel.selectedIndex].text || null)
+    : null;
+
+  if(!date)                { showStatus("err","Select a production date."); return; }
+  if(!shift)               { showStatus("err","Select a shift."); return; }
+  if(!branch)              { showStatus("err","Select a branch."); return; }
+  if(!assetCode)           { showStatus("err","Select a machine."); return; }
+  if(isNaN(kg) || kg < 0) { showStatus("err","Enter a valid KG produced value."); return; }
+
+  btn.disabled = true;
+  showStatus("info","Saving...");
+
+  try{
+    const res = await fetch(
+      SUPABASE_URL + "/rest/v1/recycling_production",
+      {
+        method:  "POST",
+        headers: Object.assign({}, authHeaders(), { "Prefer": "return=minimal" }),
+        body: JSON.stringify({
+          production_date: date,
+          shift,
+          branch,
+          asset_code:    assetCode,
+          kg_produced:   kg,
+          operator_id:   operatorId,
+          operator_name: operatorName,
+          entered_by:    ME.username || ""
+        })
+      }
+    );
+
+    if(res.status === 409){
+      throw new Error("An entry for this machine, shift and date already exists.");
+    }
+    if(!res.ok){
+      const j = await res.json().catch(()=>({}));
+      throw new Error(j.message || j.details || "Save failed (HTTP " + res.status + ").");
+    }
+
+    const machineName = assetSel.options[assetSel.selectedIndex].text;
+    showStatus("ok","✅ Saved — " + machineName + " · " + shift + " · " + date);
+
+    // Reset form — keep date, shift, branch for fast back-to-back entry
+    document.getElementById("asset").value      = "";
+    document.getElementById("targetKg").value   = "";
+    document.getElementById("kgProduced").value = "";
+    document.getElementById("operator").value   = "";
+
+  }catch(e){
+    showStatus("err","❌ " + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function showStatus(type, msg){
+  const el = document.getElementById("status");
+  el.className     = "status " + type;
+  el.textContent   = msg;
+  el.style.display = msg ? "block" : "none";
+}
+
+init();
+</script>
+</body>
+</html>

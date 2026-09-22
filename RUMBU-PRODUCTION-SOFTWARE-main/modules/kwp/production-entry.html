@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>KWP — Production Entry</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme") || "navy"); }catch(e){}
+  })();
+  window.addEventListener("message", function(e){
+    if(e.data && e.data.rumbuTheme){ document.documentElement.setAttribute("data-theme", e.data.rumbuTheme); }
+  });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1000px;margin:0 auto;}
+  .readonly-banner{background:rgba(154,107,0,.12);color:var(--warn);padding:10px 14px;border-radius:var(--radius-sm);font-size:13px;font-weight:600;margin-bottom:14px;}
+  .pending-note{background:rgba(154,107,0,.10);border:1px dashed var(--warn);color:var(--warn);border-radius:var(--radius-sm);padding:10px 14px;font-size:12.5px;margin-bottom:14px;}
+  #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);}
+  .section-title{font-size:12px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:0 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line);}
+  .locked-row{display:flex;flex-wrap:wrap;gap:18px;}
+  .locked-item{min-width:110px;}
+  .locked-item .l{font-size:10.5px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;}
+  .locked-item .v{font-size:15px;font-weight:700;color:var(--heading);margin-top:2px;}
+  .feeder-card{background:var(--bg);border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:12px 14px;margin-bottom:10px;}
+  .feeder-card h4{margin:0 0 8px;font-size:12.5px;color:var(--heading);}
+  .summary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;}
+  .summary-cell{background:var(--bg);border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:10px 12px;text-align:center;}
+  .summary-cell .n{font-size:17px;font-weight:800;color:var(--heading);}
+  .summary-cell .l{font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;margin-top:2px;}
+  .warn-text{color:var(--warn);font-size:12px;font-weight:600;margin-top:8px;}
+  details.machine-panel{margin-bottom:14px;border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:8px 12px;}
+  details.machine-panel summary{cursor:pointer;font-weight:700;color:var(--heading);font-size:12.5px;}
+  .phase5-note{font-size:12px;color:var(--muted);font-style:italic;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div id="connStatus">Loading...</div>
+<div id="roBanner" class="readonly-banner" style="display:none;">You don't have an active KWP staff assignment, so entries are read-only for you here.</div>
+
+<!-- Section 1: Locked Information -->
+<div class="card-panel">
+  <div class="section-title">1 · Header</div>
+  <div class="form-row-3">
+    <div class="field"><label>Date</label><input type="date" id="p_date" onchange="onHeaderChange()"></div>
+    <div class="field"><label>Shift</label><select id="p_shift" onchange="onHeaderChange()"><option>Morning</option><option>Night</option></select></div>
+    <div class="field"><label>Machine</label><select id="p_machine" onchange="onHeaderChange()"><option value="">— Select —</option></select></div>
+  </div>
+  <details class="machine-panel" id="machinePanel" style="display:none;">
+    <summary>+ Add Machine</summary>
+    <div class="form-row">
+      <div class="field"><label>Code</label><input id="nm_code" placeholder="e.g. KWP-01"></div>
+      <div class="field"><label>Name (optional)</label><input id="nm_name"></div>
+    </div>
+    <button class="btn-sm" onclick="addMachine()">Add</button>
+    <div class="status" id="machineStatus"></div>
+  </details>
+  <div class="locked-row" style="margin-top:6px;">
+    <div class="locked-item"><div class="l">Week</div><div class="v" id="lockWeek">—</div></div>
+    <div class="locked-item"><div class="l">Shift Team</div><div class="v" id="lockTeam">—</div></div>
+    <div class="locked-item"><div class="l">Submitted By</div><div class="v" id="lockUser">—</div></div>
+    <div class="locked-item"><div class="l">Status</div><div class="v" id="lockStatus">New</div></div>
+  </div>
+  <div class="pending-note" id="rotationNote" style="display:none;">Shift rotation isn't configured yet — Shift Team can't be auto-filled until it is (Staff &amp; Shift Management &rarr; Shift Rotation).</div>
+  <div class="pending-note" id="existingNote" style="display:none;">An entry already exists for this Date + Shift + Machine — loaded below for editing.</div>
+</div>
+
+<!-- Section 2: Feeders -->
+<div class="card-panel">
+  <div class="section-title">2 · Feeders</div>
+  <p class="sub">Enter what each feeder actually received — the plant has not confirmed that these should be summed automatically, so <b>Total Good Sorted Material Input</b> below is a suggested sum you can override.</p>
+  <div id="feederRows"></div>
+  <button class="btn-sm btn-ghost" type="button" onclick="applyFeederSum()">Use feeder sum for Total Input →</button>
+</div>
+
+<!-- Section 3: Production -->
+<div class="card-panel">
+  <div class="section-title">3 · Production</div>
+  <div class="form-row">
+    <div class="field"><label>Total Good Sorted Material Input (kg)</label><input type="number" step="0.01" min="0" id="p_input_kg" oninput="recalc()"></div>
+  </div>
+  <div class="form-row-3">
+    <div class="field"><label>A Grade / Food Grade (kg)</label><input type="number" step="0.01" min="0" id="p_a_kg" oninput="recalc()"></div>
+    <div class="field"><label>B Grade / PSF (kg)</label><input type="number" step="0.01" min="0" id="p_b_kg" oninput="recalc()"></div>
+    <div class="field"><label>Other Output (kg)</label><input type="number" step="0.01" min="0" id="p_other_kg" oninput="recalc()"></div>
+  </div>
+</div>
+
+<!-- Section 4: Production Times -->
+<div class="card-panel">
+  <div class="section-title">4 · Production Times</div>
+  <div class="form-row">
+    <div class="field"><label>Start</label><input type="time" id="p_start" oninput="recalc()"></div>
+    <div class="field"><label>Stop</label><input type="time" id="p_stop" oninput="recalc()"></div>
+  </div>
+  <p class="phase5-note">Downtime tracking and Quality Control arrive in Phase 5 — Production Rate here uses raw elapsed time, not a downtime-adjusted run time yet.</p>
+</div>
+
+<!-- Section 7: Bags -->
+<div class="card-panel">
+  <div class="section-title">7 · Bags</div>
+  <div class="form-row-3">
+    <div class="field"><label>Bags Produced</label><input type="number" min="0" id="p_bags_produced"></div>
+    <div class="field"><label>Bags on Ground</label><input type="number" min="0" id="p_bags_ground"></div>
+    <div class="field"><label>Bag Serial Range (optional)</label><input id="p_bag_serial" placeholder="e.g. 1201–1240"></div>
+  </div>
+</div>
+
+<!-- Section 8: Automatic Summary -->
+<div class="card-panel">
+  <div class="section-title">8 · Automatic Summary</div>
+  <div class="summary-grid">
+    <div class="summary-cell"><div class="n" id="sTotal">0</div><div class="l">Total Output (kg)</div></div>
+    <div class="summary-cell"><div class="n" id="sAPct">—</div><div class="l">A Grade %</div></div>
+    <div class="summary-cell"><div class="n" id="sBPct">—</div><div class="l">B Grade %</div></div>
+    <div class="summary-cell"><div class="n" id="sHours">—</div><div class="l">Production Hours</div></div>
+    <div class="summary-cell"><div class="n" id="sRate">—</div><div class="l">Rate (kg/hr)</div></div>
+    <div class="summary-cell"><div class="n" id="sYield">—</div><div class="l">Yield %</div></div>
+    <div class="summary-cell"><div class="n" id="sLoss">—</div><div class="l">Loss (kg)</div></div>
+    <div class="summary-cell"><div class="n" id="sLossPct">—</div><div class="l">Loss %</div></div>
+    <div class="summary-cell"><div class="n" id="sAchv">—</div><div class="l">Achievement %</div></div>
+  </div>
+  <div class="warn-text" id="negLossWarn" style="display:none;">⚠ Computed Loss is negative — Total Output is higher than Input. Double-check the figures before submitting.</div>
+</div>
+
+<!-- Section 9: Submit -->
+<div class="card-panel">
+  <div class="section-title">9 · Submit</div>
+  <div class="field"><label>Remarks</label><textarea id="p_remarks"></textarea></div>
+  <div style="display:flex;gap:10px;flex-wrap:wrap;">
+    <button id="btnDraft" onclick="save('Draft')">Save Draft</button>
+    <button id="btnSubmit" onclick="save('Submitted')">Submit</button>
+    <button class="btn-ghost" onclick="resetForm()">Cancel / New Entry</button>
+  </div>
+  <div class="status" id="saveStatus"></div>
+</div>
+
+</div>
+
+<script>
+let ME = null;
+let CAN_ENTER = false;
+let IS_MANAGER = false;
+let MACHINES = [];
+let CURRENT_ENTRY = null; // existing kwp_production_entries row, if editing
+let TARGET_RATE = null;
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+
+    const { data: canEnter, error: ceErr } = await sb.rpc("kwp_is_active_staff");
+    if(ceErr) throw new Error("Could not check permissions: " + ceErr.message);
+    CAN_ENTER = !!canEnter;
+    const { data: mgr } = await sb.rpc("kwp_is_manager");
+    IS_MANAGER = !!mgr;
+
+    document.getElementById("roBanner").style.display = CAN_ENTER ? "none" : "block";
+    document.getElementById("machinePanel").style.display = IS_MANAGER ? "block" : "none";
+    document.querySelectorAll("input,select,textarea,button").forEach(el=>{
+      if(["btnDraft","btnSubmit"].includes(el.id) && !CAN_ENTER) el.style.display = "none";
+    });
+
+    status.style.color = "#1d8a4e"; status.textContent = "Connected.";
+    document.getElementById("lockUser").textContent = ME.username;
+
+    buildFeederRows();
+    await loadMachines();
+    document.getElementById("p_date").value = new Date().toISOString().slice(0,10);
+    await onHeaderChange();
+  }catch(e){
+    status.style.color = "#c0392b"; status.textContent = "❌ " + e.message;
+    console.error(e);
+  }
+}
+
+async function loadMachines(){
+  const { data } = await sb.from("kwp_machines").select("*").eq("status","Active").order("code");
+  MACHINES = data || [];
+  const sel = document.getElementById("p_machine");
+  sel.innerHTML = '<option value="">— Select —</option>' + MACHINES.map(m=>`<option value="${m.id}">${m.code}${m.name?" — "+m.name:""}</option>`).join("");
+}
+
+async function addMachine(){
+  const status = document.getElementById("machineStatus");
+  const code = document.getElementById("nm_code").value.trim();
+  const name = document.getElementById("nm_name").value.trim() || null;
+  if(!code){ status.className="status err"; status.textContent="Code is required."; return; }
+  try{
+    const { error } = await sb.from("kwp_machines").insert({ code, name });
+    if(error) throw error;
+    status.className = "status ok"; status.textContent = "✅ Added.";
+    document.getElementById("nm_code").value = ""; document.getElementById("nm_name").value = "";
+    await loadMachines();
+  }catch(e){
+    status.className = "status err"; status.textContent = "❌ " + e.message;
+  }
+}
+window.addMachine = addMachine;
+
+function isoWeek(dateStr){
+  const d = new Date(dateStr + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay()||7));
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(),0,1));
+  return Math.ceil((((d - yearStart) / 86400000) + 1)/7);
+}
+
+function buildFeederRows(){
+  const wrap = document.getElementById("feederRows");
+  wrap.innerHTML = [1,2,3].map(n => `
+    <div class="feeder-card">
+      <h4>Feeder ${n}</h4>
+      <div class="form-row-3">
+        <div class="field"><label>Quantity (kg)</label><input type="number" step="0.01" min="0" id="f${n}_qty" oninput="recalc()"></div>
+        <div class="field"><label>Quality (%)</label><input type="number" step="0.1" min="0" max="100" id="f${n}_qual"></div>
+        <div class="field"><label>Remaining (kg)</label><input type="number" step="0.01" min="0" id="f${n}_rem"></div>
+      </div>
+    </div>`).join("");
+}
+
+function applyFeederSum(){
+  let sum = 0;
+  [1,2,3].forEach(n=>{ const v = parseFloat(document.getElementById("f"+n+"_qty").value); if(!isNaN(v)) sum += v; });
+  document.getElementById("p_input_kg").value = sum.toFixed(2);
+  recalc();
+}
+window.applyFeederSum = applyFeederSum;
+
+async function onHeaderChange(){
+  const dateVal = document.getElementById("p_date").value;
+  const shiftVal = document.getElementById("p_shift").value;
+  const machineVal = document.getElementById("p_machine").value;
+  if(!dateVal) return;
+
+  document.getElementById("lockWeek").textContent = "Week " + isoWeek(dateVal);
+
+  const { data: teams } = await sb.rpc("kwp_get_shift_teams_for_date", { p_date: dateVal });
+  const row = (teams && teams[0]) || {};
+  const rotationNote = document.getElementById("rotationNote");
+  if(row.morning_team){
+    rotationNote.style.display = "none";
+    document.getElementById("lockTeam").textContent = "Shift " + (shiftVal === "Morning" ? row.morning_team : row.night_team);
+  } else {
+    rotationNote.style.display = "block";
+    document.getElementById("lockTeam").textContent = "—";
+  }
+
+  TARGET_RATE = null;
+  const { data: tRate } = await sb.rpc("kwp_target_for", { p_type: "production_rate_kg_hr", p_date: dateVal, p_shift: shiftVal });
+  TARGET_RATE = tRate || null;
+
+  const existingNote = document.getElementById("existingNote");
+  existingNote.style.display = "none";
+  CURRENT_ENTRY = null;
+
+  if(machineVal){
+    const { data: existing } = await sb.from("kwp_production_entries")
+      .select("*").eq("production_date", dateVal).eq("shift", shiftVal).eq("machine_id", Number(machineVal)).maybeSingle();
+    if(existing){
+      CURRENT_ENTRY = existing;
+      existingNote.style.display = "block";
+      await loadEntryIntoForm(existing);
+      recalc();
+      return;
+    }
+  }
+  document.getElementById("lockStatus").textContent = "New";
+  recalc();
+}
+window.onHeaderChange = onHeaderChange;
+
+async function loadEntryIntoForm(e){
+  document.getElementById("lockStatus").textContent = e.status;
+  document.getElementById("p_input_kg").value = e.input_kg;
+  document.getElementById("p_a_kg").value = e.a_grade_kg;
+  document.getElementById("p_b_kg").value = e.b_grade_kg;
+  document.getElementById("p_other_kg").value = e.other_output_kg;
+  document.getElementById("p_start").value = e.production_start || "";
+  document.getElementById("p_stop").value = e.production_stop || "";
+  document.getElementById("p_bags_produced").value = e.bags_produced ?? "";
+  document.getElementById("p_bags_ground").value = e.bags_on_ground ?? "";
+  document.getElementById("p_bag_serial").value = e.bag_serial_range || "";
+  document.getElementById("p_remarks").value = e.remarks || "";
+
+  const { data: feeders } = await sb.from("kwp_feeder_entries").select("*").eq("production_entry_id", e.id);
+  [1,2,3].forEach(n=>{
+    const f = (feeders||[]).find(x=>x.feeder_number === n);
+    document.getElementById("f"+n+"_qty").value = f ? (f.quantity_kg ?? "") : "";
+    document.getElementById("f"+n+"_qual").value = f ? (f.quality_percent ?? "") : "";
+    document.getElementById("f"+n+"_rem").value = f ? (f.remaining_kg ?? "") : "";
+  });
+}
+
+function num(id){ const v = parseFloat(document.getElementById(id).value); return isNaN(v) ? 0 : v; }
+
+function elapsedMinutes(startStr, stopStr){
+  if(!startStr || !stopStr) return null;
+  const [sh,sm] = startStr.split(":").map(Number);
+  const [eh,em] = stopStr.split(":").map(Number);
+  let start = sh*60+sm, stop = eh*60+em;
+  if(stop < start) stop += 24*60;
+  return stop - start;
+}
+
+function recalc(){
+  const a = num("p_a_kg"), b = num("p_b_kg"), other = num("p_other_kg"), input = num("p_input_kg");
+  const total = a + b + other;
+  document.getElementById("sTotal").textContent = total.toFixed(2);
+  document.getElementById("sAPct").textContent = total > 0 ? (a/total*100).toFixed(2)+"%" : "—";
+  document.getElementById("sBPct").textContent = total > 0 ? (b/total*100).toFixed(2)+"%" : "—";
+
+  const mins = elapsedMinutes(document.getElementById("p_start").value, document.getElementById("p_stop").value);
+  const hours = mins != null && mins > 0 ? mins/60 : null;
+  document.getElementById("sHours").textContent = hours != null ? hours.toFixed(2) : "—";
+  const rate = hours ? total/hours : null;
+  document.getElementById("sRate").textContent = rate != null ? rate.toFixed(2) : "—";
+
+  document.getElementById("sYield").textContent = input > 0 ? (total/input*100).toFixed(2)+"%" : "—";
+  const loss = input - total;
+  document.getElementById("sLoss").textContent = loss.toFixed(2);
+  document.getElementById("sLossPct").textContent = input > 0 ? (loss/input*100).toFixed(2)+"%" : "—";
+  document.getElementById("negLossWarn").style.display = (input > 0 && loss < 0) ? "block" : "none";
+
+  document.getElementById("sAchv").textContent = (rate != null && TARGET_RATE) ? (rate/TARGET_RATE*100).toFixed(2)+"%" : "—";
+}
+window.recalc = recalc;
+
+function resetForm(){
+  CURRENT_ENTRY = null;
+  document.getElementById("existingNote").style.display = "none";
+  document.getElementById("lockStatus").textContent = "New";
+  ["p_input_kg","p_a_kg","p_b_kg","p_other_kg","p_start","p_stop","p_bags_produced","p_bags_ground","p_bag_serial","p_remarks"]
+    .forEach(id => document.getElementById(id).value = "");
+  [1,2,3].forEach(n=>{ document.getElementById("f"+n+"_qty").value=""; document.getElementById("f"+n+"_qual").value=""; document.getElementById("f"+n+"_rem").value=""; });
+  document.getElementById("saveStatus").textContent = "";
+  recalc();
+}
+window.resetForm = resetForm;
+
+async function save(targetStatus){
+  const status = document.getElementById("saveStatus");
+  const dateVal = document.getElementById("p_date").value;
+  const shiftVal = document.getElementById("p_shift").value;
+  const machineVal = document.getElementById("p_machine").value;
+
+  if(!dateVal || !shiftVal || !machineVal){
+    status.className="status err"; status.textContent="Date, Shift and Machine are required."; return;
+  }
+  const start = document.getElementById("p_start").value, stop = document.getElementById("p_stop").value;
+
+  const payload = {
+    production_date: dateVal, shift: shiftVal, machine_id: Number(machineVal),
+    shift_team: (document.getElementById("lockTeam").textContent||"").replace("Shift ","").trim() || null,
+    submitted_by: ME.id, status: targetStatus,
+    production_start: start || null, production_stop: stop || null,
+    input_kg: num("p_input_kg"), a_grade_kg: num("p_a_kg"), b_grade_kg: num("p_b_kg"), other_output_kg: num("p_other_kg"),
+    bags_produced: document.getElementById("p_bags_produced").value || null,
+    bags_on_ground: document.getElementById("p_bags_ground").value || null,
+    bag_serial_range: document.getElementById("p_bag_serial").value.trim() || null,
+    remarks: document.getElementById("p_remarks").value.trim() || null
+  };
+
+  status.className = "status"; status.textContent = "Saving...";
+  try{
+    let entryId = CURRENT_ENTRY ? CURRENT_ENTRY.id : null;
+    if(entryId){
+      const { error } = await sb.from("kwp_production_entries").update(payload).eq("id", entryId);
+      if(error) throw error;
+      await sb.from("kwp_audit_log").insert({
+        actor_profile_id: ME.id, action: "production_entry_updated", entity_type: "kwp_production_entries",
+        entity_id: String(entryId), new_value: payload
+      });
+    } else {
+      const { data: inserted, error } = await sb.from("kwp_production_entries").insert(payload).select("id").single();
+      if(error){
+        if(String(error.message||"").includes("kwp_production_entries_production_date_shift_machine_id_key") || String(error.message||"").includes("duplicate key")){
+          throw new Error("An entry for this Date + Shift + Machine already exists — reselect the header fields to load and edit it instead.");
+        }
+        throw error;
+      }
+      entryId = inserted.id;
+      await sb.from("kwp_audit_log").insert({
+        actor_profile_id: ME.id, action: "production_entry_created", entity_type: "kwp_production_entries",
+        entity_id: String(entryId), new_value: payload
+      });
+    }
+
+    const feederRows = [1,2,3].map(n => ({
+      production_entry_id: entryId, feeder_number: n,
+      quantity_kg: document.getElementById("f"+n+"_qty").value || null,
+      quality_percent: document.getElementById("f"+n+"_qual").value || null,
+      remaining_kg: document.getElementById("f"+n+"_rem").value || null
+    })).filter(f => f.quantity_kg !== null || f.quality_percent !== null || f.remaining_kg !== null);
+    if(feederRows.length){
+      const { error: fErr } = await sb.from("kwp_feeder_entries").upsert(feederRows, { onConflict: "production_entry_id,feeder_number" });
+      if(fErr) throw fErr;
+    }
+
+    status.className = "status ok"; status.textContent = "✅ Saved as " + targetStatus + ".";
+    document.getElementById("lockStatus").textContent = targetStatus;
+    CURRENT_ENTRY = Object.assign({}, payload, { id: entryId });
+  }catch(e){
+    status.className = "status err"; status.textContent = "❌ " + e.message;
+  }
+}
+window.save = save;
+
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>PM Schedule Dashboard</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+body { font-family:var(--sans); background:var(--bg); margin: 0; padding: 15px; }
+.container { max-width: 1100px; margin: auto; background:var(--card); padding: 20px; border-radius: 14px; box-shadow: 0 8px 25px rgba(0,0,0,.08); }
+h2 { text-align: center; margin-bottom: 15px; color: #1f2d3d; }
+#status { text-align:center; font-size:12px; font-weight:bold; margin-bottom:10px; }
+.filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-bottom: 15px; }
+input { width: 100%; padding: 12px; border: 1px solid var(--line); border-radius: 8px; font-size: 14px; outline: none; box-sizing:border-box; }
+input:focus { border-color: #4a90e2; box-shadow: 0 0 5px rgba(74,144,226,.2); }
+button { width: 100%; padding: 12px; background: linear-gradient(135deg,#4a90e2,#357bd8); color: #fff; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; }
+.table-container { overflow-x: auto; margin-top: 15px; border-radius: 10px; }
+table { width: 100%; border-collapse: collapse; min-width: 900px; }
+thead { position: sticky; top: 0; background: #2c3e50; color: #fff; }
+th, td { padding: 12px; text-align: center; border-bottom: 1px solid var(--line); font-size: 13px; }
+.bad { background: #ffe5e5; } .good { background: #e8f8ee; }
+.bad td:last-child { color: #d63031; font-weight: bold; } .good td:last-child { color: #27ae60; font-weight: bold; }
+.action-btn { background: #27ae60; color: #fff; border: none; padding: 6px 10px; border-radius: 6px; cursor: pointer; }
+.action-btn:hover { background: #219150; }
+.gate { max-width:360px; margin:0 auto 15px; text-align:center; }
+.gate input { margin-bottom:8px; }
+@media (max-width: 600px) { th, td { font-size: 12px; padding: 8px; } }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+</head>
+<body>
+
+<div class="container">
+<h2>🔧 PM SCHEDULE DASHBOARD</h2>
+<div id="status">Checking your session...</div>
+
+<div class="filters">
+  <div><input list="deptList" id="dept" placeholder="Department"><datalist id="deptList"></datalist></div>
+  <div><input list="unitList" id="unit" placeholder="Unit"><datalist id="unitList"></datalist></div>
+  <div><input list="partList" id="part_number" placeholder="Part Number"><datalist id="partList"></datalist></div>
+  <div><input type="number" id="rating" value="100" placeholder="Rating ≤"></div>
+</div>
+
+<button onclick="loadData()">FILTER DATA</button>
+
+<div class="table-container">
+<table>
+<thead><tr>
+  <th>S/N</th><th>Part No</th><th>Asset</th><th>Quantity</th><th>Part Name</th>
+  <th>Dept</th><th>Unit</th><th>Date</th><th>PM Date</th><th>Days Left</th><th>Action</th>
+</tr></thead>
+<tbody id="tbody"></tbody>
+</table>
+</div>
+</div>
+
+<script>
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY, "Content-Type": "application/json" }; }
+
+let CHECKLIST_ROWS = [], TREATED_IDS = new Set();
+let ME = null;
+
+// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
+async function fetchAllRows(table, query){
+  let all = [], offset = 0; const pageSize = 1000;
+  const q = query || "";
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=*" + q, { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+
+
+async function init(){
+  const status = document.getElementById("status");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+
+    const [checklistRows, treatedRes] = await Promise.all([
+      fetchAllRows("checklist",""),
+      fetch(SUPABASE_URL + "/rest/v1/treated_items?select=item_id", { headers: authHeaders() })
+    ]);
+    CHECKLIST_ROWS = checklistRows;
+    if(treatedRes.ok){
+      const t = await treatedRes.json();
+      TREATED_IDS = new Set(t.map(r=>r.item_id));
+    }
+    status.style.color = "#1d8a4e";
+    status.textContent = "Connected. checklist: " + CHECKLIST_ROWS.length + " rows, treated: " + TREATED_IDS.size + ".";
+    loadDropdowns();
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+function fill(id, arr){
+  const dl = document.getElementById(id);
+  dl.innerHTML = "";
+  arr.forEach(v=>{ const opt = document.createElement("option"); opt.value = v; dl.appendChild(opt); });
+}
+
+function loadDropdowns(){
+  const depts = [...new Set(CHECKLIST_ROWS.map(r=>r.department).filter(Boolean))];
+  const units = [...new Set(CHECKLIST_ROWS.map(r=>r.unit).filter(Boolean))];
+  const parts = [...new Set(CHECKLIST_ROWS.map(r=>r.part_number).filter(Boolean))];
+  fill("deptList", depts); fill("unitList", units); fill("partList", parts);
+}
+
+function loadData(){
+  const dept = document.getElementById("dept").value;
+  const unit = document.getElementById("unit").value;
+  const rating = document.getElementById("rating").value;
+
+  const rows = CHECKLIST_ROWS.filter(r=>{
+    if(dept && r.department !== dept) return false;
+    if(unit && r.unit !== unit) return false;
+    if(rating && !(Number(r.app_rating) <= Number(rating))) return false;
+    if(TREATED_IDS.has(r.item_id)) return false;
+    if(!r.pm_schedule_date) return false;
+    return true;
+  });
+
+  const today = new Date();
+  const output = rows.map((r,i)=>{
+    const pmDate = new Date(r.pm_schedule_date);
+    const diff = Math.ceil((pmDate - today) / (1000*60*60*24));
+    return { ...r, sn: i+1, days_to_pm: diff };
+  });
+
+  const tbody = document.getElementById("tbody");
+  tbody.innerHTML = "";
+  output.forEach(row=>{
+    const cls = row.days_to_pm <= 7 ? "bad" : "good";
+    tbody.innerHTML += `<tr class="${cls}">
+      <td>${row.sn}</td><td>${row.part_number||""}</td><td>${row.asset||""}</td><td>${row.quantity||""}</td>
+      <td>${row.part_name||""}</td><td>${row.department||""}</td><td>${row.unit||""}</td>
+      <td>${row.date_col||""}</td><td>${row.pm_schedule_date||""}</td><td>${row.days_to_pm} days</td>
+      <td><button class="action-btn" onclick="markTreated('${row.item_id}')">Treated</button></td>
+    </tr>`;
+  });
+}
+
+async function markTreated(itemId){
+  if(!(ME && (ME.role === "super_admin" || ME.role === "admin"))){ alert("❌ Only Admins and Super Admins can mark items as Treated."); return; }
+  if(!confirm("⚠️ Are you sure this part is available and ready to be marked as TREATED?")) return;
+
+  if(TREATED_IDS.has(itemId)){ alert("⚠️ Already marked as treated"); return; }
+
+  try{
+    const res = await fetch(SUPABASE_URL + "/rest/v1/treated_items", {
+      method: "post", headers: authHeaders(), body: JSON.stringify({ item_id: itemId })
+    });
+    if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
+    TREATED_IDS.add(itemId);
+    alert("✅ Marked as Treated");
+    loadData();
+  }catch(e){
+    alert("❌ Error: " + (e.message||e));
+  }
+}
+
+init();
+</script>
+</body>
+</html>

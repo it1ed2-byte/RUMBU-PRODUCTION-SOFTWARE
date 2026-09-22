@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Activity Log — Logistics</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme")||"navy"); }catch(e){} })();
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) document.documentElement.setAttribute("data-theme",e.data.rumbuTheme); });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<style>
+  body{padding:18px;}
+  .wrap{max-width:1200px;margin:0 auto;}
+  label{font-size:12px;font-weight:700;display:block;margin:10px 0 4px;color:var(--muted);}
+  input,select{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);}
+  .grid5{display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:10px;}
+  table{width:100%;border-collapse:collapse;font-size:12px;}
+  th{text-align:left;padding:7px 8px;border-bottom:2px solid var(--line);color:var(--heading);white-space:nowrap;}
+  td{padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top;}
+  .badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10.5px;font-weight:700;white-space:nowrap;}
+  .b-created{background:#dbeafe;color:#1e40af;} .b-updated{background:#fef3c7;color:#92400e;}
+  .b-submitted{background:#e0e7ff;color:#3730a3;} .b-approved{background:#dcfce7;color:#166534;}
+  .b-rejected{background:#fee2e2;color:#991b1b;} .b-other{background:#e5e7eb;color:#374151;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back</button>
+  <div id="connStatus" style="font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);">Loading...</div>
+
+  <div class="card-panel">
+    <h3 style="color:var(--heading);margin:0 0 4px;">Logistics — Activity Log</h3>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 16px;">Every action across Vehicles, Drivers, Trips, and Fuel — filterable, with a PDF export of whatever you're looking at.</p>
+
+    <div class="grid5">
+      <div><label>From Date</label><input type="date" id="alFrom" onchange="loadLog()"></div>
+      <div><label>To Date</label><input type="date" id="alTo" onchange="loadLog()"></div>
+      <div><label>Entity</label>
+        <select id="alEntity" onchange="loadLog()">
+          <option value="">All</option><option value="vehicle">Vehicle</option><option value="driver">Driver</option>
+          <option value="trip">Trip</option><option value="fuel">Fuel</option>
+        </select>
+      </div>
+      <div><label>Action</label>
+        <select id="alAction" onchange="loadLog()">
+          <option value="">All</option><option value="created">Created</option><option value="updated">Updated</option>
+          <option value="submitted">Submitted</option><option value="resubmitted">Resubmitted</option>
+          <option value="trip_approved">Approved</option><option value="trip_rejected">Rejected</option>
+          <option value="dispatched">Dispatched</option><option value="closed">Closed</option><option value="logged">Logged</option>
+        </select>
+      </div>
+      <div><label>Actor</label><input type="text" id="alSearch" placeholder="Search username" oninput="loadLog()"></div>
+    </div>
+
+    <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;">
+      <button class="btn-ghost" onclick="clearFilters()">Clear Filters</button>
+      <button onclick="downloadPdf()" id="pdfBtn">⬇ Download PDF</button>
+    </div>
+
+    <div id="logWrap" style="margin-top:16px;overflow-x:auto;"></div>
+    <div id="logStatus" style="margin-top:10px;font-size:12px;color:var(--muted);"></div>
+  </div>
+</div>
+
+<script>
+let ME = null;
+let CURRENT_ROWS = [];
+
+const ENTITY_LABELS = { vehicle:"Vehicle", driver:"Driver", trip:"Trip", fuel:"Fuel" };
+const ACTION_LABELS = {
+  created:"Created", updated:"Updated", submitted:"Submitted", resubmitted:"Resubmitted",
+  trip_approved:"Approved", trip_rejected:"Rejected", dispatched:"Dispatched", closed:"Closed", logged:"Logged"
+};
+
+function badgeClass(action){
+  if(!action) return "b-other";
+  if(action==="created") return "b-created";
+  if(action==="updated") return "b-updated";
+  if(action==="submitted"||action==="resubmitted"||action==="logged") return "b-submitted";
+  if(action==="trip_approved"||action==="dispatched"||action==="closed") return "b-approved";
+  if(action==="trip_rejected") return "b-rejected";
+  return "b-other";
+}
+
+async function init(){
+  const cs = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    await loadLog();
+    cs.style.color="var(--ok)"; cs.textContent="Connected.";
+  }catch(e){
+    cs.style.color="var(--bad)"; cs.textContent="Error: "+e.message;
+  }
+}
+
+function clearFilters(){
+  ["alFrom","alTo","alEntity","alAction","alSearch"].forEach(id=>document.getElementById(id).value="");
+  loadLog();
+}
+
+async function loadLog(){
+  const from = document.getElementById("alFrom").value;
+  const to = document.getElementById("alTo").value;
+  const entity = document.getElementById("alEntity").value;
+  const action = document.getElementById("alAction").value;
+  const search = document.getElementById("alSearch").value.trim().toLowerCase();
+  const wrap = document.getElementById("logWrap");
+  const status = document.getElementById("logStatus");
+
+  let query = sb.from("logistics_activity_log")
+    .select("id,entity_type,entity_id,action,actor_username,description,created_at")
+    .order("created_at",{ascending:false}).limit(1000);
+  if(from) query = query.gte("created_at", from+"T00:00:00");
+  if(to) query = query.lte("created_at", to+"T23:59:59");
+  if(entity) query = query.eq("entity_type", entity);
+  if(action) query = query.eq("action", action);
+
+  const { data, error } = await query;
+  if(error){ wrap.innerHTML = `<p style="color:var(--bad);">Error: ${error.message}</p>`; return; }
+
+  let rows = data||[];
+  if(search) rows = rows.filter(r=>(r.actor_username||"").toLowerCase().includes(search));
+  CURRENT_ROWS = rows;
+  status.textContent = rows.length + " entr" + (rows.length===1?"y":"ies") + " match these filters" + (rows.length>=1000?" (showing most recent 1000)":"") + ".";
+
+  if(!rows.length){ wrap.innerHTML = `<p style="font-size:13px;color:var(--muted);">No activity matches these filters.</p>`; return; }
+
+  wrap.innerHTML = `<table>
+    <thead><tr><th>Date/Time</th><th>Entity</th><th>Action</th><th>Actor</th><th>Description</th></tr></thead>
+    <tbody>${rows.map(r=>`<tr>
+      <td>${new Date(r.created_at).toLocaleString("en-GB")}</td>
+      <td>${ENTITY_LABELS[r.entity_type]||r.entity_type||"—"}</td>
+      <td><span class="badge ${badgeClass(r.action)}">${ACTION_LABELS[r.action]||r.action}</span></td>
+      <td>${r.actor_username||"—"}</td>
+      <td>${r.description||"—"}</td>
+    </tr>`).join("")}</tbody>
+  </table>`;
+}
+
+function downloadPdf(){
+  if(!CURRENT_ROWS.length){ alert("Nothing to export — no rows match the current filters."); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
+  const navy = [31, 56, 100];
+
+  doc.setFillColor(navy[0], navy[1], navy[2]);
+  doc.rect(0, 0, doc.internal.pageSize.getWidth(), 56, "F");
+  doc.setTextColor(255,255,255);
+  doc.setFont("helvetica","bold"); doc.setFontSize(13);
+  doc.text("RUMBU INDUSTRIES GROUP", 30, 24);
+  doc.setFont("helvetica","normal"); doc.setFontSize(10);
+  doc.text("Logistics — Activity Log", 30, 40);
+  doc.text("Printed " + new Date().toLocaleString("en-GB"), doc.internal.pageSize.getWidth()-30, 24, { align: "right" });
+
+  doc.setTextColor(60,60,60); doc.setFontSize(9);
+  const from = document.getElementById("alFrom").value || "—";
+  const to = document.getElementById("alTo").value || "—";
+  const entity = document.getElementById("alEntity").value ? (ENTITY_LABELS[document.getElementById("alEntity").value]||"") : "All";
+  const action = document.getElementById("alAction").value ? (ACTION_LABELS[document.getElementById("alAction").value]||"") : "All";
+  doc.text(`Date range: ${from} to ${to}   |   Entity: ${entity}   |   Action: ${action}   |   ${CURRENT_ROWS.length} entries`, 30, 72);
+
+  const body = CURRENT_ROWS.map(r=>[
+    new Date(r.created_at).toLocaleString("en-GB"),
+    ENTITY_LABELS[r.entity_type]||r.entity_type||"—",
+    ACTION_LABELS[r.action]||r.action||"—",
+    r.actor_username||"—",
+    r.description||"—"
+  ]);
+
+  doc.autoTable({
+    startY: 84,
+    head: [["Date/Time","Entity","Action","Actor","Description"]],
+    body,
+    styles: { fontSize: 8, cellPadding: 4 },
+    headStyles: { fillColor: navy, textColor: 255, fontStyle: "bold" },
+    alternateRowStyles: { fillColor: [240, 244, 249] },
+    margin: { left: 30, right: 30 },
+    didDrawPage: function(){
+      const pageCount = doc.internal.getNumberOfPages();
+      doc.setFontSize(8); doc.setTextColor(120,120,120);
+      doc.text("CONFIDENTIAL", 30, doc.internal.pageSize.getHeight()-16);
+      doc.text("Page " + doc.internal.getCurrentPageInfo().pageNumber + " of " + pageCount,
+        doc.internal.pageSize.getWidth()-30, doc.internal.pageSize.getHeight()-16, { align: "right" });
+    }
+  });
+
+  doc.save("Logistics_Activity_Log_" + new Date().toISOString().slice(0,10) + ".pdf");
+}
+
+init();
+</script>
+</body>
+</html>

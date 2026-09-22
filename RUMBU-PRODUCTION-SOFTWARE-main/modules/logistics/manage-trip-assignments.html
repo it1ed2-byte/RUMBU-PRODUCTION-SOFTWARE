@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Manage Trip Assignments — Logistics</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme")||"navy"); }catch(e){} })();
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) document.documentElement.setAttribute("data-theme",e.data.rumbuTheme); });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body{padding:18px;}
+  .wrap{max-width:700px;margin:0 auto;}
+  label{font-size:12px;font-weight:700;display:block;margin:10px 0 4px;color:var(--muted);}
+  input{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);}
+  .person-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--line);font-size:13px;}
+  .rm-btn{background:var(--bad);color:#fff;padding:4px 10px;font-size:11px;border-radius:6px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back</button>
+  <div id="connStatus" style="font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);">Loading...</div>
+
+  <div class="card-panel">
+    <h3 style="color:var(--heading);margin:0 0 4px;">Manage Trip Assignments</h3>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 16px;">Who approves Trip Requests — Logistics Officer, Logistics Manager, and Management all count equally here; ALL assigned people must approve a request.</p>
+
+    <div id="approverList"></div>
+
+    <div style="margin-top:10px;">
+      <label>Search by Name or Employee Code</label>
+      <input id="search" placeholder="Start typing..." oninput="searchStaff(this.value)" autocomplete="off">
+      <div id="searchResults" style="font-size:12.5px;margin-top:6px;"></div>
+    </div>
+    <div class="status" id="assignStatus"></div>
+  </div>
+</div>
+
+<script>
+let ME = null;
+let ALL_STAFF = [];
+let APPROVER_IDS = new Set();
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    const { data: staff } = await sb.from("employees").select("id,employee_id,full_name,linked_profile_id").not("linked_profile_id","is",null).order("full_name");
+    ALL_STAFF = staff||[];
+    await loadApprovers();
+    status.style.color="var(--ok)"; status.textContent="Connected.";
+  }catch(e){
+    status.style.color="var(--bad)"; status.textContent="Error: "+e.message;
+  }
+}
+
+async function loadApprovers(){
+  const { data } = await sb.from("logistics_trip_approvers").select("id,profile_id");
+  APPROVER_IDS = new Set((data||[]).map(a=>a.profile_id));
+  const wrap = document.getElementById("approverList");
+  if(!data || !data.length){ wrap.innerHTML = "<p style='color:var(--muted);font-size:13px;'>No approvers assigned yet.</p>"; return; }
+  wrap.innerHTML = data.map(a=>{
+    const staff = ALL_STAFF.find(s=>s.linked_profile_id===a.profile_id);
+    return `<div class="person-row">
+      <span>${staff ? staff.full_name + " (" + staff.employee_id + ")" : "Profile #" + a.profile_id}</span>
+      <button class="rm-btn" onclick="removeApprover(${a.id})">Remove</button>
+    </div>`;
+  }).join("");
+}
+
+function searchStaff(query){
+  const resultEl = document.getElementById("searchResults");
+  query = query.trim().toLowerCase();
+  if(!query){ resultEl.innerHTML = ""; return; }
+  const matches = ALL_STAFF.filter(e =>
+    (e.full_name||"").toLowerCase().includes(query) || (e.employee_id||"").toLowerCase().includes(query)
+  ).slice(0, 8);
+  if(!matches.length){ resultEl.innerHTML = `<span style="color:var(--bad);">No employee matches "${query}".</span>`; return; }
+  resultEl.innerHTML = matches.map(e=>{
+    const already = APPROVER_IDS.has(e.linked_profile_id);
+    return `<div class="person-row">
+      <span>${e.full_name} (${e.employee_id})</span>
+      ${already ? `<span style="color:var(--muted);">Already assigned</span>` : `<button onclick="addApprover('${e.linked_profile_id}')" style="padding:4px 12px;font-size:11px;">Add</button>`}
+    </div>`;
+  }).join("");
+}
+
+async function addApprover(profileId){
+  const st = document.getElementById("assignStatus");
+  const { error } = await sb.from("logistics_trip_approvers").insert({ profile_id: profileId, assigned_by: ME.username });
+  if(error){ st.className="status err"; st.textContent="Error: "+error.message; return; }
+  st.className="status ok"; st.textContent="Approver added. Keep searching to add another.";
+  document.getElementById("search").value = "";
+  document.getElementById("searchResults").innerHTML = "";
+  await loadApprovers();
+  setTimeout(()=>{ st.textContent=""; }, 2500);
+}
+
+async function removeApprover(id){
+  if(!confirm("Remove this approver?")) return;
+  const { error } = await sb.from("logistics_trip_approvers").delete().eq("id", id);
+  if(error){ alert("❌ " + error.message); return; }
+  await loadApprovers();
+}
+
+init();
+</script>
+</body>
+</html>

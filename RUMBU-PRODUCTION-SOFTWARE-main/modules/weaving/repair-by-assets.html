@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Repair by Assets</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+  :root{--navy:var(--heading);}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:16px;}
+  .container{max-width:520px;margin:0 auto 16px;background:var(--card);border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,.1);padding:20px;}
+  h3{text-align:center;color:var(--navy);}
+  label{font-weight:600;margin-top:10px;display:block;}
+  input,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6px;margin-bottom:8px;}
+  button{width:100%;padding:10px;background:var(--navy);color:#fff;font-weight:bold;border:none;border-radius:6px;cursor:pointer;margin-top:6px;}
+  button.alt{background:#38761d;}
+  #status{text-align:center;margin-top:10px;font-weight:bold;font-size:13px;}
+  .wide{max-width:1100px;margin:0 auto;background:var(--card);border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,.1);padding:20px;}
+  table{width:100%;border-collapse:collapse;margin-top:10px;font-size:12px;}
+  th,td{border:1px solid #333;padding:5px;text-align:center;white-space:nowrap;}
+  th{background:var(--navy);color:#fff;}
+  .green{background:#A5D6A7;} .red{background:#FFCDD2;}
+  @media print{ .no-print{display:none !important;} }
+</style>
+</head>
+<body>
+
+<div class="container no-print">
+  <h3>🛠️ Repair by Assets Report</h3>
+  <label>Start Date</label><input type="date" id="startDate">
+  <label>End Date</label><input type="date" id="endDate">
+  <label>Department</label>
+  <select id="department"><option value="All">All</option></select>
+  <label>Assets</label>
+  <select id="assets"><option value="All">All</option></select>
+  <label>Shift</label>
+  <select id="shift"><option value="All">All</option><option>Morning</option><option>Night</option></select>
+  <label>Section</label>
+  <select id="section"><option value="All">All</option></select>
+  <button onclick="generate()">Generate Report</button>
+  <button class="alt" onclick="window.print()">Print / Save as PDF</button>
+  <div id="status">Connecting to Supabase...</div>
+</div>
+
+<div id="reportArea"></div>
+
+<script>
+const SUPABASE_URL = "https://betfhunzmhtdzgvufmfk.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp";
+
+let CTRL_ROWS = []; CTRL_ROWS.forEach(normalizeControlRow);
+
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
+function parseDT(v){ const d=new Date(v); return isNaN(d)?null:d; }
+function minutesBetween(a,b){ return (!a||!b) ? 0 : Math.round((b-a)/60000); }
+function extractNumber(v){ if(v==null) return 0; const m=String(v).match(/\d+(\.\d+)?/); return m?Number(m[0]):0; }
+
+
+// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
+async function fetchAllRows(table, select){
+  let all = [], offset = 0; const pageSize = 1000;
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=" + (select||"*") + "&order=id.asc", { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+function normalizeControlRow(r){
+  if(r.date_col === undefined) r.date_col = r.date;
+  if(r.names === undefined) r.names = r.nurse_name;
+  if(r.stop_time === undefined) r.stop_time = r.mc_stoppage_time;
+  if(r.extimated_time === undefined) r.extimated_time = r.estimated_duration;
+  if(r.discription === undefined) r.discription = r.description;
+  return r;
+}
+
+async function init(){
+  const status = document.getElementById("status");
+  const today = new Date();
+  const iso = today.toISOString().slice(0,10);
+  const past = new Date(today); past.setDate(today.getDate()-7);
+  document.getElementById("endDate").value = iso;
+  document.getElementById("startDate").value = past.toISOString().slice(0,10);
+
+  try{
+    CTRL_ROWS = await fetchAllRows("control","*");
+    CTRL_ROWS.forEach(normalizeControlRow);
+    // Populate Department dropdown from distinct values in loaded data
+    const depts = ["All", ...new Set(CTRL_ROWS.map(r=>(r.department||"").trim()).filter(Boolean)).values()].sort();
+    const deptSel = document.getElementById("department");
+    depts.forEach(d=>{ if(d!=="All"){ const o=document.createElement("option"); o.value=d; o.textContent=d; deptSel.appendChild(o); }});
+
+    // Populate Assets dropdown
+    const assetsList = ["All", ...new Set(CTRL_ROWS.map(r=>(r.assets||"").trim()).filter(Boolean)).values()].sort();
+    const assetSel = document.getElementById("assets");
+    assetsList.forEach(a=>{ if(a!=="All"){ const o=document.createElement("option"); o.value=a; o.textContent=a; assetSel.appendChild(o); }});
+
+    // Populate Section dropdown
+    const secs = ["All", ...new Set(CTRL_ROWS.map(r=>(r.section||"").trim()).filter(Boolean)).values()].sort();
+    const secSel = document.getElementById("section");
+    secs.forEach(s=>{ if(s!=="All"){ const o=document.createElement("option"); o.value=s; o.textContent=s; secSel.appendChild(o); }});
+
+    status.style.color="#1d8a4e";
+    status.textContent = "Connected. control: " + CTRL_ROWS.length + " rows.";
+  }catch(e){
+    status.style.color="#c0392b";
+    status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+function generate(){
+  if(!CTRL_ROWS.length){ alert("control returned 0 rows — check its read policy."); return; }
+  const startDate = document.getElementById("startDate").value;
+  const endDate = document.getElementById("endDate").value;
+  const department = document.getElementById("department").value;
+  const assets = document.getElementById("assets").value;
+  const shift = document.getElementById("shift").value;
+  const section = document.getElementById("section").value;
+  if(!startDate || !endDate){ alert("Please select both dates."); return; }
+
+  // NOTE: this report shows ALL job codes — GAS has no job_code filter.
+  // Only date range, department, assets, shift, section filters apply.
+  const rows = CTRL_ROWS.filter(r=>{
+    if(r.date_col < startDate || r.date_col > endDate) return false;
+    if(department !== "All" && (r.department||"").trim() !== department) return false;
+    if(assets !== "All" && (r.assets||"").trim() !== assets) return false;
+    if(shift !== "All" && r.shift !== shift) return false;
+    if(section !== "All"){
+      const sec = (r.section||"").toUpperCase().trim();
+      if(section === "MamaSannu" && !sec.includes("MAMASANNU")) return false;
+      if(section === "Rumbu" && sec.includes("MAMASANNU")) return false;
+      if(section !== "MamaSannu" && section !== "Rumbu" && sec !== section.toUpperCase().trim()) return false;
+    }
+    const stop = parseDT(r.stop_time), start_t = parseDT(r.starting_time), finish = parseDT(r.finish_time);
+    return !!(stop && start_t && finish);
+  });
+
+  if(!rows.length){
+    document.getElementById("reportArea").innerHTML = `<div class="wide"><p>⚠️ No records found for the selected filters.</p></div>`;
+    return;
+  }
+
+  rows.sort((a,b)=> (b.date_col||"").localeCompare(a.date_col||""));
+
+  let html = `<div class="wide"><h2 style="text-align:center;color:#1565C0;">🛠️ Repair by Assets Report</h2>
+    <p style="text-align:center;">${startDate} &rarr; ${endDate} | Dept: ${department} | Assets: ${assets} | Shift: ${shift} | Section: ${section}</p>
+    <table><thead><tr><th>Asset</th><th>Job Code</th><th>Nurse Name</th><th>DTime</th><th>RTime</th><th>WTime</th><th>ETime</th><th>Diff</th><th>Date</th></tr></thead><tbody>`;
+
+  rows.forEach(r=>{
+    const stop = parseDT(r.stop_time), start = parseDT(r.starting_time), finish = parseDT(r.finish_time);
+    const downtime = Math.round(minutesBetween(stop, finish));
+    const repair   = Math.round(minutesBetween(start, finish));
+    const waiting  = downtime - repair;
+    const est      = Math.round(extractNumber(r.extimated_time));
+    const diff     = est - repair; // positive = efficient (est > actual repair)
+    html += `<tr><td>${r.assets||""}</td><td>${r.job_code||""}</td><td>${r.names||""}</td>` +
+      `<td>${downtime}</td><td>${repair}</td><td>${waiting}</td>` +
+      `<td>${est}</td><td class="${diff>0?'green':'red'}">${diff}</td><td>${r.date_col||""}</td></tr>`;
+  });
+
+  html += "</tbody></table></div>";
+  document.getElementById("reportArea").innerHTML = html;
+}
+
+init();
+</script>
+<script src="../../assets/letterhead.js"></script>
+</body>
+</html>

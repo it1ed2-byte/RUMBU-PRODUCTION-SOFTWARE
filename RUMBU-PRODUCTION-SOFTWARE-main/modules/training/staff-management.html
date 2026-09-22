@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Staff Management</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+body { font-family:var(--sans); background:var(--bg); padding: 10px; margin:0; display: flex; justify-content: center; }
+.container { width: 100%; max-width: 1000px; background:var(--card); padding: 15px; border-radius: 12px; }
+.gate { width: 100%; max-width: 420px; background:var(--card); padding: 24px; border-radius: 12px; height: fit-content; margin: 0 auto; }
+input, select, button { padding: 10px; margin-top: 8px; width: 100%; box-sizing: border-box; }
+button { background:black; color:#fff; border:none; cursor:pointer; border-radius:6px; }
+table { width: 100%; margin-top: 15px; border-collapse: collapse; }
+th, td { border: 1px solid var(--line); padding: 8px; font-size:13px; }
+.delete { background: red; color: #fff; border: none; padding: 5px; width: auto; cursor:pointer; border-radius:5px; }
+.gate-note { text-align: center; font-size: 12px; color: #888; margin-top: 10px; }
+.hidden { display: none; }
+#connStatus { font-size:12px; text-align:center; font-weight:bold; }
+h2, h3 { text-align:center; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+</head>
+<body>
+
+<div class="gate" id="statusBox">
+  <div id="connStatus">Checking your session...</div>
+</div>
+
+<div class="container hidden" id="appBox">
+<h2>Staff Management</h2>
+
+<input id="staffId" placeholder="Staff ID">
+<input id="staffName" placeholder="Staff Name">
+<select id="department"><option>WEAVING</option><option>EXTRUDER</option><option>FINISHING</option></select>
+<select id="section"></select>
+<input id="doj" type="date">
+<button onclick="add()">ADD STAFF</button>
+
+<hr>
+<h3>Delete by Staff ID</h3>
+<input id="searchStaffId" placeholder="Enter Staff ID">
+<input id="staffNamePreview" placeholder="Staff Name" disabled>
+<button onclick="previewStaff()">LOAD NAME</button>
+<button onclick="deleteByStaff()">DELETE RECORDS</button>
+
+<table>
+  <thead><tr><th>ID</th><th>Staff ID</th><th>Name</th><th>Department</th><th>Section</th><th>DOJ</th><th>Action</th></tr></thead>
+  <tbody id="table"></tbody>
+</table>
+</div>
+
+<script>
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY, "Content-Type": "application/json" }; }
+
+let STAFF_ROWS = [];
+
+// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
+// `query` may include extra params like "&order=col.desc" (no leading select).
+async function fetchAllRows(table, query){
+  let all = [], offset = 0; const pageSize = 1000;
+  const q = query || "";
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=*" + q, { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    const me = await requireAuth("../../login.html");
+    if(!me) return;
+
+    // Only show this person's own assigned Section(s) in the dropdown.
+    // Note: this table's own data uses "Mama Sannu" (with a space), while
+    // our access-control Sections are named "MamaSannu" (no space) — map
+    // between the two so the value written still matches this table's convention.
+    const sectionSelect = document.getElementById("section");
+    const sectionDisplayMap = { "Rumbu": "Rumbu", "MamaSannu": "Mama Sannu" };
+    const mySections = (me.sectionNames && me.sectionNames.length)
+      ? me.sectionNames.map(s => sectionDisplayMap[s] || s)
+      : ["Rumbu","Mama Sannu"];
+    sectionSelect.innerHTML = mySections.map(s=>`<option>${s}</option>`).join("");
+
+    STAFF_ROWS = await fetchAllRows("staff_list", "");
+    document.getElementById("statusBox").classList.add("hidden");
+    document.getElementById("appBox").classList.remove("hidden");
+    load();
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+async function add(){
+  const data = {
+    staffId: document.getElementById("staffId").value,
+    staffName: document.getElementById("staffName").value,
+    department: document.getElementById("department").value,
+    section: document.getElementById("section").value,
+    dateOfJoining: document.getElementById("doj").value
+  };
+
+  if(!data.staffId){ alert("Enter Staff ID"); return; }
+
+  const dup = STAFF_ROWS.some(r=>r.staff_id === data.staffId);
+  if(dup){ alert("❌ Staff ID already exists"); return; }
+
+  try{
+    const row = { staff_id: data.staffId, staff_name: data.staffName, department: data.department,
+      section: data.section, date_of_joining: data.dateOfJoining || null, created_at: new Date().toISOString() };
+    const res = await fetch(SUPABASE_URL + "/rest/v1/staff_list", { method:"post", headers: authHeaders(), body: JSON.stringify(row) });
+    if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
+    const saved = await res.json();
+    STAFF_ROWS.push(saved[0] || row);
+    alert("✅ Staff Added Successfully");
+    load();
+  }catch(e){
+    alert("❌ Error: " + (e.message||e));
+  }
+}
+
+function load(){
+  const rows = STAFF_ROWS.slice().sort((a,b)=>(b.created_at||"").localeCompare(a.created_at||""));
+  let html = "";
+  rows.forEach(r=>{
+    html += `<tr><td>${r.id||""}</td><td>${r.staff_id||""}</td><td>${r.staff_name||""}</td>` +
+      `<td>${r.department||""}</td><td>${r.section||""}</td><td>${r.date_of_joining||""}</td>` +
+      `<td><button class="delete" onclick="del(${r.id})">Delete</button></td></tr>`;
+  });
+  document.getElementById("table").innerHTML = html;
+}
+
+async function del(id){
+  if(!confirm("Delete this row?")) return;
+  try{
+    const res = await fetch(SUPABASE_URL + "/rest/v1/staff_list?id=eq." + id, { method:"delete", headers: authHeaders() });
+    if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
+    STAFF_ROWS = STAFF_ROWS.filter(r=>String(r.id)!==String(id));
+    alert("🗑️ Staff Deleted Successfully");
+    load();
+  }catch(e){
+    alert("Error: " + (e.message||e));
+  }
+}
+
+function previewStaff(){
+  const id = document.getElementById("searchStaffId").value;
+  const row = STAFF_ROWS.find(r=>r.staff_id===id);
+  document.getElementById("staffNamePreview").value = row ? (row.staff_name||"") : "Not Found";
+}
+
+async function deleteByStaff(){
+  const staffId = document.getElementById("searchStaffId").value;
+  if(!staffId){ alert("Enter Staff ID"); return; }
+  if(!confirm("Delete record for this Staff ID?")) return;
+  try{
+    const res = await fetch(SUPABASE_URL + "/rest/v1/staff_list?staff_id=eq." + encodeURIComponent(staffId), { method:"delete", headers: authHeaders() });
+    if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
+    STAFF_ROWS = STAFF_ROWS.filter(r=>r.staff_id!==staffId);
+    alert("🗑️ All records for Staff ID deleted");
+    load();
+  }catch(e){
+    alert("Error: " + (e.message||e));
+  }
+}
+
+init();
+</script>
+</body>
+</html>

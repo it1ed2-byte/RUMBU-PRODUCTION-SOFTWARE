@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Naslina Express — Setup</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme") || "navy"); }catch(e){}
+  })();
+  window.addEventListener("message", function(e){
+    if(e.data && e.data.rumbuTheme){ document.documentElement.setAttribute("data-theme", e.data.rumbuTheme); }
+  });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1100px;margin:0 auto;}
+  #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);}
+  .readonly-banner{background:rgba(154,107,0,.12);color:var(--warn);padding:10px 14px;border-radius:var(--radius-sm);font-size:13px;font-weight:600;margin-bottom:14px;}
+
+  /* Card-grid landing */
+  .setup-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:16px;}
+  @media(max-width:800px){.setup-grid{grid-template-columns:1fr;}}
+  .setup-card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px;box-shadow:var(--shadow);cursor:pointer;transition:transform .12s ease,border-color .12s ease;text-align:left;}
+  .setup-card:hover{transform:translateY(-2px);border-color:var(--accent);}
+  .setup-card .sc-eyebrow{font-size:11px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--accent);margin-bottom:4px;}
+  .setup-card .sc-title{font-size:16px;font-weight:700;color:var(--heading);margin-bottom:6px;}
+  .setup-card .sc-desc{font-size:12.5px;color:var(--muted);line-height:1.4;}
+
+  .back-row{margin-bottom:14px;}
+
+  .search-row{display:flex;gap:10px;align-items:flex-end;margin-bottom:12px;}
+  .search-row .field{flex:1;margin-bottom:0;}
+  .search-results{border:1px solid var(--line);border-radius:var(--radius-sm);max-height:220px;overflow-y:auto;background:var(--card);}
+  .sr-item{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;border-bottom:1px solid var(--line);font-size:13px;}
+  .sr-item:last-child{border-bottom:0;}
+  .sr-item .sr-name{font-weight:600;color:var(--heading);}
+  .sr-item .sr-id{color:var(--muted);font-size:11.5px;}
+  .sr-item.already{opacity:.55;}
+
+  .staff-card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;margin-bottom:12px;box-shadow:var(--shadow);}
+  .sc-head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;}
+  .sc-name{font-weight:700;color:var(--heading);font-size:14px;}
+  .sc-id{color:var(--muted);font-size:11.5px;}
+  .status-pill{border-radius:20px;padding:3px 10px;font-size:11px;font-weight:700;color:#fff;}
+  .status-pill.Active{background:var(--ok);}
+  .status-pill.Inactive{background:var(--muted);}
+
+  .stage-check{display:flex;align-items:center;gap:6px;background:var(--bg);border:1px solid var(--line-2);border-radius:20px;padding:6px 12px;font-size:12.5px;cursor:pointer;width:fit-content;margin-top:10px;}
+  .stage-check input{margin:0;}
+
+  .assignee-row{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;border-bottom:1px solid var(--line);font-size:13px;}
+  .assignee-row:last-child{border-bottom:0;}
+
+  .lookup-list{border:1px solid var(--line);border-radius:var(--radius-sm);overflow:hidden;}
+  .lookup-item{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;border-bottom:1px solid var(--line);font-size:13px;background:var(--card);}
+  .lookup-item:last-child{border-bottom:0;}
+  .lookup-add-row{display:flex;gap:8px;margin-top:10px;}
+  .lookup-add-row input{flex:1;}
+
+  .overview-block{margin-bottom:20px;}
+  .overview-block h4{margin:0 0 8px;font-size:13.5px;color:var(--heading);}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div id="connStatus">Loading...</div>
+<div id="roBanner" class="readonly-banner" style="display:none;">You have read-only access here. Managing Naslina Express setup is limited to Ibrahim Tukur Aliyu and GM.</div>
+
+<div class="card-panel">
+  <h3>Naslina Express Setup</h3>
+  <p class="sub">Assign who does each part of the Naslina Express workflow. Each part opens on its own page.</p>
+</div>
+
+<!-- ================= LANDING: card grid ================= -->
+<div id="viewLanding">
+  <div class="setup-grid" id="setupGrid"></div>
+</div>
+
+<!-- ================= SECTION VIEWS (one shown at a time) ================= -->
+<div id="viewSection" style="display:none;">
+  <div class="back-row"><button class="btn-ghost" onclick="backToGrid()">&larr; Back to Setup</button></div>
+  <div id="sectionBody"></div>
+</div>
+
+</div>
+
+<script>
+let ME = null;
+let CAN_MANAGE = false;
+let MY_EMPLOYEE_ID = null;
+let STAGES = [];
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+
+    const { data: emp, error: empErr } = await sb.from("employees").select("id").eq("linked_profile_id", ME.id).maybeSingle();
+    if(empErr) throw empErr;
+    MY_EMPLOYEE_ID = emp ? emp.id : null;
+
+    // Permission gate: Ibrahim Tukur Aliyu and GM only, for now.
+    // No dedicated role flag exists yet for "GM" \u2014 falls back to
+    // admin/super_admin until one does.
+    CAN_MANAGE = (ME.role === "admin" || ME.role === "super_admin");
+    document.getElementById("roBanner").style.display = CAN_MANAGE ? "none" : "block";
+
+    const { data: stages, error: stErr } = await sb.from("naslina_workflow_stages")
+      .select("*").eq("requires_action", true).order("sequence_order");
+    if(stErr) throw stErr;
+    STAGES = stages || [];
+
+    buildGrid();
+    status.style.color = "#1d8a4e"; status.textContent = "Connected.";
+  }catch(e){
+    status.style.color = "#c0392b"; status.textContent = "\u274C " + e.message;
+    console.error(e);
+  }
+}
+
+// ---- Landing grid ----
+function buildGrid(){
+  const grid = document.getElementById("setupGrid");
+  const cards = [];
+
+  cards.push({ eyebrow: "Start", title: "Initiators", desc: "Who may start a new payment request.", section: "initiators" });
+  STAGES.forEach((s, i) => {
+    cards.push({ eyebrow: "Stage " + (i + 1), title: s.stage_name, desc: "Who approves at the " + s.stage_name + " stage.", section: "stage-" + s.id });
+  });
+  cards.push({ eyebrow: "Overview", title: "All Assignments", desc: "See initiators and every stage's approvers on one screen.", section: "overview" });
+
+  cards.push({ eyebrow: "Setup", title: "Recipient Accounts", desc: "Payees available on the Payment Request form's Recipient Account Name dropdown.", section: "recipients" });
+  cards.push({ eyebrow: "Setup", title: "Company", desc: "Companies available on the Payment Request form's Company dropdown.", section: "company" });
+  cards.push({ eyebrow: "Setup", title: "Department", desc: "Departments available on the Payment Request form's Department dropdown.", section: "department" });
+
+  grid.innerHTML = cards.map(c => `
+    <button class="setup-card" onclick="openSection('${c.section}')">
+      <div class="sc-eyebrow">${c.eyebrow}</div>
+      <div class="sc-title">${c.title}</div>
+      <div class="sc-desc">${c.desc}</div>
+    </button>`).join("");
+}
+
+function backToGrid(){
+  document.getElementById("viewSection").style.display = "none";
+  document.getElementById("viewLanding").style.display = "block";
+}
+window.backToGrid = backToGrid;
+
+async function openSection(section){
+  document.getElementById("viewLanding").style.display = "none";
+  document.getElementById("viewSection").style.display = "block";
+  const body = document.getElementById("sectionBody");
+  body.innerHTML = "<div class='sub'>Loading...</div>";
+
+  if(section === "initiators"){
+    renderInitiatorsSection(body);
+  } else if(section === "recipients"){
+    renderRecipientsSection(body);
+  } else if(section === "company"){
+    renderCompanySection(body);
+  } else if(section === "department"){
+    renderDepartmentSection(body);
+  } else if(section === "overview"){
+    await renderOverviewSection(body);
+  } else if(section.startsWith("stage-")){
+    const stageId = section.slice("stage-".length);
+    const stage = STAGES.find(s => String(s.id) === String(stageId));
+    renderStageSection(body, stage);
+  }
+}
+window.openSection = openSection;
+
+// ---- Initiators section (search + add staff, initiator toggle) ----
+function renderInitiatorsSection(body){
+  body.innerHTML = `
+    <div class="card-panel" id="addPanel">
+      <h3>Add Employee to Naslina Express</h3>
+      <p class="sub">Search the shared employee directory \u2014 Naslina's own staff and any Agriwatts staff who hold an approval role here.</p>
+      <div class="search-row">
+        <div class="field"><label>Search by name or Employee ID</label><input id="searchInput" oninput="onSearchInput()" placeholder="Start typing..."></div>
+      </div>
+      <div class="search-results" id="searchResults" style="display:none;"></div>
+    </div>
+
+    <div class="card-panel">
+      <h3>Naslina Express Staff</h3>
+      <p class="sub">Tick "Can Initiate Requests" for the small set of people allowed to start a request.</p>
+      <div id="staffListWrap"></div>
+    </div>`;
+  document.getElementById("addPanel").style.display = CAN_MANAGE ? "block" : "none";
+  loadStaffList();
+}
+
+let searchTimer = null;
+function onSearchInput(){
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(runSearch, 300);
+}
+window.onSearchInput = onSearchInput;
+
+async function runSearch(){
+  const q = document.getElementById("searchInput").value.trim();
+  const box = document.getElementById("searchResults");
+  if(!q){ box.style.display = "none"; box.innerHTML = ""; return; }
+
+  const { data: matches, error } = await sb.from("employees")
+    .select("id, employee_id, full_name")
+    .or(`full_name.ilike.%${q}%,employee_id.ilike.%${q}%`)
+    .limit(15);
+  if(error){ box.innerHTML = `<div class="sr-item">Error: ${error.message}</div>`; box.style.display = "block"; return; }
+  if(!matches || !matches.length){ box.innerHTML = `<div class="sr-item">No matches.</div>`; box.style.display = "block"; return; }
+
+  const { data: existing } = await sb.from("naslina_staff").select("employee_ref_id");
+  const existingIds = new Set((existing||[]).map(s => s.employee_ref_id));
+
+  box.innerHTML = matches.map(m => {
+    const already = existingIds.has(m.id);
+    return `<div class="sr-item ${already ? "already" : ""}">
+      <span><span class="sr-name">${m.full_name}</span> <span class="sr-id">(${m.employee_id || m.id})</span></span>
+      ${already
+        ? `<span class="sr-id">Already added</span>`
+        : `<button class="btn-sm" onclick="addStaff(${m.id})">Add</button>`}
+    </div>`;
+  }).join("");
+  box.style.display = "block";
+}
+
+async function addStaff(employeeId){
+  try{
+    const { error } = await sb.from("naslina_staff").insert({
+      employee_ref_id: employeeId, added_by: MY_EMPLOYEE_ID
+    });
+    if(error) throw error;
+    document.getElementById("searchInput").value = "";
+    document.getElementById("searchResults").style.display = "none";
+    await loadStaffList();
+  }catch(e){
+    alert("\u274C Could not add: " + (e.message || e));
+  }
+}
+window.addStaff = addStaff;
+
+async function loadStaffList(){
+  const wrap = document.getElementById("staffListWrap");
+  if(!wrap) return;
+  const { data: staff, error } = await sb.from("naslina_staff")
+    .select("*, employees!naslina_staff_employee_ref_id_fkey(id, employee_id, full_name)")
+    .order("created_at", { ascending: false });
+  if(error){ wrap.innerHTML = "<div class='sub'>Error: " + error.message + "</div>"; return; }
+  if(!staff || !staff.length){ wrap.innerHTML = "<div class='sub'>No one has been added to Naslina Express yet.</div>"; return; }
+
+  const { data: initiators } = await sb.from("naslina_initiators").select("employee_ref_id");
+  const initiatorSet = new Set((initiators||[]).map(i => i.employee_ref_id));
+
+  wrap.innerHTML = "";
+  staff.forEach(s => wrap.appendChild(renderStaffCard(s, initiatorSet)));
+}
+
+function renderStaffCard(s, initiatorSet){
+  const emp = s.employees;
+  const isInitiator = initiatorSet.has(s.employee_ref_id);
+  const el = document.createElement("div");
+  el.className = "staff-card";
+  el.innerHTML = `
+    <div class="sc-head">
+      <div>
+        <div class="sc-name">${emp ? emp.full_name : "\u2014"}</div>
+        <div class="sc-id">${emp ? (emp.employee_id || emp.id) : "\u2014"}</div>
+      </div>
+      <span class="status-pill ${s.status}">${s.status}</span>
+    </div>
+    <div class="form-row" style="margin-top:12px;">
+      <div class="field"><label>Status</label>
+        <select id="status-${s.id}" ${CAN_MANAGE?"":"disabled"}>
+          <option ${s.status==="Active"?"selected":""}>Active</option>
+          <option ${s.status==="Inactive"?"selected":""}>Inactive</option>
+        </select>
+      </div>
+    </div>
+    ${CAN_MANAGE ? `<button class="btn-sm" onclick="saveStaff('${s.id}')">Save</button>` : ""}
+
+    <label class="stage-check" style="background:rgba(200,163,78,.12);border-color:var(--accent);">
+      <input type="checkbox" ${isInitiator?"checked":""} ${CAN_MANAGE?"":"disabled"}
+        onchange="toggleInitiator(${s.employee_ref_id}, this.checked)">
+      Can Initiate Requests (Start)
+    </label>
+  `;
+  return el;
+}
+
+async function saveStaff(staffId){
+  try{
+    const { error } = await sb.from("naslina_staff").update({
+      status: document.getElementById(`status-${staffId}`).value,
+      updated_at: new Date().toISOString()
+    }).eq("id", staffId);
+    if(error) throw error;
+    await loadStaffList();
+  }catch(e){
+    alert("\u274C Could not save: " + (e.message || e));
+  }
+}
+window.saveStaff = saveStaff;
+
+async function toggleInitiator(employeeRefId, checked){
+  try{
+    if(checked){
+      const { error } = await sb.from("naslina_initiators").insert({ employee_ref_id: employeeRefId, added_by: MY_EMPLOYEE_ID });
+      if(error) throw error;
+    } else {
+      const { error } = await sb.from("naslina_initiators").delete().eq("employee_ref_id", employeeRefId);
+      if(error) throw error;
+    }
+  }catch(e){
+    alert("\u274C Could not update initiator status: " + (e.message || e));
+    await loadStaffList();
+  }
+}
+window.toggleInitiator = toggleInitiator;
+
+// ---- Per-stage section ----
+function renderStageSection(body, stage){
+  if(!stage){ body.innerHTML = "<div class='sub'>Stage not found.</div>"; return; }
+  body.innerHTML = `
+    <div class="card-panel">
+      <h3>${stage.stage_name} \u2014 Assignees</h3>
+      <p class="sub">Everyone ticked here must approve before a request advances past this stage.</p>
+      <div id="stage-assignee-list-${stage.id}"></div>
+    </div>`;
+  renderStageAssigneeList(stage);
+}
+
+async function renderStageAssigneeList(stage){
+  const wrap = document.getElementById(`stage-assignee-list-${stage.id}`);
+  if(!wrap) return;
+
+  const { data: staff } = await sb.from("naslina_staff")
+    .select("employee_ref_id, status, employees!naslina_staff_employee_ref_id_fkey(full_name, employee_id)")
+    .eq("status", "Active");
+  const { data: assigned } = await sb.from("naslina_workflow_stage_assignees")
+    .select("employee_ref_id").eq("stage_id", stage.id);
+  const assignedSet = new Set((assigned||[]).map(a => a.employee_ref_id));
+
+  if(!staff || !staff.length){
+    wrap.innerHTML = "<div class='sub'>Add active staff on the Initiators page first.</div>";
+    return;
+  }
+
+  wrap.innerHTML = staff.map(s => {
+    const emp = s.employees;
+    const checked = assignedSet.has(s.employee_ref_id);
+    return `<div class="assignee-row">
+      <span>${emp ? emp.full_name : "\u2014"} <span class="sc-id">(${emp ? (emp.employee_id || "") : ""})</span></span>
+      <label class="stage-check" style="margin-top:0;">
+        <input type="checkbox" ${checked?"checked":""} ${CAN_MANAGE?"":"disabled"}
+          onchange="toggleStageAssignment(${s.employee_ref_id}, '${stage.id}', this.checked)">
+        Assigned
+      </label>
+    </div>`;
+  }).join("");
+}
+
+async function toggleStageAssignment(employeeRefId, stageId, checked){
+  try{
+    if(checked){
+      const { error } = await sb.from("naslina_workflow_stage_assignees").insert({
+        stage_id: stageId, employee_ref_id: employeeRefId, added_by: MY_EMPLOYEE_ID
+      });
+      if(error) throw error;
+    } else {
+      const { error } = await sb.from("naslina_workflow_stage_assignees")
+        .delete().eq("stage_id", stageId).eq("employee_ref_id", employeeRefId);
+      if(error) throw error;
+    }
+  }catch(e){
+    alert("\u274C Could not update stage assignment: " + (e.message || e));
+    const stage = STAGES.find(s => String(s.id) === String(stageId));
+    if(stage) await renderStageAssigneeList(stage);
+  }
+}
+window.toggleStageAssignment = toggleStageAssignment;
+
+// ---- Independent Recipients / Company / Department sections ----
+function renderRecipientsSection(body){
+  body.innerHTML = `
+    <div class="card-panel">
+      <h3>Recipient Accounts</h3>
+      <p class="sub">Payees available on the Payment Request form's Recipient Account Name dropdown.</p>
+      <div class="lookup-list" id="beneficiaryList"></div>
+      <div class="lookup-add-row">
+        <input id="nb_name" placeholder="Name">
+        <input id="nb_account" placeholder="Account Number">
+        <input id="nb_bank" placeholder="Bank">
+        <button class="btn-sm" onclick="addBeneficiary()">Add</button>
+      </div>
+    </div>`;
+  loadBeneficiaryList();
+}
+
+function renderCompanySection(body){
+  body.innerHTML = `
+    <div class="card-panel">
+      <h3>Company</h3>
+      <p class="sub">Companies available on the Payment Request form's Company dropdown.</p>
+      <div class="lookup-list" id="companyList"></div>
+      <div class="lookup-add-row">
+        <input id="nc_name" placeholder="Company name">
+        <button class="btn-sm" onclick="addLookup('naslina_companies', 'nc_name', loadCompanyList)">Add</button>
+      </div>
+    </div>`;
+  loadCompanyList();
+}
+
+function renderDepartmentSection(body){
+  body.innerHTML = `
+    <div class="card-panel">
+      <h3>Department</h3>
+      <p class="sub">Departments available on the Payment Request form's Department dropdown.</p>
+      <div class="lookup-list" id="departmentList"></div>
+      <div class="lookup-add-row">
+        <input id="nd_name" placeholder="Department name">
+        <button class="btn-sm" onclick="addLookup('naslina_departments', 'nd_name', loadDepartmentList)">Add</button>
+      </div>
+    </div>`;
+  loadDepartmentList();
+}
+
+async function loadBeneficiaryList(){
+  const wrap = document.getElementById("beneficiaryList");
+  if(!wrap) return;
+  const { data, error } = await sb.from("beneficiaries").select("*").order("name");
+  if(error){ wrap.innerHTML = "<div class='lookup-item'>Error: " + error.message + "</div>"; return; }
+  if(!data || !data.length){ wrap.innerHTML = "<div class='lookup-item'>No recipients yet.</div>"; return; }
+  wrap.innerHTML = data.map(b => `<div class="lookup-item">
+    <span>${b.name} \u2014 ${b.account_number} (${b.bank})</span>
+    ${CAN_MANAGE ? `<button class="btn-sm ${b.is_active?"":"btn-ghost"}" onclick="toggleBeneficiary('${b.id}', ${!b.is_active})">${b.is_active?"Active":"Inactive"}</button>` : ""}
+  </div>`).join("");
+}
+
+async function addBeneficiary(){
+  const name = document.getElementById("nb_name").value.trim();
+  const account_number = document.getElementById("nb_account").value.trim();
+  const bank = document.getElementById("nb_bank").value.trim();
+  if(!name || !account_number || !bank){ alert("Name, account number and bank are all required."); return; }
+  try{
+    const { error } = await sb.from("beneficiaries").insert({
+      name, account_number, bank, linked_company: "Naslina", created_by: MY_EMPLOYEE_ID
+    });
+    if(error) throw error;
+    document.getElementById("nb_name").value = "";
+    document.getElementById("nb_account").value = "";
+    document.getElementById("nb_bank").value = "";
+    await loadBeneficiaryList();
+  }catch(e){
+    alert("\u274C Could not add recipient: " + (e.message || e));
+  }
+}
+window.addBeneficiary = addBeneficiary;
+
+async function toggleBeneficiary(id, newActive){
+  try{
+    const { error } = await sb.from("beneficiaries").update({ is_active: newActive }).eq("id", id);
+    if(error) throw error;
+    await loadBeneficiaryList();
+  }catch(e){
+    alert("\u274C Could not update: " + (e.message || e));
+  }
+}
+window.toggleBeneficiary = toggleBeneficiary;
+
+async function loadCompanyList(){
+  const wrap = document.getElementById("companyList");
+  if(!wrap) return;
+  const { data, error } = await sb.from("naslina_companies").select("*").order("name");
+  if(error){ wrap.innerHTML = "<div class='lookup-item'>Error: " + error.message + "</div>"; return; }
+  wrap.innerHTML = (data||[]).map(c => `<div class="lookup-item">
+    <span>${c.name}</span>
+    ${CAN_MANAGE ? `<button class="btn-sm ${c.is_active?"":"btn-ghost"}" onclick="toggleLookupActive('naslina_companies','${c.id}',${!c.is_active},loadCompanyList)">${c.is_active?"Active":"Inactive"}</button>` : ""}
+  </div>`).join("") || "<div class='lookup-item'>None yet.</div>";
+}
+window.loadCompanyList = loadCompanyList;
+
+async function loadDepartmentList(){
+  const wrap = document.getElementById("departmentList");
+  if(!wrap) return;
+  const { data, error } = await sb.from("naslina_departments").select("*").order("name");
+  if(error){ wrap.innerHTML = "<div class='lookup-item'>Error: " + error.message + "</div>"; return; }
+  wrap.innerHTML = (data||[]).map(d => `<div class="lookup-item">
+    <span>${d.name}</span>
+    ${CAN_MANAGE ? `<button class="btn-sm ${d.is_active?"":"btn-ghost"}" onclick="toggleLookupActive('naslina_departments','${d.id}',${!d.is_active},loadDepartmentList)">${d.is_active?"Active":"Inactive"}</button>` : ""}
+  </div>`).join("") || "<div class='lookup-item'>None yet.</div>";
+}
+window.loadDepartmentList = loadDepartmentList;
+
+async function addLookup(table, inputId, reload){
+  const val = document.getElementById(inputId).value.trim();
+  if(!val){ return; }
+  try{
+    const { error } = await sb.from(table).insert({ name: val });
+    if(error) throw error;
+    document.getElementById(inputId).value = "";
+    await reload();
+  }catch(e){
+    alert("\u274C Could not add: " + (e.message || e));
+  }
+}
+window.addLookup = addLookup;
+
+async function toggleLookupActive(table, id, newActive, reload){
+  try{
+    const { error } = await sb.from(table).update({ is_active: newActive }).eq("id", id);
+    if(error) throw error;
+    await reload();
+  }catch(e){
+    alert("\u274C Could not update: " + (e.message || e));
+  }
+}
+window.toggleLookupActive = toggleLookupActive;
+
+// ---- Overview section: everyone's assignments on one screen ----
+async function renderOverviewSection(body){
+  body.innerHTML = "<div class='sub'>Loading...</div>";
+
+  const [{ data: initiators }, { data: assignments }, { data: staffRows }] = await Promise.all([
+    sb.from("naslina_initiators").select("employee_ref_id"),
+    sb.from("naslina_workflow_stage_assignees").select("stage_id, employee_ref_id"),
+    sb.from("naslina_staff").select("employee_ref_id, employees!naslina_staff_employee_ref_id_fkey(full_name, employee_id)")
+  ]);
+
+  const nameById = {};
+  (staffRows||[]).forEach(s => { if(s.employees) nameById[s.employee_ref_id] = s.employees.full_name + " (" + (s.employees.employee_id||"") + ")"; });
+
+  let html = `<div class="card-panel"><div class="overview-block">
+    <h4>Initiators</h4>
+    ${(initiators||[]).length
+      ? "<ul>" + initiators.map(i => `<li>${nameById[i.employee_ref_id] || i.employee_ref_id}</li>`).join("") + "</ul>"
+      : "<div class='sub'>No initiators set yet.</div>"}
+  </div>`;
+
+  STAGES.forEach(s => {
+    const rows = (assignments||[]).filter(a => String(a.stage_id) === String(s.id));
+    html += `<div class="overview-block">
+      <h4>${s.stage_name}</h4>
+      ${rows.length
+        ? "<ul>" + rows.map(a => `<li>${nameById[a.employee_ref_id] || a.employee_ref_id}</li>`).join("") + "</ul>"
+        : "<div class='sub'>No assignees set yet.</div>"}
+    </div>`;
+  });
+
+  html += "</div>";
+  body.innerHTML = html;
+}
+
+init();
+</script>
+</body>
+</html>

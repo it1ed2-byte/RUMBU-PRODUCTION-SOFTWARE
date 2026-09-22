@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Parts Store Manager</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family:var(--sans); margin: 0; padding: 12px; color: #1F3864; font-size: 15px; -webkit-text-size-adjust: 100%; }
+  h1 { font-size: 20px; margin: 8px 0; } h3 { font-size: 16px; margin: 0 0 10px; }
+  .card { border: 1px solid var(--line); border-radius: 8px; padding: 14px; margin-bottom: 16px; max-width: 800px; }
+  label { display: block; margin-top: 10px; font-weight: bold; font-size: 13px; }
+  input, select { width: 100%; padding: 10px; margin-top: 4px; font-size: 16px; border: 1px solid #bbb; border-radius: 5px; }
+  button { background: #2E75B6; color: #fff; border: none; padding: 11px 16px; border-radius: 5px; cursor: pointer; margin-top: 12px; margin-right: 6px; font-size: 15px; min-height: 44px; }
+  button.danger { background: #b62e2e; }
+  button.small { padding: 8px 12px; font-size: 13px; min-height: 36px; margin-top: 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { border: 1px solid var(--line); padding: 8px; text-align: left; }
+  th { background: #1F3864; color: #fff; }
+  .hidden { display: none; }
+  .msg { margin-top: 10px; font-weight: bold; min-height: 18px; }
+  .banner { background:var(--bg); padding: 10px; border-radius: 5px; font-size: 13px; margin-bottom: 14px; word-break: break-word; }
+  .banner.ok { background: #e7f4ea; color: #1e7a34; }
+  .banner.bad { background: #fdecea; color: #b3261e; }
+  .actions-cell { white-space: nowrap; }
+  #status { font-size:12px; font-weight:bold; margin-bottom:8px; }
+  @media (max-width: 600px) {
+    body { padding: 10px; } h1 { font-size: 18px; }
+    table, thead, tbody, th, td, tr { display: block; }
+    thead { display: none; }
+    tr { border: 1px solid var(--line); border-radius: 8px; margin-bottom: 12px; padding: 6px 10px; background:var(--card); }
+    td { border: none; border-bottom: 1px solid var(--line); padding: 8px 4px; display: flex; justify-content: space-between; align-items: center; text-align: right; font-size: 14px; }
+    td:last-child { border-bottom: none; }
+    td::before { content: attr(data-label); font-weight: bold; color: #1F3864; text-align: left; padding-right: 10px; flex: 0 0 42%; }
+    td.actions-cell { justify-content: flex-start; }
+    td.actions-cell::before { content: "Actions"; }
+    button { width: auto; }
+  }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+</head>
+<body>
+<h1>Parts Store Manager</h1>
+<div id="status">Checking your session...</div>
+
+<div class="card hidden" id="formCard">
+  <h3 id="formTitle">Add Part</h3>
+  <label>Part Name</label><input type="text" id="part_name">
+  <label>Part Number</label><input type="text" id="part_number">
+  <label>Department</label>
+  <select id="department" onchange="toggleOther('department')"></select>
+  <input type="text" id="department_other" class="hidden" placeholder="Enter department">
+  <label>Unit</label>
+  <select id="unit" onchange="toggleOther('unit')"></select>
+  <input type="text" id="unit_other" class="hidden" placeholder="Enter unit">
+  <div id="actionButtons">
+    <button id="addBtn" onclick="submitAdd()">Add Part</button>
+    <button id="updateBtn" class="hidden" onclick="submitUpdate()">Update Part</button>
+    <button id="cancelBtn" class="hidden" onclick="resetForm()">Cancel</button>
+  </div>
+  <div class="msg" id="msg"></div>
+</div>
+
+<h3>Parts List</h3>
+<button class="small" onclick="loadParts()">Refresh</button>
+<input type="text" id="searchBox" placeholder="Search by name, number, department or unit..." oninput="filterTable()" style="margin-top:12px;">
+<div id="tableArea" style="margin-top:12px;">Loading...</div>
+
+<script>
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY, "Content-Type": "application/json" }; }
+
+var DEPARTMENTS = ['FEEDING','DELIVERY','QUALITY CONTROL','TRANSMISSION','DESIGN CARD','TWINE','RECYCLING','ELECTRICAL','WORKSHOP','EXTRUDER MECHANICS','OILING','POWER HOUSE','PET MECHANICS','Other'];
+var UNITS = DEPARTMENTS;
+
+var canEdit = false;
+var ALL_ROWS = [];
+
+// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
+// `query` may include extra params like "&order=col.desc" (no leading select).
+async function fetchAllRows(table, query){
+  let all = [], offset = 0; const pageSize = 1000;
+  const q = query || "";
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=*" + q, { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+async function init(){
+  const status = document.getElementById("status");
+  try{
+    const me = await requireAuth("../../login.html");
+    if(!me) return;
+
+    // Being logged in with access to this page is the real gate now —
+    // anyone who reaches it can add, edit, and delete parts.
+    canEdit = true;
+    document.getElementById("formCard").classList.remove("hidden");
+
+    fillDropdown('department', DEPARTMENTS);
+    fillDropdown('unit', UNITS);
+    status.classList.add("hidden");
+    await loadParts();
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "Could not load: " + (e.message||e);
+  }
+}
+
+function fillDropdown(id, items){
+  const sel = document.getElementById(id);
+  sel.innerHTML = "";
+  items.forEach(i=>{ const o = document.createElement("option"); o.value=i; o.text=i; sel.add(o); });
+}
+
+function toggleOther(field){
+  const sel = document.getElementById(field);
+  const other = document.getElementById(field + "_other");
+  if(sel.value === "Other") other.classList.remove("hidden"); else other.classList.add("hidden");
+}
+function getFieldValue(field){
+  const sel = document.getElementById(field);
+  if(sel.value === "Other") return document.getElementById(field + "_other").value.trim();
+  return sel.value;
+}
+function gatherData(){
+  return {
+    part_name: document.getElementById("part_name").value.trim(),
+    part_number: document.getElementById("part_number").value.trim(),
+    department: getFieldValue("department"),
+    unit: getFieldValue("unit")
+  };
+}
+
+async function submitAdd(){
+  const d = gatherData();
+  if(!d.part_name || !d.part_number){ setMsg("Part name and number required."); return; }
+  setMsg("Saving...");
+  try{
+    const row = { part_name: d.part_name, part_number: d.part_number, department: d.department, unit: d.unit, recorded_at: new Date().toISOString() };
+    const res = await fetch(SUPABASE_URL + "/rest/v1/store", { method:"post", headers: authHeaders(), body: JSON.stringify(row) });
+    if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
+    setMsg("Part added."); resetForm(); await loadParts();
+  }catch(e){ setMsg("Error: " + (e.message||e)); }
+}
+
+async function submitUpdate(){
+  const d = gatherData();
+  if(!d.part_number){ setMsg("Part number required."); return; }
+  setMsg("Updating...");
+  try{
+    const url = SUPABASE_URL + "/rest/v1/store?part_number=eq." + encodeURIComponent(d.part_number);
+    const res = await fetch(url, { method:"patch", headers: authHeaders(), body: JSON.stringify({ part_name: d.part_name, department: d.department, unit: d.unit }) });
+    if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
+    const updated = await res.json();
+    if(!updated.length) throw new Error('No part found with part_number "' + d.part_number + '". Nothing updated.');
+    setMsg("Part updated (" + updated.length + " row(s))."); resetForm(); await loadParts();
+  }catch(e){ setMsg("Error: " + (e.message||e)); }
+}
+
+function editRow(name, number, dept, unit){
+  document.getElementById("formTitle").innerText = "Update Part";
+  document.getElementById("part_name").value = name;
+  document.getElementById("part_number").value = number;
+  setSelect("department", dept);
+  setSelect("unit", unit);
+  document.getElementById("addBtn").classList.add("hidden");
+  document.getElementById("updateBtn").classList.remove("hidden");
+  document.getElementById("cancelBtn").classList.remove("hidden");
+  window.scrollTo(0,0);
+}
+
+function setSelect(field, value){
+  const sel = document.getElementById(field);
+  let found = false;
+  for(let i=0;i<sel.options.length;i++){ if(sel.options[i].value===value){ sel.selectedIndex=i; found=true; break; } }
+  if(!found){
+    sel.value = "Other";
+    const other = document.getElementById(field + "_other");
+    other.classList.remove("hidden"); other.value = value;
+  } else { toggleOther(field); }
+}
+
+async function deleteRow(number){
+  if(!confirm("Delete part " + number + "?")) return;
+  try{
+    const url = SUPABASE_URL + "/rest/v1/store?part_number=eq." + encodeURIComponent(number);
+    const res = await fetch(url, { method:"delete", headers: authHeaders() });
+    if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
+    const deleted = await res.json().catch(()=>[]);
+    setMsg("Part deleted."); await loadParts();
+  }catch(e){ setMsg("Error: " + (e.message||e)); }
+}
+
+function resetForm(){
+  document.getElementById("formTitle").innerText = "Add Part";
+  document.getElementById("part_name").value = "";
+  document.getElementById("part_number").value = "";
+  document.getElementById("department").selectedIndex = 0;
+  document.getElementById("unit").selectedIndex = 0;
+  document.getElementById("department_other").classList.add("hidden");
+  document.getElementById("unit_other").classList.add("hidden");
+  document.getElementById("department_other").value = "";
+  document.getElementById("unit_other").value = "";
+  document.getElementById("addBtn").classList.remove("hidden");
+  document.getElementById("updateBtn").classList.add("hidden");
+  document.getElementById("cancelBtn").classList.add("hidden");
+}
+
+async function loadParts(){
+  const status = document.getElementById("status");
+  document.getElementById("tableArea").innerHTML = "Loading...";
+  try{
+    ALL_ROWS = await fetchAllRows("store", "&order=recorded_at.desc");
+    filterTable();
+  }catch(e){
+    status.classList.remove("hidden");
+    status.style.color = "#c0392b";
+    status.textContent = "Could not read data: " + (e.message||e);
+    document.getElementById("tableArea").innerHTML = "Error: " + (e.message||e);
+  }
+}
+
+function filterTable(){
+  const q = document.getElementById("searchBox").value.trim().toLowerCase();
+  let rows = ALL_ROWS;
+  if(q){
+    rows = ALL_ROWS.filter(r =>
+      (r.part_name||"").toLowerCase().includes(q) ||
+      (r.part_number||"").toLowerCase().includes(q) ||
+      (r.department||"").toLowerCase().includes(q) ||
+      (r.unit||"").toLowerCase().includes(q)
+    );
+  }
+  renderTable(rows);
+}
+
+function renderTable(rows){
+  if(!rows || !rows.length){ document.getElementById("tableArea").innerHTML = "No parts found."; return; }
+  let html = "<table><thead><tr><th>Part Name</th><th>Part Number</th><th>Department</th><th>Unit</th><th>Recorded At</th>";
+  if(canEdit) html += "<th>Actions</th>";
+  html += "</tr></thead><tbody>";
+  rows.forEach(r=>{
+    html += "<tr>" +
+      `<td data-label="Part Name">${esc(r.part_name)}</td>` +
+      `<td data-label="Part Number">${esc(r.part_number)}</td>` +
+      `<td data-label="Department">${esc(r.department)}</td>` +
+      `<td data-label="Unit">${esc(r.unit)}</td>` +
+      `<td data-label="Recorded At">${esc(r.recorded_at)}</td>`;
+    if(canEdit){
+      html += `<td class="actions-cell">` +
+        `<button class="small" onclick="editRow('${js(r.part_name)}','${js(r.part_number)}','${js(r.department)}','${js(r.unit)}')">Edit</button> ` +
+        `<button class="small danger" onclick="deleteRow('${js(r.part_number)}')">Delete</button></td>`;
+    }
+    html += "</tr>";
+  });
+  html += "</tbody></table>";
+  document.getElementById("tableArea").innerHTML = html;
+}
+
+function esc(s){ return (s||"").toString().replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+function js(s){ return (s||"").toString().replace(/\\/g,"\\\\").replace(/'/g,"\\'"); }
+function setMsg(m){ document.getElementById("msg").innerText = m; }
+
+init();
+</script>
+</body>
+</html>

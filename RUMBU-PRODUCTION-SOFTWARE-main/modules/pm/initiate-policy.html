@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Initiate PM Policy</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme") || "navy"); }catch(e){} })();
+  window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme){ document.documentElement.setAttribute("data-theme", e.data.rumbuTheme); } });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="../../assets/letterhead.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:820px;margin:0 auto;}
+  #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);}
+  .readonly-field{background:var(--bg);border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:11px 12px;font-size:14px;color:var(--muted);}
+  .policy-meta{background:var(--bg);border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:12px 14px;margin-top:6px;font-size:13px;color:var(--muted);display:none;}
+  .policy-meta b{color:var(--heading);}
+  .name-ok{color:var(--ok)!important;font-weight:700;}
+  .name-bad{color:var(--bad)!important;font-weight:700;}
+  .actions{margin-top:20px;}
+  .actions .btn-primary{background:var(--accent);color:var(--logo-fg);}
+  .recent h4{margin:22px 0 8px;color:var(--heading);font-size:14px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:220px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back to Dashboard</button>
+<div id="connStatus">Loading...</div>
+
+<div class="card-panel">
+  <h3>Initiate PM Policy</h3>
+  <p class="sub">Assign a preventive-maintenance policy to a specialist for a specific asset. Only that specialist will see the checklist to fill.</p>
+
+  <div class="field">
+    <label>Policy</label>
+    <select id="f_policy" onchange="onPolicyChange()"><option value="">Select a policy...</option></select>
+    <div class="policy-meta" id="policyMeta"></div>
+  </div>
+
+  <div class="field"><label>Asset (the machine/asset the PM is done on)</label><input type="text" id="f_asset" placeholder="e.g. Extruder Motor 2"></div>
+
+  <div class="form-row">
+    <div class="field"><label>Specialist ID Number</label><input type="text" id="f_empid" placeholder="Type staff ID, then press Tab" onchange="lookupSpecialist()"></div>
+    <div class="field"><label>Specialist Name (auto)</label><div class="readonly-field" id="f_empname">&mdash;</div></div>
+  </div>
+
+  <div class="actions">
+    <button class="btn-primary" onclick="initiate()">Initiate</button>
+  </div>
+  <div class="status" id="entryStatus" style="display:none;"></div>
+</div>
+
+<div class="card-panel recent">
+  <h4>Recently Initiated</h4>
+  <div class="table-wrap"><div class="table-scroll">
+    <table>
+      <thead><tr><th>Policy</th><th>Asset</th><th>Specialist</th><th>Due</th><th>Status</th><th>Initiated</th></tr></thead>
+      <tbody id="recentBody"></tbody>
+    </table>
+  </div></div>
+</div>
+</div>
+
+<script>
+let ME = null;
+let POLICIES = [];
+let PICKED_POLICY = null;
+let PICKED_SPECIALIST = null; // { id, employee_id, full_name, linked_profile_id }
+
+async function logActivity(actionType, description){
+  try{
+    await sb.from("activity_log").insert({
+      actor_id: ME.id, actor_username: ME.username, actor_role: ME.role,
+      section_id: ME.sectionId, action_type: actionType, description: description
+    });
+  }catch(e){ console.warn("Activity log write failed (non-fatal):", e); }
+}
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+
+    const { data, error } = await sb.from("pm_policies")
+      .select("id, policy_number, policy_name, unit_name, section, pm_next_days")
+      .order("policy_number");
+    if(error) throw error;
+    POLICIES = data || [];
+    document.getElementById("f_policy").innerHTML =
+      '<option value="">Select a policy...</option>' +
+      POLICIES.map(p => `<option value="${p.id}">${p.policy_number} — ${p.policy_name}${p.section ? " (" + p.section + ")" : ""}</option>`).join("");
+
+    await loadRecent();
+    status.style.color = "var(--ok)"; status.textContent = "Connected.";
+  }catch(e){
+    status.style.color = "var(--bad)"; status.textContent = "Could not load: " + e.message;
+  }
+}
+
+function onPolicyChange(){
+  const id = document.getElementById("f_policy").value;
+  PICKED_POLICY = POLICIES.find(p => String(p.id) === String(id)) || null;
+  const box = document.getElementById("policyMeta");
+  if(!PICKED_POLICY){ box.style.display = "none"; return; }
+  box.style.display = "block";
+  box.innerHTML = "<b>Unit:</b> " + (PICKED_POLICY.unit_name || "—") +
+    " &nbsp;·&nbsp; <b>Branch:</b> " + (PICKED_POLICY.section || "—") +
+    " &nbsp;·&nbsp; <b>PM Next:</b> " + (PICKED_POLICY.pm_next_days || "—") + " day(s)";
+}
+
+async function lookupSpecialist(){
+  const code = document.getElementById("f_empid").value.trim();
+  const nameEl = document.getElementById("f_empname");
+  PICKED_SPECIALIST = null;
+  if(!code){ nameEl.className = "readonly-field"; nameEl.textContent = "—"; return; }
+  try{
+    const { data, error } = await sb.from("employees")
+      .select("id, employee_id, full_name, linked_profile_id")
+      .eq("employee_id", code).maybeSingle();
+    if(error) throw error;
+    if(!data){
+      nameEl.className = "readonly-field name-bad"; nameEl.textContent = "No employee with ID " + code;
+      return;
+    }
+    PICKED_SPECIALIST = data;
+    nameEl.className = "readonly-field name-ok";
+    nameEl.textContent = data.full_name + (data.linked_profile_id ? "" : "  (no login linked yet)");
+  }catch(e){
+    nameEl.className = "readonly-field name-bad"; nameEl.textContent = "Lookup failed: " + (e.message || e);
+  }
+}
+
+function addDays(n){
+  const d = new Date(); d.setDate(d.getDate() + (parseInt(n,10) || 0));
+  const p = x => String(x).padStart(2,"0");
+  return d.getFullYear() + "-" + p(d.getMonth()+1) + "-" + p(d.getDate());
+}
+function todayStr(){
+  const d = new Date(); const p = x => String(x).padStart(2,"0");
+  return d.getFullYear() + "-" + p(d.getMonth()+1) + "-" + p(d.getDate());
+}
+
+async function initiate(){
+  const status = document.getElementById("entryStatus");
+  const show = (cls, msg) => { status.style.display = "block"; status.className = "status " + cls; status.textContent = msg; };
+
+  const asset = document.getElementById("f_asset").value.trim();
+  if(!PICKED_POLICY){ return show("bad", "Select a policy."); }
+  if(!asset){ return show("bad", "Enter the asset the PM will be done on."); }
+  if(!PICKED_SPECIALIST){ return show("bad", "Enter a valid Specialist ID Number (the name must resolve)."); }
+
+  show("warn", "Initiating...");
+  try{
+    // Do not initiate the same policy on the same asset again while a job is
+    // still active: either not yet completed, or completed but not yet due.
+    // Once the due date is reached, reassign it from the PM Due / Reassign page.
+    const today = todayStr();
+    const { data: existing, error: exErr } = await sb.from("pm_initiations")
+      .select("id, status, due_date").eq("policy_id", PICKED_POLICY.id).eq("asset", asset);
+    if(exErr) throw exErr;
+    const blocker = (existing || []).find(j => j.status === "Pending" || (j.due_date && j.due_date > today));
+    if(blocker){
+      const reason = blocker.status === "Pending"
+        ? "It is already initiated for this asset and has not been completed yet."
+        : "It is already initiated for this asset and is not due until " + fmtDate(blocker.due_date) + ".";
+      return show("bad", reason + " Reassign it from the PM Due / Reassign page once it is due.");
+    }
+
+    // Copy the policy's checklist so this job is frozen even if the policy changes later.
+    const { data: items, error: iErr } = await sb.from("pm_policy_items")
+      .select("item_no, checklist_item").eq("policy_id", PICKED_POLICY.id).order("item_no");
+    if(iErr) throw iErr;
+    if(!items || !items.length){ return show("bad", "This policy has no checklist items, so there is nothing to initiate."); }
+
+    const { data: job, error: jErr } = await sb.from("pm_initiations").insert({
+      policy_id: PICKED_POLICY.id,
+      policy_number: PICKED_POLICY.policy_number,
+      policy_name: PICKED_POLICY.policy_name,
+      unit_name: PICKED_POLICY.unit_name,
+      section: PICKED_POLICY.section,
+      asset: asset,
+      specialist_emp_pk: PICKED_SPECIALIST.id,
+      specialist_employee_id: PICKED_SPECIALIST.employee_id,
+      specialist_name: PICKED_SPECIALIST.full_name,
+      pm_next_days: PICKED_POLICY.pm_next_days,
+      due_date: addDays(PICKED_POLICY.pm_next_days),
+      status: "Pending",
+      initiated_by: ME.username
+    }).select("id").single();
+    if(jErr) throw jErr;
+
+    const rows = items.map(it => ({ initiation_id: job.id, item_no: it.item_no, checklist_item: it.checklist_item }));
+    const { error: riErr } = await sb.from("pm_initiation_items").insert(rows);
+    if(riErr) throw riErr;
+
+    await logActivity("pm_initiate", "Initiated PM " + PICKED_POLICY.policy_number + " on asset '" + asset + "' for " + PICKED_SPECIALIST.full_name + " (ID " + PICKED_SPECIALIST.employee_id + ").");
+
+    show("ok", "Initiated. " + PICKED_SPECIALIST.full_name + " will now see this checklist" + (PICKED_SPECIALIST.linked_profile_id ? "." : " once their account is linked to this employee."));
+    document.getElementById("f_asset").value = "";
+    document.getElementById("f_empid").value = "";
+    document.getElementById("f_empname").className = "readonly-field"; document.getElementById("f_empname").textContent = "—";
+    PICKED_SPECIALIST = null;
+    await loadRecent();
+  }catch(e){
+    show("bad", "Could not initiate: " + (e.message || e));
+  }
+}
+
+function esc(s){ return (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c])); }
+function fmtDate(s){ if(!s) return "—"; try{ return new Date(s).toLocaleDateString(); }catch(e){ return s; } }
+
+async function loadRecent(){
+  const { data } = await sb.from("pm_initiations").select("*").order("initiated_at", { ascending: false }).limit(15);
+  const body = document.getElementById("recentBody");
+  const rows = data || [];
+  if(!rows.length){ body.innerHTML = "<tr><td colspan='6' style='color:var(--muted);'>Nothing initiated yet.</td></tr>"; return; }
+  body.innerHTML = rows.map(r =>
+    "<tr>" +
+    "<td><b>" + esc(r.policy_number) + "</b><br><span style='color:var(--muted);font-size:12px;'>" + esc(r.policy_name) + "</span></td>" +
+    "<td>" + esc(r.asset) + "</td>" +
+    "<td>" + esc(r.specialist_name) + "<br><span style='color:var(--muted);font-size:12px;'>ID " + esc(r.specialist_employee_id) + "</span></td>" +
+    "<td>" + fmtDate(r.due_date) + "</td>" +
+    "<td>" + (r.status === "Completed" ? "<span style='color:var(--ok);font-weight:700;'>Completed</span>" : "<span style='color:var(--warn);font-weight:700;'>Pending</span>") + "</td>" +
+    "<td>" + fmtDate(r.initiated_at) + "</td>" +
+    "</tr>"
+  ).join("");
+}
+
+init();
+</script>
+</body>
+</html>

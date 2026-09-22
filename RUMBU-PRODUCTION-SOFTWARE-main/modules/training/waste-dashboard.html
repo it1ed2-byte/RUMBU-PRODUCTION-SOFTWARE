@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Waste Dashboard</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--green:#1d8a4e;--green-dark:#156d3d;}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;color:var(--text);}
+  .wrap{max-width:980px;margin:0 auto;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;}
+  .card h3{color:var(--navy);margin:0 0 4px;font-size:16px;}
+  .card .sub{color:var(--blue);font-size:12px;margin:0 0 14px;}
+  label{display:block;font-size:12px;font-weight:bold;color:var(--text);margin:0 0 4px;}
+  input,select{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;}
+  .grid-5{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;}
+  .btn-row{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap;}
+  button.primary,button.success{padding:12px 16px;border:none;border-radius:8px;font-weight:bold;font-size:15px;cursor:pointer;font-family:inherit;color:#fff;}
+  button.primary{background:var(--blue);flex:1 1 100%;} button.primary:hover{background:var(--blue-dark);}
+  button.success{background:var(--green);padding:10px 14px;font-size:14px;} button.success:hover{background:var(--green-dark);}
+  #connStatus{text-align:center;font-size:12px;font-weight:bold;margin-bottom:10px;}
+  table{width:100%;border-collapse:collapse;margin-top:14px;font-size:13px;}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;white-space:nowrap;}
+  th.num,td.num{text-align:right;}
+  thead th{background:var(--navy);color:#fff;font-size:12px;}
+  tbody tr:nth-child(even){background:#f6f8fb;}
+  tfoot td{font-weight:bold;background:#eaf0f8;color:var(--navy);}
+  .hint{font-size:12px;color:var(--muted);margin-top:8px;}
+  #printArea{display:none;}
+  @media print{
+    .wrap{display:none !important;}
+    #printArea{display:block;padding:10px;}
+    #printArea .grp{font-size:11pt;letter-spacing:1px;color:#000;font-weight:bold;}
+    #printArea h1{font-size:16pt;color:#000;margin:0;}
+    #printArea .meta{font-size:10pt;margin:6px 0 12px;color:#222;}
+    #printArea table{width:100%;border-collapse:collapse;font-size:9pt;}
+    #printArea th,#printArea td{border:1px solid #444;padding:5px 7px;text-align:left;}
+    #printArea thead th{background:#1F3864 !important;color:#fff !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+  }
+  @media(max-width:820px){.grid-5{grid-template-columns:1fr 1fr;}}
+  @media(max-width:460px){.grid-5{grid-template-columns:1fr;}}
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+</head>
+<body>
+<div class="wrap">
+<div id="connStatus">Connecting to Supabase...</div>
+
+<div class="card">
+  <h3>Waste Dashboard</h3>
+  <p class="sub">View summary and detailed waste records &middot; weight in kg</p>
+  <div class="grid-5">
+    <div><label>From</label><input type="date" id="startDate"></div>
+    <div><label>To</label><input type="date" id="endDate"></div>
+    <div><label>Section</label><select id="section"></select></div>
+    <div><label>Department</label><select id="department"></select></div>
+    <div><label>Measured By</label><select id="measured_by"></select></div>
+  </div>
+  <div class="btn-row"><button class="primary" id="searchBtn" onclick="loadAll()">SEARCH</button></div>
+</div>
+
+<div class="card">
+  <h3>Waste Summary (by type)</h3>
+  <p class="sub">Total weight per waste type for the selected filters</p>
+  <div id="sumWrap"></div>
+  <div class="btn-row" id="sumExport" style="display:none;">
+    <button class="success" onclick="exportSummaryCSV()">EXPORT CSV</button>
+    <button class="success" onclick="exportSummaryPDF()">EXPORT PDF</button>
+  </div>
+</div>
+
+<div class="card">
+  <h3>Detailed Records</h3>
+  <p class="sub">Individual entries for the selected filters</p>
+  <div id="detWrap"></div>
+  <div class="btn-row" id="detExport" style="display:none;">
+    <button class="success" onclick="exportDetailCSV()">EXPORT CSV</button>
+    <button class="success" onclick="exportDetailPDF()">EXPORT PDF</button>
+  </div>
+</div>
+</div>
+
+<div id="printArea"></div>
+
+<script>
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
+function esc(s){ return String(s==null?"":s).replace(/[&<>"]/g,c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c])); }
+function fmt(n){ return Number(n||0).toLocaleString("en-GB",{maximumFractionDigits:2}); }
+
+let WASTE_ROWS = [];
+let filters = {};
+let lastSummary = [], lastDetail = [];
+
+// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
+// `query` may include extra params like "&order=col.desc" (no leading select).
+async function fetchAllRows(table, query){
+  let all = [], offset = 0; const pageSize = 1000;
+  const q = query || "";
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=*" + q, { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    const me = await requireAuth("../../login.html");
+    if(!me) return;
+
+    WASTE_ROWS = await fetchAllRows("waste_table", "");
+    status.style.color = "#1d8a4e";
+    status.textContent = "Connected. waste_table: " + WASTE_ROWS.length + " rows.";
+
+    const mySections = (me.sectionNames && me.sectionNames.length) ? me.sectionNames : null;
+    let secs = [...new Set(WASTE_ROWS.map(r=>r.section).filter(Boolean))].sort();
+    if(mySections) secs = secs.filter(s => mySections.indexOf(s) !== -1);
+    fill("section", secs);
+    fill("department", [...new Set(WASTE_ROWS.map(r=>r.department).filter(Boolean))].sort());
+    fill("measured_by", [...new Set(WASTE_ROWS.map(r=>r.measured_by).filter(Boolean))].sort());
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+function fill(id, values){
+  const el = document.getElementById(id);
+  el.innerHTML = '<option value="">All</option>';
+  values.forEach(v=>{ const o=document.createElement("option"); o.value=v; o.textContent=v; el.appendChild(o); });
+}
+
+function loadAll(){
+  filters = {
+    startDate: document.getElementById("startDate").value,
+    endDate: document.getElementById("endDate").value,
+    section: document.getElementById("section").value,
+    department: document.getElementById("department").value,
+    measured_by: document.getElementById("measured_by").value
+  };
+
+  const rows = WASTE_ROWS.filter(r=>{
+    if(filters.startDate && filters.endDate && !(r.date_col >= filters.startDate && r.date_col <= filters.endDate)) return false;
+    if(filters.section && r.section !== filters.section) return false;
+    if(filters.department && r.department !== filters.department) return false;
+    if(filters.measured_by && r.measured_by !== filters.measured_by) return false;
+    return true;
+  });
+
+  const sumMap = {};
+  rows.forEach(r=>{ sumMap[r.waste_type] = (sumMap[r.waste_type]||0) + Number(r.waste_weight||0); });
+  lastSummary = Object.entries(sumMap).map(([Waste_Type,Total_Weight])=>({Waste_Type,Total_Weight})).sort((a,b)=>b.Total_Weight-a.Total_Weight);
+
+  lastDetail = rows.slice().sort((a,b)=> (b.date_col||"").localeCompare(a.date_col||"") || (a.section||"").localeCompare(b.section||"") || (a.department||"").localeCompare(b.department||""));
+
+  renderSummary(); renderDetail();
+}
+
+function renderSummary(){
+  const wrap = document.getElementById("sumWrap");
+  if(!lastSummary.length){ wrap.innerHTML='<p class="hint">No data found.</p>'; document.getElementById("sumExport").style.display="none"; return; }
+  let total = 0, body = "";
+  lastSummary.forEach(r=>{ total += Number(r.Total_Weight||0); body += `<tr><td>${esc(r.Waste_Type)}</td><td class="num">${fmt(r.Total_Weight)}</td></tr>`; });
+  wrap.innerHTML = `<table><thead><tr><th>Waste Type</th><th class="num">Total Weight (kg)</th></tr></thead><tbody>${body}</tbody>` +
+    `<tfoot><tr><td>TOTAL</td><td class="num">${fmt(total)}</td></tr></tfoot></table>`;
+  document.getElementById("sumExport").style.display = "flex";
+}
+
+function renderDetail(){
+  const wrap = document.getElementById("detWrap");
+  if(!lastDetail.length){ wrap.innerHTML='<p class="hint">No data found.</p>'; document.getElementById("detExport").style.display="none"; return; }
+  let body = "";
+  lastDetail.forEach(r=>{
+    body += `<tr><td>${esc(r.date_col)}</td><td>${esc(r.shift)}</td><td>${esc(r.section)}</td><td>${esc(r.department)}</td>` +
+      `<td>${esc(r.waste_type)}</td><td class="num">${fmt(r.waste_weight)}</td><td>${esc(r.measured_by)}</td></tr>`;
+  });
+  wrap.innerHTML = `<table><thead><tr><th>Date</th><th>Shift</th><th>Section</th><th>Department</th><th>Waste Type</th><th class="num">Weight (kg)</th><th>Measured By</th></tr></thead><tbody>${body}</tbody></table>`;
+  document.getElementById("detExport").style.display = "flex";
+}
+
+function metaText(){
+  return "Section: "+(filters.section||"All")+"  |  Department: "+(filters.department||"All")+"  |  Measured By: "+(filters.measured_by||"All")+"  |  "+(filters.startDate||"-")+" to "+(filters.endDate||"-");
+}
+
+function downloadCSV(filename, lines){
+  const blob = new Blob([lines.join("\n")], { type:"text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a"); a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+
+function exportSummaryCSV(){
+  if(!lastSummary.length) return;
+  let lines = ['"Rumbu Industries Group - Waste Summary"', '"'+metaText()+'"', "", '"Waste Type","Total Weight (kg)"'];
+  let total = 0;
+  lastSummary.forEach(r=>{ total += Number(r.Total_Weight||0); lines.push('"'+r.Waste_Type+'",'+Number(r.Total_Weight||0)); });
+  lines.push('"TOTAL",'+total);
+  downloadCSV("Waste_Summary.csv", lines);
+}
+
+function exportDetailCSV(){
+  if(!lastDetail.length) return;
+  let lines = ['"Rumbu Industries Group - Waste Detail"', '"'+metaText()+'"', "", '"Date","Shift","Section","Department","Waste Type","Weight (kg)","Measured By"'];
+  lastDetail.forEach(r=>{
+    lines.push(['"'+r.date_col+'"','"'+r.shift+'"','"'+r.section+'"','"'+r.department+'"','"'+r.waste_type+'"',Number(r.waste_weight||0),'"'+r.measured_by+'"'].join(","));
+  });
+  downloadCSV("Waste_Detail.csv", lines);
+}
+
+function printDoc(title, headHtml, bodyHtml){
+  document.getElementById("printArea").innerHTML =
+    '<div class="grp">RUMBU INDUSTRIES GROUP</div><h1>'+title+'</h1><div class="meta">'+esc(metaText())+'</div>' +
+    '<table><thead>'+headHtml+'</thead><tbody>'+bodyHtml+'</tbody></table>';
+  window.print();
+}
+
+function exportSummaryPDF(){
+  if(!lastSummary.length) return;
+  let total = 0, body = "";
+  lastSummary.forEach(r=>{ total += Number(r.Total_Weight||0); body += `<tr><td>${esc(r.Waste_Type)}</td><td>${fmt(r.Total_Weight)}</td></tr>`; });
+  body += `<tr><td><b>TOTAL</b></td><td><b>${fmt(total)}</b></td></tr>`;
+  printDoc("Waste Summary", "<tr><th>Waste Type</th><th>Total Weight (kg)</th></tr>", body);
+}
+
+function exportDetailPDF(){
+  if(!lastDetail.length) return;
+  let body = "";
+  lastDetail.forEach(r=>{
+    body += `<tr><td>${esc(r.date_col)}</td><td>${esc(r.shift)}</td><td>${esc(r.section)}</td><td>${esc(r.department)}</td>` +
+      `<td>${esc(r.waste_type)}</td><td>${fmt(r.waste_weight)}</td><td>${esc(r.measured_by)}</td></tr>`;
+  });
+  printDoc("Waste Detail", "<tr><th>Date</th><th>Shift</th><th>Section</th><th>Department</th><th>Waste Type</th><th>Weight (kg)</th><th>Measured By</th></tr>", body);
+}
+
+init();
+</script>
+</body>
+</html>

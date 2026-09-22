@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>RumbuApp — Login</title>
+<link rel="manifest" href="manifest.json">
+<script src="pwa-install.js" defer></script>
+<meta name="theme-color" content="#1F3864">
+<link rel="icon" href="favicon-32.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="RumbuApp">
+<script>
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    });
+  }
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  html, body{touch-action:manipulation;-webkit-tap-highlight-color:transparent;overscroll-behavior-y:contain;}
+  button, a, img{-webkit-touch-callout:none;}
+  img{-webkit-user-drag:none;}
+  :root{--navy:#1F3864;--blue:#2E75B6;--blue-dark:#245d92;--line:#d8dee8;--bg:#eef2f7;--red:#c0392b;
+    --sans:"Inter","Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:linear-gradient(135deg,var(--navy) 0%,#142a4d 100%);margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;overflow-x:hidden;}
+  .login-wrap{position:relative;width:100%;max-width:420px;}
+  .brand-watermark{position:absolute;left:50%;top:-170px;transform:translateX(-50%);width:340px;max-width:80vw;opacity:.55;filter:drop-shadow(0 18px 36px rgba(0,0,0,.45));pointer-events:none;z-index:0;user-select:none;}
+  .card{position:relative;z-index:1;background:#fff;border-radius:14px;padding:36px 30px;width:100%;max-width:380px;margin:0 auto;box-shadow:0 12px 32px rgba(0,0,0,.25);}
+  h1{color:var(--navy);font-size:18px;text-align:center;margin:0 0 4px;letter-spacing:.5px;}
+  p.sub{text-align:center;color:#6b7280;font-size:12px;margin:0 0 24px;}
+  label{display:block;font-size:12px;font-weight:bold;color:var(--text);margin:14px 0 4px;}
+  input{width:100%;padding:11px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;}
+  input:focus{outline:2px solid var(--blue);border-color:var(--blue);}
+  button{width:100%;padding:12px;margin-top:20px;background:var(--blue);color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:bold;cursor:pointer;}
+  button:hover{background:var(--blue-dark);}
+  button:disabled{opacity:.6;cursor:not-allowed;}
+  .status{margin-top:14px;text-align:center;font-size:13px;font-weight:bold;min-height:16px;}
+  .status.err{color:var(--red);}
+  .status.ok{color:#1d8a4e;}
+</style>
+</head>
+<body>
+
+<div class="login-wrap">
+  <img class="brand-watermark" src="login-logo-watermark-white.png" alt="" aria-hidden="true">
+  <div class="card">
+  <h1>RumbuApp</h1>
+  <p class="sub">RUMBU INDUSTRIES GROUP &bull; Sign in</p>
+
+  <label>Username or Email</label>
+  <input type="text" id="username" autocomplete="username" placeholder="Employee ID or email" onkeydown="if(event.key==='Enter'){document.getElementById('password').focus();}">
+
+  <label>Password</label>
+  <input type="password" id="password" autocomplete="current-password" onkeydown="if(event.key==='Enter'){login();}">
+
+  <button id="loginBtn" onclick="login()">LOG IN</button>
+  <div class="status" id="status"></div>
+  </div>
+</div>
+
+<script>
+const SUPABASE_URL = "https://betfhunzmhtdzgvufmfk.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp";
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+async function login(){
+  const username = document.getElementById("username").value.trim();
+  const password = document.getElementById("password").value;
+  const status = document.getElementById("status");
+  const btn = document.getElementById("loginBtn");
+
+  if(!username || !password){
+    status.className = "status err"; status.textContent = "Enter your username or email and your password.";
+    return;
+  }
+
+  btn.disabled = true; btn.innerText = "Signing in...";
+  status.className = "status"; status.textContent = "";
+
+  try{
+    // What the person typed could be their Employee ID (their real
+    // username) or their personal email. If it looks like an email, first
+    // check whether it belongs to a known employee — if so, resolve it to
+    // THEIR Employee ID and proceed exactly as a normal username login
+    // would, through the same trusted username->Auth-email RPC. This
+    // means email login piggybacks on the existing, already-correct
+    // username resolution rather than needing its own separate path.
+    let identifier = username;
+    if(username.indexOf("@") !== -1){
+      try{
+        const { data: empId } = await sb.rpc("resolve_email_to_username", { p_email: username });
+        if(empId) identifier = empId;
+      }catch(e){ /* not a recognized employee email — fall through below */ }
+    }
+
+    // Resolve what the person typed (or the Employee ID we just resolved
+    // their email to) to their real Auth login email. A staff member's
+    // username is their Employee ID; Super Admins use their real email as
+    // their username. The RPC maps either to the login email.
+    let email = null;
+    try{
+      const { data } = await sb.rpc("resolve_username_to_email", { p_username: identifier });
+      if(data) email = data;
+    }catch(e){ /* fall through to the email fallback below */ }
+
+    // If it still wasn't resolved but looks like an email, try it
+    // directly — covers a Super Admin whose Auth email itself was typed.
+    if(!email && username.indexOf("@") !== -1) email = username;
+
+    if(!email){
+      status.className = "status err"; status.textContent = "Invalid username or password.";
+      return;
+    }
+
+    const { error: signInErr } = await sb.auth.signInWithPassword({ email, password });
+    if(signInErr){
+      status.className = "status err"; status.textContent = "Invalid username or password.";
+      return;
+    }
+
+    status.className = "status ok"; status.textContent = "Signed in. Loading...";
+    window.location.href = "index.html";
+  }catch(e){
+    status.className = "status err"; status.textContent = "Error: " + (e.message||e);
+  }finally{
+    btn.disabled = false; btn.innerText = "LOG IN";
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Enter Production</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme") || "navy"); }catch(e){}
+  })();
+  window.addEventListener("message", function(e){
+    if(e.data && e.data.rumbuTheme){ document.documentElement.setAttribute("data-theme", e.data.rumbuTheme); }
+  });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="../../table-resolver.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:900px;margin:0 auto;}
+  #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);}
+  .blocked{background:rgba(176,42,55,.1);color:var(--bad);padding:16px 18px;border-radius:var(--radius);text-align:center;font-weight:600;}
+  #entryForm{display:none;}
+  #entryForm.show{display:block;}
+  .locked-row{display:flex;gap:20px;flex-wrap:wrap;background:var(--bg);border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:12px 16px;margin-bottom:16px;}
+  .locked-row div{font-size:13px;}
+  .locked-row b{color:var(--heading);}
+  .asset-result{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;border:1px solid var(--line);border-radius:8px;margin-top:6px;cursor:pointer;background:var(--card);}
+  .asset-result:hover{background:var(--bg);}
+  .asset-result .n{font-weight:700;color:var(--heading);}
+  .asset-result .m{font-size:12px;color:var(--muted);}
+  .picked-box{background:var(--bg);border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:12px 14px;margin-top:8px;}
+  .picked-box.empty{color:var(--muted);font-size:13px;}
+  .readonly-field{background:var(--bg);border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:11px 12px;font-size:14px;color:var(--muted);}
+  .total-box{font-size:22px;font-weight:800;color:var(--heading);background:var(--bg);border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:11px 12px;text-align:center;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:220px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back to Dashboard</button>
+<div id="connStatus">Loading...</div>
+
+<div class="card-panel">
+  <h3>Select Initiated Shift</h3>
+  <p class="sub">You can only enter production for a shift that has been initiated and is still Pending.</p>
+  <div class="field">
+    <label>Active Initiation</label>
+    <select id="initSelect" onchange="onInitiationPick()"><option value="">Loading...</option></select>
+  </div>
+</div>
+
+<div id="noInitBlock" class="blocked" style="display:none;">
+  No production has been initiated yet for any pending shift.<br>
+  Ask your supervisor to initiate today's shift in <b>Manage Operator &rarr; Initiate Production</b> first.
+</div>
+
+<div id="entryForm">
+  <div class="card-panel">
+    <h3>Log Production — <span id="formTitleTail"></span></h3>
+    <div class="locked-row">
+      <div>Date: <b id="lk_date"></b></div>
+      <div>Work Type: <b id="lk_worktype"></b></div>
+      <div>Shift: <b id="lk_shift"></b></div>
+    </div>
+
+    <div class="form-row">
+      <div class="field">
+        <label>Mat Type</label>
+        <select id="f_mat_type" onchange="recomputeTarget()">
+          <option value="">Select...</option>
+          <option>No.1</option><option>No.2</option><option>No.3</option><option>No.4</option>
+          <option>Hajj Mat</option><option>Prayer Mat</option><option>Customize</option>
+        </select>
+      </div>
+      <div class="field"><label>Customize (if applicable)</label><input type="text" id="f_customize" placeholder="Describe the custom order, if any"></div>
+    </div>
+
+    <div class="field">
+      <label>Search Asset</label>
+      <input type="text" id="assetSearch" placeholder="Type an asset code, e.g. WA-01" oninput="searchAssets()">
+      <div id="assetResults"></div>
+    </div>
+    <div class="picked-box empty" id="pickedAssetBox">No asset selected yet.</div>
+
+    <div class="form-row">
+      <div class="field"><label>Group</label>
+        <select id="f_group" onchange="lookupOperator()"><option value="">Select...</option><option>A</option><option>B</option></select>
+      </div>
+      <div class="field"><label>Target (auto)</label><div class="readonly-field" id="lk_target">—</div></div>
+    </div>
+
+    <div class="form-row-3">
+      <div class="field"><label>Double</label><input type="number" id="f_double" value="0" oninput="recomputeTotal()"></div>
+      <div class="field"><label>Single</label><input type="number" id="f_single" value="0" oninput="recomputeTotal()"></div>
+      <div class="field"><label>B</label><input type="number" id="f_b" value="0" oninput="recomputeTotal()"></div>
+    </div>
+    <div class="form-row">
+      <div class="field"><label>C</label><input type="number" id="f_c" value="0" oninput="recomputeTotal()"></div>
+      <div class="field"><label>Total (auto)</label><div class="total-box" id="lk_total">0</div></div>
+    </div>
+
+    <div class="form-row">
+      <div class="field"><label>B Grade Type (if applicable)</label><input type="text" id="f_bgradetype" placeholder="e.g. reason / category for B grade"></div>
+      <div class="field"><label></label><div></div></div>
+    </div>
+
+    <div class="locked-row">
+      <div>Shed: <b id="lk_shed">—</b></div>
+      <div>Unit: <b id="lk_units">—</b></div>
+      <div>Section: <b id="lk_section">—</b></div>
+    </div>
+
+    <div class="form-row-3">
+      <div class="field"><label>Operator Name</label><div class="readonly-field" id="lk_opname">—</div></div>
+      <div class="field"><label>Operator ID</label><input type="text" id="f_opid" placeholder="Auto-fills, editable to override" oninput="onOperatorIdEdited()"></div>
+      <div class="field"><label>Rank</label><div class="readonly-field" id="lk_rank">—</div></div>
+    </div>
+
+    <div class="field"><label>Description</label><textarea id="f_description" placeholder="Any notes for this entry"></textarea></div>
+
+    <button onclick="submitEntry()">Submit Entry</button>
+    <div class="status" id="entryStatus" style="display:none;"></div>
+  </div>
+</div>
+
+</div>
+
+<script>
+let ME = null;
+let MW_TABLE = "mat_weaving"; // resolved properly in init() below
+let INITIATIONS = [];
+let CURRENT_INIT = null;
+let PICKED_ASSET = null;   // row from weaving_assets_full
+const OPERATOR_DEPARTMENT = "Production";
+const OPERATOR_UNIT = "Weaving";
+
+async function logActivity(actionType, description){
+  try{
+    await sb.from("activity_log").insert({
+      actor_id: ME.id, actor_username: ME.username, actor_role: ME.role,
+      section_id: ME.sectionId, action_type: actionType, description: description
+    });
+  }catch(e){ console.warn("Activity log write failed (non-fatal):", e); }
+}
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    MW_TABLE = await resolveWeavingTable();
+
+    try{ await sb.rpc("auto_suspend_stale_initiations"); }catch(e){ console.warn("Auto-suspend sweep failed (non-fatal):", e); }
+
+    const { data, error } = await sb.from("weaving_production_initiations")
+      .select("*").eq("status","Pending").order("production_date",{ascending:false}).order("shift");
+    if(error) throw error;
+    INITIATIONS = data || [];
+
+    const sel = document.getElementById("initSelect");
+    if(!INITIATIONS.length){
+      document.getElementById("noInitBlock").style.display = "block";
+      sel.innerHTML = '<option value="">No pending initiations</option>';
+      sel.disabled = true;
+    } else {
+      sel.innerHTML = '<option value="">Select...</option>' + INITIATIONS.map((i,idx)=>
+        `<option value="${idx}">${i.production_date} — ${i.shift} — ${i.work_type} (by ${i.initiated_by})</option>`).join("");
+    }
+
+    status.style.color = "var(--ok)"; status.textContent = "Connected.";
+  }catch(e){
+    status.style.color = "var(--bad)"; status.textContent = "Could not load: " + e.message;
+  }
+}
+
+function onInitiationPick(){
+  const idx = document.getElementById("initSelect").value;
+  if(idx === ""){ CURRENT_INIT = null; document.getElementById("entryForm").classList.remove("show"); return; }
+  CURRENT_INIT = INITIATIONS[idx];
+  document.getElementById("formTitleTail").textContent = CURRENT_INIT.production_date + " / " + CURRENT_INIT.shift;
+  document.getElementById("lk_date").textContent = CURRENT_INIT.production_date;
+  document.getElementById("lk_worktype").textContent = CURRENT_INIT.work_type;
+  document.getElementById("lk_shift").textContent = CURRENT_INIT.shift;
+  resetEntryFields();
+  document.getElementById("entryForm").classList.add("show");
+}
+
+function resetEntryFields(){
+  PICKED_ASSET = null;
+  document.getElementById("f_mat_type").value = "";
+  document.getElementById("f_customize").value = "";
+  document.getElementById("assetSearch").value = "";
+  document.getElementById("assetResults").innerHTML = "";
+  document.getElementById("pickedAssetBox").className = "picked-box empty";
+  document.getElementById("pickedAssetBox").textContent = "No asset selected yet.";
+  document.getElementById("f_group").value = "";
+  document.getElementById("lk_target").textContent = "—";
+  document.getElementById("f_double").value = 0;
+  document.getElementById("f_single").value = 0;
+  document.getElementById("f_b").value = 0;
+  document.getElementById("f_c").value = 0;
+  document.getElementById("lk_total").textContent = "0";
+  document.getElementById("f_bgradetype").value = "";
+  document.getElementById("lk_shed").textContent = "—";
+  document.getElementById("lk_units").textContent = "—";
+  document.getElementById("lk_section").textContent = "—";
+  document.getElementById("lk_opname").textContent = "—";
+  document.getElementById("f_opid").value = "";
+  document.getElementById("lk_rank").textContent = "—";
+  document.getElementById("f_description").value = "";
+  document.getElementById("entryStatus").style.display = "none";
+}
+
+let assetSearchTimer = null;
+function searchAssets(){
+  clearTimeout(assetSearchTimer);
+  assetSearchTimer = setTimeout(runAssetSearch, 200);
+}
+
+async function runAssetSearch(){
+  const q = document.getElementById("assetSearch").value.trim();
+  const resultsEl = document.getElementById("assetResults");
+  if(q.length < 1){ resultsEl.innerHTML = ""; return; }
+  try{
+    const { data, error } = await sb.from("weaving_assets_full")
+      .select("*").or(`asset_code.ilike.%${q}%,unit_code.ilike.%${q}%`).order("asset_code").limit(12);
+    if(error) throw error;
+    if(!data || !data.length){ resultsEl.innerHTML = '<p class="sub">No asset matched.</p>'; return; }
+    resultsEl.innerHTML = data.map(a => `
+      <div class="asset-result" onclick='pickAsset(${JSON.stringify(a).replace(/'/g,"&apos;")})'>
+        <div><div class="n">${a.asset_code}</div><div class="m">Unit ${a.unit_code} · ${a.section} · Shed ${a.shed}</div></div>
+        <div class="m">${a.mat_type || "no mat type"}</div>
+      </div>`).join("");
+  }catch(e){
+    resultsEl.innerHTML = `<p class="sub">Search error: ${e.message}</p>`;
+  }
+}
+
+function pickAsset(asset){
+  PICKED_ASSET = asset;
+  const box = document.getElementById("pickedAssetBox");
+  box.className = "picked-box";
+  box.innerHTML = `Selected: <b>${asset.asset_code}</b> (Unit ${asset.unit_code})`;
+  document.getElementById("assetResults").innerHTML = "";
+  document.getElementById("assetSearch").value = asset.asset_code;
+  document.getElementById("lk_shed").textContent = asset.shed;
+  document.getElementById("lk_units").textContent = asset.unit_code;
+  document.getElementById("lk_section").textContent = asset.section;
+  recomputeTarget();
+  lookupOperator();
+}
+
+function recomputeTarget(){
+  if(!PICKED_ASSET || !CURRENT_INIT){ document.getElementById("lk_target").textContent = "—"; return; }
+
+  const zeroTargetWorkTypes = ["B Grade","Cover Duty","Extra Operators","Breakdown"];
+  if(zeroTargetWorkTypes.includes(CURRENT_INIT.work_type)){
+    document.getElementById("lk_target").textContent = "0";
+    return;
+  }
+  // "Normal" and "Overtime" both use the asset's normal target logic
+  const mt = document.getElementById("f_mat_type").value;
+  let target = PICKED_ASSET.target_normal_mat;
+  if(mt === "Hajj Mat") target = PICKED_ASSET.target_hajj_mat;
+  else if(mt === "Prayer Mat") target = PICKED_ASSET.target_prayer_mat;
+  document.getElementById("lk_target").textContent = target;
+}
+
+function recomputeTotal(){
+  const d = Number(document.getElementById("f_double").value) || 0;
+  const s = Number(document.getElementById("f_single").value) || 0;
+  const b = Number(document.getElementById("f_b").value) || 0;
+  const c = Number(document.getElementById("f_c").value) || 0;
+  document.getElementById("lk_total").textContent = (d+s+b+c);
+}
+
+async function lookupOperator(){
+  if(!PICKED_ASSET) return;
+  const group = document.getElementById("f_group").value;
+  if(!group){ document.getElementById("lk_opname").textContent = "—"; document.getElementById("f_opid").value=""; document.getElementById("lk_rank").textContent = "—"; return; }
+  try{
+    const { data, error } = await sb.from("weaving_unit_operators_full")
+      .select("*").eq("unit_code", PICKED_ASSET.unit_code).eq("group_name", group).maybeSingle();
+    if(error) throw error;
+    if(!data){
+      document.getElementById("lk_opname").textContent = "No operator assigned — set one in Manage Operator";
+      document.getElementById("f_opid").value = "";
+      document.getElementById("lk_rank").textContent = "—";
+      return;
+    }
+    document.getElementById("lk_opname").textContent = data.operator_name;
+    document.getElementById("f_opid").value = data.employee_id || "";
+    document.getElementById("lk_rank").textContent = data.rank || (data.is_trainee ? "Trainee" : "—");
+  }catch(e){
+    console.warn("Operator lookup failed:", e);
+  }
+}
+
+let opIdTimer = null;
+function onOperatorIdEdited(){
+  clearTimeout(opIdTimer);
+  opIdTimer = setTimeout(reverseOperatorLookup, 300);
+}
+
+async function reverseOperatorLookup(){
+  const id = document.getElementById("f_opid").value.trim();
+  if(!id){ return; }
+  try{
+    const { data, error } = await sb.from("employees")
+      .select("employee_id, full_name, rank, department")
+      .eq("department", OPERATOR_DEPARTMENT).eq("unit", OPERATOR_UNIT).eq("employee_id", id).maybeSingle();
+    if(error) throw error;
+    if(!data){
+      document.getElementById("lk_opname").textContent = `No ${OPERATOR_DEPARTMENT} employee found for ID "${id}"`;
+      document.getElementById("lk_rank").textContent = "—";
+      return;
+    }
+    document.getElementById("lk_opname").textContent = data.full_name + " (override)";
+    document.getElementById("lk_rank").textContent = data.rank || "—";
+  }catch(e){
+    console.warn("Reverse operator lookup failed:", e);
+  }
+}
+
+async function submitEntry(){
+  const statusEl = document.getElementById("entryStatus");
+  statusEl.style.display = "block"; statusEl.className = "status"; statusEl.textContent = "Checking...";
+
+  if(!CURRENT_INIT){ statusEl.className="status err"; statusEl.textContent="Select an initiated shift first."; return; }
+  if(!PICKED_ASSET){ statusEl.className="status err"; statusEl.textContent="Select an Asset."; return; }
+  const matType = document.getElementById("f_mat_type").value;
+  if(!matType){ statusEl.className="status err"; statusEl.textContent="Select a Mat Type."; return; }
+  const group = document.getElementById("f_group").value;
+  if(!group){ statusEl.className="status err"; statusEl.textContent="Select a Group."; return; }
+
+  const opNameRaw = document.getElementById("lk_opname").textContent;
+  if(opNameRaw === "—" || opNameRaw.startsWith("No operator assigned") || opNameRaw.startsWith("No " + OPERATOR_DEPARTMENT + " employee found")){
+    statusEl.className = "status err";
+    statusEl.textContent = "No valid operator resolved for this Unit/Group — fix the Operator ID, or assign one in Manage Operator first.";
+    return;
+  }
+  const opName = opNameRaw.replace(" (override)","");
+  const opId = document.getElementById("f_opid").value.trim() || null;
+  const rank = document.getElementById("lk_rank").textContent;
+  const dbl = Number(document.getElementById("f_double").value) || 0;
+  const sgl = Number(document.getElementById("f_single").value) || 0;
+  const b = Number(document.getElementById("f_b").value) || 0;
+  const c = Number(document.getElementById("f_c").value) || 0;
+  const total = dbl+sgl+b+c;
+  const target = Number(document.getElementById("lk_target").textContent) || 0;
+  const customize = document.getElementById("f_customize").value.trim() || null;
+  const bGradeType = document.getElementById("f_bgradetype").value.trim() || null;
+  const description = document.getElementById("f_description").value.trim() || null;
+  const recordedAt = CURRENT_INIT.initiated_at;
+
+  try{
+    // Re-verify the initiation hasn't been closed/suspended while this form was open
+    try{ await sb.rpc("auto_suspend_stale_initiations"); }catch(e){ console.warn("Auto-suspend sweep failed (non-fatal):", e); }
+    const { data: freshInit, error: fErr } = await sb.from("weaving_production_initiations")
+      .select("status").eq("id", CURRENT_INIT.id).maybeSingle();
+    if(fErr) throw fErr;
+    if(!freshInit || freshInit.status !== "Pending"){
+      statusEl.className = "status err";
+      statusEl.textContent = "This shift's production window is no longer open (completed or suspended). Refresh the page — your entry was not submitted.";
+      return;
+    }
+
+    // Duplicate check against the same natural key used by the dedup index
+    const { data: dupes, error: dErr } = await sb.from(MW_TABLE)
+      .select("id").eq("date_col", CURRENT_INIT.production_date).eq("work_type", CURRENT_INIT.work_type)
+      .eq("shift", CURRENT_INIT.shift).eq("mat_type", matType).eq("group_name", group)
+      .eq("assets", PICKED_ASSET.asset_code).eq("recorded_at", recordedAt);
+    if(dErr) throw dErr;
+    if(dupes && dupes.length){
+      if(!confirm(`Asset ${PICKED_ASSET.asset_code} already has an entry for this exact shift session. Submit anyway and create a duplicate?`)){
+        statusEl.style.display = "none";
+        return;
+      }
+    }
+
+    statusEl.textContent = "Submitting...";
+    const { error } = await sb.from(MW_TABLE).insert({
+      date_col: CURRENT_INIT.production_date,
+      work_type: CURRENT_INIT.work_type,
+      shift: CURRENT_INIT.shift,
+      mat_type: matType,
+      customize: customize,
+      group_name: group,
+      assets: PICKED_ASSET.asset_code,
+      a_double: dbl, a_single: sgl, b: b, c: c, total: total,
+      b_grade_type: bGradeType,
+      target: target,
+      shed: PICKED_ASSET.shed,
+      units: PICKED_ASSET.unit_code,
+      section: PICKED_ASSET.section,
+      operator_name: opName,
+      operator_id: opId,
+      rank: rank === "—" ? null : rank,
+      description: description,
+      recorded_at: recordedAt
+    });
+    if(error) throw error;
+
+    await logActivity("weaving_production_entry_added",
+      ME.username + " logged production for asset " + PICKED_ASSET.asset_code + " (" + CURRENT_INIT.production_date + " " + CURRENT_INIT.shift + ", Group " + group + ", Total " + total + ")");
+
+    statusEl.className = "status ok"; statusEl.textContent = "Entry submitted. Form cleared for the next asset.";
+    resetEntryFields();
+    document.getElementById("lk_date").textContent = CURRENT_INIT.production_date;
+    document.getElementById("lk_worktype").textContent = CURRENT_INIT.work_type;
+    document.getElementById("lk_shift").textContent = CURRENT_INIT.shift;
+  }catch(e){
+    statusEl.className = "status err"; statusEl.textContent = "Error: " + e.message;
+  }
+}
+
+init();
+</script>
+</body>
+</html>

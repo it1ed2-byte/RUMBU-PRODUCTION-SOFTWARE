@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Vehicle Monitor — Logistics</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme")||"navy"); }catch(e){} })();
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) document.documentElement.setAttribute("data-theme",e.data.rumbuTheme); });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1150px;margin:0 auto;}
+  .legend{display:flex;gap:18px;align-items:center;margin-bottom:16px;flex-wrap:wrap;}
+  .legend-item{display:flex;align-items:center;gap:6px;font-size:12.5px;}
+  .legend-dot{width:14px;height:14px;border-radius:4px;display:inline-block;}
+  .veh-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px;margin-top:8px;}
+  .veh-card{border-radius:12px;padding:14px 12px;text-align:center;cursor:pointer;transition:transform .12s,box-shadow .12s;position:relative;}
+  .veh-card:hover{transform:translateY(-2px);box-shadow:0 4px 14px rgba(0,0,0,.15);}
+  .veh-card.free{background:#d1fae5;border:2px solid #6ee7b7;}
+  .veh-card.occupied{background:#fee2e2;border:2px solid #fca5a5;}
+  .veh-card.unavailable{background:#f3f4f6;border:2px solid #d1d5db;}
+  .veh-icon{font-size:26px;line-height:1;margin-bottom:4px;}
+  .veh-card .veh-name{font-weight:800;font-size:13px;color:#1f2430;}
+  .veh-card .veh-status{font-size:11px;font-weight:700;margin-top:3px;}
+  .veh-card.free .veh-status{color:#065f46;}
+  .veh-card.occupied .veh-status{color:#991b1b;}
+  .veh-card.unavailable .veh-status{color:#4b5563;}
+  .veh-card .veh-info{font-size:10px;color:#6b7280;margin-top:4px;line-height:1.4;}
+  .fuel-badge{display:inline-flex;align-items:center;gap:4px;margin-top:8px;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:700;}
+  .fuel-badge.f-ok{background:#dbeafe;color:#1e40af;}
+  .fuel-badge.f-low{background:#fef3c7;color:#92400e;}
+  .fuel-badge.f-empty{background:#fee2e2;color:#991b1b;}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:16px;}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center;}
+  .stat .n{font-size:26px;font-weight:800;color:var(--heading);}
+  .stat .l{font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;margin-top:4px;}
+  .stat.free-s .n{color:#065f46;}
+  .stat.occ-s .n{color:#991b1b;}
+  .stat.unavail-s .n{color:#4b5563;}
+  .stat.fuel-s .n{color:#92400e;}
+  .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;justify-content:center;align-items:center;padding:16px;}
+  .modal-overlay.open{display:flex;}
+  .modal{background:var(--card);border-radius:12px;padding:24px;width:100%;max-width:460px;}
+  .modal h4{color:var(--heading);margin:0 0 12px;}
+  .detail-row{font-size:13px;padding:6px 0;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:10px;}
+  .detail-row:last-child{border-bottom:none;}
+  .btn-ghost{background:var(--bg);color:var(--heading);border:1px solid var(--line);}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
+    <button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;background:var(--accent);color:var(--logo-fg);">&larr; Back</button>
+    <button onclick="loadVehicles()" style="max-width:150px;">&#8635; Refresh</button>
+  </div>
+  <div id="connStatus" style="font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);">Loading...</div>
+
+  <div class="stats" id="statsBar"></div>
+
+  <div class="card-panel">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
+      <h3 style="margin:0;color:var(--heading);">🚐 Vehicle Monitor — Occupancy &amp; Fuel</h3>
+      <div class="legend">
+        <div class="legend-item"><span class="legend-dot" style="background:#6ee7b7;border:2px solid #6ee7b7;"></span>Available</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#fca5a5;border:2px solid #fca5a5;"></span>Occupied (On Trip)</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#d1d5db;border:2px solid #d1d5db;"></span>Unavailable</div>
+        <div class="legend-item">⛽🔵 Fuel OK</div>
+        <div class="legend-item">⛽🟡 Fuel Low</div>
+        <div class="legend-item">⛽🔴 Empty</div>
+      </div>
+    </div>
+    <div class="veh-grid" id="vehGrid"></div>
+  </div>
+</div>
+
+<!-- Detail modal -->
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <h4 id="modalTitle">Vehicle Detail</h4>
+    <div id="modalContent"></div>
+    <button class="btn-ghost" onclick="closeModal()" style="width:100%;margin-top:14px;">Close</button>
+  </div>
+</div>
+
+<script>
+let ME=null, VEHICLES=[], ACTIVE_TRIPS=[], FUEL_BY_VEHICLE={};
+
+// Simple, adjustable heuristic — there's no tank-capacity field on Vehicle
+// Profiles yet, so "Low" is an absolute litre threshold rather than a
+// percentage of tank size. Easy to refine later if a capacity field gets
+// added.
+const LOW_FUEL_THRESHOLD_LITRES = 10;
+
+async function init(){
+  const cs=document.getElementById("connStatus");
+  try{
+    ME=await requireAuth("../../login.html");
+    if(!ME) return;
+    await loadVehicles();
+    cs.style.color="var(--ok)"; cs.textContent="Live — click any vehicle for details.";
+  }catch(e){ cs.style.color="var(--bad)"; cs.textContent="Error: "+e.message; }
+}
+
+async function loadVehicles(){
+  const [{ data: vData, error: vErr }, { data: tData }, { data: fuelData }, { data: allTripsData }] = await Promise.all([
+    sb.from("logistics_vehicles").select("*").order("registration_number"),
+    sb.from("logistics_trips")
+      .select("id,vehicle_id,destination,requesting_department,purpose,trip_date,expected_duration_hours,dispatched_at,logistics_drivers(employees(full_name))")
+      .eq("status","dispatched"),
+    sb.from("logistics_fuel_records").select("vehicle_id,quantity_purchased"),
+    sb.from("logistics_trips").select("vehicle_id,calculated_fuel_litres").in("status",["dispatched","completed"])
+  ]);
+  if(vErr){ document.getElementById("vehGrid").innerHTML=`<p style="color:var(--bad);">Error: ${vErr.message}</p>`; return; }
+  VEHICLES = vData||[];
+  ACTIVE_TRIPS = tData||[];
+
+  // Remaining fuel per vehicle, tracked end to end: everything ever
+  // purchased for it (Fuel Management) minus everything ever issued to it
+  // (every trip that's been Dispatched, whether closed out yet or not,
+  // since fuel leaves the tank the moment it's issued).
+  FUEL_BY_VEHICLE = {};
+  VEHICLES.forEach(v=>{ FUEL_BY_VEHICLE[v.id] = { purchased: 0, issued: 0 }; });
+  (fuelData||[]).forEach(f=>{ if(FUEL_BY_VEHICLE[f.vehicle_id]) FUEL_BY_VEHICLE[f.vehicle_id].purchased += Number(f.quantity_purchased||0); });
+  (allTripsData||[]).forEach(t=>{ if(FUEL_BY_VEHICLE[t.vehicle_id] && t.calculated_fuel_litres!=null) FUEL_BY_VEHICLE[t.vehicle_id].issued += Number(t.calculated_fuel_litres); });
+
+  const occupiedIds = new Set(ACTIVE_TRIPS.map(t=>t.vehicle_id));
+  const total = VEHICLES.length;
+  const occupied = VEHICLES.filter(v=>occupiedIds.has(v.id)).length;
+  const unavailable = VEHICLES.filter(v=>!occupiedIds.has(v.id) && v.operational_status !== "Active").length;
+  const free = total - occupied - unavailable;
+  const needsFuel = VEHICLES.filter(v=>remainingFuel(v.id) <= LOW_FUEL_THRESHOLD_LITRES).length;
+
+  document.getElementById("statsBar").innerHTML=`
+    <div class="stat"><div class="n">${total}</div><div class="l">Total Vehicles</div></div>
+    <div class="stat free-s"><div class="n">${free}</div><div class="l">Available</div></div>
+    <div class="stat occ-s"><div class="n">${occupied}</div><div class="l">Occupied</div></div>
+    <div class="stat unavail-s"><div class="n">${unavailable}</div><div class="l">Unavailable</div></div>
+    <div class="stat fuel-s"><div class="n">${needsFuel}</div><div class="l">Need Fuel</div></div>`;
+
+  document.getElementById("vehGrid").innerHTML = VEHICLES.map(v=>{
+    const trip = ACTIVE_TRIPS.find(t=>t.vehicle_id===v.id);
+    let cls, label, info = "";
+    if(trip){
+      cls = "occupied"; label = "Occupied";
+      info = `${trip.destination}<br>${trip.requesting_department}`;
+    } else if(v.operational_status !== "Active"){
+      cls = "unavailable"; label = v.operational_status;
+    } else {
+      cls = "free"; label = "Available";
+    }
+    return `<div class="veh-card ${cls}" onclick="showDetail(${v.id})">
+      <div class="veh-icon">🚐</div>
+      <div class="veh-name">${v.registration_number}</div>
+      <div class="veh-status">${label}</div>
+      ${info ? `<div class="veh-info">${info}</div>` : ""}
+      ${fuelBadge(v.id)}
+    </div>`;
+  }).join("");
+}
+
+function remainingFuel(vehicleId){
+  const f = FUEL_BY_VEHICLE[vehicleId] || { purchased:0, issued:0 };
+  return f.purchased - f.issued;
+}
+
+function fuelBadge(vehicleId){
+  const remaining = remainingFuel(vehicleId);
+  let cls, icon, label;
+  if(remaining <= 0){ cls="f-empty"; icon="⛽🔴"; label="Empty"; }
+  else if(remaining <= LOW_FUEL_THRESHOLD_LITRES){ cls="f-low"; icon="⛽🟡"; label="Low"; }
+  else { cls="f-ok"; icon="⛽🔵"; label=remaining.toFixed(0)+"L"; }
+  return `<div class="fuel-badge ${cls}">${icon} ${label}</div>`;
+}
+
+function showDetail(id){
+  const v = VEHICLES.find(x=>x.id===id);
+  if(!v) return;
+  const trip = ACTIVE_TRIPS.find(t=>t.vehicle_id===id);
+  const status = trip ? "Occupied" : (v.operational_status!=="Active" ? v.operational_status : "Available");
+  const f = FUEL_BY_VEHICLE[id] || { purchased:0, issued:0 };
+  const remaining = f.purchased - f.issued;
+  document.getElementById("modalTitle").textContent = v.registration_number + " — " + status;
+
+  const fuelSection = `
+    <div class="detail-row"><span>Total Fuel Purchased</span><b>${f.purchased.toFixed(2)} L</b></div>
+    <div class="detail-row"><span>Total Fuel Issued (all trips)</span><b>${f.issued.toFixed(2)} L</b></div>
+    <div class="detail-row"><span>Remaining in Tank (est.)</span><b style="color:${remaining<=0?'#991b1b':remaining<=LOW_FUEL_THRESHOLD_LITRES?'#92400e':'#1e40af'};">${remaining.toFixed(2)} L</b></div>`;
+
+  if(trip){
+    const drv = (trip.logistics_drivers && trip.logistics_drivers.employees) ? trip.logistics_drivers.employees.full_name : "—";
+    document.getElementById("modalContent").innerHTML = `
+      <div class="detail-row"><span>Destination</span><b>${trip.destination}</b></div>
+      <div class="detail-row"><span>Requesting Department</span><b>${trip.requesting_department}</b></div>
+      <div class="detail-row"><span>Purpose</span><b>${trip.purpose}</b></div>
+      <div class="detail-row"><span>Driver</span><b>${drv}</b></div>
+      <div class="detail-row"><span>Trip Date</span><b>${trip.trip_date}</b></div>
+      <div class="detail-row"><span>Expected Duration</span><b>${trip.expected_duration_hours} hour(s)</b></div>
+      <div class="detail-row"><span>Dispatched At</span><b>${trip.dispatched_at ? new Date(trip.dispatched_at).toLocaleString("en-GB") : "—"}</b></div>
+      ${fuelSection}
+      <p style="font-size:12px;color:var(--muted);margin-top:10px;">This vehicle will show as Available again once the trip is closed out.</p>`;
+  } else if(v.operational_status !== "Active"){
+    document.getElementById("modalContent").innerHTML = `
+      <div class="detail-row"><span>Operational Status</span><b>${v.operational_status}</b></div>
+      <div class="detail-row"><span>Department / Location</span><b>${v.department_location||"—"}</b></div>
+      ${fuelSection}
+      <p style="color:#4b5563;font-weight:700;text-align:center;padding:12px 0;">Not currently available — update its status in Vehicle Profiles once it's ready again.</p>`;
+  } else {
+    document.getElementById("modalContent").innerHTML = `
+      <div class="detail-row"><span>Make / Model</span><b>${v.make} ${v.model} (${v.year})</b></div>
+      <div class="detail-row"><span>Current Mileage</span><b>${v.current_mileage!=null?v.current_mileage+" km":"—"}</b></div>
+      ${fuelSection}
+      ${remaining<=LOW_FUEL_THRESHOLD_LITRES ? `<p style="color:#92400e;font-weight:700;text-align:center;padding:8px 0;">⚠️ Consider fuelling this vehicle before its next trip.</p>` : `<p style="color:#065f46;font-weight:700;text-align:center;padding:16px 0;">Available for a new Trip Request.</p>`}`;
+  }
+  document.getElementById("modal").classList.add("open");
+}
+
+function closeModal(){ document.getElementById("modal").classList.remove("open"); }
+document.getElementById("modal").addEventListener("click",function(e){ if(e.target===this) closeModal(); });
+init();
+</script>
+</body>
+</html>

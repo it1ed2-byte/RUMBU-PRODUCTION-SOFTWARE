@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>IT Inventory — Reports</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;color:var(--text);}
+  .wrap{max-width:1200px;margin:0 auto;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;}
+  .card h3{color:var(--navy);margin:0 0 4px;font-size:16px;}
+  label{display:block;font-size:12px;font-weight:bold;color:var(--text);margin:10px 0 4px;}
+  input,select{width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;}
+  .row > div{flex:1;min-width:160px;}
+  button{padding:10px 14px;border:none;border-radius:8px;font-weight:bold;font-size:13px;cursor:pointer;background:var(--blue);color:#fff;}
+  button:hover{background:var(--blue-dark);}
+  button.print{background:#6b7280;} button.print:hover{background:#4b5563;}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;}
+  .status{margin-top:8px;font-weight:bold;font-size:13px;min-height:14px;}
+  .status.err{color:var(--red);}
+  table{width:100%;border-collapse:collapse;margin-top:12px;font-size:12px;}
+  th,td{border:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top;}
+  thead th{background:var(--navy);color:#fff;}
+  tbody tr:nth-child(even){background:#f6f8fb;}
+  .count{font-size:13px;color:var(--muted);margin-top:8px;}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<div id="connStatus">Loading...</div>
+
+<div id="appArea" style="display:none;">
+  <div class="card">
+    <h3>IT Inventory Reports</h3>
+    <div class="row">
+      <div>
+        <label>Report</label>
+        <select id="report" onchange="onReportChange()">
+          <option value="full_register">Full Device Register</option>
+          <option value="by_status">Devices by Status</option>
+          <option value="by_branch">Devices by Branch</option>
+          <option value="by_department">Devices by Department</option>
+          <option value="active_assignments">Active Assignments (devices out)</option>
+          <option value="open_repairs">Open Repairs</option>
+          <option value="all_repairs">All Repairs</option>
+          <option value="maintenance_due">Maintenance Due</option>
+          <option value="all_maintenance">All Maintenance</option>
+          <option value="movement_history">Movement History</option>
+          <option value="disposals">Disposals</option>
+        </select>
+      </div>
+      <div id="branchFilterWrap">
+        <label>Branch</label>
+        <select id="branchFilter"><option value="">All (my scope)</option></select>
+      </div>
+      <div id="statusFilterWrap" style="display:none;">
+        <label>Status</label>
+        <select id="statusFilter"><option value="">All</option></select>
+      </div>
+      <div style="flex:0 0 auto;"><button onclick="run()">Run Report</button></div>
+      <div style="flex:0 0 auto;"><button class="print" onclick="printReport()">Print / PDF</button></div>
+    </div>
+    <div class="status" id="status"></div>
+    <div class="count" id="count"></div>
+  </div>
+
+  <div class="card">
+    <div id="reportWrap"><p style="color:#6b7280;">Choose a report and click "Run Report".</p></div>
+  </div>
+</div>
+</div>
+
+<script>
+let ME = null;
+let BRANCHES = [], STATUSES = [];
+let lastTitle = "", lastRows = [], lastHeaders = [];
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    status.style.color = "#1d8a4e"; status.textContent = "Connected." + (ME.role==="super_admin"?" All branches.":" Your branch(es).");
+    document.getElementById("appArea").style.display = "block";
+    await loadRef();
+  }catch(e){
+    status.style.color = "#c0392b"; status.textContent = "❌ " + e.message; console.error(e);
+  }
+}
+
+async function loadRef(){
+  const [sec, st] = await Promise.all([
+    sb.from("app_sections").select("name").order("name"),
+    sb.from("it_ref_statuses").select("name").order("name")
+  ]);
+  BRANCHES = (ME.role==="super_admin") ? (sec.data||[]).map(s=>s.name) : (ME.sectionNames||[]);
+  STATUSES = (st.data||[]).map(s=>s.name);
+  const bf = document.getElementById("branchFilter");
+  BRANCHES.forEach(b=>{ const o=document.createElement("option"); o.value=b; o.textContent=b; bf.appendChild(o); });
+  const sf = document.getElementById("statusFilter");
+  STATUSES.forEach(s=>{ const o=document.createElement("option"); o.value=s; o.textContent=s; sf.appendChild(o); });
+}
+
+function onReportChange(){
+  const r = document.getElementById("report").value;
+  document.getElementById("statusFilterWrap").style.display = (r==="by_status") ? "block" : "none";
+}
+
+function scope(q){
+  const bf = document.getElementById("branchFilter").value;
+  if(bf) return q.eq("branch", bf);
+  if(ME.role!=="super_admin"){
+    if(ME.sectionNames && ME.sectionNames.length) return q.in("branch", ME.sectionNames);
+    return q.eq("branch","___none___");
+  }
+  return q;
+}
+
+async function run(){
+  const status = document.getElementById("status");
+  status.className="status"; status.textContent="Running...";
+  const r = document.getElementById("report").value;
+  try{
+    let headers=[], rows=[], title="";
+    if(r==="full_register" || r==="by_status" || r==="by_branch" || r==="by_department"){
+      let q = scope(sb.from("it_devices").select("*"));
+      const stF = document.getElementById("statusFilter").value;
+      if(r==="by_status" && stF) q = q.eq("status", stF);
+      const { data, error } = await q; if(error) throw error;
+      let devs = data||[];
+      if(r==="by_branch") devs.sort((a,b)=>(a.branch||"").localeCompare(b.branch||""));
+      if(r==="by_department") devs.sort((a,b)=>(a.department||"").localeCompare(b.department||""));
+      headers = ["Code","Type","Make/Model","Serial","Branch","Dept/Unit","Assigned","Status","Condition"];
+      rows = devs.map(d=>[d.device_code, d.type, [d.make,d.model].filter(Boolean).join(" "), d.serial_number, d.branch, [d.department,d.unit].filter(Boolean).join(" / "), d.assigned_name, d.status, d.condition]);
+      title = ({full_register:"Full Device Register", by_status:"Devices by Status"+(stF?" — "+stF:""), by_branch:"Devices by Branch", by_department:"Devices by Department"})[r];
+    } else if(r==="active_assignments"){
+      const { data, error } = await scope(sb.from("it_assignments").select("*")).is("date_returned", null); if(error) throw error;
+      headers = ["Code","Device","Assigned To","Branch","Issued","By"];
+      rows = (data||[]).map(a=>[a.assign_code, a.device_label, a.assigned_name, a.branch, fmt(a.date_assigned), a.assigned_by]);
+      title = "Active Assignments";
+    } else if(r==="open_repairs" || r==="all_repairs"){
+      let q = scope(sb.from("it_repairs").select("*"));
+      if(r==="open_repairs") q = q.eq("status","Open");
+      const { data, error } = await q; if(error) throw error;
+      headers = ["Code","Device","Fault","Reported","Technician","Cost","Status"];
+      rows = (data||[]).map(x=>[x.repair_code, x.device_label, x.fault_description, fmt(x.date_reported), x.technician, x.cost!=null?"₦"+x.cost:"", x.status]);
+      title = r==="open_repairs" ? "Open Repairs" : "All Repairs";
+    } else if(r==="maintenance_due" || r==="all_maintenance"){
+      let q = scope(sb.from("it_maintenance").select("*"));
+      const { data, error } = await q; if(error) throw error;
+      let m = data||[];
+      if(r==="maintenance_due"){
+        const now = new Date();
+        m = m.filter(x=>x.status!=="Completed" && x.scheduled_date && (new Date(x.scheduled_date)-now)/86400000 <= 7);
+      }
+      headers = ["Code","Device","Type","Scheduled","Performed","Next Due","Status"];
+      rows = m.map(x=>[x.maint_code, x.device_label, x.type, x.scheduled_date, x.date_performed, x.next_due_date, x.status]);
+      title = r==="maintenance_due" ? "Maintenance Due (next 7 days)" : "All Maintenance";
+    } else if(r==="movement_history"){
+      const { data, error } = await scope(sb.from("it_movement").select("*")).order("move_date",{ascending:false}); if(error) throw error;
+      headers = ["Code","Date","Device","From","To","Reason","By"];
+      rows = (data||[]).map(x=>[x.move_code, fmt(x.move_date), x.device_label, loc(x.from_branch,x.from_department,x.from_unit,x.from_location), loc(x.to_branch,x.to_department,x.to_unit,x.to_location), x.reason, x.moved_by]);
+      title = "Movement History";
+    } else if(r==="disposals"){
+      const { data, error } = await scope(sb.from("it_disposal").select("*")).order("disposal_date",{ascending:false}); if(error) throw error;
+      headers = ["Code","Device","Branch","Method","Reason","Date","Recovery"];
+      rows = (data||[]).map(x=>[x.disposal_code, x.device_label, x.branch, x.method, x.reason, fmt(x.disposal_date), x.recovery_value!=null?"₦"+x.recovery_value:""]);
+      title = "Disposals";
+    }
+    lastTitle=title; lastRows=rows; lastHeaders=headers;
+    renderTable(headers, rows);
+    document.getElementById("count").textContent = rows.length + " row(s).";
+    status.textContent="";
+  }catch(e){
+    status.className="status err"; status.textContent="❌ "+e.message;
+  }
+}
+
+function fmt(ts){ return ts ? new Date(ts).toLocaleDateString() : ""; }
+function loc(b,d,u,l){ return [b,d,u,l].filter(Boolean).join(" › ") || "—"; }
+
+function renderTable(headers, rows){
+  const wrap = document.getElementById("reportWrap");
+  if(!rows.length){ wrap.innerHTML="<p>No data for this report.</p>"; return; }
+  let html = "<table><thead><tr>"+headers.map(h=>`<th>${h}</th>`).join("")+"</tr></thead><tbody>";
+  rows.forEach(row=>{ html += "<tr>"+row.map(c=>`<td>${c!=null&&c!==""?c:""}</td>`).join("")+"</tr>"; });
+  html += "</tbody></table>";
+  wrap.innerHTML = html;
+}
+
+function printReport(){
+  if(!lastRows.length){ alert("Run a report first."); return; }
+  const head = lastHeaders.map(h=>`<th>${h}</th>`).join("");
+  const body = lastRows.map(r=>"<tr>"+r.map(c=>`<td>${c!=null&&c!==""?c:""}</td>`).join("")+"</tr>").join("");
+  const html = `<html><head><style>
+  @page{size:A4 landscape;margin:28pt;} body{font-family:var(--sans);font-size:9.5pt;padding:18px;}
+  h2{text-align:center;margin:0 0 2px;} h3{text-align:center;margin:0 0 14px;font-weight:normal;}
+  table{width:100%;border-collapse:collapse;} th,td{border:1px solid #333;padding:5px 7px;text-align:left;}
+  th{background:#1F3864;color:#fff;} .meta{font-size:9pt;color:#555;text-align:center;margin-bottom:12px;}
+  </style></head><body>
+  <h2>Rumbu Industries Group</h2><h3>${lastTitle}</h3>
+  <div class="meta">Generated ${new Date().toLocaleString()} — ${lastRows.length} row(s)</div>
+  <table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>
+  </body></html>`;
+  const w = window.open("","_blank"); w.document.write(html); w.document.close();
+  w.onload=function(){ w.focus(); w.print(); };
+}
+
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Trip Request — Logistics</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme")||"navy"); }catch(e){} })();
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) document.documentElement.setAttribute("data-theme",e.data.rumbuTheme); });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="review-modal.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<style>
+  body{padding:18px;}
+  .wrap{max-width:1000px;margin:0 auto;}
+  label{font-size:12px;font-weight:700;display:block;margin:10px 0 4px;color:var(--muted);}
+  input,select,textarea{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);}
+  .form-row-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;}
+  .form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  .sec-title{font-weight:700;color:var(--heading);margin:18px 0 8px;padding-bottom:4px;border-bottom:2px solid var(--line);font-size:13px;}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;}
+  th{text-align:left;padding:7px 8px;border-bottom:2px solid var(--line);color:var(--heading);white-space:nowrap;}
+  td{padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top;}
+  .badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10.5px;font-weight:700;}
+  .b-submitted{background:#fef3c7;color:#92400e;} .b-approved{background:#dbeafe;color:#1e40af;}
+  .b-rejected{background:#fee2e2;color:#991b1b;} .b-dispatched{background:#e0e7ff;color:#3730a3;}
+  .b-completed{background:#dcfce7;color:#166534;}
+  .btn-ghost{background:var(--bg);color:var(--heading);border:1px solid var(--line);}
+  .hidden{display:none;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back</button>
+  <div id="connStatus" style="font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);">Loading...</div>
+
+  <div class="card-panel">
+    <h3 style="color:var(--heading);margin:0 0 4px;">Trip Request</h3>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 16px;">Request a vehicle and driver for a trip — goes straight to the Dispatch queue once submitted.</p>
+
+    <button onclick="toggleForm()">+ New Trip Request</button>
+
+    <div class="hidden" id="formPanel" style="border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin:14px 0;">
+      <h4 style="margin-top:0;" id="formTitle">New Trip Request</h4>
+      <input type="hidden" id="t_id">
+
+      <div class="form-row">
+        <div><label>Requesting Department *</label><input id="t_dept" placeholder="e.g. Finance, HR, Production"></div>
+        <div><label>Destination *</label><input id="t_destination"></div>
+      </div>
+      <div><label>Purpose of Trip *</label><textarea id="t_purpose"></textarea></div>
+      <div class="form-row">
+        <div><label>Trip Date *</label><input type="date" id="t_date"></div>
+        <div><label>Expected Duration (hours) *</label><input type="number" step="0.5" min="0" id="t_duration"></div>
+      </div>
+
+      <div class="sec-title">Vehicle &amp; Driver</div>
+      <div class="form-row">
+        <div><label>Vehicle *</label><select id="t_vehicle" onchange="onVehicleChange()"><option value="">— Select —</option></select></div>
+        <div><label>Driver *</label><select id="t_driver"><option value="">— Select —</option></select></div>
+      </div>
+      <p style="font-size:12px;color:var(--muted);margin:4px 0 0;" id="vehicleStatusNote"></p>
+
+      <div class="sec-title">Supporting Document</div>
+      <div><label>Attachment (optional)</label><input type="file" id="t_file"><div id="t_file_url" class="hidden"></div></div>
+
+      <button onclick="submitTrip()" style="margin-top:14px;">Submit Trip Request</button>
+      <button class="btn-ghost" onclick="toggleForm()">Cancel</button>
+      <div class="status" id="formStatus"></div>
+    </div>
+
+    <div class="form-row" style="margin-top:16px;">
+      <div><label>Search</label><input id="search" placeholder="Department, destination, purpose" oninput="render()"></div>
+      <div><label>Status</label>
+        <select id="statusFilter" onchange="render()">
+          <option value="">All</option><option value="submitted">Submitted (awaiting dispatch)</option>
+          <option value="dispatched">Dispatched</option><option value="completed">Completed</option>
+        </select>
+      </div>
+    </div>
+    <div style="margin-top:10px;"><button class="btn-ghost" onclick="downloadPdf()">⬇ Download PDF (current filters)</button></div>
+    <div id="wrap" style="margin-top:14px;overflow-x:auto;"></div>
+  </div>
+</div>
+
+<script>
+let ME = null;
+let TRIPS = [];
+let VEHICLES = [];
+let DRIVERS = [];
+let CURRENT_ROWS = [];
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    await loadAll();
+    status.style.color="var(--ok)"; status.textContent="Connected.";
+  }catch(e){
+    status.style.color="var(--bad)"; status.textContent="Error: "+e.message;
+  }
+}
+
+async function loadAll(){
+  const [{ data: tData, error: tErr }, { data: vData }, { data: dData }] = await Promise.all([
+    sb.from("logistics_trips").select("*, logistics_vehicles(registration_number), logistics_drivers(employees(full_name))")
+      .order("created_at", { ascending:false }),
+    sb.from("logistics_vehicles").select("id,registration_number,operational_status").order("registration_number"),
+    sb.from("logistics_drivers").select("id,employees(full_name,employee_id)").order("id")
+  ]);
+  if(tErr) throw tErr;
+  TRIPS = tData || [];
+  VEHICLES = vData || [];
+  DRIVERS = dData || [];
+  document.getElementById("t_vehicle").innerHTML = '<option value="">— Select —</option>' +
+    VEHICLES.map(v=>`<option value="${v.id}" data-status="${v.operational_status}">${v.registration_number} (${v.operational_status})</option>`).join("");
+  document.getElementById("t_driver").innerHTML = '<option value="">— Select —</option>' +
+    DRIVERS.map(d=>{ const e=d.employees||{}; return `<option value="${d.id}">${e.full_name||"—"} (${e.employee_id||"—"})</option>`; }).join("");
+  render();
+}
+
+function onVehicleChange(){
+  const sel = document.getElementById("t_vehicle");
+  const opt = sel.options[sel.selectedIndex];
+  const st = opt ? opt.getAttribute("data-status") : "";
+  const note = document.getElementById("vehicleStatusNote");
+  note.textContent = (st && st !== "Active") ? "⚠️ This vehicle's current status is \"" + st + "\" — confirm it's actually available before requesting it." : "";
+}
+
+const STATUS_LABELS = { submitted:"Submitted", dispatched:"Dispatched", completed:"Completed" };
+const STATUS_BADGE = { submitted:"b-submitted", dispatched:"b-dispatched", completed:"b-completed" };
+
+function render(){
+  const q = document.getElementById("search").value.trim().toLowerCase();
+  const statusF = document.getElementById("statusFilter").value;
+  let rows = TRIPS.filter(t=>{
+    if(statusF && t.status !== statusF) return false;
+    if(q && !((t.requesting_department||"")+(t.destination||"")+(t.purpose||"")).toLowerCase().includes(q)) return false;
+    return true;
+  });
+  const wrap = document.getElementById("wrap");
+  CURRENT_ROWS = rows;
+  if(!rows.length){ wrap.innerHTML = "<p style='color:var(--muted);font-size:13px;'>No trip requests match.</p>"; return; }
+  wrap.innerHTML = `<table>
+    <thead><tr><th>Date</th><th>Department</th><th>Destination</th><th>Vehicle</th><th>Driver</th><th>Status</th></tr></thead>
+    <tbody>${rows.map(t=>{
+      const veh = t.logistics_vehicles ? t.logistics_vehicles.registration_number : "—";
+      const drv = (t.logistics_drivers && t.logistics_drivers.employees) ? t.logistics_drivers.employees.full_name : "—";
+      return `<tr>
+        <td>${t.trip_date||"—"}</td><td>${t.requesting_department||"—"}</td><td>${t.destination||"—"}</td>
+        <td>${veh}</td><td>${drv}</td>
+        <td><span class="badge ${STATUS_BADGE[t.status]||''}">${STATUS_LABELS[t.status]||t.status}</span></td>
+      </tr>`;
+    }).join("")}</tbody>
+  </table>`;
+}
+
+function toggleForm(){
+  const panel = document.getElementById("formPanel");
+  panel.classList.toggle("hidden");
+  if(!panel.classList.contains("hidden")) clearForm();
+}
+
+function clearForm(){
+  document.getElementById("formTitle").textContent = "New Trip Request";
+  document.getElementById("t_id").value = "";
+  ["t_dept","t_destination","t_purpose","t_date","t_duration"].forEach(id=>document.getElementById(id).value="");
+  document.getElementById("t_vehicle").value = "";
+  document.getElementById("t_driver").value = "";
+  document.getElementById("vehicleStatusNote").textContent = "";
+  document.getElementById("t_file_url").classList.add("hidden");
+  document.getElementById("formStatus").textContent = "";
+}
+
+function submitTrip(){
+  const status = document.getElementById("formStatus");
+  const required = [
+    ["t_dept","Requesting Department"], ["t_destination","Destination"], ["t_purpose","Purpose of Trip"],
+    ["t_date","Trip Date"], ["t_duration","Expected Duration"], ["t_vehicle","Vehicle"], ["t_driver","Driver"]
+  ];
+  for(const [id,label] of required){
+    if(document.getElementById(id).value===""){ status.className="status err"; status.textContent=`"${label}" is required.`; return; }
+  }
+
+  const vehSel = document.getElementById("t_vehicle");
+  const drvSel = document.getElementById("t_driver");
+  status.textContent = "";
+  showReviewModal({
+    title: "Review Before Submitting",
+    subtitle: document.getElementById("t_destination").value + " — " + document.getElementById("t_date").value,
+    mode: "submit",
+    sections: [{ rows: [
+      ["Requesting Department", document.getElementById("t_dept").value],
+      ["Destination", document.getElementById("t_destination").value],
+      ["Purpose", document.getElementById("t_purpose").value],
+      ["Trip Date", document.getElementById("t_date").value],
+      ["Expected Duration (hours)", document.getElementById("t_duration").value],
+      ["Vehicle", vehSel.options[vehSel.selectedIndex]?.text||""],
+      ["Driver", drvSel.options[drvSel.selectedIndex]?.text||""],
+    ]}],
+    onConfirm: proceedWithTripSubmit
+  });
+}
+window.submitTrip = submitTrip;
+
+async function proceedWithTripSubmit(){
+  const status = document.getElementById("formStatus");
+  status.className="status"; status.textContent="Saving...";
+  try{
+    const payload = {
+      requesting_department: document.getElementById("t_dept").value.trim(),
+      destination: document.getElementById("t_destination").value.trim(),
+      purpose: document.getElementById("t_purpose").value.trim(),
+      trip_date: document.getElementById("t_date").value,
+      expected_duration_hours: Number(document.getElementById("t_duration").value),
+      vehicle_id: Number(document.getElementById("t_vehicle").value),
+      driver_id: Number(document.getElementById("t_driver").value),
+      status: "submitted",
+      cycle: 1,
+      requested_by: ME.id
+    };
+
+    const file = document.getElementById("t_file").files[0];
+    if(file){
+      const path = "trip-requests/" + Date.now() + "_" + file.name.replace(/[^a-zA-Z0-9._-]/g,"_");
+      const { error: upErr } = await sb.storage.from("logistics-attachments").upload(path, file);
+      if(upErr){ status.className="status warn"; status.textContent="⚠️ Attachment failed to upload, continuing without it: " + upErr.message; }
+      else { const { data } = sb.storage.from("logistics-attachments").getPublicUrl(path); payload.supporting_document = data.publicUrl; }
+    }
+
+    const { data: inserted, error } = await sb.from("logistics_trips").insert(payload).select("id").single();
+    if(error) throw error;
+    await sb.from("logistics_activity_log").insert({
+      entity_type:"trip", entity_id:inserted.id, action:"submitted",
+      actor_profile_id: ME.id, actor_username: ME.username,
+      description: ME.username + " submitted a trip request to " + payload.destination
+    });
+
+    if(status.className !== "status warn") status.className="status ok";
+    status.textContent = (status.className==="status warn" ? status.textContent : "✅ Trip request submitted — ready for Dispatch.");
+    await loadAll();
+    setTimeout(()=>{ document.getElementById("formPanel").classList.add("hidden"); }, 900);
+  }catch(e){
+    status.className="status err"; status.textContent="❌ " + e.message;
+  }
+}
+
+function downloadPdf(){
+  if(!CURRENT_ROWS.length){ alert("Nothing to export — no rows match the current filters."); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
+  const navy = [31, 56, 100];
+
+  doc.setFillColor(navy[0], navy[1], navy[2]);
+  doc.rect(0, 0, doc.internal.pageSize.getWidth(), 56, "F");
+  doc.setTextColor(255,255,255);
+  doc.setFont("helvetica","bold"); doc.setFontSize(13);
+  doc.text("RUMBU INDUSTRIES GROUP", 30, 24);
+  doc.setFont("helvetica","normal"); doc.setFontSize(10);
+  doc.text("Logistics — Trip Request Report", 30, 40);
+  doc.text("Printed " + new Date().toLocaleString("en-GB"), doc.internal.pageSize.getWidth()-30, 24, { align: "right" });
+
+  doc.setTextColor(60,60,60); doc.setFontSize(9);
+  const search = document.getElementById("search").value || "—";
+  const statusF = document.getElementById("statusFilter").value ? (STATUS_LABELS[document.getElementById("statusFilter").value]||"") : "All";
+  doc.text(`Search: ${search}   |   Status: ${statusF}   |   ${CURRENT_ROWS.length} record(s)`, 30, 72);
+
+  const body = CURRENT_ROWS.map(t=>{
+    const veh = t.logistics_vehicles ? t.logistics_vehicles.registration_number : "—";
+    const drv = (t.logistics_drivers && t.logistics_drivers.employees) ? t.logistics_drivers.employees.full_name : "—";
+    return [
+      t.trip_date||"—", t.requesting_department||"—", t.destination||"—", t.purpose||"—",
+      t.expected_duration_hours!=null?t.expected_duration_hours+"h":"—",
+      veh, drv, STATUS_LABELS[t.status]||t.status||"—"
+    ];
+  });
+
+  doc.autoTable({
+    startY: 84,
+    head: [["Date","Department","Destination","Purpose","Duration","Vehicle","Driver","Status"]],
+    body,
+    styles: { fontSize: 7.5, cellPadding: 4 },
+    headStyles: { fillColor: navy, textColor: 255, fontStyle: "bold" },
+    alternateRowStyles: { fillColor: [240, 244, 249] },
+    margin: { left: 30, right: 30 },
+    didDrawPage: function(){
+      const pageCount = doc.internal.getNumberOfPages();
+      doc.setFontSize(8); doc.setTextColor(120,120,120);
+      doc.text("CONFIDENTIAL", 30, doc.internal.pageSize.getHeight()-16);
+      doc.text("Page " + doc.internal.getCurrentPageInfo().pageNumber + " of " + pageCount,
+        doc.internal.pageSize.getWidth()-30, doc.internal.pageSize.getHeight()-16, { align: "right" });
+    }
+  });
+
+  doc.save("Logistics_Trip_Requests_" + new Date().toISOString().slice(0,10) + ".pdf");
+}
+
+init();
+</script>
+</body>
+</html>

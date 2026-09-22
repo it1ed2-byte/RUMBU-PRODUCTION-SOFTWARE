@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Downtime Report</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+  :root{--navy:var(--heading);}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:16px;}
+  .container{max-width:520px;margin:0 auto 16px;background:var(--card);padding:22px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.15);}
+  h3{text-align:center;color:var(--navy);margin-top:0;}
+  label{font-weight:600;margin-top:10px;display:block;}
+  input,select{width:100%;padding:8px;margin-top:5px;border:1px solid var(--line);border-radius:6px;}
+  button{width:100%;padding:10px;margin-top:16px;background:var(--navy);color:#fff;border:none;border-radius:6px;font-size:15px;cursor:pointer;}
+  button.alt{background:#38761d;}
+  #status{margin-top:12px;text-align:center;font-weight:bold;font-size:13px;}
+  .wide{max-width:1000px;margin:0 auto;}
+  table{width:100%;border-collapse:collapse;margin-top:12px;font-size:12px;background:var(--card);}
+  th,td{border:1px solid #333;padding:5px;text-align:center;}
+  th{background:var(--navy);color:#fff;}
+  tfoot td{font-weight:bold;background:#e3f2fd;}
+  .green{background:#A5D6A7;}
+  @media print{ .no-print{display:none !important;} }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+</head>
+<body>
+
+<div class="container no-print">
+  <h3>📊 Generate Downtime Report</h3>
+  <label>Start Date</label><input type="date" id="startDate">
+  <label>End Date</label><input type="date" id="endDate">
+  <label>Department</label><select id="department"><option>All</option></select>
+  <label>Shift</label><select id="shift"><option>All</option><option>Morning</option><option>Night</option></select>
+  <label>Section</label><select id="section"><option>All</option></select>
+  <button onclick="generate()">Generate Report</button>
+  <button class="alt" onclick="window.print()">Print / Save as PDF</button>
+  <div id="status">Connecting to Supabase...</div>
+</div>
+
+<div class="wide" id="reportArea"></div>
+
+<script>
+const SECTION_LABEL = { "Rumbu": "Rumbu", "MamaSannu": "Mama Sannu" };
+let CTRL_ROWS = []; CTRL_ROWS.forEach(normalizeControlRow);
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
+function parseDT(v){ const d=new Date(v); return isNaN(d)?null:d; }
+function minutesBetween(a,b){ return (!a||!b)?0:Math.trunc((b-a)/60000); }
+function extractNumber(v){ if(v==null) return 0; const m=String(v).match(/\d+(\.\d+)?/); return m?Number(m[0]):0; }
+
+const DEPARTMENTS = {
+  "FEEDING": ["200","201A","201B","202A","202B","203A","203B","204A","204B","205A","205B","206A","206B","207","208","209","210A","210B","211","212A","212B","214A","214B","215A","215B","216A","216B","218A","218B","220A","220B","222A","222B","223A","223B","224A","224B","225A","225B","226A","226B","227A","227B","228","230A","230B","231","232","233","234","235","236","237A","237B","237C","237D","238","239A","239B","239C","240A","240B","241A","241B","242A","242B","243","244A","245","248","249","251","252","253A","253B","254A","254B","255","256A","256B","257A","257B","258A","258B","260A","260B","261A","261B","262","263A","263B","264A","264B","265","266","267A","267B","268","270","271A","271B","272A","272B","273A","273B","274A","274B","275","277","278","279","280","281A","281B","282A","282B","283A","283B","284","285A","285B","286","287","288","289A","289B","290A","290B","291A","291B","292A","292B","293","294","295","296A","296B","297","298"],
+  "DELIVERY": ["3001","3002","3003A","3003B","3003C","3004","3004A","3005","3005A","3006","3006A","3012","3014","3018","3019","301A","301B","3020","3021A","3021B","3026","3026A","3027","302A","302B","3030","3031","3034","3035","3035A","3036","3038","3039","3039A","3039B","303A","303B","3040","3040A","3040B","3041","3041A","3042A","3042B","3043","3043A","3044A","3044B","3048","3048A","3049","3049A","304A","304B","3050","3050A","3051","3052","3053","3054","3055","3056","3057","3059","305A","305B","3060","3061","3062","3063","3064","3065","3066","3066A","3067","3067A","3068","3068A","3069","3069A","306A","3070","3070A","3070B","3070C","3071","3071A","3072","3072A","3073","3073A","3076","3076A","3077","3077A","3078","3078A","3079","307A","307B","308","3084","3084A","3085","3086","309A","309B","309C","310A","310B","311A","311B","311C","313","314A","314B","314C","315A","315B","316A","316B","316C","317A","317B","318A","318B","319A","319B","321","322A","322B","323A","323B","323C","324","326A","326B","327","328","329","330A","330B","331","332","334A","334B","336A","336B","336C","337A","337B","337C","340","341","343A","343B","344","346A","346B","349A","349B","350A","350B","351A","351B","352","353A","353B","354A","354B","355A","355B","356A","356B","357","358","359A","359B","360","361A","361B","362","363A","363B","364A","364B","365","366A","366B","367","368A","368B","369","370","371A","371B","372","373A","373B","374A","374B","375","376","377A","377B","378A","378B","378C","379A","379B","380A","380B","381A","381B","382A","382B","383","384A","384B","384C","384D","390"],
+  "QUALITY CONTROL": ["QC-001A","QC-001B","QC-001C","QC-001D","QC-002A","QC-002B","QC-002C","QC-003A","QC-003B","QC-004A","QC-004B","QC-004C","QC-005A","QC-005B","QC-006","QC-007A","QC-007B","QC-007C","QC-007D","QC-008","QC-008A","QC-008B","QC-009A","QC-009B","QC-010A","QC-010B","QC-011A","QC-011B","QC-011C","QC-011D","QC-011E","QC-012A","QC-012B","QC-012C","QC-012D","QC-013A","QC-013B","QC-013C","QC-014","QC-015A","QC-015B","QC-016A","QC-016B","QC-016C","QC-016D","QC-017A","QC-017B","QC-018A","QC-018B","QC-018C","QC-018D","QC-018E","QC-018F","QC-019","QC-019A","QC-019B","QC-020A","QC-020B","QC-020C","QC-020D","QC-021A","QC-021B","QC-021C","QC-022","QC-022A","QC-022B","QC-022C","QC-023","QC-023A","QC-023B","QC-024A","QC-024B","QC-024C","QC-025","QC-025A","QC-025B","QC-026","QC-026A","QC-026B","QC-026C","QC-027","QC-027A","QC-027B","QC-027C","QC-028A","QC-028B","QC-028C","QC-029A","QC-029B","QC-029C","QC-029D","QC-029E","QC-030","QC-031","QC-032A","QC-032B","QC-033A","QC-033B","QC-034","QC-041","QC-051","QC-052","QC-056","QC-100","QC-101","QC-102","QC-103","QC-104","QC-105","QC-106","QC-107","QC-108","QC-109","QC-110","QC-250"],
+  "TRANSMISSION": ["401A","401B","402","403","404","405","406","407A","407B","408","409","410","4101","4101A","4101B","4102","4103","4104A","4104B","4105A","4105B","4106A","4106B","4107","4108A","4108B","4109","411","412A","412B","413A","413B","414A","414B","415","416","417","418","419","420","421","422","423A","423B","424","425","426","427","428","429","430","430B","431","432","433A","433B","433C","434A","434B","435A","435B","436","437","438","439","440","441A","441B","442","443","444","445A","445B","445C","446","447","448A","448B","449","450","4500","4501A","4501B","4503A","4503B","4508A","451","4510B","452","4520","453A","453B","453C","454A","454B","455A","455B","456A","456B","457A","457B","457C","458A","458B","459A","459B","460A","460B","460C","461A","461B","462","463","464","465A","465B","466A","466B","467","468","469","470A","470B","471","472","473A","473B","474","475","476","477","478","479","480","481","482A","482B","483","484","485","486A","486B","487","488","489","490","491","492","493","494","495","496","497","498","499A","499B","499C","499D"],
+  "DESIGN CARD": ["501C","502","503","504","505A","505B","506","510A","511","511A","512","513","514","517","520B","520D","521"],
+  "RECYCLING": ["1106","1105","1100","1103","1101","1107","1108"],
+  "TWINE": ["1200","1201","1202","1203","1204","1205","1206","1207","1208","1209"],
+  "ELEC MAT WEAVING": ["101","102","103","104","105","105A","105B","105C","105D","105E","106","107A","107B","107C","107D","107E","108","109","109A","109B","110","111","112","113","114","115","116","117","118","119","120","121","122","123","124","125","126","127","128","129","130","131","132","133","134","135","136","137","138","139","140","141","142","142A","143","144","145","146","147A","147B","147C","147D","147E","148","149","150","151","152","153","154","155","156","157","158","159","160","161","162","163","164","165","166","167","168","169","170A","170B","171","172A","172B","173","174","175","176","176(B)","177","178","179","180","181","182","183","184","185A","185B","190","191","191(B)","192","193(A)","193(B)","193(C)","193(D)","193(E)","194","194(B)","195","196","197","198"],
+  "ELEC EXTRUDER": ["901","902","903","904","905","906","907","908A","909A","909B","910A","910B","911A","911B","912A","912B","913","914","916","917","918","919","920","920A","920C","921","921A","921B","922","923","925","926","927","928","929","930","931","933","934","935","936","937A","937B","938","939","940","941B","942","943","944","945","947","949B","949C","949D","951","952","953","954","955","956","957","958","961","962","963","966","968","970","971","972","974A","974B","975B"],
+  "ELECRICAL RECYCLING": ["001","002","003","004","006","007","010","012","013","014","015","016","017","018","019","020","021","022","023","024","026","027","028","029","030","031","033","034","035","036","037","038","039","040","042","045","046","047","047A","047B"],
+  "ELECTRICAL TWINE": ["1000","1001","1002","1003","1004","1005","1006","1007","1008","1009","1010","1011","1014","1015","1016","1017","1018","1019","1020","1021","1022","1023","1024","1025","1026","1027","1028","1030","1031","1032","1033","1034","1035","1036","1037","1038","1039","1040","1041","1042","1043","1044","1045","1046","1047","1048","1049","1050","1051","1052","1053","1054","1055","1056","1057","1058","1059","1061","1062"],
+  "BEAMING": ["601A","601B","601C","601D","601E"],
+  "EXT-MECH CUTTER": ["801","802","805","806A","811","811A","890","707","876A","810","806C","806","812","805A","832","804","876B","878B","817","816","870","825A","814","803","874","825B","833","813","830","877B","820","881B","819","827A","878A","867A","811B","881A","882","871","815"],
+  "EXT-MECH DIE HEAD": ["727A","728B","731","716","771","714","763A"]
+};
+function getJobCodesByDepartment(department){
+  if(department === "All") return Object.values(DEPARTMENTS).flat();
+  return DEPARTMENTS[department] || [];
+}
+
+
+
+// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
+async function fetchAllRows(table, select, query){
+  let all = [], offset = 0; const pageSize = 1000; const q = query||"";
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=" + (select||"*") + q, { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+function normalizeControlRow(r){
+  if(r.date_col === undefined) r.date_col = r.date;
+  if(r.names === undefined) r.names = r.nurse_name;
+  if(r.stop_time === undefined) r.stop_time = r.mc_stoppage_time;
+  if(r.extimated_time === undefined) r.extimated_time = r.estimated_duration;
+  if(r.discription === undefined) r.discription = r.description;
+  return r;
+}
+
+async function init(){
+  const status = document.getElementById("status");
+  try{
+    // Declare me in outer scope so mySections below can use it
+    let me = null;
+    if(typeof requireAuth === "function"){
+      me = await requireAuth("../../login.html");
+      if(!me) return;
+    }
+    if(typeof SUPABASE_URL === "undefined") throw new Error("Supabase credentials not loaded.");
+
+    const mySections = (me.sectionNames && me.sectionNames.length) ? me.sectionNames : ["Rumbu","MamaSannu"];
+    document.getElementById("section").innerHTML = '<option>All</option>' +
+      mySections.map(s=>`<option value="${s}">${SECTION_LABEL[s]||s}</option>`).join("");
+
+    status.style.color="#1d8a4e";
+    status.textContent = "Ready. Select a date range and click Generate.";
+
+    // Department dropdown from actual department column values — matches old
+    // AppScript's SELECT DISTINCT Department FROM maintenance_log
+    const KNOWN_DEPARTMENTS = [
+      "BEAMING","DELIVERY","DESIGN CARD","ELEC EXTRUDER","ELEC MAT WEAVING",
+      "ELECRICAL RECYCLING","ELECTRICAL TWINE","EXT-MECH CUTTER","EXT-MECH DIE HEAD",
+      "EXTRUDER","FEEDING","QUALITY CONTROL","RECYCLING","Technical",
+      "TRANSMISSION","TWINE"
+    ];
+    const sel = document.getElementById("department");
+    KNOWN_DEPARTMENTS.forEach(d=>{ const o=document.createElement("option"); o.value=d; o.textContent=d; sel.appendChild(o); });
+  }catch(e){
+    status.style.color="#c0392b";
+    status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+async function fetchControlRange(fromDate, toDate){
+  // Use mc_stoppage_time — matches old script's DATE(MC_Stoppage_Time) BETWEEN
+  CTRL_ROWS = await fetchAllRows("control","*", "&mc_stoppage_time=gte."+fromDate+"&mc_stoppage_time=lte."+toDate+"T23:59:59");
+  CTRL_ROWS.forEach(normalizeControlRow);
+}
+
+async function generate(){
+  const startDate = document.getElementById("startDate").value;
+  const endDate = document.getElementById("endDate").value;
+  const department = document.getElementById("department").value;
+  const shift = document.getElementById("shift").value;
+  const section = document.getElementById("section").value;
+  if(!startDate || !endDate){ alert("Please select dates."); return; }
+
+  const status = document.getElementById("status");
+  if(status){ status.style.color="#555"; status.textContent = "Loading "+startDate+" to "+endDate+"…"; }
+  try{ await fetchControlRange(startDate, endDate); }
+  catch(e){ if(status){ status.style.color="#c0392b"; status.textContent="Could not read data: "+(e.message||e); } return; }
+  if(status){ status.textContent = ""; }
+  if(!CTRL_ROWS.length){ alert("No downtime records found for this date range."); return; }
+
+  const rows = CTRL_ROWS.filter(r=>{
+    // Date: from mc_stoppage_time — matches old script's DATE(MC_Stoppage_Time) BETWEEN
+    const stopDate = r.stop_time ? r.stop_time.slice(0,10) : r.date_col;
+    if(stopDate < startDate || stopDate > endDate) return false;
+    // Department: actual column — matches old script's AND Department=@dept
+    if(department !== "All" && (r.department||"").trim() !== department) return false;
+    if(shift !== "All" && r.shift !== shift) return false;
+    // Section: LIKE logic matching old script behaviour
+    if(section !== "All"){
+      const sec = (r.section||"").toUpperCase().trim();
+      if(section === "MamaSannu" && !sec.includes("MAMASANNU")) return false;
+      if(section === "Rumbu" && sec.includes("MAMASANNU")) return false;
+      if(section !== "MamaSannu" && section !== "Rumbu" && sec !== section.toUpperCase()) return false;
+    }
+    return true;
+  });
+  if(!rows.length){
+    document.getElementById("reportArea").innerHTML = "<p>⚠️ No data found for selected filters.</p>";
+    return;
+  }
+
+  const byJob = {};
+  rows.forEach(r=>{
+    const j = r.job_code || "(blank)";
+    if(!byJob[j]) byJob[j] = { job:j, count:0, downtime:0, repair:0, waiting:0, est:0 };
+    const stop=parseDT(r.stop_time), start=parseDT(r.starting_time), finish=parseDT(r.finish_time);
+    byJob[j].count++;
+    byJob[j].downtime += minutesBetween(stop, finish);
+    byJob[j].repair += minutesBetween(start, finish);
+    byJob[j].waiting += minutesBetween(stop, start);
+    byJob[j].est += extractNumber(r.extimated_time);
+  });
+
+  let html = `<h2 style="text-align:center;color:var(--heading);">📊 Downtime Report</h2>
+    <p style="text-align:center;">${startDate} &rarr; ${endDate} | Department: ${department} | Shift: ${shift} | Section: ${section}</p>
+    <table><thead><tr><th>Job Code</th><th>Occurrences</th><th>Downtime (min)</th><th>Repair Time (min)</th>
+    <th>Waiting Time (min)</th><th>Estimated Duration (min)</th><th>% Efficiency</th><th>Difference (min)</th></tr></thead><tbody>`;
+
+  let tC=0,tD=0,tR=0,tW=0,tE=0,tDiff=0;
+  Object.values(byJob).sort((a,b)=>b.count-a.count).forEach(r=>{
+    const diff = Math.round(r.est - r.repair);
+    const eff = r.repair>0 ? (r.est/r.repair)*100 : 0;
+    tC+=r.count; tD+=Math.round(r.downtime); tR+=Math.round(r.repair); tW+=Math.round(r.waiting); tE+=Math.round(r.est); tDiff+=diff;
+    html += `<tr><td>${r.job}</td><td>${r.count}</td><td>${Math.round(r.downtime)}</td><td>${Math.round(r.repair)}</td>` +
+      `<td>${Math.round(r.waiting)}</td><td>${Math.round(r.est)}</td><td>${eff.toFixed(1)}%</td>` +
+      `<td class="${diff>0?'green':''}">${diff}</td></tr>`;
+  });
+  const overallEff = tR>0 ? (tE/tR)*100 : 0;
+  html += `</tbody><tfoot><tr><td>TOTAL</td><td>${tC}</td><td>${tD}</td><td>${tR}</td><td>${tW}</td><td>${tE}</td>` +
+    `<td>${overallEff.toFixed(1)}%</td><td>${tDiff}</td></tr></tfoot></table>`;
+
+  document.getElementById("reportArea").innerHTML = html;
+}
+
+init();
+</script>
+<script src="../../assets/letterhead.js"></script>
+</body>
+</html>

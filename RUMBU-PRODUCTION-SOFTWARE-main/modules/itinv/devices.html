@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>IT Inventory — Devices</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;--amber:#d97706;}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;color:var(--text);}
+  .wrap{max-width:1150px;margin:0 auto;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;}
+  .card h3{color:var(--navy);margin:0 0 4px;font-size:16px;}
+  .card .sub{color:var(--blue);font-size:12px;margin:0 0 14px;}
+  label{display:block;font-size:12px;font-weight:bold;color:var(--text);margin:10px 0 4px;}
+  input,textarea,select{width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;}
+  textarea{resize:vertical;min-height:50px;}
+  .row{display:flex;gap:12px;flex-wrap:wrap;}
+  .row > div{flex:1;min-width:170px;}
+  button{padding:10px 14px;border:none;border-radius:8px;font-weight:bold;font-size:13px;cursor:pointer;background:var(--blue);color:#fff;}
+  button:hover{background:var(--blue-dark);}
+  button.mini{padding:5px 9px;font-size:12px;}
+  button.secondary{background:#6b7280;} button.secondary:hover{background:#4b5563;}
+  button.del{background:var(--red);} button.del:hover{background:#96242e;}
+  .status{margin-top:10px;font-weight:bold;font-size:13px;min-height:16px;}
+  .status.ok{color:var(--green);} .status.err{color:var(--red);}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;}
+  table{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px;}
+  th,td{border:1px solid var(--line);padding:7px 9px;text-align:left;vertical-align:top;}
+  thead th{background:var(--navy);color:#fff;font-size:12px;}
+  tbody tr:nth-child(even){background:#f6f8fb;}
+  .tag{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:bold;color:#fff;background:var(--blue);}
+  .formwrap{display:none;}
+  .formwrap.open{display:block;}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<div id="connStatus">Loading...</div>
+
+<div id="appArea" style="display:none;">
+  <!-- FORM -->
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <h3 id="formTitle">Add Device</h3>
+      <button class="secondary" onclick="toggleForm()"><span id="formToggleLabel">Hide form</span></button>
+    </div>
+    <div class="formwrap open" id="formWrap">
+      <input type="hidden" id="editId">
+      <div class="row">
+        <div><label>Branch</label><select id="branch" onchange="onBranchChange()"></select></div>
+        <div><label>Department</label><select id="department" onchange="onDeptChange()"></select></div>
+        <div><label>Unit</label><select id="unit"></select></div>
+        <div><label>Location detail</label><input type="text" id="locationDetail" placeholder="e.g. 2nd floor, Room 4"></div>
+      </div>
+      <div class="row">
+        <div><label>Category</label><select id="category" onchange="onCatChange()"></select></div>
+        <div><label>Type</label><select id="type"></select></div>
+        <div><label>Make</label><input type="text" id="make" placeholder="e.g. HP"></div>
+        <div><label>Model</label><input type="text" id="model" placeholder="e.g. ProBook 450"></div>
+      </div>
+      <div class="row">
+        <div><label>Serial Number</label><input type="text" id="serial"></div>
+        <div><label>Asset Tag</label><input type="text" id="assetTag" placeholder="internal tag"></div>
+        <div><label>Status</label><select id="status"></select></div>
+        <div><label>Condition</label><select id="condition"></select></div>
+      </div>
+      <div class="row">
+        <div><label>Assigned to (name)</label><input type="text" id="assignedName" placeholder="Unassigned"></div>
+        <div><label>Assigned email</label><input type="text" id="assignedEmail"></div>
+        <div><label>Assigned phone</label><input type="text" id="assignedPhone"></div>
+      </div>
+      <div class="row">
+        <div><label>Purchase date</label><input type="date" id="purchaseDate"></div>
+        <div><label>Purchase cost (₦)</label><input type="number" step="0.01" id="purchaseCost"></div>
+        <div><label>Supplier</label><input type="text" id="supplier"></div>
+        <div><label>Warranty expiry</label><input type="date" id="warrantyExpiry"></div>
+      </div>
+      <label>Notes</label>
+      <textarea id="notes"></textarea>
+      <div style="margin-top:12px;">
+        <button onclick="saveDevice()">Save Device</button>
+        <button class="secondary" id="cancelEditBtn" style="display:none;" onclick="resetForm()">Cancel edit</button>
+      </div>
+      <div class="status" id="formStatus"></div>
+    </div>
+  </div>
+
+  <!-- LIST -->
+  <div class="card">
+    <h3>Device Register</h3>
+    <p class="sub" id="scopeNote"></p>
+    <div class="row">
+      <div><label>Filter status</label><select id="fStatus" onchange="applyFilters()"><option value="">All</option></select></div>
+      <div><label>Filter branch</label><select id="fBranch" onchange="applyFilters()"><option value="">All</option></select></div>
+      <div><label>Filter category</label><select id="fCategory" onchange="applyFilters()"><option value="">All</option></select></div>
+      <div><label>Search</label><input type="text" id="search" placeholder="code / serial / make / model / person" oninput="applyFilters()"></div>
+      <div style="flex:0 0 auto;"><label>&nbsp;</label><button onclick="loadDevices()">Refresh</button></div>
+    </div>
+    <div class="status" id="listStatus"></div>
+    <div id="tableWrap"></div>
+  </div>
+</div>
+</div>
+
+<script>
+let ME = null;
+let DEVICES = [];
+let DEPTS = [], UNITS = [], CATS = [], TYPES = [], STATUSES = [], CONDITIONS = [];
+let BRANCHES = [];
+
+async function logActivity(actionType, description){
+  try{
+    await sb.from("activity_log").insert({
+      actor_id: ME.id, actor_username: ME.username, actor_role: ME.role,
+      section_id: ME.sectionId, action_type: actionType, description: description
+    });
+  }catch(e){ console.warn("Activity log write failed (non-fatal):", e); }
+}
+
+function myBranches(){
+  if(ME.role === "super_admin") return BRANCHES.slice();
+  return (ME.sectionNames || []).filter(b => BRANCHES.indexOf(b) !== -1);
+}
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    document.getElementById("scopeNote").textContent = ME.role === "super_admin"
+      ? "Showing devices from every branch." : "Showing devices for your own branch(es).";
+    status.style.color = "#1d8a4e"; status.textContent = "Connected.";
+    document.getElementById("appArea").style.display = "block";
+    await loadRefData();
+    await loadDevices();
+  }catch(e){
+    status.style.color = "#c0392b"; status.textContent = "❌ " + e.message; console.error(e);
+  }
+}
+
+async function loadRefData(){
+  const [sec, dep, un, ca, ty, st, co] = await Promise.all([
+    sb.from("app_sections").select("name").order("name"),
+    sb.from("it_ref_departments").select("*").order("name"),
+    sb.from("it_ref_units").select("*").order("name"),
+    sb.from("it_ref_categories").select("*").order("name"),
+    sb.from("it_ref_types").select("*").order("name"),
+    sb.from("it_ref_statuses").select("*").order("name"),
+    sb.from("it_ref_conditions").select("*").order("name")
+  ]);
+  BRANCHES = (sec.data || []).map(s => s.name);
+  DEPTS = dep.data || []; UNITS = un.data || [];
+  CATS = ca.data || []; TYPES = ty.data || [];
+  STATUSES = (st.data || []).map(r => r.name);
+  CONDITIONS = (co.data || []).map(r => r.name);
+
+  // form branch (scoped)
+  const mine = myBranches();
+  fillSelect("branch", mine, false);
+  document.getElementById("branch").disabled = (ME.role !== "super_admin" && mine.length === 1);
+  onBranchChange();
+
+  fillSelect("category", CATS.map(c=>c.name), true);
+  onCatChange();
+  fillSelect("status", STATUSES, false);
+  fillSelect("condition", CONDITIONS, false);
+
+  // filters
+  fillSelect("fStatus", STATUSES, false, true);
+  fillSelect("fBranch", mine, false, true);
+  fillSelect("fCategory", CATS.map(c=>c.name), false, true);
+}
+
+function fillSelect(id, values, allowBlank, keepAllOption){
+  const sel = document.getElementById(id);
+  const prev = sel.value;
+  sel.innerHTML = keepAllOption ? '<option value="">All</option>' : "";
+  if(allowBlank) { const o=document.createElement("option"); o.value=""; o.textContent="—"; sel.appendChild(o); }
+  values.forEach(v=>{ const o=document.createElement("option"); o.value=v; o.textContent=v; sel.appendChild(o); });
+  if(prev) sel.value = prev;
+}
+
+// Dependent dropdowns
+function onBranchChange(){
+  const branch = document.getElementById("branch").value;
+  const depts = DEPTS.filter(d=>d.branch===branch).map(d=>d.name);
+  fillSelect("department", depts, true);
+  onDeptChange();
+}
+function onDeptChange(){
+  const branch = document.getElementById("branch").value;
+  const dept = document.getElementById("department").value;
+  const units = UNITS.filter(u=>u.branch===branch && u.department===dept).map(u=>u.name);
+  fillSelect("unit", units, true);
+}
+function onCatChange(){
+  const cat = document.getElementById("category").value;
+  const types = TYPES.filter(t=>t.category===cat).map(t=>t.name);
+  fillSelect("type", types, true);
+}
+
+function toggleForm(){
+  const w = document.getElementById("formWrap");
+  w.classList.toggle("open");
+  document.getElementById("formToggleLabel").textContent = w.classList.contains("open") ? "Hide form" : "Show form";
+}
+
+function resetForm(){
+  document.getElementById("editId").value = "";
+  ["locationDetail","make","model","serial","assetTag","assignedName","assignedEmail","assignedPhone","purchaseDate","purchaseCost","supplier","warrantyExpiry","notes"]
+    .forEach(id=>document.getElementById(id).value="");
+  document.getElementById("formTitle").textContent = "Add Device";
+  document.getElementById("cancelEditBtn").style.display = "none";
+  document.getElementById("formStatus").textContent = "";
+}
+
+async function nextCode(){
+  const { data, error } = await sb.from("it_devices").select("device_code").like("device_code","DEV-%").order("device_code",{ascending:false}).limit(1);
+  if(error) throw error;
+  let seq = 1;
+  if(data && data.length){ seq = parseInt(data[0].device_code.slice(4),10)+1; }
+  return "DEV-" + String(seq).padStart(5,"0");
+}
+
+async function saveDevice(){
+  const status = document.getElementById("formStatus");
+  const g = id => document.getElementById(id).value.trim();
+  const branch = g("branch");
+  const editId = g("editId");
+
+  if(!branch){ status.className="status err"; status.textContent="Branch is required."; return; }
+  if(ME.role !== "super_admin" && (ME.sectionNames||[]).indexOf(branch) === -1){
+    status.className="status err"; status.textContent="You are not assigned to that branch."; return;
+  }
+  if(!g("make") && !g("model") && !g("serial")){
+    status.className="status err"; status.textContent="Enter at least make, model, or serial."; return;
+  }
+
+  const payload = {
+    branch: branch,
+    category: g("category") || null, type: g("type") || null,
+    make: g("make") || null, model: g("model") || null,
+    serial_number: g("serial") || null, asset_tag: g("assetTag") || null,
+    department: g("department") || null, unit: g("unit") || null,
+    location_detail: g("locationDetail") || null,
+    assigned_name: g("assignedName") || "Unassigned",
+    assigned_email: g("assignedEmail") || null, assigned_phone: g("assignedPhone") || null,
+    status: g("status") || null, condition: g("condition") || null,
+    purchase_date: g("purchaseDate") || null,
+    purchase_cost: g("purchaseCost") ? parseFloat(g("purchaseCost")) : null,
+    supplier: g("supplier") || null,
+    warranty_expiry: g("warrantyExpiry") || null,
+    notes: g("notes") || null
+  };
+
+  status.className="status"; status.textContent="Saving...";
+  try{
+    if(editId){
+      const { error } = await sb.from("it_devices").update(payload).eq("id", parseInt(editId,10));
+      if(error) throw error;
+      await logActivity("it_device_updated", ME.username+" updated device "+editId);
+      status.className="status ok"; status.textContent="✅ Device updated.";
+    } else {
+      payload.device_code = await nextCode();
+      payload.created_by_username = ME.username;
+      const { error } = await sb.from("it_devices").insert(payload);
+      if(error) throw error;
+      await logActivity("it_device_added", ME.username+" added device "+payload.device_code+" ("+(payload.make||"")+" "+(payload.model||"")+")");
+      status.className="status ok"; status.textContent="✅ Saved as "+payload.device_code+".";
+    }
+    resetForm();
+    await loadDevices();
+  }catch(e){
+    status.className="status err"; status.textContent="❌ "+e.message;
+  }
+}
+
+async function loadDevices(){
+  const status = document.getElementById("listStatus");
+  status.className="status"; status.textContent="Loading...";
+  try{
+    let q = sb.from("it_devices").select("*").order("created_at",{ascending:false});
+    if(ME.role !== "super_admin"){
+      if(ME.sectionNames && ME.sectionNames.length){ q = q.in("branch", ME.sectionNames); }
+      else { q = q.eq("branch","___none___"); }
+    }
+    const { data, error } = await q;
+    if(error) throw error;
+    DEVICES = data || [];
+    status.className="status ok"; status.textContent=DEVICES.length+" device(s).";
+    applyFilters();
+  }catch(e){
+    status.className="status err"; status.textContent="❌ "+e.message;
+  }
+}
+
+function applyFilters(){
+  const st = document.getElementById("fStatus").value;
+  const br = document.getElementById("fBranch").value;
+  const cat = document.getElementById("fCategory").value;
+  const s = document.getElementById("search").value.trim().toLowerCase();
+  let rows = DEVICES.slice();
+  if(st) rows = rows.filter(r=>r.status===st);
+  if(br) rows = rows.filter(r=>r.branch===br);
+  if(cat) rows = rows.filter(r=>r.category===cat);
+  if(s){
+    rows = rows.filter(r =>
+      (r.device_code||"").toLowerCase().includes(s) ||
+      (r.serial_number||"").toLowerCase().includes(s) ||
+      (r.make||"").toLowerCase().includes(s) ||
+      (r.model||"").toLowerCase().includes(s) ||
+      (r.asset_tag||"").toLowerCase().includes(s) ||
+      (r.assigned_name||"").toLowerCase().includes(s));
+  }
+  render(rows);
+}
+
+function render(rows){
+  const wrap = document.getElementById("tableWrap");
+  if(!rows.length){ wrap.innerHTML="<p>No devices match.</p>"; return; }
+  const canEdit = (ME.role === "super_admin" || ME.role === "admin");
+  let html = "<table><thead><tr>" +
+    "<th>Code</th><th>Type</th><th>Make/Model</th><th>Serial</th><th>Branch</th>" +
+    "<th>Dept/Unit</th><th>Assigned</th><th>Status</th><th>Cond.</th><th>Actions</th>" +
+    "</tr></thead><tbody>";
+  rows.forEach(r=>{
+    html += "<tr>" +
+      `<td>${r.device_code||""}</td>` +
+      `<td>${r.type||""}</td>` +
+      `<td>${(r.make||"")+" "+(r.model||"")}</td>` +
+      `<td>${r.serial_number||""}</td>` +
+      `<td>${r.branch||""}</td>` +
+      `<td>${(r.department||"")}${r.unit?" / "+r.unit:""}</td>` +
+      `<td>${r.assigned_name||""}</td>` +
+      `<td><span class="tag">${r.status||""}</span></td>` +
+      `<td>${r.condition||""}</td>` +
+      `<td>` +
+        `<button class="mini" onclick="viewDevice(${r.id})">View</button> ` +
+        (canEdit ? `<button class="mini secondary" onclick="editDevice(${r.id})">Edit</button> ` : "") +
+        (canEdit ? `<button class="mini del" onclick="delDevice(${r.id})">Del</button>` : "") +
+      `</td>` +
+    "</tr>";
+  });
+  html += "</tbody></table>";
+  wrap.innerHTML = html;
+}
+
+function viewDevice(id){
+  const r = DEVICES.find(x=>x.id===id); if(!r) return;
+  const rows = [
+    ["Code", r.device_code],["Branch", r.branch],["Department", r.department],["Unit", r.unit],
+    ["Location", r.location_detail],["Category", r.category],["Type", r.type],["Make", r.make],
+    ["Model", r.model],["Serial", r.serial_number],["Asset Tag", r.asset_tag],
+    ["Assigned to", r.assigned_name],["Email", r.assigned_email],["Phone", r.assigned_phone],
+    ["Status", r.status],["Condition", r.condition],["Purchase date", r.purchase_date],
+    ["Purchase cost", r.purchase_cost],["Supplier", r.supplier],["Warranty expiry", r.warranty_expiry],
+    ["Notes", r.notes]
+  ];
+  const html = `<html><head><style>
+  @page{size:A4;margin:40pt;} body{font-family:var(--sans);padding:30px;color:#000;}
+  h2{text-align:center;margin:0 0 2px;} h3{text-align:center;margin:0 0 18px;font-weight:normal;}
+  table{width:100%;border-collapse:collapse;} td{border:1px solid #333;padding:7px 10px;font-size:12pt;}
+  td.k{width:35%;background:#f0f0f0;font-weight:bold;}
+  </style></head><body>
+  <h2>Rumbu Industries Group</h2><h3>IT Device Record — ${r.device_code||""}</h3>
+  <table>${rows.map(([k,v])=>`<tr><td class="k">${k}</td><td>${v!=null&&v!==""?v:"—"}</td></tr>`).join("")}</table>
+  </body></html>`;
+  const w = window.open("","_blank"); w.document.write(html); w.document.close();
+  w.onload=function(){ w.focus(); w.print(); };
+}
+
+function editDevice(id){
+  const r = DEVICES.find(x=>x.id===id); if(!r) return;
+  if(!document.getElementById("formWrap").classList.contains("open")) toggleForm();
+  document.getElementById("editId").value = r.id;
+  document.getElementById("formTitle").textContent = "Edit Device " + r.device_code;
+  document.getElementById("cancelEditBtn").style.display = "inline-block";
+
+  const set = (id,v)=>{ document.getElementById(id).value = v||""; };
+  // branch + dependent chain
+  document.getElementById("branch").value = r.branch || "";
+  onBranchChange();
+  document.getElementById("department").value = r.department || "";
+  onDeptChange();
+  document.getElementById("unit").value = r.unit || "";
+  document.getElementById("category").value = r.category || "";
+  onCatChange();
+  document.getElementById("type").value = r.type || "";
+  set("locationDetail", r.location_detail);
+  set("make", r.make); set("model", r.model); set("serial", r.serial_number);
+  set("assetTag", r.asset_tag);
+  document.getElementById("status").value = r.status || "";
+  document.getElementById("condition").value = r.condition || "";
+  set("assignedName", r.assigned_name); set("assignedEmail", r.assigned_email); set("assignedPhone", r.assigned_phone);
+  set("purchaseDate", r.purchase_date); set("purchaseCost", r.purchase_cost);
+  set("supplier", r.supplier); set("warrantyExpiry", r.warranty_expiry); set("notes", r.notes);
+  window.scrollTo({top:0, behavior:"smooth"});
+}
+
+async function delDevice(id){
+  const r = DEVICES.find(x=>x.id===id); if(!r) return;
+  if(!confirm("Delete device "+r.device_code+"? This cannot be undone.")) return;
+  const { error } = await sb.from("it_devices").delete().eq("id", id);
+  if(error){ alert(error.message); return; }
+  await logActivity("it_device_deleted", ME.username+" deleted device "+r.device_code);
+  await loadDevices();
+}
+
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Vehicle Profiles — Logistics</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme")||"navy"); }catch(e){} })();
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) document.documentElement.setAttribute("data-theme",e.data.rumbuTheme); });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body{padding:18px;}
+  .wrap{max-width:1100px;margin:0 auto;}
+  label{font-size:12px;font-weight:700;display:block;margin:10px 0 4px;color:var(--muted);}
+  input,select,textarea{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);}
+  .form-row-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;}
+  .form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  .sec-title{font-weight:700;color:var(--heading);margin:18px 0 8px;padding-bottom:4px;border-bottom:2px solid var(--line);font-size:13px;}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;}
+  th{text-align:left;padding:7px 8px;border-bottom:2px solid var(--line);color:var(--heading);white-space:nowrap;}
+  td{padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top;}
+  .badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10.5px;font-weight:700;}
+  .b-active{background:#dcfce7;color:#166534;}
+  .b-maint{background:#fef3c7;color:#92400e;}
+  .b-unavail{background:#fee2e2;color:#991b1b;}
+  .b-disposed{background:#e5e7eb;color:#374151;}
+  .btn-ghost{background:var(--bg);color:var(--heading);border:1px solid var(--line);}
+  .exp-warn{color:var(--bad,#c0392b);font-weight:700;}
+  .hidden{display:none;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back</button>
+  <div id="connStatus" style="font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);">Loading...</div>
+
+  <div class="card-panel">
+    <h3 style="color:var(--heading);margin:0 0 4px;">Vehicle Profiles</h3>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 16px;">Company-wide vehicle register — one profile per vehicle, from acquisition onward.</p>
+
+    <button onclick="toggleForm()" id="toggleFormBtn">+ Add Vehicle</button>
+
+    <div class="hidden" id="formPanel" style="border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin:14px 0;">
+      <h4 style="margin-top:0;" id="formTitle">Add Vehicle</h4>
+      <input type="hidden" id="v_id">
+
+      <div class="sec-title">Identification</div>
+      <div class="form-row-3">
+        <div><label>Registration Number *</label><input id="v_reg"></div>
+        <div><label>Chassis / VIN *</label><input id="v_chassis"></div>
+        <div><label>Year *</label><input type="number" id="v_year"></div>
+      </div>
+      <div class="form-row">
+        <div><label>Make *</label><input id="v_make"></div>
+        <div><label>Model *</label><input id="v_model"></div>
+      </div>
+
+      <div class="sec-title">Assignment &amp; Status</div>
+      <div class="form-row-3">
+        <div><label>Department / Location</label><input id="v_dept" placeholder="e.g. Lagos Wash Plant"></div>
+        <div><label>Current Mileage (km)</label><input type="number" step="0.1" id="v_mileage"></div>
+        <div><label>Operational Status *</label>
+          <select id="v_status"><option>Active</option><option>Under Maintenance</option><option>Unavailable</option><option>Disposed</option></select>
+        </div>
+      </div>
+      <div><label>Expected Fuel Consumption (km/litre)</label><input type="number" step="0.01" id="v_expected_consumption" placeholder="Leave blank until known — used by Fuel Management to flag abnormal usage"></div>
+      <p style="font-size:12px;color:var(--muted);margin:4px 0 0;">Assigned Driver is shown automatically once a Driver profile is linked to this vehicle — set from the Driver Profiles page.</p>
+
+      <div class="sec-title">Insurance</div>
+      <div class="form-row-3">
+        <div><label>Provider</label><input id="v_ins_provider"></div>
+        <div><label>Policy Number</label><input id="v_ins_policy"></div>
+        <div><label>Expiry Date</label><input type="date" id="v_ins_expiry"></div>
+      </div>
+      <div><label>Insurance Document</label><input type="file" id="v_ins_file"><div id="v_ins_url" class="hidden"></div></div>
+
+      <div class="sec-title">Roadworthiness Certificate</div>
+      <div class="form-row"><div><label>Certificate Number</label><input id="v_road_no"></div><div><label>Expiry Date</label><input type="date" id="v_road_expiry"></div></div>
+      <div><label>Roadworthiness Document</label><input type="file" id="v_road_file"><div id="v_road_url" class="hidden"></div></div>
+
+      <div class="sec-title">Vehicle Licence</div>
+      <div class="form-row"><div><label>Licence Number</label><input id="v_lic_no"></div><div><label>Expiry Date</label><input type="date" id="v_lic_expiry"></div></div>
+      <div><label>Licence Document</label><input type="file" id="v_lic_file"><div id="v_lic_url" class="hidden"></div></div>
+
+      <div class="sec-title">Purchase / Ownership</div>
+      <div class="form-row"><div><label>Purchase Date</label><input type="date" id="v_purchase_date"></div><div><label>Purchase Value (NGN)</label><input type="number" step="0.01" id="v_purchase_value"></div></div>
+      <div><label>Purchase / Ownership Document</label><input type="file" id="v_purchase_file"><div id="v_purchase_url" class="hidden"></div></div>
+
+      <button onclick="saveVehicle()" style="margin-top:14px;">Save Vehicle</button>
+      <button class="btn-ghost" onclick="toggleForm()">Cancel</button>
+      <div class="status" id="formStatus"></div>
+    </div>
+
+    <div class="form-row" style="margin-top:16px;">
+      <div><label>Search</label><input id="search" placeholder="Registration, chassis, make/model" oninput="render()"></div>
+      <div><label>Status</label>
+        <select id="statusFilter" onchange="render()">
+          <option value="">All</option><option>Active</option><option>Under Maintenance</option><option>Unavailable</option><option>Disposed</option>
+        </select>
+      </div>
+    </div>
+
+    <div id="wrap" style="margin-top:14px;overflow-x:auto;"></div>
+  </div>
+</div>
+
+<script>
+let ME = null;
+let VEHICLES = [];
+let DRIVERS = [];
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    await loadAll();
+    status.style.color="var(--ok)"; status.textContent="Connected.";
+  }catch(e){
+    status.style.color="var(--bad)"; status.textContent="Error: "+e.message;
+  }
+}
+
+async function loadAll(){
+  const [{ data: vData, error: vErr }, { data: dData }] = await Promise.all([
+    sb.from("logistics_vehicles").select("*").order("registration_number"),
+    sb.from("logistics_drivers").select("id,assigned_vehicle_id,employees(full_name,employee_id)")
+  ]);
+  if(vErr) throw vErr;
+  VEHICLES = vData || [];
+  DRIVERS = dData || [];
+  render();
+}
+
+function driverFor(vehicleId){
+  const d = DRIVERS.find(x=>x.assigned_vehicle_id === vehicleId);
+  if(!d) return null;
+  const e = d.employees || {};
+  return e.full_name ? (e.full_name + " (" + e.employee_id + ")") : null;
+}
+
+function daysUntil(dateStr){
+  if(!dateStr) return null;
+  const diff = (new Date(dateStr) - new Date());
+  return Math.ceil(diff / 86400000);
+}
+function expiryCell(dateStr){
+  if(!dateStr) return "—";
+  const d = daysUntil(dateStr);
+  const cls = (d!=null && d<=30) ? "exp-warn" : "";
+  return `<span class="${cls}">${dateStr}${d!=null && d<=30 ? " ("+(d<0?"expired":d+"d left")+")" : ""}</span>`;
+}
+
+function statusBadgeClass(s){
+  return { "Active":"b-active", "Under Maintenance":"b-maint", "Unavailable":"b-unavail", "Disposed":"b-disposed" }[s] || "b-disposed";
+}
+
+function render(){
+  const q = document.getElementById("search").value.trim().toLowerCase();
+  const statusF = document.getElementById("statusFilter").value;
+  let rows = VEHICLES.filter(v=>{
+    if(statusF && v.operational_status !== statusF) return false;
+    if(q && !((v.registration_number||"")+(v.chassis_number||"")+(v.make||"")+(v.model||"")).toLowerCase().includes(q)) return false;
+    return true;
+  });
+  const wrap = document.getElementById("wrap");
+  if(!rows.length){ wrap.innerHTML = "<p style='color:var(--muted);font-size:13px;'>No vehicles match.</p>"; return; }
+  wrap.innerHTML = `<table>
+    <thead><tr><th>Reg. Number</th><th>Make/Model/Year</th><th>Status</th><th>Assigned Driver</th><th>Mileage</th>
+      <th>Insurance Exp.</th><th>Roadworthy Exp.</th><th>Licence Exp.</th><th></th></tr></thead>
+    <tbody>${rows.map(v=>`<tr>
+      <td><b>${v.registration_number}</b></td>
+      <td>${v.make} ${v.model} (${v.year})</td>
+      <td><span class="badge ${statusBadgeClass(v.operational_status)}">${v.operational_status}</span></td>
+      <td>${driverFor(v.id) || "—"}</td>
+      <td>${v.current_mileage!=null?v.current_mileage:"—"}</td>
+      <td>${expiryCell(v.insurance_expiry)}</td>
+      <td>${expiryCell(v.roadworthiness_expiry)}</td>
+      <td>${expiryCell(v.vehicle_licence_expiry)}</td>
+      <td><button class="btn-ghost btn-sm" onclick="editVehicle(${v.id})">Edit</button></td>
+    </tr>`).join("")}</tbody>
+  </table>`;
+}
+
+function toggleForm(isEdit){
+  const panel = document.getElementById("formPanel");
+  panel.classList.toggle("hidden");
+  if(!panel.classList.contains("hidden") && !isEdit) clearForm();
+}
+
+function clearForm(){
+  document.getElementById("formTitle").textContent = "Add Vehicle";
+  document.getElementById("v_id").value = "";
+  ["v_reg","v_chassis","v_year","v_make","v_model","v_dept","v_mileage","v_expected_consumption","v_ins_provider","v_ins_policy","v_ins_expiry",
+   "v_road_no","v_road_expiry","v_lic_no","v_lic_expiry","v_purchase_date","v_purchase_value"].forEach(id=>document.getElementById(id).value="");
+  document.getElementById("v_status").value = "Active";
+  ["v_ins_url","v_road_url","v_lic_url","v_purchase_url"].forEach(id=>{ document.getElementById(id).textContent=""; document.getElementById(id).classList.add("hidden"); });
+  document.getElementById("formStatus").textContent = "";
+}
+
+function editVehicle(id){
+  const v = VEHICLES.find(x=>x.id===id);
+  if(!v) return;
+  document.getElementById("formPanel").classList.remove("hidden");
+  document.getElementById("formTitle").textContent = "Edit Vehicle — " + v.registration_number;
+  document.getElementById("v_id").value = v.id;
+  document.getElementById("v_reg").value = v.registration_number||"";
+  document.getElementById("v_chassis").value = v.chassis_number||"";
+  document.getElementById("v_year").value = v.year||"";
+  document.getElementById("v_make").value = v.make||"";
+  document.getElementById("v_model").value = v.model||"";
+  document.getElementById("v_dept").value = v.department_location||"";
+  document.getElementById("v_mileage").value = v.current_mileage??"";
+  document.getElementById("v_expected_consumption").value = v.expected_consumption_km_per_litre??"";
+  document.getElementById("v_status").value = v.operational_status||"Active";
+  document.getElementById("v_ins_provider").value = v.insurance_provider||"";
+  document.getElementById("v_ins_policy").value = v.insurance_policy_no||"";
+  document.getElementById("v_ins_expiry").value = v.insurance_expiry||"";
+  document.getElementById("v_road_no").value = v.roadworthiness_cert_no||"";
+  document.getElementById("v_road_expiry").value = v.roadworthiness_expiry||"";
+  document.getElementById("v_lic_no").value = v.vehicle_licence_no||"";
+  document.getElementById("v_lic_expiry").value = v.vehicle_licence_expiry||"";
+  document.getElementById("v_purchase_date").value = v.purchase_date||"";
+  document.getElementById("v_purchase_value").value = v.purchase_value??"";
+  setAttachmentDisplay("v_ins_url", v.insurance_attachment);
+  setAttachmentDisplay("v_road_url", v.roadworthiness_attachment);
+  setAttachmentDisplay("v_lic_url", v.vehicle_licence_attachment);
+  setAttachmentDisplay("v_purchase_url", v.purchase_attachment);
+}
+
+function setAttachmentDisplay(elId, url){
+  const el = document.getElementById(elId);
+  if(url){ el.innerHTML = `<a href="${url}" target="_blank">View current file</a>`; el.classList.remove("hidden"); }
+  else { el.textContent = ""; el.classList.add("hidden"); }
+}
+
+// Never throws — a failed attachment upload must not block saving the
+// vehicle's mandatory data. Returns { url, warning } instead; the caller
+// decides what to do with a warning (show it, but still save).
+async function uploadIfPresent(fileInputId, existingUrl, folder){
+  const file = document.getElementById(fileInputId).files[0];
+  if(!file) return { url: existingUrl || null, warning: null };
+  try{
+    const path = folder + "/" + Date.now() + "_" + file.name.replace(/[^a-zA-Z0-9._-]/g,"_");
+    const { error } = await sb.storage.from("logistics-attachments").upload(path, file);
+    if(error) throw error;
+    const { data } = sb.storage.from("logistics-attachments").getPublicUrl(path);
+    return { url: data.publicUrl, warning: null };
+  }catch(e){
+    return { url: existingUrl || null, warning: fileInputId + ": " + e.message };
+  }
+}
+
+async function saveVehicle(){
+  const status = document.getElementById("formStatus");
+  const id = document.getElementById("v_id").value;
+  const reg = document.getElementById("v_reg").value.trim();
+  const chassis = document.getElementById("v_chassis").value.trim();
+  const make = document.getElementById("v_make").value.trim();
+  const model = document.getElementById("v_model").value.trim();
+  const year = document.getElementById("v_year").value;
+  if(!reg || !chassis || !make || !model || !year){
+    status.className="status err"; status.textContent="Registration Number, Chassis/VIN, Make, Model, and Year are all required.";
+    return;
+  }
+
+  status.className="status"; status.textContent="Saving...";
+  try{
+    const existing = id ? VEHICLES.find(v=>v.id===Number(id)) : null;
+    const payload = {
+      registration_number: reg,
+      chassis_number: chassis,
+      make, model, year: Number(year),
+      department_location: document.getElementById("v_dept").value.trim() || null,
+      current_mileage: document.getElementById("v_mileage").value ? Number(document.getElementById("v_mileage").value) : null,
+      expected_consumption_km_per_litre: document.getElementById("v_expected_consumption").value ? Number(document.getElementById("v_expected_consumption").value) : null,
+      operational_status: document.getElementById("v_status").value,
+      insurance_provider: document.getElementById("v_ins_provider").value.trim() || null,
+      insurance_policy_no: document.getElementById("v_ins_policy").value.trim() || null,
+      insurance_expiry: document.getElementById("v_ins_expiry").value || null,
+      roadworthiness_cert_no: document.getElementById("v_road_no").value.trim() || null,
+      roadworthiness_expiry: document.getElementById("v_road_expiry").value || null,
+      vehicle_licence_no: document.getElementById("v_lic_no").value.trim() || null,
+      vehicle_licence_expiry: document.getElementById("v_lic_expiry").value || null,
+      purchase_date: document.getElementById("v_purchase_date").value || null,
+      purchase_value: document.getElementById("v_purchase_value").value ? Number(document.getElementById("v_purchase_value").value) : null,
+    };
+
+    payload.insurance_attachment = null;
+    payload.roadworthiness_attachment = null;
+    payload.vehicle_licence_attachment = null;
+    payload.purchase_attachment = null;
+    const warnings = [];
+
+    const ins = await uploadIfPresent("v_ins_file", existing?.insurance_attachment, "insurance");
+    payload.insurance_attachment = ins.url; if(ins.warning) warnings.push(ins.warning);
+    const road = await uploadIfPresent("v_road_file", existing?.roadworthiness_attachment, "roadworthiness");
+    payload.roadworthiness_attachment = road.url; if(road.warning) warnings.push(road.warning);
+    const lic = await uploadIfPresent("v_lic_file", existing?.vehicle_licence_attachment, "licence");
+    payload.vehicle_licence_attachment = lic.url; if(lic.warning) warnings.push(lic.warning);
+    const purch = await uploadIfPresent("v_purchase_file", existing?.purchase_attachment, "purchase");
+    payload.purchase_attachment = purch.url; if(purch.warning) warnings.push(purch.warning);
+
+    if(id){
+      const { error } = await sb.from("logistics_vehicles").update(payload).eq("id", id);
+      if(error) throw error;
+      await sb.from("logistics_activity_log").insert({
+        entity_type:"vehicle", entity_id:id, action:"updated",
+        actor_profile_id: ME.id, actor_username: ME.username,
+        description: ME.username + " updated vehicle " + reg
+      });
+    } else {
+      payload.created_by = ME.id;
+      const { data: inserted, error } = await sb.from("logistics_vehicles").insert(payload).select("id").single();
+      if(error) throw error;
+      await sb.from("logistics_activity_log").insert({
+        entity_type:"vehicle", entity_id:inserted.id, action:"created",
+        actor_profile_id: ME.id, actor_username: ME.username,
+        description: ME.username + " added vehicle " + reg
+      });
+    }
+
+    if(warnings.length){
+      status.className="status warn"; status.textContent="⚠️ Vehicle saved, but " + warnings.length + " attachment(s) failed to upload: " + warnings.join("; ");
+    } else {
+      status.className="status ok"; status.textContent="✅ Vehicle saved.";
+    }
+    await loadAll();
+    if(!warnings.length) setTimeout(()=>{ document.getElementById("formPanel").classList.add("hidden"); }, 700);
+  }catch(e){
+    status.className="status err";
+    status.textContent = (e.message && e.message.toLowerCase().indexOf("duplicate")!==-1)
+      ? "❌ That Registration Number is already in use."
+      : "❌ " + e.message;
+  }
+}
+
+init();
+</script>
+</body>
+</html>

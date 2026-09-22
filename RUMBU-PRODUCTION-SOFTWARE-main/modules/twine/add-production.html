@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Add Twine Production</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme") || "navy"); }catch(e){} })();
+  window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme){ document.documentElement.setAttribute("data-theme", e.data.rumbuTheme); } });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:700px;margin:0 auto;}
+  #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);}
+  .picked-box{background:var(--bg);border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:12px 14px;margin-top:8px;}
+  .picked-box.empty{color:var(--muted);font-size:13px;}
+  .result-row{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;border:1px solid var(--line);border-radius:8px;margin-top:6px;cursor:pointer;background:var(--card);}
+  .result-row:hover{background:var(--bg);}
+  .result-row .n{font-weight:700;color:var(--heading);}
+  .result-row .m{font-size:12px;color:var(--muted);}
+  .readonly-field{background:var(--bg);border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:11px 12px;font-size:14px;color:var(--muted);}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div id="connStatus">Loading...</div>
+
+<div class="card-panel">
+  <h3>Add Twine Production</h3>
+  <p class="sub">Operators and Assets already recorded for the chosen Date &amp; Shift are hidden below, to avoid double-entry.</p>
+
+  <div class="form-row">
+    <div class="field"><label>Date</label><input type="date" id="f_date" onchange="onDateShiftChange()"></div>
+    <div class="field"><label>Shift</label><select id="f_shift" onchange="onDateShiftChange()"><option value="">Select...</option><option>Morning</option><option>Night</option></select></div>
+  </div>
+
+  <div class="form-row">
+    <div class="field">
+      <label>Twine Type</label>
+      <select id="f_type" onchange="onTypeChange()"><option value="">Select...</option></select>
+    </div>
+    <div class="field"><label>Target (auto)</label><div class="readonly-field" id="lk_target">—</div></div>
+  </div>
+
+  <div class="field">
+    <label>Search Asset</label>
+    <input type="text" id="assetSearch" placeholder="Select Date &amp; Shift first" oninput="searchAssets()" disabled>
+    <div id="assetResults"></div>
+  </div>
+  <div class="picked-box empty" id="pickedAssetBox">No asset selected yet.</div>
+
+  <div class="form-row">
+    <div class="field"><label>Bags</label><input type="number" id="f_bags" value="0"></div>
+    <div class="field"><label>Remainder</label><input type="number" id="f_remainder" value="0"></div>
+  </div>
+
+  <div class="field">
+    <label>Section</label>
+    <select id="f_section"><option value="">Select...</option><option value="Rumbu">Rumbu</option><option value="MamaSannu">MamaSannu</option></select>
+  </div>
+
+  <div class="field">
+    <label>Search Operator (Production department)</label>
+    <input type="text" id="opSearch" placeholder="Select Date &amp; Shift first" oninput="searchOperators()" disabled>
+    <div id="opResults"></div>
+  </div>
+  <div class="picked-box empty" id="pickedOpBox">No operator selected yet.</div>
+
+  <button onclick="submitEntry()">Submit &amp; Add Another</button>
+  <div class="status" id="entryStatus" style="display:none;"></div>
+</div>
+
+</div>
+
+<script>
+let ME = null;
+let TYPES = [];
+let PICKED_ASSET = null;
+let PICKED_OPERATOR = null;
+let USED_ASSETS = new Set();
+let USED_OPERATOR_IDS = new Set();
+const OPERATOR_DEPARTMENT = "Production";
+const OPERATOR_UNIT = "Twine";
+
+async function logActivity(actionType, description){
+  try{
+    await sb.from("activity_log").insert({
+      actor_id: ME.id, actor_username: ME.username, actor_role: ME.role,
+      section_id: ME.sectionId, action_type: actionType, description: description
+    });
+  }catch(e){ console.warn("Activity log write failed (non-fatal):", e); }
+}
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+
+    // Default to yesterday, matching how this was always recorded the morning after.
+    const y = new Date(); y.setDate(y.getDate() - 1);
+    document.getElementById("f_date").value = y.toISOString().slice(0,10);
+
+    const { data, error } = await sb.from("twine_types").select("*").order("type_code");
+    if(error) throw error;
+    TYPES = data || [];
+    document.getElementById("f_type").innerHTML = '<option value="">Select...</option>' + TYPES.map(t=>`<option value="${t.type_code}">${t.type_code}</option>`).join("");
+
+    status.style.color = "var(--ok)"; status.textContent = "Connected.";
+    await onDateShiftChange();
+  }catch(e){
+    status.style.color = "var(--bad)"; status.textContent = "Could not load: " + e.message;
+  }
+}
+
+function onTypeChange(){
+  const t = TYPES.find(x=>x.type_code === document.getElementById("f_type").value);
+  document.getElementById("lk_target").textContent = t ? t.target_bags : "—";
+}
+
+async function onDateShiftChange(){
+  const date = document.getElementById("f_date").value;
+  const shift = document.getElementById("f_shift").value;
+  const assetInput = document.getElementById("assetSearch");
+  const opInput = document.getElementById("opSearch");
+
+  if(!date || !shift){
+    assetInput.disabled = true; assetInput.placeholder = "Select Date & Shift first";
+    opInput.disabled = true; opInput.placeholder = "Select Date & Shift first";
+    return;
+  }
+
+  assetInput.disabled = false; assetInput.placeholder = "Type an asset code, e.g. BM-01";
+  opInput.disabled = false; opInput.placeholder = "Type a name or Staff ID";
+
+  const { data, error } = await sb.from("twine_production").select("asset_code, operator_id").eq("production_date", date).eq("shift", shift);
+  if(error){ console.warn("Could not load used assets/operators:", error); return; }
+  USED_ASSETS = new Set((data||[]).map(r=>r.asset_code));
+  USED_OPERATOR_IDS = new Set((data||[]).filter(r=>r.operator_id).map(r=>r.operator_id));
+
+  // Clear any stale picks so a previously-selected asset/operator that just
+  // became "used" (by someone else) can't slip through.
+  PICKED_ASSET = null; document.getElementById("pickedAssetBox").className = "picked-box empty";
+  document.getElementById("pickedAssetBox").textContent = "No asset selected yet.";
+  document.getElementById("assetSearch").value = ""; document.getElementById("assetResults").innerHTML = "";
+  PICKED_OPERATOR = null; document.getElementById("pickedOpBox").className = "picked-box empty";
+  document.getElementById("pickedOpBox").textContent = "No operator selected yet.";
+  document.getElementById("opSearch").value = ""; document.getElementById("opResults").innerHTML = "";
+}
+
+let assetTimer = null;
+function searchAssets(){ clearTimeout(assetTimer); assetTimer = setTimeout(runAssetSearch, 200); }
+async function runAssetSearch(){
+  const q = document.getElementById("assetSearch").value.trim();
+  const resultsEl = document.getElementById("assetResults");
+  if(q.length < 1){ resultsEl.innerHTML = ""; return; }
+  try{
+    const { data, error } = await sb.from("twine_assets").select("*").eq("is_active", true).ilike("asset_code", `%${q}%`).order("asset_code").limit(15);
+    if(error) throw error;
+    const available = (data||[]).filter(a=>!USED_ASSETS.has(a.asset_code));
+    if(!available.length){ resultsEl.innerHTML = '<p class="sub">No available (unused) asset matched.</p>'; return; }
+    resultsEl.innerHTML = available.map(a => `
+      <div class="result-row" onclick='pickAsset(${JSON.stringify(a).replace(/'/g,"&apos;")})'>
+        <div class="n">${a.asset_code}</div><div class="m">${a.machine_group}</div>
+      </div>`).join("");
+  }catch(e){ resultsEl.innerHTML = `<p class="sub">Search error: ${e.message}</p>`; }
+}
+function pickAsset(asset){
+  PICKED_ASSET = asset;
+  const box = document.getElementById("pickedAssetBox");
+  box.className = "picked-box"; box.innerHTML = `Selected: <b>${asset.asset_code}</b> (${asset.machine_group})`;
+  document.getElementById("assetResults").innerHTML = "";
+  document.getElementById("assetSearch").value = asset.asset_code;
+}
+
+let opTimer = null;
+function searchOperators(){ clearTimeout(opTimer); opTimer = setTimeout(runOperatorSearch, 250); }
+async function runOperatorSearch(){
+  const q = document.getElementById("opSearch").value.trim();
+  const resultsEl = document.getElementById("opResults");
+  if(q.length < 2){ resultsEl.innerHTML = ""; return; }
+  try{
+    const { data, error } = await sb.from("employees").select("employee_id, full_name, department, branch, rank")
+      .eq("department", OPERATOR_DEPARTMENT).eq("unit", OPERATOR_UNIT).or(`full_name.ilike.%${q}%,employee_id.ilike.%${q}%`).order("full_name").limit(12);
+    if(error) throw error;
+    const available = (data||[]).filter(e=>!USED_OPERATOR_IDS.has(e.employee_id));
+    if(!available.length){ resultsEl.innerHTML = `<p class="sub">No available (not-yet-used) ${OPERATOR_DEPARTMENT} / ${OPERATOR_UNIT} employee matched.</p>`; return; }
+    resultsEl.innerHTML = available.map(e => `
+      <div class="result-row" onclick='pickOperator(${JSON.stringify(e).replace(/'/g,"&apos;")})'>
+        <div><div class="n">${e.full_name}</div><div class="m">${e.employee_id} · ${e.department}${e.branch ? " · " + e.branch : ""}</div></div>
+        <div class="m">${e.rank || "no rank on file"}</div>
+      </div>`).join("");
+  }catch(e){ resultsEl.innerHTML = `<p class="sub">Search error: ${e.message}</p>`; }
+}
+function pickOperator(emp){
+  PICKED_OPERATOR = emp;
+  const box = document.getElementById("pickedOpBox");
+  box.className = "picked-box"; box.innerHTML = `Selected: <b>${emp.full_name}</b> (${emp.employee_id}) — ${emp.rank || "no rank on file"}`;
+  document.getElementById("opResults").innerHTML = "";
+  document.getElementById("opSearch").value = emp.full_name;
+}
+
+async function submitEntry(){
+  const statusEl = document.getElementById("entryStatus");
+  statusEl.style.display = "block"; statusEl.className = "status"; statusEl.textContent = "Checking...";
+
+  const date = document.getElementById("f_date").value;
+  const shift = document.getElementById("f_shift").value;
+  const typeCode = document.getElementById("f_type").value;
+  const section = document.getElementById("f_section").value;
+  const bags = Number(document.getElementById("f_bags").value) || 0;
+  const remainder = Number(document.getElementById("f_remainder").value) || 0;
+  const target = Number(document.getElementById("lk_target").textContent) || 0;
+
+  if(!date || !shift){ statusEl.className="status err"; statusEl.textContent="Select Date and Shift."; return; }
+  if(!typeCode){ statusEl.className="status err"; statusEl.textContent="Select a Twine Type."; return; }
+  if(!PICKED_ASSET){ statusEl.className="status err"; statusEl.textContent="Select an Asset."; return; }
+  if(!section){ statusEl.className="status err"; statusEl.textContent="Select a Section."; return; }
+  if(!PICKED_OPERATOR){ statusEl.className="status err"; statusEl.textContent="Select an Operator."; return; }
+
+  try{
+    // Same dedup rule as the original: Date + Type + Section + Asset + Shift
+    const { data: dupes, error: dErr } = await sb.from("twine_production").select("id")
+      .eq("production_date", date).eq("shift", shift).eq("twine_type", typeCode)
+      .eq("section", section).eq("asset_code", PICKED_ASSET.asset_code);
+    if(dErr) throw dErr;
+    if(dupes && dupes.length){
+      statusEl.className = "status err";
+      statusEl.textContent = "A record already exists for this exact Date, Shift, Type, Section and Asset.";
+      return;
+    }
+
+    statusEl.textContent = "Submitting...";
+    const { error } = await sb.from("twine_production").insert({
+      production_date: date, shift: shift, twine_type: typeCode, asset_code: PICKED_ASSET.asset_code,
+      bags: bags, remainder: remainder, target: target, section: section,
+      operator_id: PICKED_OPERATOR.employee_id, operator_name: PICKED_OPERATOR.full_name,
+      recorded_by: ME.username
+    });
+    if(error) throw error;
+
+    await logActivity("twine_production_entry_added",
+      ME.username + " logged twine production: " + date + " " + shift + ", " + typeCode + ", asset " + PICKED_ASSET.asset_code + ", " + bags + " bags");
+
+    statusEl.className = "status ok"; statusEl.textContent = "Entry submitted. Ready for the next one.";
+
+    document.getElementById("f_bags").value = 0;
+    document.getElementById("f_remainder").value = 0;
+    document.getElementById("f_type").value = "";
+    document.getElementById("lk_target").textContent = "—";
+    document.getElementById("f_section").value = "";
+    await onDateShiftChange();
+  }catch(e){
+    statusEl.className = "status err";
+    statusEl.textContent = (e.message && e.message.indexOf("duplicate") !== -1)
+      ? "A record already exists for this exact Date, Shift, Type, Section and Asset."
+      : "Error: " + e.message;
+  }
+}
+
+init();
+</script>
+</body>
+</html>

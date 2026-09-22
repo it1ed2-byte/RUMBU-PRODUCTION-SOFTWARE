@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Payment Stage — PET Collection</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme")||"navy"); }catch(e){} })();
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) document.documentElement.setAttribute("data-theme",e.data.rumbuTheme); });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="review-modal.js"></script>
+<script src="queue-collapse.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1100px;margin:0 auto;}
+  label{font-size:12px;font-weight:700;display:block;margin:10px 0 4px;color:var(--muted);}
+  input,select{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);}
+  input[readonly]{background:var(--bg);color:var(--muted);}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;}
+  .phase-header{background:var(--heading);color:#fff;padding:10px 16px;border-radius:8px 8px 0 0;font-weight:700;font-size:13px;}
+  .phase-body{border:1px solid var(--line);border-radius:0 0 8px 8px;padding:16px;margin-bottom:16px;}
+  .queue-row{padding:10px 14px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;background:var(--card);gap:10px;flex-wrap:wrap;}
+  .approve-card{border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:10px;}
+  .correction-note{background:#fef3c7;border:1px solid #d97706;border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:12px;}
+  .file-url{font-size:11px;color:var(--ok);margin-top:3px;}
+  .info-row{font-size:12px;color:var(--muted);padding:4px 0;border-bottom:1px solid var(--line);}
+  .info-row:last-child{border-bottom:none;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back</button>
+  <div id="connStatus" style="font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);">Loading...</div>
+
+  <!-- Phase 1 -->
+  <div id="p1FillSection" style="display:none;">
+    <div class="phase-header">Stage 3 — Phase 1: 90% Payment (Fill Queue)</div>
+    <div class="phase-body">
+      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Collections approved by Quality Control awaiting first payment entry.</p>
+      <div class="panel-title" id="p1FillQueueTitle" style="font-size:13px;margin-bottom:8px;">Pending Entries</div>
+      <div id="p1FillQueue"></div>
+
+      <!-- Phase 1 Form -->
+      <div id="p1Form" style="display:none;margin-top:16px;">
+        <div id="p1CorrNote" style="display:none;" class="correction-note"></div>
+        <h4 id="p1FormTitle" style="color:var(--heading);">Payment — Phase 1</h4>
+
+        <!-- Summary from collection and QC -->
+        <div style="background:var(--bg);border-radius:8px;padding:12px;margin-bottom:14px;" id="p1Summary"></div>
+
+        <div class="grid3">
+          <div><label>Form Number</label><input type="text" id="p1FormNum" readonly></div>
+          <div><label>Agent</label><input type="text" id="p1Agent" readonly></div>
+          <div><label>Section</label><input type="text" id="p1Section" readonly></div>
+        </div>
+        <div class="grid2" style="margin-top:4px;">
+          <div>
+            <label>Odoo PO Number *</label>
+            <input type="text" id="p1PO" placeholder="Enter Odoo PO number">
+          </div>
+          <div>
+            <label>90% Payment Receipt *</label>
+            <input type="file" id="p1Receipt" accept=".pdf,.jpg,.jpeg,.png">
+            <div class="file-url" id="p1ReceiptUrl"></div>
+          </div>
+        </div>
+        <div style="margin-top:16px;display:flex;gap:10px;">
+          <button onclick="submitP1()">Submit for Approval</button>
+          <button class="btn-ghost" onclick="closeP1Form()">Cancel</button>
+        </div>
+        <div id="p1FormStatus" style="margin-top:10px;font-size:13px;font-weight:700;min-height:16px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="p1ApprovalSection" style="display:none;">
+    <div class="phase-header" style="background:var(--accent);">Stage 3 — Phase 1: 90% Payment (Approval Queue)</div>
+    <div class="phase-body">
+      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Approve or reject Phase 1 payment submissions.</p>
+      <div class="panel-title" id="p1ApprovalQueueTitle" style="font-size:13px;margin-bottom:8px;">Pending Approvals</div>
+      <div id="p1ApprovalQueue"></div>
+    </div>
+  </div>
+
+  <!-- Phase 2 -->
+  <div id="p2FillSection" style="display:none;margin-top:16px;">
+    <div class="phase-header">Stage 3 — Phase 2: 10% Balance Payment (Fill Queue)</div>
+    <div class="phase-body">
+      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Production complete. Enter deduction and balance payment receipt.</p>
+      <div class="panel-title" id="p2FillQueueTitle" style="font-size:13px;margin-bottom:8px;">Pending Entries</div>
+      <div id="p2FillQueue"></div>
+
+      <!-- Phase 2 Form -->
+      <div id="p2Form" style="display:none;margin-top:16px;">
+        <div id="p2CorrNote" style="display:none;" class="correction-note"></div>
+        <h4 id="p2FormTitle" style="color:var(--heading);">Payment — Phase 2 (Balance)</h4>
+        <div style="background:var(--bg);border-radius:8px;padding:12px;margin-bottom:14px;" id="p2Summary"></div>
+
+        <div class="grid3">
+          <div><label>Form Number</label><input type="text" id="p2FormNum" readonly></div>
+          <div><label>Agent</label><input type="text" id="p2Agent" readonly></div>
+          <div><label>Section</label><input type="text" id="p2Section" readonly></div>
+        </div>
+
+        <!-- Deduction (computed from Stage 4 waste via Stage 2 QC) -->
+        <div class="grid3" style="margin-top:8px;">
+          <div><label>Rumbu Weighbridge Weight (kg)</label><input type="number" id="p2RumbuW" readonly></div>
+          <div><label>Unacceptable Waste Value (kg)</label><input type="number" id="p2UnaccVal" readonly></div>
+          <div>
+            <label>Deduction % = (Unacceptable / Rumbu) × 100</label>
+            <input type="number" id="p2DeductPct" readonly>
+          </div>
+        </div>
+        <div class="grid2" style="margin-top:4px;">
+          <div>
+            <label>Deduction Amount (NGN)</label>
+            <input type="number" id="p2DeductAmt" placeholder="Enter deduction amount in NGN">
+          </div>
+          <div>
+            <label>10% Balance Payment Receipt *</label>
+            <input type="file" id="p2Receipt" accept=".pdf,.jpg,.jpeg,.png">
+            <div class="file-url" id="p2ReceiptUrl"></div>
+          </div>
+        </div>
+        <div style="margin-top:16px;display:flex;gap:10px;">
+          <button onclick="submitP2()">Submit for Approval</button>
+          <button class="btn-ghost" onclick="closeP2Form()">Cancel</button>
+        </div>
+        <div id="p2FormStatus" style="margin-top:10px;font-size:13px;font-weight:700;min-height:16px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="p2ApprovalSection" style="display:none;margin-top:16px;">
+    <div class="phase-header" style="background:var(--accent);">Stage 3 — Phase 2: 10% Balance Payment (Approval Queue)</div>
+    <div class="phase-body">
+      <div class="panel-title" id="p2ApprovalQueueTitle" style="font-size:13px;margin-bottom:8px;">Pending Approvals</div>
+      <div id="p2ApprovalQueue"></div>
+    </div>
+  </div>
+
+  <div id="noQueue" style="display:none;text-align:center;color:var(--muted);padding:40px;font-size:14px;">
+    No payment actions assigned to you at this stage.
+  </div>
+</div>
+
+<script>
+let ME=null, CURRENT_P1=null, CURRENT_P2=null, ALL_SECTIONS=[], P1_QUEUE_DATA=[], P2_QUEUE_DATA=[];
+
+const NEXT_STATUS={stage3p1:'stage4_filling', stage3p2:'completed'};
+const REJECT_STATUS={stage3p1:'rejected_to_stage2', stage3p2:'rejected_to_stage4'};
+
+async function init(){
+  const cs=document.getElementById("connStatus");
+  try{
+    ME=await requireAuth("../../login.html");
+    if(!ME) return;
+
+    const { data: secData } = await sb.from("app_sections").select("name").order("name");
+    ALL_SECTIONS = (secData||[]).map(s=>s.name);
+
+    const [{ data:f1 },{ data:a1 },{ data:f2 },{ data:a2 }]=await Promise.all([
+      sb.from("pet_stage_fillers").select("section").eq("stage","stage3p1").eq("profile_id",ME.id),
+      sb.from("pet_stage_approvers").select("section").eq("stage","stage3p1").eq("profile_id",ME.id),
+      sb.from("pet_stage_fillers").select("section").eq("stage","stage3p2").eq("profile_id",ME.id),
+      sb.from("pet_stage_approvers").select("section").eq("stage","stage3p2").eq("profile_id",ME.id)
+    ]);
+
+    const isP1Filler   = (f1&&f1.length>0)||ME.role==="super_admin";
+    const isP1Approver = (a1&&a1.length>0)||ME.role==="super_admin";
+    const isP2Filler   = (f2&&f2.length>0)||ME.role==="super_admin";
+    const isP2Approver = (a2&&a2.length>0)||ME.role==="super_admin";
+
+    const p1FillerSecs=(f1||[]).map(r=>r.section), p1ApprSecs=(a1||[]).map(r=>r.section);
+    const p2FillerSecs=(f2||[]).map(r=>r.section), p2ApprSecs=(a2||[]).map(r=>r.section);
+
+    let anyQueue=false;
+    if(isP1Filler){   await loadP1FillQueue(p1FillerSecs);   document.getElementById("p1FillSection").style.display="block"; anyQueue=true; }
+    if(isP1Approver){ await loadP1ApprovalQueue(p1ApprSecs); document.getElementById("p1ApprovalSection").style.display="block"; anyQueue=true; }
+    if(isP2Filler){   await loadP2FillQueue(p2FillerSecs);   document.getElementById("p2FillSection").style.display="block"; anyQueue=true; }
+    if(isP2Approver){ await loadP2ApprovalQueue(p2ApprSecs); document.getElementById("p2ApprovalSection").style.display="block"; anyQueue=true; }
+    if(!anyQueue) document.getElementById("noQueue").style.display="block";
+
+    cs.style.color="var(--ok)"; cs.textContent="Connected.";
+  }catch(e){ cs.style.color="var(--bad)"; cs.textContent="Error: "+e.message; }
+}
+
+async function loadP1FillQueue(sections){
+  const { data }=await sb.from("pet_collections")
+    .select("id,form_number,agent_name,agent_code,section,status,updated_at")
+    .in("status",["stage3p1_filling","rejected_to_stage3p1"])
+    .in("section",sections.length?sections:ALL_SECTIONS)
+    .order("updated_at",{ascending:false});
+  const queue=document.getElementById("p1FillQueue");
+  if(!data||!data.length){
+    queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No collections waiting for Phase 1 payment entry.</p>`;
+    setupCollapsibleQueue("p1FillQueueTitle","p1FillQueue",0,"Pending Entries");
+    return;
+  }
+  queue.innerHTML=data.map(c=>`<div class="queue-row">
+    <div><b>${c.form_number}</b> <span style="font-size:12px;color:var(--muted);margin-left:8px;">${c.agent_name} — ${c.section}</span>
+    ${c.status==="rejected_to_stage3p1"?`<span style="font-size:11px;color:var(--bad);margin-left:8px;">(Returned for correction)</span>`:""}
+    </div>
+    <button onclick="openP1Form(${c.id})">Enter Payment</button>
+  </div>`).join("");
+  setupCollapsibleQueue("p1FillQueueTitle","p1FillQueue",data.length,"Pending Entries");
+}
+
+async function loadP1ApprovalQueue(sections){
+  const { data }=await sb.from("pet_collections")
+    .select("id,form_number,agent_name,agent_code,section,status,cycle,agent_waybill_weight,rumbu_weighbridge_weight,pet_stage3_payment(*),pet_stage2_qc(offload_location)")
+    .eq("status","stage3p1_approval")
+    .in("section",sections.length?sections:ALL_SECTIONS)
+    .order("updated_at",{ascending:false});
+  const queue=document.getElementById("p1ApprovalQueue");
+  if(!data||!data.length){
+    queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No Phase 1 submissions awaiting approval.</p>`;
+    setupCollapsibleQueue("p1ApprovalQueueTitle","p1ApprovalQueue",0,"Pending Approvals");
+    return;
+  }
+
+  // Scoped to THIS cycle — a decision from before a reject/correct loop must not
+  // hide the buttons once the form has been corrected and resubmitted.
+  const { data:myDec }=await sb.from("pet_approvals").select("collection_id,cycle").eq("approver_profile_id",ME.id).eq("stage","stage3p1");
+  const decided=new Set((myDec||[]).map(d=>d.collection_id+":"+d.cycle));
+
+  P1_QUEUE_DATA = data;
+  queue.innerHTML=data.map(c=>{
+    const pay=(Array.isArray(c.pet_stage3_payment)?c.pet_stage3_payment[0]:c.pet_stage3_payment)||{};
+    const hasDec=decided.has(c.id+":"+c.cycle);
+    return `<div class="approve-card">
+      <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+        <div><b>${c.form_number}</b> — ${c.agent_name} (${c.section})
+          <div style="font-size:12px;color:var(--muted);">PO: ${pay.odoo_po_number||"—"}</div>
+        </div>
+        ${hasDec?`<span style="color:var(--ok);font-size:12px;font-weight:700;">Decision submitted</span>`:""}
+      </div>
+      ${!hasDec?`<div style="margin-top:10px;">
+        <button onclick="openP1Review(${c.id})">Review to Confirm or Reject</button>
+      </div>`:""}
+    </div>`;
+  }).join("");
+  setupCollapsibleQueue("p1ApprovalQueueTitle","p1ApprovalQueue",data.length,"Pending Approvals");
+}
+
+function openP1Review(collectionId){
+  const c = P1_QUEUE_DATA.find(x=>x.id===collectionId);
+  if(!c) return;
+  const pay = (Array.isArray(c.pet_stage3_payment)?c.pet_stage3_payment[0]:c.pet_stage3_payment)||{};
+  const qc  = (Array.isArray(c.pet_stage2_qc)?c.pet_stage2_qc[0]:c.pet_stage2_qc)||{};
+  showReviewModal({
+    title: "Phase 1 (90%) Payment — Review Submission",
+    subtitle: c.form_number + " — " + c.agent_name + " (" + c.agent_code + ") — " + c.section,
+    mode: "decide",
+    sections: [
+      { heading: "Quality Control Context", rows: [
+        ["LOT Assigned", qc.offload_location],
+        ["Agent Waybill Weight", (c.agent_waybill_weight||0) + " kg"],
+        ["Rumbu Weighbridge Weight", (c.rumbu_weighbridge_weight||0) + " kg"],
+      ]},
+      { heading: "Payment Details", rows: [
+        ["Odoo PO Number", pay.odoo_po_number],
+        ["90% Payment Receipt", reviewModalFileLink(pay.payment_90pct_attachment, "View receipt")],
+      ]}
+    ],
+    onApprove: ()=>decide(collectionId,'stage3p1','approved',null),
+    onReject: (note)=>decide(collectionId,'stage3p1','rejected',note)
+  });
+}
+
+async function loadP2FillQueue(sections){
+  const { data }=await sb.from("pet_collections")
+    .select("id,form_number,agent_name,section,status,updated_at")
+    .in("status",["stage3p2_filling","rejected_to_stage4"])
+    .in("section",sections.length?sections:ALL_SECTIONS)
+    .order("updated_at",{ascending:false});
+  const queue=document.getElementById("p2FillQueue");
+  if(!data||!data.length){
+    queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No collections ready for Phase 2 payment.</p>`;
+    setupCollapsibleQueue("p2FillQueueTitle","p2FillQueue",0,"Pending Entries");
+    return;
+  }
+  queue.innerHTML=data.map(c=>`<div class="queue-row">
+    <div><b>${c.form_number}</b> <span style="font-size:12px;color:var(--muted);margin-left:8px;">${c.agent_name} — ${c.section}</span>
+    ${c.status==="rejected_to_stage4"?`<span style="font-size:11px;color:var(--bad);margin-left:8px;">(Returned for correction)</span>`:""}
+    </div>
+    <button onclick="openP2Form(${c.id})">Enter Balance Payment</button>
+  </div>`).join("");
+  setupCollapsibleQueue("p2FillQueueTitle","p2FillQueue",data.length,"Pending Entries");
+}
+
+async function loadP2ApprovalQueue(sections){
+  const { data }=await sb.from("pet_collections")
+    .select("id,form_number,agent_name,agent_code,section,status,cycle,pet_stage3_payment(*),pet_stage4_production(*),pet_stage2_qc(offload_location)")
+    .eq("status","stage3p2_approval")
+    .in("section",sections.length?sections:ALL_SECTIONS)
+    .order("updated_at",{ascending:false});
+  const queue=document.getElementById("p2ApprovalQueue");
+  if(!data||!data.length){
+    queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No Phase 2 submissions awaiting approval.</p>`;
+    setupCollapsibleQueue("p2ApprovalQueueTitle","p2ApprovalQueue",0,"Pending Approvals");
+    return;
+  }
+
+  // Scoped to THIS cycle — a decision from before a reject/correct loop must not
+  // hide the buttons once the form has been corrected and resubmitted.
+  const { data:myDec }=await sb.from("pet_approvals").select("collection_id,cycle").eq("approver_profile_id",ME.id).eq("stage","stage3p2");
+  const decided=new Set((myDec||[]).map(d=>d.collection_id+":"+d.cycle));
+
+  P2_QUEUE_DATA = data;
+  queue.innerHTML=data.map(c=>{
+    const pay=(Array.isArray(c.pet_stage3_payment)?c.pet_stage3_payment[0]:c.pet_stage3_payment)||{};
+    const hasDec=decided.has(c.id+":"+c.cycle);
+    return `<div class="approve-card">
+      <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+        <div><b>${c.form_number}</b> — ${c.agent_name} (${c.section})
+          <div style="font-size:12px;color:var(--muted);">Deduction: ${pay.deduction_pct||0}% | Receipt: ${pay.payment_10pct_attachment?"✔":"Pending"}</div>
+        </div>
+        ${hasDec?`<span style="color:var(--ok);font-size:12px;font-weight:700;">Decision submitted</span>`:""}
+      </div>
+      ${!hasDec?`<div style="margin-top:10px;">
+        <button onclick="openP2Review(${c.id})">Review to Confirm or Reject</button>
+      </div>`:""}
+    </div>`;
+  }).join("");
+  setupCollapsibleQueue("p2ApprovalQueueTitle","p2ApprovalQueue",data.length,"Pending Approvals");
+}
+
+function openP2Review(collectionId){
+  const c = P2_QUEUE_DATA.find(x=>x.id===collectionId);
+  if(!c) return;
+  const pay  = (Array.isArray(c.pet_stage3_payment)?c.pet_stage3_payment[0]:c.pet_stage3_payment)||{};
+  const prod = (Array.isArray(c.pet_stage4_production)?c.pet_stage4_production[0]:c.pet_stage4_production)||{};
+  const qc   = (Array.isArray(c.pet_stage2_qc)?c.pet_stage2_qc[0]:c.pet_stage2_qc)||{};
+  showReviewModal({
+    title: "Phase 2 (10% Balance) Payment — Review Submission",
+    subtitle: c.form_number + " — " + c.agent_name + " (" + c.agent_code + ") — " + c.section,
+    mode: "decide",
+    sections: [
+      { heading: "Production Context", rows: [
+        ["LOT", qc.offload_location],
+        ["Production Start", prod.production_start ? new Date(prod.production_start).toLocaleString("en-GB") : null],
+        ["Production End", prod.production_end ? new Date(prod.production_end).toLocaleString("en-GB") : null],
+        ["Total Colored Flex (kg)", prod.colored_flex_kg],
+        ["Total Non-Colored Flex (kg)", prod.non_colored_flex_kg],
+        ["Total Production (kg)", prod.total_production_kg],
+        ["Total Waste (kg)", prod.total_waste_kg],
+        ["Total Production + Waste (kg)", prod.total_production_plus_waste_kg],
+      ]},
+      { heading: "Balance Payment Details", rows: [
+        ["Deduction %", pay.deduction_pct],
+        ["Deduction Amount (NGN)", pay.deduction_amount],
+        ["10% Balance Receipt", reviewModalFileLink(pay.payment_10pct_attachment, "View receipt")],
+      ]}
+    ],
+    onApprove: ()=>decide(collectionId,'stage3p2','approved',null),
+    onReject: (note)=>decide(collectionId,'stage3p2','rejected',note)
+  });
+}
+
+async function openP1Form(id){
+  const { data:c }=await sb.from("pet_collections").select("*,pet_stage3_payment(*),pet_stage2_qc(*)").eq("id",id).single();
+  if(!c) return;
+  CURRENT_P1=c;
+  const pay=(Array.isArray(c.pet_stage3_payment)?c.pet_stage3_payment[0]:c.pet_stage3_payment)||{};
+
+  document.getElementById("p1FormNum").value=c.form_number;
+  document.getElementById("p1Agent").value=c.agent_name;
+  document.getElementById("p1Section").value=c.section;
+  document.getElementById("p1PO").value=pay.odoo_po_number||"";
+  document.getElementById("p1ReceiptUrl").textContent=pay.payment_90pct_attachment||"";
+
+  const qc=(Array.isArray(c.pet_stage2_qc)?c.pet_stage2_qc[0]:c.pet_stage2_qc)||{};
+  document.getElementById("p1Summary").innerHTML=`
+    <div class="info-row"><b>Waybill Weight:</b> ${c.agent_waybill_weight||0} kg</div>
+    <div class="info-row"><b>Rumbu Weight:</b> ${c.rumbu_weighbridge_weight||0} kg</div>
+    <div class="info-row"><b>LOT Assigned:</b> ${qc.offload_location||"—"}</div>`;
+
+  if(c.status==="rejected_to_stage3p1"){
+    const { data:log }=await sb.from("pet_activity_log").select("note").eq("collection_id",id).eq("action","rejected").order("created_at",{ascending:false}).limit(1);
+    if(log&&log.length){ const el=document.getElementById("p1CorrNote"); el.style.display="block"; el.innerHTML=`<b>Rejection reason:</b> ${log[0].note}`; }
+  } else document.getElementById("p1CorrNote").style.display="none";
+
+  document.getElementById("p1FormTitle").textContent="Phase 1 Payment — "+c.form_number;
+  document.getElementById("p1FormStatus").textContent="";
+  document.getElementById("p1Form").style.display="block";
+  document.getElementById("p1Form").scrollIntoView({behavior:"smooth"});
+}
+
+async function submitP1(){
+  const st=document.getElementById("p1FormStatus");
+  const po=document.getElementById("p1PO").value.trim();
+  if(!po){ st.style.color="var(--bad)"; st.textContent="Odoo PO number is required."; return; }
+  const existingReceipt=document.getElementById("p1ReceiptUrl").textContent;
+  const receiptFile=document.getElementById("p1Receipt").files[0];
+  if(!receiptFile && !existingReceipt){ st.style.color="var(--bad)"; st.textContent="Attach the 90% payment receipt."; return; }
+
+  st.textContent = "";
+  showReviewModal({
+    title: "Review Before Submitting",
+    subtitle: (CURRENT_P1?.form_number||"") + " — check everything below before it goes for approval",
+    mode: "submit",
+    sections: [{ rows: [
+      ["Odoo PO Number", po],
+      ["90% Payment Receipt", receiptFile ? receiptFile.name : "Already attached"]
+    ]}],
+    onConfirm: proceedWithP1Submit
+  });
+}
+
+async function proceedWithP1Submit(){
+  const st=document.getElementById("p1FormStatus");
+  const po=document.getElementById("p1PO").value.trim();
+  st.style.color="var(--muted)"; st.textContent="Saving...";
+  try{
+    let receiptUrl=document.getElementById("p1ReceiptUrl").textContent||null;
+    const file=document.getElementById("p1Receipt").files[0];
+    if(file){
+      const path=`receipts/90pct/${Date.now()}-${Math.random().toString(36).slice(2)}.${file.name.split(".").pop()}`;
+      const { data:ud,error:ue }=await sb.storage.from("pet-attachments").upload(path,file);
+      if(ue) throw ue;
+      const { data:urlD }=sb.storage.from("pet-attachments").getPublicUrl(path);
+      receiptUrl=urlD.publicUrl;
+    }
+    const payload={ collection_id:CURRENT_P1.id, odoo_po_number:po, payment_90pct_attachment:receiptUrl, phase1_filled_by_profile_id:ME.id, phase1_filled_at:new Date().toISOString() };
+    const { data:ex }=await sb.from("pet_stage3_payment").select("id").eq("collection_id",CURRENT_P1.id).maybeSingle();
+    if(ex){
+      const { error: payErr } = await sb.from("pet_stage3_payment").update(payload).eq("collection_id",CURRENT_P1.id);
+      if(payErr) throw new Error("Could not save payment data: "+payErr.message);
+    } else {
+      const { error: payErr } = await sb.from("pet_stage3_payment").insert(payload);
+      if(payErr) throw new Error("Could not save payment data: "+payErr.message);
+    }
+
+    const oldStatus=CURRENT_P1.status;
+    const { error: stErr } = await sb.from("pet_collections").update({ status:"stage3p1_approval", updated_at:new Date().toISOString() }).eq("id",CURRENT_P1.id);
+    if(stErr) throw new Error("Payment data was saved, but could not advance status: "+stErr.message);
+    const { error: logErr } = await sb.from("pet_activity_log").insert({ collection_id:CURRENT_P1.id, action:"stage3p1_filled", stage:"stage3p1", actor_profile_id:ME.id, actor_username:ME.username, old_status:oldStatus, new_status:"stage3p1_approval" });
+    if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
+
+    st.style.color="var(--ok)"; st.textContent="Submitted for approval.";
+    setTimeout(()=>{ closeP1Form(); init(); },1200);
+  }catch(e){ st.style.color="var(--bad)"; st.textContent="Error: "+e.message; }
+}
+
+function closeP1Form(){ document.getElementById("p1Form").style.display="none"; CURRENT_P1=null; }
+
+async function openP2Form(id){
+  const { data:c }=await sb.from("pet_collections").select("*,pet_stage3_payment(*),pet_stage2_qc(*),pet_stage4_production(*)").eq("id",id).single();
+  if(!c) return;
+  CURRENT_P2=c;
+  const pay=(Array.isArray(c.pet_stage3_payment)?c.pet_stage3_payment[0]:c.pet_stage3_payment)||{};
+  const qc=(Array.isArray(c.pet_stage2_qc)?c.pet_stage2_qc[0]:c.pet_stage2_qc)||{};
+  const prod=(Array.isArray(c.pet_stage4_production)?c.pet_stage4_production[0]:c.pet_stage4_production)||{};
+
+  document.getElementById("p2FormNum").value=c.form_number;
+  document.getElementById("p2Agent").value=c.agent_name;
+  document.getElementById("p2Section").value=c.section;
+  document.getElementById("p2ReceiptUrl").textContent=pay.payment_10pct_attachment||"";
+
+  const rumbuW=c.rumbu_weighbridge_weight||0;
+  const unaccVal=prod.unacceptable_waste_value||0;
+  const deductPct=rumbuW>0 ? ((unaccVal/rumbuW)*100) : 0;
+  document.getElementById("p2RumbuW").value=rumbuW;
+  document.getElementById("p2UnaccVal").value=unaccVal;
+  document.getElementById("p2DeductPct").value=deductPct.toFixed(4);
+  document.getElementById("p2DeductAmt").value=pay.deduction_amount||"";
+
+  document.getElementById("p2Summary").innerHTML=`
+    <div class="info-row"><b>Total Waste (Stage 4):</b> ${prod.total_waste_kg||0} kg</div>
+    <div class="info-row"><b>Total Colored Flex:</b> ${prod.colored_flex_kg||0} kg</div>
+    <div class="info-row"><b>Total Non-Colored Flex:</b> ${prod.non_colored_flex_kg||0} kg</div>
+    <div class="info-row"><b>Total Production:</b> ${prod.total_production_kg||0} kg</div>
+    <div class="info-row"><b>Total Production + Waste:</b> ${prod.total_production_plus_waste_kg||0} kg</div>
+    <div class="info-row"><b>Deduction %:</b> ${deductPct.toFixed(4)}%</div>
+    <div class="info-row"><b>Production Start:</b> ${prod.production_start||"—"}</div>
+    <div class="info-row"><b>Production End:</b> ${prod.production_end||"—"}</div>`;
+
+  if(c.status==="rejected_to_stage4"){
+    const { data:log }=await sb.from("pet_activity_log").select("note").eq("collection_id",id).eq("action","rejected").order("created_at",{ascending:false}).limit(1);
+    if(log&&log.length){ const el=document.getElementById("p2CorrNote"); el.style.display="block"; el.innerHTML=`<b>Rejection reason:</b> ${log[0].note}`; }
+  } else document.getElementById("p2CorrNote").style.display="none";
+
+  document.getElementById("p2FormTitle").textContent="Phase 2 Balance Payment — "+c.form_number;
+  document.getElementById("p2FormStatus").textContent="";
+  document.getElementById("p2Form").style.display="block";
+  document.getElementById("p2Form").scrollIntoView({behavior:"smooth"});
+}
+
+async function submitP2(){
+  const st=document.getElementById("p2FormStatus");
+  const existingReceipt=document.getElementById("p2ReceiptUrl").textContent;
+  const receiptFile=document.getElementById("p2Receipt").files[0];
+  if(!receiptFile && !existingReceipt){ st.style.color="var(--bad)"; st.textContent="Attach the 10% balance payment receipt."; return; }
+
+  st.textContent = "";
+  showReviewModal({
+    title: "Review Before Submitting",
+    subtitle: (CURRENT_P2?.form_number||"") + " — check everything below before it goes for approval",
+    mode: "submit",
+    sections: [{ rows: [
+      ["Deduction %", document.getElementById("p2DeductPct").value],
+      ["Deduction Amount (NGN)", document.getElementById("p2DeductAmt").value],
+      ["10% Balance Payment Receipt", receiptFile ? receiptFile.name : "Already attached"]
+    ]}],
+    onConfirm: proceedWithP2Submit
+  });
+}
+
+async function proceedWithP2Submit(){
+  const st=document.getElementById("p2FormStatus");
+  st.style.color="var(--muted)"; st.textContent="Saving...";
+  try{
+    let receiptUrl=document.getElementById("p2ReceiptUrl").textContent||null;
+    const file=document.getElementById("p2Receipt").files[0];
+    if(file){
+      const path=`receipts/10pct/${Date.now()}-${Math.random().toString(36).slice(2)}.${file.name.split(".").pop()}`;
+      const { data:ud,error:ue }=await sb.storage.from("pet-attachments").upload(path,file);
+      if(ue) throw ue;
+      const { data:urlD }=sb.storage.from("pet-attachments").getPublicUrl(path);
+      receiptUrl=urlD.publicUrl;
+    }
+    const deductPct=parseFloat(document.getElementById("p2DeductPct").value)||0;
+    const deductAmt=parseFloat(document.getElementById("p2DeductAmt").value)||null;
+    const payload={ deduction_pct:deductPct, deduction_amount:deductAmt, payment_10pct_attachment:receiptUrl, phase2_filled_by_profile_id:ME.id, phase2_filled_at:new Date().toISOString() };
+    const { error: payErr } = await sb.from("pet_stage3_payment").update(payload).eq("collection_id",CURRENT_P2.id);
+    if(payErr) throw new Error("Could not save balance payment data: "+payErr.message);
+
+    const oldStatus=CURRENT_P2.status;
+    const { error: stErr } = await sb.from("pet_collections").update({ status:"stage3p2_approval", updated_at:new Date().toISOString() }).eq("id",CURRENT_P2.id);
+    if(stErr) throw new Error("Payment data was saved, but could not advance status: "+stErr.message);
+    const { error: logErr } = await sb.from("pet_activity_log").insert({ collection_id:CURRENT_P2.id, action:"stage3p2_filled", stage:"stage3p2", actor_profile_id:ME.id, actor_username:ME.username, old_status:oldStatus, new_status:"stage3p2_approval" });
+    if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
+
+    st.style.color="var(--ok)"; st.textContent="Submitted for approval.";
+    setTimeout(()=>{ closeP2Form(); init(); },1200);
+  }catch(e){ st.style.color="var(--bad)"; st.textContent="Error: "+e.message; }
+}
+
+function closeP2Form(){ document.getElementById("p2Form").style.display="none"; CURRENT_P2=null; }
+
+async function decide(collectionId, stage, decision, note){
+  if(decision==="rejected"&&!note){ alert("Rejection reason is required."); return; }
+  try{
+    const { data:c, error:cErr }=await sb.from("pet_collections").select("section,cycle,status").eq("id",collectionId).single();
+    if(cErr) throw new Error("Could not load collection: "+cErr.message);
+    const { error: apprErr } = await sb.from("pet_approvals").insert({ collection_id:collectionId, stage, cycle:c.cycle, approver_profile_id:ME.id, approver_username:ME.username, decision, correction_note:note||null, decided_at:new Date().toISOString() });
+    if(apprErr) throw new Error("Could not record your decision: "+apprErr.message);
+
+    if(decision==="rejected"){
+      const newStatus=REJECT_STATUS[stage];
+      const { error: updErr } = await sb.from("pet_collections").update({ status:newStatus, cycle:(c.cycle||1)+1, updated_at:new Date().toISOString() }).eq("id",collectionId);
+      if(updErr) throw new Error("Could not update status: "+updErr.message);
+      const { error: logErr } = await sb.from("pet_activity_log").insert({ collection_id:collectionId, action:"rejected", stage, actor_profile_id:ME.id, actor_username:ME.username, old_status:c.status, new_status:newStatus, note });
+      if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
+    } else {
+      const allApproved=(ME.role==="super_admin") ? true : await checkAllApproved(collectionId,stage,c.cycle,c.section);
+      if(allApproved){
+        const newStatus=stage==="stage3p2"?"completed":NEXT_STATUS[stage];
+        const { error: updErr } = await sb.from("pet_collections").update({ status:newStatus, updated_at:new Date().toISOString() }).eq("id",collectionId);
+        if(updErr) throw new Error("Could not advance status: "+updErr.message);
+        const { error: logErr } = await sb.from("pet_activity_log").insert({ collection_id:collectionId, action:"approved_all", stage, actor_profile_id:ME.id, actor_username:ME.username, old_status:c.status, new_status:newStatus });
+        if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
+      }
+    }
+    await init();
+  }catch(e){ alert("Error: "+e.message); }
+}
+
+async function checkAllApproved(collectionId,stage,cycle,section){
+  const [{ data:approvers },{ data:approvals }]=await Promise.all([
+    sb.from("pet_stage_approvers").select("profile_id").eq("section",section).eq("stage",stage),
+    sb.from("pet_approvals").select("approver_profile_id").eq("collection_id",collectionId).eq("stage",stage).eq("cycle",cycle).eq("decision","approved")
+  ]);
+  if(!approvers||!approvers.length) return true;
+  const assigned=new Set(approvers.map(a=>a.profile_id));
+  const approved=new Set((approvals||[]).map(a=>a.approver_profile_id));
+  return [...assigned].every(id=>approved.has(id));
+}
+
+init();
+</script>
+</body>
+</html>

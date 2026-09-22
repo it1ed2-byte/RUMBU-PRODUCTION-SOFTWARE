@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Smart Asset Summary</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+  :root{--navy:var(--heading);}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:16px;}
+  .card{max-width:1100px;margin:0 auto 16px;background:var(--card);border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.2);padding:20px;}
+  h2{text-align:center;color:var(--navy);border-bottom:2px solid var(--navy);padding-bottom:10px;}
+  label{font-weight:600;margin-top:8px;display:block;font-size:13px;}
+  input,select{width:100%;padding:8px;margin-top:4px;border:1px solid var(--line);border-radius:6px;font-size:13px;}
+  .grid{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;}
+  .btn-row{display:flex;gap:10px;margin-top:14px;}
+  button{flex:1;padding:11px;border:none;border-radius:8px;background:var(--navy);color:#fff;font-weight:bold;cursor:pointer;}
+  button.alt{background:#38761d;}
+  #status{margin-top:10px;font-weight:bold;font-size:13px;}
+  table{width:100%;border-collapse:collapse;font-size:12px;margin-top:6px;}
+  th,td{border:1px solid #333;padding:4px;text-align:center;}
+  th{background:var(--navy);color:#fff;}
+  tr:nth-child(even){background:#f9f9f9;}
+  @media (max-width:700px){ .grid{grid-template-columns:1fr 1fr;} }
+  @media print{ .no-print{display:none !important;} }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="../../table-resolver.js"></script>
+</head>
+<body>
+
+<div class="card no-print">
+  <h2>🧶 Smart Asset Summary</h2>
+  <div class="grid">
+    <div><label>From Date</label><input type="date" id="fromDate"></div>
+    <div><label>To Date</label><input type="date" id="toDate"></div>
+    <div><label>Shift</label><select id="shift"><option value="All">All</option><option>Morning</option><option>Night</option></select></div>
+    <div><label>Group</label><select id="group"><option value="All">All</option><option>A</option><option>B</option></select></div>
+    <div><label>Section</label><select id="section"><option value="All">All</option></select></div>
+    <div><label>Work Duration</label><select id="workHours"><option value="660">11 hours</option><option value="600">10 hours</option><option value="540">9 hours</option></select></div>
+    <div><label>%P Minimum</label><input type="number" id="pMin" placeholder="none"></div>
+    <div><label>%P Maximum</label><input type="number" id="pMax" placeholder="none"></div>
+    <div><label>%A Minimum</label><input type="number" id="aMin" placeholder="none"></div>
+    <div><label>%A Maximum</label><input type="number" id="aMax" placeholder="none"></div>
+    <div><label>%B Minimum</label><input type="number" id="bMin" placeholder="none"></div>
+    <div><label>%B Maximum</label><input type="number" id="bMax" placeholder="none"></div>
+  </div>
+  <div class="btn-row">
+    <button onclick="generate()">Generate Report</button>
+    <button class="alt" onclick="window.print()">Print / Save as PDF</button>
+  </div>
+  <div id="status">Connecting to Supabase...</div>
+</div>
+
+<div id="reportArea"></div>
+
+<script>
+const SECTION_LABEL = { "Rumbu": "Rumbu", "MamaSannu": "Mama Sannu" };
+
+let MW_ROWS = [], CTRL_ROWS = []; CTRL_ROWS.forEach(normalizeControlRow);
+let MW_TABLE = "mat_weaving"; // resolved properly in init() below
+
+function parseDT(v){ const d=new Date(v); return isNaN(d)?null:d; }
+function minutesBetween(a,b){ return (!a||!b) ? 0 : Math.round((b-a)/60000); }
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
+
+
+function normalizeControlRow(r){
+  if(r.date_col === undefined) r.date_col = r.date;
+  if(r.names === undefined) r.names = r.nurse_name;
+  if(r.stop_time === undefined) r.stop_time = r.mc_stoppage_time;
+  if(r.extimated_time === undefined) r.extimated_time = r.estimated_duration;
+  if(r.discription === undefined) r.discription = r.description;
+  return r;
+}
+
+async function init(){
+  const status = document.getElementById("status");
+  try{
+    const me = await requireAuth("../../login.html");
+    if(!me) return;
+    MW_TABLE = await resolveWeavingTable();
+
+    const mySections = (me.sectionNames && me.sectionNames.length) ? me.sectionNames : ["Rumbu","MamaSannu"];
+    document.getElementById("section").innerHTML = '<option value="All">All</option>' +
+      mySections.map(s=>`<option value="${s}">${SECTION_LABEL[s]||s}</option>`).join("");
+    // Default-select and lock the dropdown to the user's own Section when they only have one.
+    if(mySections.length === 1){
+      document.getElementById("section").value = mySections[0];
+      document.getElementById("section").disabled = true;
+    }
+
+    const [mwRes, ctrlRes] = await Promise.all([
+      fetch(SUPABASE_URL + "/rest/v1/" + MW_TABLE + "?select=*", { headers: authHeaders() }),
+      fetch(SUPABASE_URL + "/rest/v1/control?select=*", { headers: authHeaders() })
+    ]);
+    if(!mwRes.ok) throw new Error(MW_TABLE + ": HTTP " + mwRes.status);
+    if(!ctrlRes.ok) throw new Error("control: HTTP " + ctrlRes.status);
+    MW_ROWS = await mwRes.json();
+    CTRL_ROWS = await ctrlRes.json(); CTRL_ROWS.forEach(normalizeControlRow);
+    status.style.color="#1d8a4e";
+    status.textContent = "Connected. matweaving: " + MW_ROWS.length + " rows, control: " + CTRL_ROWS.length + " rows.";
+  }catch(e){
+    status.style.color="#c0392b";
+    status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+function generate(){
+  if(!MW_ROWS.length){ alert("matweaving returned 0 rows — check its read policy."); return; }
+  const fromDate = document.getElementById("fromDate").value;
+  const toDate = document.getElementById("toDate").value;
+  const shift = document.getElementById("shift").value;
+  const group = document.getElementById("group").value;
+  const section = document.getElementById("section").value;
+  const workMinutes = Number(document.getElementById("workHours").value) || 660;
+  const pMin = document.getElementById("pMin").value ? Number(document.getElementById("pMin").value) : null;
+  const pMax = document.getElementById("pMax").value ? Number(document.getElementById("pMax").value) : null;
+  const aMin = document.getElementById("aMin").value ? Number(document.getElementById("aMin").value) : null;
+  const aMax = document.getElementById("aMax").value ? Number(document.getElementById("aMax").value) : null;
+  const bMin = document.getElementById("bMin").value ? Number(document.getElementById("bMin").value) : null;
+  const bMax = document.getElementById("bMax").value ? Number(document.getElementById("bMax").value) : null;
+
+  if(!fromDate || !toDate){ alert("Please select From & To dates."); return; }
+
+  // ---- filter production (no job_table exclusion in this module, by design) ----
+  const prod = MW_ROWS.filter(r=>{
+    if(r.date_col < fromDate || r.date_col > toDate) return false;
+    if(shift !== "All" && r.shift !== shift) return false;
+    if(group !== "All" && r.group_name !== group) return false;
+    if(section !== "All" && r.section !== section) return false;
+    return true;
+  });
+  if(!prod.length){
+    document.getElementById("reportArea").innerHTML = "<div class='card'><p>⚠️ No data found</p></div>";
+    return;
+  }
+
+  // ---- downtime by Assets only, whole range, NO job_table exclusion ----
+  const downtime = {};
+  CTRL_ROWS.forEach(r=>{
+    if(r.date_col < fromDate || r.date_col > toDate) return;
+    if(shift !== "All" && r.shift !== shift) return;
+    if(section !== "All" && r.section !== section) return;
+    const stop = parseDT(r.stop_time), finish = parseDT(r.finish_time);
+    if(!stop || !finish) return;
+    downtime[r.assets] = (downtime[r.assets] || 0) + minutesBetween(stop, finish);
+  });
+
+  // ---- group by Shed + Assets ----
+  const groups = {};
+  prod.forEach(r=>{
+    const key = r.shed + "||" + r.assets;
+    if(!groups[key]) groups[key] = { shed:r.shed, asset:r.assets, A:0,B:0,C:0,total:0,target:0, occ:0 };
+    const g = groups[key];
+    g.A += Number(r.a_double||0) + Number(r.a_single||0);
+    g.B += Number(r.b||0);
+    g.C += Number(r.c||0);
+    g.total += Number(r.total||0);
+    g.target += Number(r.target||0);
+    g.occ += 1;
+  });
+
+  const headers = ["S/N","Asset","A","B","C","Total","Target","Downtime","MLD","ATG","MLU","%A","%B","%P"];
+  let html = `<div class="card"><h2>🧶 Asset Summary (${fromDate} &rarr; ${toDate})</h2>`;
+
+  const bySh = {};
+  Object.values(groups).forEach(g=>{ if(!bySh[g.shed]) bySh[g.shed]=[]; bySh[g.shed].push(g); });
+
+  let anyRows = false;
+  Object.keys(bySh).forEach(shed=>{
+    let rowsHtml = "";
+    let sn = 1;
+    bySh[shed].forEach(g=>{
+      let target = g.target;
+      if(workMinutes !== 660) target = Math.round(target * workMinutes / 660);
+      const D = downtime[g.asset] || 0;
+      const MLD = Math.round((target * D) / (workMinutes * (g.occ||1)));
+      const ATG = target - MLD;
+      const MLU = g.A - ATG;
+      const pA = ATG ? Math.round(g.A/ATG*100) : 0;
+      const pB = ATG ? Math.round(g.B/ATG*100) : 0;
+      const pP = ATG ? Math.round(g.total/ATG*100) : 0;
+
+      if(pMin!=null && pP<pMin) return;
+      if(pMax!=null && pP>pMax) return;
+      if(aMin!=null && pA<aMin) return;
+      if(aMax!=null && pA>aMax) return;
+      if(bMin!=null && pB<bMin) return;
+      if(bMax!=null && pB>bMax) return;
+
+      anyRows = true;
+      rowsHtml += `<tr><td>${sn++}</td><td>${g.asset}</td><td>${Math.round(g.A)}</td><td>${Math.round(g.B)}</td>` +
+        `<td>${Math.round(g.C)}</td><td>${Math.round(g.total)}</td><td>${Math.round(target)}</td>` +
+        `<td>${Math.round(D)}</td><td>${Math.round(MLD)}</td><td>${Math.round(ATG)}</td><td>${Math.round(MLU)}</td>` +
+        `<td>${pA}</td><td>${pB}</td><td>${pP}</td></tr>`;
+    });
+    if(rowsHtml){
+      html += `<h3>Shed: ${shed}</h3><table><tr>${headers.map(h=>`<th>${h}</th>`).join("")}</tr>${rowsHtml}</table><br/>`;
+    }
+  });
+
+  if(!anyRows) html += "<p>No assets matched the selected %A/%B/%P range.</p>";
+  html += "</div>";
+  document.getElementById("reportArea").innerHTML = html;
+}
+
+init();
+</script>
+</body>
+</html>

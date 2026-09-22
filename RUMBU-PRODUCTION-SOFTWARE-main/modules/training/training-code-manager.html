@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Training Code Manager</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+body { font-family:var(--sans); background:var(--bg); padding: 20px; margin:0; display: flex; justify-content: center; }
+.container { width: 100%; max-width: 900px; background:var(--card); padding: 20px; border-radius: 12px; }
+.gate { width: 100%; max-width: 420px; background:var(--card); padding: 24px; border-radius: 12px; height: fit-content; margin: 0 auto; }
+h2 { text-align: center; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+input, select { padding: 10px; width: 100%; border-radius: 8px; border: 1px solid var(--line); box-sizing: border-box; }
+button { width: 100%; padding: 12px; background: black; color: #fff; border: none; margin-top: 10px; border-radius: 8px; cursor: pointer; }
+button:hover { background: #333; }
+table { width: 100%; margin-top: 20px; border-collapse: collapse; }
+th, td { border: 1px solid var(--line); padding: 8px; font-size: 14px; }
+th { background:var(--bg); }
+.delete { background: red; color: #fff; border: none; padding: 5px; cursor: pointer; border-radius: 5px; width: auto; margin-top: 0; }
+.delete:hover { background: #c00; }
+.status { margin-top: 10px; font-weight: bold; color: green; }
+.gate-note { text-align: center; font-size: 12px; color: #888; margin-top: 10px; }
+.hidden { display: none; }
+#connStatus { font-size:12px; text-align:center; font-weight:bold; }
+@media (max-width: 600px) { .grid { grid-template-columns: 1fr; } }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+</head>
+<body>
+
+<div class="gate" id="statusBox">
+  <div id="connStatus">Checking your session...</div>
+</div>
+
+<div class="container hidden" id="appBox">
+  <h2>Training Code Manager</h2>
+
+  <div class="grid">
+    <select id="department" onchange="loadTable(); updateRankOptions();">
+      <option value="WEAVING">WEAVING</option>
+      <option value="EXTRUDER">EXTRUDER</option>
+      <option value="MAT FINISHING">MAT FINISHING</option>
+      <option value="RECYCLING">RECYCLING</option>
+      <option value="TWINE">TWINE</option>
+      <option value="PIPE FINISHING">PIPE FINISHING</option>
+      <option value="FEEDING">FEEDING</option>
+      <option value="TRANSMISSION">TRANSMISSION</option>
+      <option value="DELIVERY">DELIVERY</option>
+      <option value="DESIGN CARD">DESIGN CARD</option>
+      <option value="QUALITY CONTROL">QUALITY CONTROL</option>
+    </select>
+    <input id="code" placeholder="Training Code">
+    <select id="rank"><option value="">Select Rank</option></select>
+  </div>
+
+  <input id="description" placeholder="Description">
+
+  <button onclick="add()">ADD CODE</button>
+  <div id="status" class="status"></div>
+
+  <table>
+    <thead><tr><th>ID</th><th>Code</th><th>Description</th><th>Department</th><th>Rank</th><th>Action</th></tr></thead>
+    <tbody id="table"></tbody>
+  </table>
+</div>
+
+<script>
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY, "Content-Type": "application/json" }; }
+
+let TRAINING_CODE_ROWS = [];
+
+// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
+// `query` may include extra params like "&order=col.desc" (no leading select).
+async function fetchAllRows(table, query){
+  let all = [], offset = 0; const pageSize = 1000;
+  const q = query || "";
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=*" + q, { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    const me = await requireAuth("../../login.html");
+    if(!me) return;
+
+    TRAINING_CODE_ROWS = await fetchAllRows("training_code", "");
+    document.getElementById("statusBox").classList.add("hidden");
+    document.getElementById("appBox").classList.remove("hidden");
+    updateRankOptions();
+    loadTable();
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+function updateRankOptions(){
+  const dept = document.getElementById("department").value;
+  const rankSelect = document.getElementById("rank");
+  let options = [];
+  switch(dept){
+    case "WEAVING": options = ["Junior Operator","Operator","Senior Operator"]; break;
+    case "EXTRUDER": options = ["Packer","Operator"]; break;
+    case "PIPE FINISHING": options = ["Wrapper","Suppliers"]; break;
+    case "MAT FINISHING": options = ["Training Trimmer","Trimmer","Senior Trimmer","Training Folgers","Training sorters","Training tailors","Training Arrangers","Training packers","Training suppliers","Training Cutters","Cutter","Senior Cutter"]; break;
+    case "RECYCLING": options = ["Packer","Crusher","Blending","Operator","Mechanics"]; break;
+    case "TWINE": options = ["Operator"]; break;
+    case "FEEDING": case "TRANSMISSION": case "DELIVERY": case "DESIGN CARD": case "QUALITY CONTROL":
+      options = ["Level 1","Level 2","Level 3"]; break;
+    default: options = ["Level 1","Level 2","Level 3"];
+  }
+  rankSelect.innerHTML = '<option value="">Select Rank</option>';
+  options.forEach(r=>{ const o=document.createElement("option"); o.value=r; o.textContent=r; rankSelect.appendChild(o); });
+}
+
+async function add(){
+  const status = document.getElementById("status");
+  const department = document.getElementById("department").value;
+  const code = document.getElementById("code").value;
+  const description = document.getElementById("description").value;
+  const rank = document.getElementById("rank").value;
+
+  // Duplicate check adapted to Code + Department, since manual IDs are no
+  // longer used (we rely on Supabase's own auto-incrementing id instead).
+  const dup = TRAINING_CODE_ROWS.some(r => r.code === code && r.department === department);
+  if(dup){ status.style.color="red"; status.textContent = "❌ Duplicate Code in this Department already exists"; return; }
+
+  try{
+    const row = { code, description, department, rank, created_at: new Date().toISOString() };
+    const res = await fetch(SUPABASE_URL + "/rest/v1/training_code", { method:"post", headers: authHeaders(), body: JSON.stringify(row) });
+    if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
+    const saved = await res.json();
+    TRAINING_CODE_ROWS.push(saved[0] || row);
+    status.style.color = "green"; status.textContent = "✅ Added Successfully";
+    document.getElementById("code").value = ""; document.getElementById("description").value = "";
+    loadTable();
+  }catch(e){
+    status.style.color = "red"; status.textContent = "❌ Error: " + (e.message||e);
+  }
+}
+
+function loadTable(){
+  const department = document.getElementById("department").value;
+  const rows = TRAINING_CODE_ROWS.filter(r=>r.department===department).slice().sort((a,b)=>Number(a.id)-Number(b.id));
+  let html = "";
+  rows.forEach(r=>{
+    html += `<tr><td>${r.id}</td><td>${r.code||""}</td><td>${r.description||""}</td><td>${r.department||""}</td>` +
+      `<td>${r.rank||""}</td><td><button class="delete" onclick="del(${r.id})">Delete</button></td></tr>`;
+  });
+  document.getElementById("table").innerHTML = html;
+}
+
+async function del(id){
+  if(!confirm("Delete this code?")) return;
+  try{
+    const res = await fetch(SUPABASE_URL + "/rest/v1/training_code?id=eq." + id, { method:"delete", headers: authHeaders() });
+    if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
+    TRAINING_CODE_ROWS = TRAINING_CODE_ROWS.filter(r=>String(r.id)!==String(id));
+    alert("🗑️ Deleted Successfully");
+    loadTable();
+  }catch(e){
+    alert("Error: " + (e.message||e));
+  }
+}
+
+init();
+</script>
+</body>
+</html>

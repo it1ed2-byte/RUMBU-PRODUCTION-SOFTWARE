@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Monitoring Room - Live TV Dashboard</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+:root{--scale: min(1.2vw, 1.2vh);--sans:"Inter","Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+body{font-family:var(--sans);background:#0f172a;color:#fff;min-height:100vh;overflow-x:hidden;}
+h1{text-align:center;font-size:calc(2.2 * var(--scale));padding:1.2vh;color:#38bdf8;}
+.controls{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;padding:0 1vh 1vh;}
+.controls button, .controls select, .controls input{
+  padding:0.6vh 1.2vh;border:none;border-radius:0.6vh;background:#2563eb;color:#fff;
+  cursor:pointer;font-size:calc(0.9 * var(--scale));
+}
+.controls button.active{background:#22c55e;}
+#status{ text-align:center; font-size:calc(0.9*var(--scale)); padding-bottom:6px; color:#94a3b8; }
+#status.bad{ color:#f87171; }
+.dashboard{display:grid;grid-template-columns:1fr 1fr 1fr;grid-auto-rows:minmax(28vh, auto);gap:1vh;padding:1vh;}
+#kpi{grid-column:1/span 3;display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1.2vh;}
+.card{background:#1e293b;border-radius:1.2vh;padding:2vh 1vh;text-align:center;display:flex;flex-direction:column;justify-content:center;min-height:15vh;box-shadow:0 2px 6px rgba(0,0,0,.25);}
+.card p{font-size:calc(1.8*var(--scale));font-weight:700;color:#cbd5e1;line-height:1.2;}
+.card h2{font-size:calc(3.4*var(--scale));color:#22c55e;margin-top:8px;}
+.section{background:#1e293b;border-radius:1vh;padding:0.8vh;display:flex;flex-direction:column;overflow:hidden;min-height:30vh;}
+.section h2{font-size:calc(1.8*var(--scale));margin-bottom:0.5vh;color:#38bdf8;}
+.table-wrap{overflow:auto;max-height:40vh;}
+table{width:100%;border-collapse:collapse;font-size:calc(1.5*var(--scale));}
+th,td{padding:0.5vh 0.6vh;text-align:left;}
+th{background:#334155;position:sticky;top:0;}
+tr:nth-child(even){background:#25324a;}
+@media (max-width:780px){
+  .dashboard{grid-template-columns:1fr;}
+  #kpi{grid-column:1;grid-template-columns:repeat(2,1fr);}
+}
+/* ---- TV Full-Screen mode ---- */
+body.tv-mode{ --scale: min(1.35vw, 1.35vh); overflow:hidden; }
+body.tv-mode .controls{ display:none; }         /* hide controls on the wall display */
+body.tv-mode #status{ display:none; }
+body.tv-mode h1{ padding:0.6vh; }
+body.tv-mode .dashboard{ height:calc(100vh - 5vh); padding:0.8vh; gap:0.8vh; }
+body.tv-mode .table-wrap{ max-height:34vh; }
+#exitHint{
+  display:none; position:fixed; top:8px; right:12px; z-index:9999;
+  background:rgba(124,58,237,.9); color:#fff; padding:6px 12px; border-radius:8px;
+  font-size:13px; cursor:pointer;
+}
+body.tv-mode #exitHint{ display:block; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+</head>
+<body>
+
+<div id="exitHint" onclick="toggleFullscreen()">✕ Exit TV View (Esc)</div>
+
+<h1>RUMBU INDUSTRIES GROUP — Monitoring Room (Live)</h1>
+
+<div class="controls">
+  <button id="btnMorning" onclick="setShift('Morning')">Morning</button>
+  <button id="btnNight" onclick="setShift('Night')">Night</button>
+  <button id="btnAll" onclick="setShift('All')">All</button>
+  <input type="date" id="fromDate" onchange="loadDashboard()">
+  <input type="date" id="toDate" onchange="loadDashboard()">
+  <button id="btnFull" onclick="toggleFullscreen()" style="background:#7c3aed;">📺 TV Full Screen</button>
+</div>
+<div id="status">Connecting to Supabase...</div>
+
+<div class="dashboard">
+  <div id="kpi"></div>
+  <div class="section"><h2>Department</h2>
+    <div class="table-wrap"><table id="dept_table"></table></div>
+  </div>
+  <div class="section"><h2>Shed</h2>
+    <div class="table-wrap"><table id="shed_table"></table></div>
+  </div>
+  <div class="section"><h2>Nurse Ranking (current shift)</h2>
+    <div class="table-wrap"><table id="nurse_table"></table></div>
+  </div>
+  <div class="section"><h2>Previous Shift Nurses</h2>
+    <div class="table-wrap"><table id="prev_nurse_table"></table></div>
+  </div>
+  <div class="section"><h2>No Repair — Today</h2>
+    <div class="table-wrap"><table id="norepair_today"></table></div>
+  </div>
+  <div class="section"><h2>No Repair — Yesterday</h2>
+    <div class="table-wrap"><table id="norepair_yesterday"></table></div>
+  </div>
+</div>
+
+<p style="text-align:center;font-size:12px;color:#64748b;padding:10px;">
+  KPI, Department, Shed, and Nurse Ranking are read from "control" (maintenance_log).
+  Machine Status and both No-Repair tables are read from "tracking_table", joined to
+  "treated_table" on tracking_table.asset_id = treated_table.id_number — matching the
+  original Apps Script exactly.
+</p>
+
+<script>
+// ---- TV Full-Screen mode ----
+function toggleFullscreen(){
+  const el = document.documentElement;
+  if(!document.fullscreenElement){
+    (el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen).call(el);
+  } else {
+    (document.exitFullscreen || document.webkitExitFullscreen || document.msExitFullscreen).call(document);
+  }
+}
+["fullscreenchange","webkitfullscreenchange","msfullscreenchange"].forEach(function(ev){
+  document.addEventListener(ev, function(){
+    document.body.classList.toggle("tv-mode", !!document.fullscreenElement);
+  });
+});
+
+// ---- shared connection ----
+const CONTROL_TABLE = "control";
+const TRACKING_TABLE = "tracking_table";
+const TREATED_TABLE = "treated_table";
+
+let currentShift = "All";
+let CONTROL_ROWS = [];
+let TRACKING_ROWS = [];
+let TREATED_IDS = new Set();
+
+// Same exclusion / grouping rules as the original Apps Script.
+const EXCLUDED_CODES = ["QL01","QL02","QL03","LV01","LV02","LV03","LV04","LV05"];
+const DEPARTMENTS_SHOWN = ["FEEDING","ELEC MAT WEAVING","BEAMING","QUALITY CONTROL",
+  "DESIGN CARD","TECHNICAL","TRANSMISSION","DELIVERY","OILING","Technical"];
+const SHEDS_FOR_DEPT = ["1","2","3","4","5","6"];
+const SHEDS_FOR_SHED_TABLE = ["1","2","3","4","5","6","MamaSannu"];
+
+function setShift(shift){
+  currentShift = shift;
+  ["Morning","Night","All"].forEach(s=>{
+    document.getElementById("btn"+s).classList.toggle("active", s===shift);
+  });
+  render();
+}
+
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
+
+// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
+async function fetchAllRows(table, query){
+  let all = [], offset = 0; const pageSize = 1000;
+  const q = query || "";
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=*" + q, { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+function nigeriaDateISO(){
+  const now = new Date();
+  const utcMs = now.getTime() + now.getTimezoneOffset()*60000;
+  const wat = new Date(utcMs + 1*3600000);
+  return wat.getFullYear()+"-"+String(wat.getMonth()+1).padStart(2,"0")+"-"+String(wat.getDate()).padStart(2,"0");
+}
+function nigeriaYesterdayISO(){
+  const now = new Date();
+  const utcMs = now.getTime() + now.getTimezoneOffset()*60000;
+  const wat = new Date(utcMs + 1*3600000 - 86400000);
+  return wat.getFullYear()+"-"+String(wat.getMonth()+1).padStart(2,"0")+"-"+String(wat.getDate()).padStart(2,"0");
+}
+function nigeriaNowHour(){
+  const now = new Date();
+  const utcMs = now.getTime() + now.getTimezoneOffset()*60000;
+  const wat = new Date(utcMs + 1*3600000);
+  return wat.getHours();
+}
+
+async function loadDashboard(){
+  const status = document.getElementById("status");
+  try{
+    const me = await requireAuth("../../login.html");
+    if(!me) return;
+
+    // Scope every fetch to the selected date range at the query level —
+    // same idea as the original Apps Script's targeted BigQuery WHERE
+    // clauses. Only "today" is ever loaded by default; changing the date
+    // range re-queries Supabase for just that window, never the whole table.
+    const from = document.getElementById("fromDate").value;
+    const to = document.getElementById("toDate").value;
+    // "control" was renamed to "date" (a reserved word, but fine as a
+    // plain filter key), while "tracking_table" still uses "date_col".
+    const controlDateClause = "&date=gte." + from + "&date=lte." + to;
+    const trackingDateClause = "&date_col=gte." + from + "&date_col=lte." + to;
+
+    // Load today's rows
+    CONTROL_ROWS = await fetchAllRows(CONTROL_TABLE, controlDateClause);
+    TRACKING_ROWS = await fetchAllRows(TRACKING_TABLE, trackingDateClause);
+
+    // Also load yesterday's control + tracking rows so that when Morning shift is
+    // selected the "Previous Shift Nurses" panel can show Night shift from yesterday.
+    // GAS handles this with a BigQuery WHERE clause that spans two dates;
+    // Vercel must pre-fetch both days client-side.
+    const yesterday = nigeriaYesterdayISO();
+    if(from === nigeriaDateISO()){
+      // Only auto-load yesterday when the date picker is set to today (default).
+      // Avoids double-loading when the user picks a historical range manually.
+      const yControlClause = "&date=gte." + yesterday + "&date=lte." + yesterday;
+      const yTrackingClause = "&date_col=gte." + yesterday + "&date_col=lte." + yesterday;
+      const [yCtrl, yTrack] = await Promise.all([
+        fetchAllRows(CONTROL_TABLE, yControlClause),
+        fetchAllRows(TRACKING_TABLE, yTrackingClause)
+      ]);
+      // Merge — de-duplicate on id so we never double-count if ranges overlap
+      const existingIds = new Set(CONTROL_ROWS.map(r => r.id));
+      yCtrl.forEach(r => { if(!existingIds.has(r.id)) CONTROL_ROWS.push(r); });
+      const existingTIds = new Set(TRACKING_ROWS.map(r => r.id));
+      yTrack.forEach(r => { if(!existingTIds.has(r.id)) TRACKING_ROWS.push(r); });
+    }
+
+    // GAS has no date filter on treated_table — it fetches ALL treated records
+    // and joins on tracking_table.ID = treated_table.ID.
+    // In Supabase: treated_table key = id_number, tracking_table key = asset_id.
+    const tres = await fetch(SUPABASE_URL + "/rest/v1/" + TREATED_TABLE + "?select=id_number", { headers: authHeaders() });
+    if(tres.ok){
+      const trows = await tres.json();
+      TREATED_IDS = new Set(trows.map(r => String(r.id_number)));
+    } else {
+      TREATED_IDS = new Set();
+    }
+
+    status.className=""; status.textContent = "Connected. control: " + CONTROL_ROWS.length + " rows | tracking: " + TRACKING_ROWS.length + " rows | treated: " + TREATED_IDS.size + " (from " + from + " to " + to + ")";
+    render();
+  }catch(e){
+    status.className="bad"; status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+function parseDT(v){
+  if(!v) return null;
+  const d = new Date(v);
+  return isNaN(d.getTime()) ? null : d;
+}
+function minutesBetween(a,b){
+  if(!a || !b) return 0;
+  return Math.round((b - a) / 60000);
+}
+function extractNumber(v){
+  if(v === null || v === undefined) return 0;
+  const m = String(v).match(/\d+(\.\d+)?/);
+  return m ? Number(m[0]) : 0;
+}
+function inDateRange(row){
+  const from = document.getElementById("fromDate").value;
+  const to = document.getElementById("toDate").value;
+  if(!from && !to) return true;
+  const d = row.date || row.date_col;
+  if(!d) return true;
+  if(from && d < from) return false;
+  if(to && d > to) return false;
+  return true;
+}
+// Filters rows for the "previous shift" — mirrors GAS getOppositeShiftFilterSQL exactly.
+// Morning current → look at Night from yesterday (or night today if still before 07:00 WAT)
+// Night current   → look at Morning from today
+function filteredControlRowsForPrevShift(currentShift){
+  const todayISO = nigeriaDateISO();
+  const yesterdayISO = nigeriaYesterdayISO();
+  const hour = nigeriaNowHour();
+  if(currentShift === "Morning"){
+    // Previous = Night shift: yesterday, OR today before 07:00
+    return CONTROL_ROWS.filter(r=>{
+      if(r.shift !== "Night") return false;
+      const d = r.date || r.date_col || "";
+      return d === yesterdayISO || (d === todayISO && hour < 7);
+    });
+  } else {
+    // Previous = Morning shift: today
+    return CONTROL_ROWS.filter(r=>{
+      if(r.shift !== "Morning") return false;
+      const d = r.date || r.date_col || "";
+      return d === todayISO;
+    });
+  }
+}
+
+// For No-Repair Yesterday — mirrors GAS getOppositeShiftFilterForNoRepair exactly.
+// Morning current → Night yesterday (strict — no "before 07:00 today" clause)
+// Night current   → Morning today
+function filteredTrackingRowsForPrevShift(currentShift){
+  const todayISO = nigeriaDateISO();
+  const yesterdayISO = nigeriaYesterdayISO();
+  if(currentShift === "Morning"){
+    return TRACKING_ROWS.filter(r=>{
+      if(r.shift !== "Night") return false;
+      const d = r.date_col || "";
+      return d === yesterdayISO;
+    });
+  } else {
+    return TRACKING_ROWS.filter(r=>{
+      if(r.shift !== "Morning") return false;
+      const d = r.date_col || "";
+      return d === todayISO;
+    });
+  }
+}
+
+function filteredControlRowsForShift(shiftValue){
+  return CONTROL_ROWS.filter(r=>{
+    if(shiftValue !== "All" && r.shift !== shiftValue) return false;
+    return inDateRange(r);
+  });
+}
+function filteredTrackingRowsForShift(shiftValue){
+  return TRACKING_ROWS.filter(r=>{
+    if(shiftValue !== "All" && r.shift !== shiftValue) return false;
+    return inDateRange(r);
+  });
+}
+
+function render(){
+  if(!CONTROL_ROWS.length && !TRACKING_ROWS.length) return;
+
+  // =========================================================
+  // KPI — from control (= maintenance_log), matching getKPI()
+  // =========================================================
+  const kpiRows = filteredControlRowsForShift(currentShift).filter(r=>
+    r.finish_time && SHEDS_FOR_DEPT.includes(String(r.shed)) && !EXCLUDED_CODES.includes(r.job_code)
+  );
+  let totalDowntime=0, totalRepair=0, totalWaiting=0, totalEst=0;
+  kpiRows.forEach(r=>{
+    const stop=parseDT(r.mc_stoppage_time), start=parseDT(r.starting_time), finish=parseDT(r.finish_time);
+    totalDowntime += minutesBetween(stop, finish);
+    totalRepair += minutesBetween(start, finish);
+    totalWaiting += minutesBetween(stop, start);
+    totalEst += extractNumber(r.estimated_duration);
+  });
+  const efficiency = totalRepair ? Math.round((totalEst/totalRepair)*100) : 0;
+
+  // ---- Machine Status: waiting vs repaired, from tracking_table + treated_table ----
+  const statusRows = filteredTrackingRowsForShift(currentShift);
+  let waiting = 0, repaired = 0;
+  statusRows.forEach(r=>{
+    // tracking_table.asset_id → treated_table.id_number (confirmed from codebase)
+    const key = String(r.asset_id || "");
+    if(TREATED_IDS.has(key)) repaired++; else waiting++;
+  });
+
+  document.getElementById("kpi").innerHTML = `
+    <div class="card"><p>Total Downtime (min)</p><h2>${totalDowntime}</h2></div>
+    <div class="card"><p>Repair Time (min)</p><h2>${totalRepair}</h2></div>
+    <div class="card"><p>Waiting Time (min)</p><h2>${totalWaiting}</h2></div>
+    <div class="card"><p>Estimated Duration</p><h2>${Math.round(totalEst)}</h2></div>
+    <div class="card"><p>Efficiency</p><h2>${efficiency}%</h2></div>
+    <div class="card"><p>Waiting (jobs)</p><h2 style="color:#f59e0b">${waiting}</h2></div>
+    <div class="card"><p>Repaired (jobs)</p><h2>${repaired}</h2></div>
+  `;
+
+  // =========================================================
+  // Department — from control, matching getDepartment()
+  // =========================================================
+  const deptFiltered = filteredControlRowsForShift(currentShift).filter(r=>
+    r.finish_time && SHEDS_FOR_DEPT.includes(String(r.shed)) &&
+    !EXCLUDED_CODES.includes(r.job_code) && DEPARTMENTS_SHOWN.includes(r.department)
+  );
+  const byDept = {};
+  deptFiltered.forEach(r=>{
+    const key = r.department || "(blank)";
+    if(!byDept[key]) byDept[key] = { department:key, downtime:0, repair:0, waiting:0, est:0 };
+    const stop=parseDT(r.mc_stoppage_time), start=parseDT(r.starting_time), finish=parseDT(r.finish_time);
+    byDept[key].downtime += minutesBetween(stop, finish);
+    byDept[key].repair += minutesBetween(start, finish);
+    byDept[key].waiting += minutesBetween(stop, start);
+    byDept[key].est += extractNumber(r.estimated_duration);
+  });
+  let deptHtml = "<tr><th>Dept</th><th>D</th><th>R</th><th>W</th><th>E</th><th>%</th></tr>";
+  Object.values(byDept).sort((a,b)=>b.downtime-a.downtime).forEach(r=>{
+    const pct = r.repair ? Math.round((r.est/r.repair)*100) : 0;
+    deptHtml += `<tr><td>${r.department}</td><td>${r.downtime}</td><td>${r.repair}</td><td>${r.waiting}</td><td>${Math.round(r.est)}</td><td>${pct}%</td></tr>`;
+  });
+  document.getElementById("dept_table").innerHTML = deptHtml;
+
+  // =========================================================
+  // Shed — from control, matching getShed()
+  // =========================================================
+  const shedFiltered = filteredControlRowsForShift(currentShift).filter(r=>
+    r.finish_time && SHEDS_FOR_SHED_TABLE.includes(String(r.shed)) && !EXCLUDED_CODES.includes(r.job_code)
+  );
+  const byShed = {};
+  shedFiltered.forEach(r=>{
+    const key = String(r.shed || "(blank)");
+    if(!byShed[key]) byShed[key] = { shed:key, downtime:0, repair:0, waiting:0, est:0 };
+    const stop=parseDT(r.mc_stoppage_time), start=parseDT(r.starting_time), finish=parseDT(r.finish_time);
+    byShed[key].downtime += minutesBetween(stop, finish);
+    byShed[key].repair += minutesBetween(start, finish);
+    byShed[key].waiting += minutesBetween(stop, start);
+    byShed[key].est += extractNumber(r.estimated_duration);
+  });
+  let shedHtml = "<tr><th>Shed</th><th>D</th><th>R</th><th>W</th><th>E</th><th>%</th></tr>";
+  Object.values(byShed).sort((a,b)=>b.downtime-a.downtime).forEach(r=>{
+    const pct = r.repair ? Math.round((r.est/r.repair)*100) : 0;
+    shedHtml += `<tr><td>${r.shed}</td><td>${r.downtime}</td><td>${r.repair}</td><td>${r.waiting}</td><td>${Math.round(r.est)}</td><td>${pct}%</td></tr>`;
+  });
+  document.getElementById("shed_table").innerHTML = shedHtml;
+
+  // =========================================================
+  // Nurse Ranking — from control, Department = Technical,
+  // matching getNurseRanking() / getNurseRankingByShift()
+  // =========================================================
+  function buildNurseRanking(rows){
+    const nrows = rows.filter(r=>
+      r.finish_time && String(r.department).toLowerCase() === "technical"
+    );
+    // "persisting" = repeat visit to the same Date+Shift+Assets+Job_Code, ordered by starting_time
+    const groups = {};
+    nrows.forEach(r=>{
+      const gkey = [r.date, r.shift, r.assets, r.job_code].join("||");
+      if(!groups[gkey]) groups[gkey] = [];
+      groups[gkey].push(r);
+    });
+    Object.values(groups).forEach(list=>{
+      list.sort((a,b)=> (a.starting_time||"").localeCompare(b.starting_time||""));
+      list.forEach((r,i)=> r.__persisting = i > 0);
+    });
+
+    const byNurse = {};
+    nrows.forEach(r=>{
+      const key = r.nurse_name || "(blank)";
+      if(!byNurse[key]) byNurse[key] = { nurse:key, repairs:0, persisting:0, repair:0, est:0 };
+      byNurse[key].repairs++;
+      if(r.__persisting) byNurse[key].persisting++;
+      const start=parseDT(r.starting_time), finish=parseDT(r.finish_time);
+      byNurse[key].repair += minutesBetween(start, finish);
+      byNurse[key].est += extractNumber(r.estimated_duration);
+    });
+    return Object.values(byNurse).sort((a,b)=>b.repairs-a.repairs).slice(0,9);
+  }
+
+  function renderNurseTable(elId, list){
+    let html = "<tr><th>#</th><th>Name</th><th>F</th><th>PR</th><th>R</th><th>E</th><th>%</th></tr>";
+    list.forEach((r,i)=>{
+      const pct = r.repair ? Math.round((r.est/r.repair)*100) : 0;
+      html += `<tr><td>${i+1}</td><td>${r.nurse}</td><td>${r.repairs}</td><td>${r.persisting}</td><td>${r.repair}</td><td>${Math.round(r.est)}</td><td>${pct}%</td></tr>`;
+    });
+    document.getElementById(elId).innerHTML = html;
+  }
+
+  renderNurseTable("nurse_table", buildNurseRanking(filteredControlRowsForShift(currentShift)));
+  if(currentShift === "All"){
+    document.getElementById("prev_nurse_table").innerHTML = "<tr><th colspan='7'>Select Morning or Night to see the opposite shift's nurses</th></tr>";
+  } else {
+    renderNurseTable("prev_nurse_table", buildNurseRanking(filteredControlRowsForPrevShift(currentShift)));
+  }
+
+  // =========================================================
+  // No Repair — Today / Yesterday, from tracking_table,
+  // matching getNoRepairToday() / getNoRepairYesterday()
+  // =========================================================
+  function buildNoRepair(rows){
+    rows = rows.filter(r=>
+      r.job_code && r.job_code.trim().toLowerCase() === "no repair"
+    );
+    const byOperator = {};
+    rows.forEach(r=>{
+      const key = r.operator_id || "(blank)";
+      if(!byOperator[key]) byOperator[key] = { id: r.operator_id||"", name: r.operator_name||"", count: 0 };
+      byOperator[key].count++;
+    });
+    return Object.values(byOperator).sort((a,b)=>b.count-a.count);
+  }
+
+  function renderNoRepairTable(elId, list){
+    let html = "<tr><th>Operator ID</th><th>Name</th><th>Count</th></tr>";
+    list.forEach(r=>{
+      const style = r.count >= 5 ? " style='color:#f87171;font-weight:bold'" : "";
+      html += `<tr${style}><td>${r.id}</td><td>${r.name}</td><td>${r.count}</td></tr>`;
+    });
+    document.getElementById(elId).innerHTML = html;
+  }
+
+  renderNoRepairTable("norepair_today", buildNoRepair(filteredTrackingRowsForShift(currentShift)));
+  if(currentShift === "All"){
+    document.getElementById("norepair_yesterday").innerHTML = "<tr><th colspan='3'>Select Morning or Night to see the opposite shift's No-Repair jobs</th></tr>";
+  } else {
+    renderNoRepairTable("norepair_yesterday", buildNoRepair(filteredTrackingRowsForPrevShift(currentShift)));
+  }
+}
+
+document.getElementById("fromDate").value = nigeriaDateISO();
+document.getElementById("toDate").value = nigeriaDateISO();
+// Auto-detect shift on load — matches GAS getCurrentShift() behaviour
+const autoShift = (nigeriaNowHour() >= 7 && nigeriaNowHour() < 19) ? "Morning" : "Night";
+setShift(autoShift);
+loadDashboard();
+</script>
+</body>
+</html>

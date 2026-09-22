@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Loan / IOU Application — My Requests</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1000px;margin:0 auto;}
+  #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);}
+  .empty-note{background:var(--bg);border:1px dashed var(--line-2);border-radius:var(--radius);padding:24px;text-align:center;color:var(--muted);font-size:13px;}
+  .filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;align-items:end;}
+  .filters .field{margin-bottom:0;} .filters input,.filters select{width:100%;}
+  .filters label{display:block;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.3px;margin-bottom:4px;}
+  .req-row{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:16px 18px;margin-bottom:12px;box-shadow:var(--shadow);}
+  .rr-head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;}
+  .rr-ref{font-weight:800;color:var(--heading);font-size:14px;}
+  .rr-title{color:var(--text);font-size:13px;margin-top:2px;}
+  .rr-badge{border-radius:20px;padding:4px 12px;font-size:11px;font-weight:700;color:#fff;white-space:nowrap;}
+  .rr-badge.draft{background:var(--muted);} .rr-badge.in_progress{background:var(--warn);}
+  .rr-badge.completed{background:var(--ok);} .rr-badge.withdrawn{background:var(--muted);} .rr-badge.rejected{background:var(--bad);}
+  .rr-sub{font-size:12px;color:var(--muted);margin-top:4px;}
+  .rr-decline{background:rgba(176,42,55,.08);border:1px solid var(--bad);border-radius:var(--radius-sm);padding:10px 12px;font-size:12.5px;color:var(--text);margin-top:10px;}
+  .rr-decline b{color:var(--bad);}
+  .rr-actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;}
+  .btn-trail{background:var(--bg);border:1px solid var(--line-2);color:var(--primary);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;}
+  .btn-trail:hover{border-color:var(--accent);}
+  table.appl{width:100%;border-collapse:collapse;margin:6px 0;font-size:13px;}
+  table.appl th,table.appl td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;}
+  table.appl thead th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.3px;}
+  .paybar{display:flex;justify-content:space-between;font-weight:800;color:var(--heading);padding:8px 10px;background:var(--bg);border:1px solid var(--line-2);border-radius:var(--radius);margin:8px 0;}
+  .detail-meta{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px;font-size:13px;color:var(--text);margin-top:12px;}
+  .detail-meta .m-label{color:var(--muted);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.3px;}
+  .section-h{font-size:11px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--accent);margin:16px 0 6px;}
+  .att-list{display:flex;flex-wrap:wrap;gap:8px;margin:2px 0 6px;}
+  .att-list a{font-size:12px;background:var(--bg);border:1px solid var(--line-2);border-radius:16px;padding:3px 10px;color:var(--primary);text-decoration:none;font-weight:600;}
+  .trail{margin-top:6px;} .trail-load{font-size:12.5px;color:var(--muted);}
+  .trail-stage{display:flex;gap:12px;padding-bottom:14px;position:relative;}
+  .trail-stage:not(:last-child)::before{content:"";position:absolute;left:7px;top:18px;bottom:0;width:2px;background:var(--line-2);}
+  .ts-dot{flex:0 0 16px;width:16px;height:16px;border-radius:50%;margin-top:2px;background:var(--line-2);border:2px solid var(--card);box-shadow:0 0 0 1px var(--line-2);}
+  .trail-stage.done .ts-dot{background:var(--ok);box-shadow:0 0 0 1px var(--ok);}
+  .trail-stage.current .ts-dot{background:var(--warn);box-shadow:0 0 0 1px var(--warn);}
+  .trail-stage.declined .ts-dot{background:var(--bad);box-shadow:0 0 0 1px var(--bad);}
+  .ts-body{flex:1;min-width:0;}
+  .ts-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;}
+  .ts-name{font-weight:800;color:var(--heading);font-size:13px;}
+  .ts-badge{font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;border-radius:12px;padding:2px 9px;background:var(--bg);border:1px solid var(--line-2);color:var(--muted);white-space:nowrap;}
+  .ts-badge.done{color:var(--ok);border-color:var(--ok);} .ts-badge.current{color:var(--warn);border-color:var(--warn);} .ts-badge.declined{color:var(--bad);border-color:var(--bad);}
+  .ts-people{margin-top:6px;display:flex;flex-direction:column;gap:5px;}
+  .ts-person{font-size:12.5px;color:var(--text);display:flex;flex-wrap:wrap;gap:4px 8px;align-items:baseline;}
+  .tp-name{font-weight:700;} .tp-state{font-size:11.5px;font-weight:700;}
+  .tp-state.approve{color:var(--ok);} .tp-state.decline{color:var(--bad);} .tp-state.wait{color:var(--warn);} .tp-state.idle{color:var(--muted);}
+  .tp-when{font-size:11px;color:var(--muted);}
+  .tp-comment{flex-basis:100%;font-size:12px;color:var(--muted);margin-left:2px;padding:2px 0 2px 8px;border-left:2px solid var(--line-2);}
+  .ts-none{font-size:12px;color:var(--muted);font-style:italic;}
+  .col-amt{width:150px;} .col-rm{width:40px;} .ro{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px;font-size:13px;color:var(--muted);}
+  .rm-item{background:var(--bad);color:#fff;border:none;border-radius:6px;width:34px;height:38px;font-size:16px;font-weight:bold;cursor:pointer;padding:0;}
+  .rm-item:disabled{opacity:.4;cursor:not-allowed;}
+  .g-row{display:flex;gap:8px;align-items:flex-start;margin-top:8px;}
+  .dropzone{background:var(--bg);border:1px dashed var(--line-2);border-radius:var(--radius);padding:14px 12px;text-align:center;cursor:pointer;}
+  .dropzone:hover{border-color:var(--accent);} .dropzone .dz-action{color:var(--primary);font-weight:700;font-size:13px;} .dropzone input[type=file]{display:none;}
+  .file-list{margin-top:6px;display:flex;flex-direction:column;gap:6px;}
+  .file-chip{display:flex;align-items:center;justify-content:space-between;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:7px;padding:5px 10px;font-size:12px;}
+  .file-chip .fc-remove{color:var(--bad);cursor:pointer;font-weight:700;background:none;border:0;padding:0 4px;font-size:14px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<button class="no-print" onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:240px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back to Dashboard</button>
+<div id="connStatus">Loading...</div>
+
+<div class="card-panel">
+  <h3 id="pageTitle">My Requests — Loan / IOU Application</h3>
+  <p class="sub" id="pageSub">Everything you've submitted, its current stage, and — for anything declined or in draft — an edit-and-resubmit option.</p>
+</div>
+
+<div id="listView">
+  <div class="card-panel" id="filterPanel">
+    <div class="filters">
+      <div class="field" id="scopeWrap" style="display:none;"><label>Show</label>
+        <select id="fScope" onchange="loadRequests()"><option value="all">All requests</option><option value="mine">My requests only</option></select></div>
+      <div class="field"><label>Stage / Step</label><select id="fStage" onchange="renderList()"><option value="all">All</option></select></div>
+      <div class="field"><label>Status</label>
+        <select id="fStatus" onchange="renderList()">
+          <option value="all">All</option><option value="draft">Draft</option><option value="in_progress">In progress</option>
+          <option value="completed">Completed</option><option value="rejected">Declined</option><option value="withdrawn">Withdrawn</option>
+        </select></div>
+      <div class="field"><label>From</label><input type="date" id="fFrom" onchange="renderList()"></div>
+      <div class="field"><label>To</label><input type="date" id="fTo" onchange="renderList()"></div>
+      <div class="field" style="grid-column:span 2;"><label>Search</label><input type="text" id="fSearch" placeholder="Reference, form no or submitter" oninput="renderList()" autocomplete="off"></div>
+    </div>
+  </div>
+  <div id="listWrap"></div>
+</div>
+
+<div id="detailView" style="display:none;">
+  <button class="btn-ghost" style="margin-bottom:12px;" onclick="backToList()">&larr; Back to list</button>
+  <div class="card-panel">
+    <div id="detailSummary"></div>
+    <div id="detailBody"></div>
+    <div class="section-h">Approval progress</div>
+    <p class="sub" style="margin-top:0;">Who has approved, who declined, and who the request is waiting on.</p>
+    <div id="detailTrail"></div>
+    <div id="editWrap"></div>
+  </div>
+</div>
+</div>
+
+<datalist id="empList"></datalist>
+<datalist id="empListUnitEdit"></datalist>
+
+<script>
+let ME = null, MY_EMPLOYEE_REF_ID = null;
+let STAGES = [], STAGES_BY_ID = {}, IS_APPROVER = false, SCOPE = "mine", ALL_ROWS = [];
+let CAN_VIEW_ALL = false, MY_VIEW_BRANCHES = [];
+let ASSIGNEES_BY_STAGE = {}, ASSIGNEES_ALLBRANCH = {}, EMP_NAME = {}, EMP_BY_CODE = {}, EMP_ALL = [], EDIT_UNIT_MAP = {}, FIRST_STAGE_ID = null;
+let DIV_NAME = {}, LOAN_NAME = {}, BANK_NAME = {}, PTYPE_NAME = {};
+let DIVS = [], LOANS = [];
+let EDIT_GUAR_SEQ = 0, EDIT_APPLICANT = null, EDIT_LETTER = [];
+
+function esc(s){ return (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c])); }
+function ngn(n){ return "NGN " + (Number(n)||0).toLocaleString(); }
+function fmtWhen(s){ if(!s) return ""; try{ return new Date(s).toLocaleString(); }catch(e){ return s; } }
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    const { data: emp, error: empErr } = await sb.from("employees").select("id").eq("linked_profile_id", ME.id).maybeSingle();
+    if(empErr) throw empErr;
+    if(!emp){ throw new Error("No employee record is linked to your account."); }
+    MY_EMPLOYEE_REF_ID = emp.id;
+
+    const { data: stages } = await sb.from("iou_workflow_stages").select("*").order("sequence_order");
+    STAGES = stages || []; STAGES.forEach(s => STAGES_BY_ID[s.id] = s);
+    FIRST_STAGE_ID = STAGES.length ? STAGES[0].id : null;
+    document.getElementById("fStage").innerHTML = "<option value=\"all\">All</option>" + STAGES.map(s => `<option value="${s.id}">${esc(s.stage_name)}</option>`).join("");
+
+    const [{ data: assign }, { data: emps }, { data: divs }, { data: loans }, { data: banks }, { data: ptypes }, { data: viewerRow }] = await Promise.all([
+      sb.from("iou_workflow_stage_assignees").select("stage_id, employee_ref_id, branch"),
+      sb.from("employees").select("id, employee_id, full_name, branch, department, unit").order("full_name"),
+      sb.from("iou_divisions").select("id,name"),
+      sb.from("iou_loan_types").select("id,name"),
+      sb.from("iou_banks").select("id,name"),
+      sb.from("iou_payment_types").select("id,name"),
+      sb.from("iou_viewers").select("id").eq("employee_ref_id", MY_EMPLOYEE_REF_ID).limit(1)
+    ]);
+    (assign||[]).forEach(a => {
+      const emp = String(a.employee_ref_id);
+      if(a.branch){ const k = String(a.stage_id) + "|" + String(a.branch); (ASSIGNEES_BY_STAGE[k] = ASSIGNEES_BY_STAGE[k] || []).push(emp); }
+      else { const k = String(a.stage_id); (ASSIGNEES_ALLBRANCH[k] = ASSIGNEES_ALLBRANCH[k] || []).push(emp); }
+    });
+    EMP_ALL = emps || [];
+    const dl = document.getElementById("empList");
+    (emps||[]).forEach(e => { EMP_NAME[String(e.id)] = e.full_name; const code = e.employee_id || String(e.id); EMP_BY_CODE[code] = e;
+      dl.insertAdjacentHTML("beforeend", `<option value="${esc(code)}">${esc(e.full_name)}</option>`); });
+    DIVS = divs || []; LOANS = loans || [];
+    (divs||[]).forEach(d => DIV_NAME[d.id] = d.name);
+    (loans||[]).forEach(l => LOAN_NAME[l.id] = l.name);
+    (banks||[]).forEach(b => BANK_NAME[b.id] = b.name);
+    (ptypes||[]).forEach(p => PTYPE_NAME[p.id] = p.name);
+
+    const mineAssign = (assign||[]).filter(a => String(a.employee_ref_id) === String(MY_EMPLOYEE_REF_ID));
+    IS_APPROVER = mineAssign.length > 0;
+    MY_VIEW_BRANCHES = Array.from(new Set(mineAssign.map(a => a.branch).filter(Boolean)));
+    const hasAllBranchAssign = mineAssign.some(a => !a.branch);
+    CAN_VIEW_ALL = (ME.role === "super_admin") || !!(viewerRow && viewerRow.length) || hasAllBranchAssign;
+
+    if(IS_APPROVER || CAN_VIEW_ALL){
+      SCOPE = "all";
+      document.getElementById("scopeWrap").style.display = "block";
+      const sc = document.getElementById("fScope");
+      sc.innerHTML = CAN_VIEW_ALL
+        ? "<option value='all'>All requests</option><option value='mine'>My requests only</option>"
+        : "<option value='all'>My branch(es)</option><option value='mine'>My requests only</option>";
+      sc.value = "all";
+      document.getElementById("pageTitle").textContent = "Requests — Loan / IOU Application";
+      document.getElementById("pageSub").textContent = CAN_VIEW_ALL
+        ? "You can view every IOU request across all branches. Edit, resubmit and withdraw are available only on your own requests."
+        : "As an approver you can view requests for your branch(es) and the step each has reached. Edit, resubmit and withdraw are available only on your own requests.";
+    }
+    status.style.color = "#1d8a4e"; status.textContent = "Connected.";
+    await loadRequests();
+  }catch(e){ status.style.color = "#c0392b"; status.textContent = "❌ " + e.message; console.error(e); }
+}
+
+async function loadRequests(){
+  const wrap = document.getElementById("listWrap");
+  wrap.innerHTML = "<div class='empty-note'>Loading…</div>";
+  SCOPE = (IS_APPROVER || CAN_VIEW_ALL) ? (document.getElementById("fScope").value || "all") : "mine";
+  let q = sb.from("iou_requests").select("*, employees:submitted_by(full_name)").order("created_at", { ascending: false });
+  if(SCOPE === "mine"){
+    q = q.eq("submitted_by", MY_EMPLOYEE_REF_ID);
+  } else if(!CAN_VIEW_ALL){
+    // branch approver: only their branch(es), plus their own submissions
+    if(MY_VIEW_BRANCHES.length){
+      const branchCsv = MY_VIEW_BRANCHES.map(b => `"${b}"`).join(",");
+      q = q.or(`branch.in.(${branchCsv}),submitted_by.eq.${MY_EMPLOYEE_REF_ID}`);
+    } else {
+      q = q.eq("submitted_by", MY_EMPLOYEE_REF_ID);
+    }
+  }
+  const { data: requests, error } = await q;
+  if(error){ wrap.innerHTML = "<div class='empty-note'>Error: " + esc(error.message) + "</div>"; return; }
+  ALL_ROWS = requests || [];
+  renderList();
+}
+window.loadRequests = loadRequests;
+
+function badgeFor(r, stage){
+  return r.status === "completed" ? "Completed"
+    : r.status === "withdrawn" ? "Withdrawn"
+    : r.status === "draft" ? "Draft"
+    : r.status === "rejected" ? ("Declined" + (stage ? " · " + stage.stage_name : ""))
+    : (stage ? stage.stage_name : r.status);
+}
+
+function renderList(){
+  const wrap = document.getElementById("listWrap");
+  const stageF = document.getElementById("fStage").value;
+  const statusF = document.getElementById("fStatus").value;
+  const from = document.getElementById("fFrom").value;
+  const to = document.getElementById("fTo").value;
+  const term = (document.getElementById("fSearch").value || "").trim().toLowerCase();
+  let rows = ALL_ROWS.slice();
+  if(stageF !== "all") rows = rows.filter(r => String(r.current_stage_id) === stageF);
+  if(statusF !== "all") rows = rows.filter(r => r.status === statusF);
+  if(from) rows = rows.filter(r => String(r.request_date || r.created_at || "").slice(0,10) >= from);
+  if(to) rows = rows.filter(r => String(r.request_date || r.created_at || "").slice(0,10) <= to);
+  if(term) rows = rows.filter(r => { const sub = r.employees ? r.employees.full_name : ""; return ((r.reference_no||"") + " " + (r.form_no||"") + " " + sub).toLowerCase().indexOf(term) !== -1; });
+  if(!rows.length){ wrap.innerHTML = "<div class='empty-note'>No requests match these filters.</div>"; return; }
+  wrap.innerHTML = "";
+  rows.forEach(r => wrap.appendChild(renderRow(r)));
+}
+window.renderList = renderList;
+
+function renderRow(r){
+  const stage = STAGES_BY_ID[r.current_stage_id];
+  const el = document.createElement("div"); el.className = "req-row";
+  const submitter = r.employees ? r.employees.full_name : "—";
+  el.innerHTML =
+    "<div class='rr-head'>" +
+      "<div style='cursor:pointer;' onclick=\"openDetail('" + r.id + "')\">" +
+        "<div class='rr-ref'>" + esc(r.reference_no || "") + "</div>" +
+        "<div class='rr-title'>" + esc(LOAN_NAME[r.loan_type_id] || "—") + " · " + esc(r.branch || "—") + "</div>" +
+        "<div class='rr-sub'>" + ngn(r.payment_value) + " · " + (r.request_date ? new Date(r.request_date).toLocaleDateString() : "—") + " · by " + esc(submitter) + (r.cycle > 1 ? " · Resubmission #" + (r.cycle - 1) : "") + "</div>" +
+      "</div>" +
+      "<span class='rr-badge " + r.status + "'>" + esc(badgeFor(r, stage)) + "</span>" +
+    "</div>" +
+    "<div class='rr-actions'><button class='btn-trail' onclick=\"openDetail('" + r.id + "')\">View details</button></div>";
+  return el;
+}
+
+async function openDetail(id){
+  const r = ALL_ROWS.find(x => String(x.id) === String(id));
+  if(!r) return;
+  const stage = STAGES_BY_ID[r.current_stage_id];
+  const mine = String(r.submitted_by) === String(MY_EMPLOYEE_REF_ID);
+  document.getElementById("detailSummary").innerHTML =
+    "<div class='rr-head'><div><div class='rr-ref'>" + esc(r.reference_no || "") + "</div></div>" +
+    "<span class='rr-badge " + r.status + "'>" + esc(badgeFor(r, stage)) + "</span></div>" +
+    "<div class='detail-meta'>" +
+      metaCell("Loan Type", esc(LOAN_NAME[r.loan_type_id] || "—")) +
+      metaCell("Branch / Dept / Unit", esc([r.branch, r.department, r.unit].filter(Boolean).join(" · ") || "—")) +
+      metaCell("Request date", r.request_date ? new Date(r.request_date).toLocaleDateString() : "—") +
+      metaCell("Submitted by", esc(r.employees ? r.employees.full_name : "—")) +
+      metaCell("Payment value", ngn(r.payment_value)) +
+    "</div>";
+
+  document.getElementById("detailBody").innerHTML = "<p class='trail-load'>Loading…</p>";
+  document.getElementById("detailTrail").innerHTML = "";
+  document.getElementById("editWrap").innerHTML = "";
+  document.getElementById("listView").style.display = "none";
+  document.getElementById("detailView").style.display = "block";
+  try{ window.scrollTo(0,0); }catch(e){}
+
+  const [{ data: appl }, { data: guar }, { data: atts }] = await Promise.all([
+    sb.from("iou_applicants").select("applicant_name, staff_id_value, iou_amount").eq("request_id", r.id).order("id"),
+    sb.from("iou_guarantors").select("guarantor_name, staff_id_value").eq("request_id", r.id).order("id"),
+    sb.from("iou_request_attachments").select("field_key, file_name, file_url").eq("request_id", r.id)
+  ]);
+  const total = (appl||[]).reduce((s,a)=> s + (Number(a.iou_amount)||0), 0);
+  const applRows = (appl||[]).map((a,i)=> "<tr><td>" + (i+1) + "</td><td>" + esc(a.applicant_name||"") + "</td><td>" + esc(a.staff_id_value||"") + "</td><td>" + ngn(a.iou_amount) + "</td></tr>").join("");
+  const guarRows = (guar||[]).map((g,i)=> "<tr><td>" + (i+1) + "</td><td>" + esc(g.guarantor_name||"") + "</td><td>" + esc(g.staff_id_value||"") + "</td></tr>").join("");
+  const attHtml = (atts && atts.length) ? "<div class='att-list'>" + atts.map(a => "<a href='" + esc(a.file_url) + "' target='_blank'>" + esc(a.field_key) + ": " + esc(a.file_name) + "</a>").join("") + "</div>" : "<p class='ts-none'>No attachments.</p>";
+
+  let accounts = "";
+  if(r.bank_id || r.payment_type_id || r.palladium_document_no || r.payment_date || r.staff_no_outstanding_loan){
+    accounts = "<div class='section-h'>Accounts</div><div class='detail-meta'>" +
+      metaCell("Staff has no outstanding loan", esc(r.staff_no_outstanding_loan || "—")) +
+      metaCell("Bank", esc(BANK_NAME[r.bank_id] || "—")) +
+      metaCell("Payment Type", esc(PTYPE_NAME[r.payment_type_id] || "—")) +
+      metaCell("Palladium Document No.", esc(r.palladium_document_no || "—")) +
+      metaCell("Payment Date", r.payment_date ? new Date(r.payment_date).toLocaleDateString() : "—") +
+      (r.hrm_updated ? metaCell("HRM Updated", esc(r.hrm_updated)) : "") +
+    "</div>";
+  }
+
+  document.getElementById("detailBody").innerHTML =
+    "<div class='section-h'>Applicant</div>" +
+    "<table class='appl'><thead><tr><th>#</th><th>Applicant</th><th>Staff ID</th><th>IOU Amount</th></tr></thead><tbody>" + applRows + "</tbody></table>" +
+    "<div class='paybar'><span>IOU Amount</span><span>" + ngn(total) + "</span></div>" +
+    "<div class='section-h'>Guarantors</div>" +
+    "<table class='appl'><thead><tr><th>#</th><th>Guarantor</th><th>Staff ID</th></tr></thead><tbody>" + (guarRows || "<tr><td colspan='3' class='ts-none'>None recorded.</td></tr>") + "</tbody></table>" +
+    "<div class='section-h'>Attachments</div>" + attHtml + accounts;
+
+  await renderTrail(document.getElementById("detailTrail"), r);
+
+  // Own draft/rejected → edit & resubmit; own in_progress → withdraw
+  if(mine && (r.status === "rejected" || r.status === "draft")){ renderEditPanel(r, appl || [], guar || []); }
+  else if(mine && r.status === "in_progress"){
+    document.getElementById("editWrap").innerHTML = "<div class='rr-actions' style='margin-top:16px;'><button class='btn-bad btn-sm' onclick=\"withdraw('" + r.id + "')\">Withdraw</button></div>";
+  }
+}
+window.openDetail = openDetail;
+
+function metaCell(label, value){ return "<div><span class='m-label'>" + label + "</span><br>" + value + "</div>"; }
+
+function backToList(){
+  document.getElementById("detailView").style.display = "none";
+  document.getElementById("listView").style.display = "block";
+  try{ window.scrollTo(0,0); }catch(e){}
+}
+window.backToList = backToList;
+
+async function withdraw(id){
+  if(!confirm("Withdraw this request? It moves back to draft for you to edit and resubmit.")) return;
+  try{ const { error } = await sb.from("iou_requests").update({ status: "draft", current_stage_id: null }).eq("id", id); if(error) throw error; await loadRequests(); backToList(); }
+  catch(e){ alert("Could not withdraw: " + (e.message || e)); }
+}
+window.withdraw = withdraw;
+
+async function renderTrail(panel, r){
+  const { data: actions, error } = await sb.from("iou_request_stage_actions")
+    .select("stage_id, employee_ref_id, action, comment, action_date").eq("request_id", r.id).eq("cycle", r.cycle).order("action_date", { ascending: true });
+  if(error){ panel.innerHTML = "<div class='trail-load'>Could not load progress: " + esc(error.message) + "</div>"; return; }
+  const actByStageEmp = {}; (actions||[]).forEach(a => { actByStageEmp[String(a.stage_id) + ":" + String(a.employee_ref_id)] = a; });
+  const currentIdx = STAGES.findIndex(s => String(s.id) === String(r.current_stage_id));
+  const completed = r.status === "completed", rejected = r.status === "rejected", withdrawn = r.status === "withdrawn" || r.status === "draft";
+  let html = "<div class='trail'>";
+  STAGES.forEach((s, idx) => {
+    const isTerminal = (s.stage_name || "").toLowerCase().indexOf("complete") !== -1;
+    let cls = "", badge = "Waiting", badgeCls = "";
+    if(completed){ cls = "done"; badge = "Done"; badgeCls = "done"; }
+    else if(rejected && idx === currentIdx){ cls = "declined"; badge = "Declined"; badgeCls = "declined"; }
+    else if(idx < currentIdx){ cls = "done"; badge = "Approved"; badgeCls = "done"; }
+    else if(idx === currentIdx){ if(withdrawn){ cls = ""; badge = r.status === "draft" ? "Draft" : "Withdrawn"; badgeCls = ""; } else { cls = "current"; badge = "In progress"; badgeCls = "current"; } }
+    const assignees = Array.from(new Set([].concat(ASSIGNEES_BY_STAGE[String(s.id) + "|" + String(r.branch||"")] || [], ASSIGNEES_ALLBRANCH[String(s.id)] || [])));
+    let peopleHtml = "";
+    if(!assignees.length){ peopleHtml = "<div class='ts-none'>" + (isTerminal ? "Final stage — the request ends here." : "No approver assigned to this stage.") + "</div>"; }
+    else {
+      peopleHtml = assignees.map(empId => {
+        const act = actByStageEmp[String(s.id) + ":" + String(empId)];
+        const name = EMP_NAME[String(empId)] || ("#" + empId);
+        let stateCls = "idle", stateTxt = "", when = "", comment = "";
+        if(act && act.action === "approve"){ stateCls = "approve"; stateTxt = "✓ Approved"; when = fmtWhen(act.action_date); comment = act.comment; }
+        else if(act && act.action === "decline"){ stateCls = "decline"; stateTxt = "✕ Declined"; when = fmtWhen(act.action_date); comment = act.comment; }
+        else if(completed || idx < currentIdx){ stateCls = "idle"; stateTxt = "Did not act"; }
+        else if(idx === currentIdx){ if(rejected){ stateCls = "idle"; stateTxt = "Did not act"; } else if(withdrawn){ stateCls = "idle"; stateTxt = "—"; } else { stateCls = "wait"; stateTxt = "⏳ Waiting"; } }
+        else { stateCls = "idle"; stateTxt = "Not reached yet"; }
+        return "<div class='ts-person'><span class='tp-name'>" + esc(name) + "</span><span class='tp-state " + stateCls + "'>" + stateTxt + "</span>" +
+          (when ? "<span class='tp-when'>" + esc(when) + "</span>" : "") + (comment ? "<span class='tp-comment'>" + esc(comment) + "</span>" : "") + "</div>";
+      }).join("");
+    }
+    html += "<div class='trail-stage " + cls + "'><div class='ts-dot'></div><div class='ts-body'>" +
+      "<div class='ts-head'><span class='ts-name'>Stage " + (idx+1) + " · " + esc(s.stage_name) + "</span><span class='ts-badge " + badgeCls + "'>" + esc(badge) + "</span></div>" +
+      "<div class='ts-people'>" + peopleHtml + "</div></div></div>";
+  });
+  html += "</div>";
+  panel.innerHTML = html;
+}
+
+// ---------- Edit & resubmit ----------
+function renderEditPanel(r, appl, guar){
+  EDIT_GUAR_SEQ = 0; EDIT_LETTER = []; EDIT_APPLICANT = null;
+  // Only staff of this request's unit may be the applicant.
+  EDIT_UNIT_MAP = {};
+  const dlu = document.getElementById("empListUnitEdit"); dlu.innerHTML = "";
+  EMP_ALL.filter(e => String(e.unit||"") === String(r.unit||"") && String(e.department||"") === String(r.department||"") && String(e.branch||"") === String(r.branch||""))
+    .forEach(e => { const code = e.employee_id || String(e.id); EDIT_UNIT_MAP[code] = e; dlu.insertAdjacentHTML("beforeend", `<option value="${esc(code)}">${esc(e.full_name)}</option>`); });
+
+  const a0 = (appl && appl.length) ? appl[0] : null;
+  const appCode = a0 ? (a0.staff_id_value || "") : "";
+  EDIT_APPLICANT = a0 ? (EDIT_UNIT_MAP[appCode] || null) : null;
+
+  const wrap = document.getElementById("editWrap");
+  wrap.innerHTML =
+    "<div class='section-h' style='margin-top:20px;border-top:1px solid var(--line);padding-top:16px;'>Edit &amp; Resubmit</div>" +
+    "<div class='form-row'>" +
+      "<div class='field'><label>Loan Type</label><select id='e-loan'><option value=''>— none —</option>" + LOANS.map(l=>"<option value='" + l.id + "'" + (String(l.id)===String(r.loan_type_id)?" selected":"") + ">" + esc(l.name) + "</option>").join("") + "</select></div>" +
+      "<div class='field'></div>" +
+    "</div>" +
+    "<div class='section-h'>Applicant</div>" +
+    "<p class='sub' style='margin-top:0;'>Branch / Dept / Unit: <b>" + esc([r.branch, r.department, r.unit].filter(Boolean).join(" · ") || "—") + "</b>. The applicant must be a staff of this unit.</p>" +
+    "<div class='form-row'>" +
+      "<div class='field'><label>ID of Applicant *</label><input list='empListUnitEdit' id='e-appcode' value=\"" + esc(appCode) + "\" placeholder='Staff ID' autocomplete='off' oninput='onEditApplicant()'><div class='ro' id='e-appname' style='margin-top:6px;'>" + esc(a0 && a0.applicant_name ? a0.applicant_name : "—") + "</div></div>" +
+      "<div class='field'><label>IOU Amount *</label><input type='number' step='any' min='0' id='e-amount' value=\"" + esc(a0 && a0.iou_amount != null ? a0.iou_amount : "") + "\"></div>" +
+    "</div>" +
+    "<div class='section-h'>Guarantors (at least two)</div>" +
+    "<div id='e-guarBody'></div>" +
+    "<div style='margin-top:8px;'><button class='btn-trail' onclick='addEditGuar()'>+ Add guarantor</button></div>" +
+    "<div class='field' style='margin-top:14px;'><label>Replace IOU application letter (optional — leave blank to keep)</label>" +
+      "<div class='dropzone' id='e-letterzone'><div class='dz-action'>Upload file</div><input type='file'></div><div class='file-list' id='e-letterlist'></div></div>" +
+    "<button onclick=\"resubmit('" + r.id + "')\">Resubmit</button>" +
+    "<div class='status' id='e-status'></div>";
+
+  const gseed = (guar && guar.length) ? guar : [null, null];
+  (gseed.length < 2 ? gseed.concat(Array(2 - gseed.length).fill(null)) : gseed).forEach(g => addEditGuar(g));
+
+  const zone = document.getElementById("e-letterzone");
+  const input = zone.querySelector("input[type=file]");
+  zone.addEventListener("click", ()=>input.click());
+  input.addEventListener("change", e => { const f = e.target.files[0]; if(f){ EDIT_LETTER = [f]; document.getElementById("e-letterlist").innerHTML = `<div class="file-chip"><span>${esc(f.name)}</span><button class="fc-remove" onclick="clearEditLetter()">&times;</button></div>`; } });
+}
+function clearEditLetter(){ EDIT_LETTER = []; document.getElementById("e-letterlist").innerHTML = ""; }
+window.clearEditLetter = clearEditLetter;
+
+function onEditApplicant(){ const code = document.getElementById("e-appcode").value.trim(); const e = EDIT_UNIT_MAP[code]; EDIT_APPLICANT = e || null; document.getElementById("e-appname").textContent = e ? e.full_name : (code ? "Not in this unit" : "—"); }
+window.onEditApplicant = onEditApplicant;
+
+function addEditGuar(g){
+  const id = ++EDIT_GUAR_SEQ;
+  const code = g && g.staff_id_value ? g.staff_id_value : "";
+  const row = document.createElement("div"); row.className = "g-row"; row.id = "eguar-" + id;
+  row.innerHTML =
+    "<div class='g-no gn' style='flex:0 0 26px;text-align:center;font-weight:bold;color:var(--muted);padding-top:12px;'></div>" +
+    "<div style='flex:1;'><input list='empList' id='eg-code-" + id + "' value=\"" + esc(code) + "\" placeholder='Staff ID or name' autocomplete='off' oninput='onEditGuar(" + id + ")'></div>" +
+    "<div style='flex:1;'><div class='ro' id='eg-name-" + id + "'>" + esc(g && g.guarantor_name ? g.guarantor_name : "—") + "</div></div>" +
+    "<button type='button' class='rm-item' onclick='removeEditGuar(" + id + ")' title='Remove'>&times;</button>";
+  document.getElementById("e-guarBody").appendChild(row);
+  renumberEditGuar();
+}
+window.addEditGuar = addEditGuar;
+function onEditGuar(id){ const code = document.getElementById("eg-code-" + id).value.trim(); const e = EMP_BY_CODE[code]; document.getElementById("eg-name-" + id).textContent = e ? e.full_name : (code ? "No staff match" : "—"); }
+window.onEditGuar = onEditGuar;
+function removeEditGuar(id){ if(document.querySelectorAll("#e-guarBody .g-row").length <= 2) return; const row = document.getElementById("eguar-" + id); if(row) row.remove(); renumberEditGuar(); }
+window.removeEditGuar = removeEditGuar;
+function renumberEditGuar(){ const rows = document.querySelectorAll("#e-guarBody .g-row"); rows.forEach((r,i)=>{ const c=r.querySelector(".gn"); if(c) c.textContent=(i+1); const b=r.querySelector(".rm-item"); if(b) b.disabled = rows.length <= 2; }); }
+function collectEditGuar(){
+  const out = [];
+  document.querySelectorAll("#e-guarBody .g-row").forEach(r=>{
+    const id = r.id.replace("eguar-","");
+    const code = (document.getElementById("eg-code-"+id).value||"").trim();
+    if(!code) return;
+    out.push(EMP_BY_CODE[code] || null);
+  });
+  return out;
+}
+
+async function resubmit(id){
+  const st = document.getElementById("e-status");
+  const r = ALL_ROWS.find(x => String(x.id) === String(id));
+  const loanId = document.getElementById("e-loan").value || null;
+  const amtRaw = (document.getElementById("e-amount").value||"").trim();
+  if(!EDIT_APPLICANT){ st.className="status err"; st.textContent="Select a valid applicant from this unit."; return; }
+  if(amtRaw === "" || isNaN(parseFloat(amtRaw)) || parseFloat(amtRaw) <= 0){ st.className="status err"; st.textContent="Enter an IOU amount greater than 0."; return; }
+  const g = collectEditGuar().filter(Boolean);
+  if(g.length < 2){ st.className="status err"; st.textContent="At least two valid guarantors are required."; return; }
+  const gids = g.map(x => String(x.id));
+  if(new Set(gids).size !== gids.length){ st.className="status err"; st.textContent="Guarantors must be different people."; return; }
+  if(gids.indexOf(String(EDIT_APPLICANT.id)) !== -1){ st.className="status err"; st.textContent="A guarantor cannot be the applicant."; return; }
+
+  st.className="status"; st.textContent="Resubmitting...";
+  try{
+    const amount = parseFloat(amtRaw);
+    if(EDIT_LETTER.length){
+      const f = EDIT_LETTER[0];
+      const path = `iou/${id}/application_letter/${Date.now()}_${f.name}`;
+      const { error: upErr } = await sb.storage.from("request-attachments").upload(path, f);
+      if(upErr) throw upErr;
+      const { data: pub } = sb.storage.from("request-attachments").getPublicUrl(path);
+      await sb.from("iou_request_attachments").insert({ request_id: id, field_key: "application_letter", file_name: f.name, file_url: pub.publicUrl, uploaded_by: MY_EMPLOYEE_REF_ID });
+    }
+    await sb.from("iou_applicants").delete().eq("request_id", id);
+    await sb.from("iou_applicants").insert({ request_id: id, applicant_emp_id: EDIT_APPLICANT.id, applicant_name: EDIT_APPLICANT.full_name, staff_id_value: (EDIT_APPLICANT.employee_id||""), iou_amount: amount });
+    await sb.from("iou_guarantors").delete().eq("request_id", id);
+    const gRows = g.map(x => ({ request_id: id, guarantor_emp_id: x.id, guarantor_name: x.full_name, staff_id_value: (x.employee_id||"") }));
+    const { error: gErr } = await sb.from("iou_guarantors").insert(gRows);
+    if(gErr) throw gErr;
+    const { error: uErr } = await sb.from("iou_requests").update({
+      loan_type_id: loanId, guarantor_emp_id: g[0].id, payment_value: amount,
+      status: "in_progress", current_stage_id: FIRST_STAGE_ID, cycle: (r.cycle || 1) + 1
+    }).eq("id", id);
+    if(uErr) throw uErr;
+    st.className="status ok"; st.textContent="✅ Resubmitted — back at Accounts.";
+    setTimeout(()=>{ loadRequests(); backToList(); }, 800);
+  }catch(e){ st.className="status err"; st.textContent="❌ " + (e.message || e); }
+}
+window.resubmit = resubmit;
+
+init();
+</script>
+</body>
+</html>

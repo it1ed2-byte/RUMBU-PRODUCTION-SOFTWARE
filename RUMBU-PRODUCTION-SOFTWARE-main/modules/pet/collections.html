@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>All Collections — PET</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme")||"navy"); }catch(e){} })();
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) document.documentElement.setAttribute("data-theme",e.data.rumbuTheme); });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1200px;margin:0 auto;}
+  label{font-size:12px;font-weight:700;display:block;margin:0 0 4px;color:var(--muted);}
+  input,select{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);}
+  .badge{display:inline-block;padding:2px 9px;border-radius:20px;font-size:10px;font-weight:700;white-space:nowrap;}
+  .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;justify-content:center;align-items:flex-start;padding:30px 12px;overflow-y:auto;}
+  .modal-overlay.open{display:flex;}
+  .modal{background:var(--card);border-radius:14px;padding:24px;width:100%;max-width:760px;box-shadow:0 8px 32px rgba(0,0,0,.25);}
+  .modal h3{color:var(--heading);margin:0 0 14px;}
+  .log-row{padding:8px 0;border-bottom:1px solid var(--line);font-size:12px;display:flex;gap:10px;align-items:flex-start;}
+  .log-row:last-child{border-bottom:none;}
+  .log-ts{color:var(--muted);white-space:nowrap;min-width:130px;}
+  .log-action{font-weight:700;color:var(--heading);min-width:120px;}
+  .log-note{color:var(--muted);}
+  /* Print styles for PDF */
+  @media print{
+    .no-print{display:none !important;}
+    body{background:#fff;padding:0;}
+    .modal-overlay{position:static;background:none;padding:0;}
+    .modal{box-shadow:none;max-width:100%;padding:0;}
+    .print-header{display:block !important;}
+  }
+  .print-header{display:none;border-bottom:3px solid #1F3864;padding-bottom:10px;margin-bottom:16px;}
+  .print-header .co{font-size:14pt;font-weight:bold;color:#1F3864;}
+  .print-header .sub{font-size:10pt;color:#555;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <button class="no-print" onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back</button>
+  <div id="connStatus" style="font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);">Loading...</div>
+
+  <div class="card-panel no-print">
+    <h3 style="color:var(--heading);margin:0 0 14px;">All PET Collections</h3>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:10px;">
+      <div><label>From Date</label><input type="date" id="fFrom"></div>
+      <div><label>To Date</label><input type="date" id="fTo"></div>
+      <div><label>Status</label>
+        <select id="fStatus">
+          <option value="">All</option>
+          <option value="submitted">Submitted</option>
+          <option value="stage2_approval">Quality Control Approval</option>
+          <option value="stage3p1_filling">Payment Phase 1 Fill</option>
+          <option value="stage3p1_approval">Payment Phase 1 Approval</option>
+          <option value="stage4_filling">Production Fill</option>
+          <option value="stage4_approval">Production Approval</option>
+          <option value="stage3p2_filling">Payment Phase 2 Fill</option>
+          <option value="stage3p2_approval">Payment Phase 2 Approval</option>
+          <option value="completed">Completed</option>
+        </select>
+      </div>
+      <div><label>Section</label>
+        <select id="fSection">
+          <option value="">All</option>
+        </select>
+      </div>
+      <div><label>Agent Code</label><input type="text" id="fAgent" placeholder="AGT-..."></div>
+      <div style="align-self:flex-end;"><button onclick="loadCollections()">Filter</button></div>
+    </div>
+    <div id="countLine" style="font-size:12px;color:var(--muted);margin-bottom:6px;"></div>
+  </div>
+
+  <div class="table-wrap">
+    <div class="table-scroll">
+      <table id="collTable">
+        <thead><tr>
+          <th>Form No.</th><th>Date</th><th>Agent</th><th>Section</th>
+          <th>Rumbu Weight (kg)</th><th>LOT</th><th>Status</th><th>Actions</th>
+        </tr></thead>
+        <tbody id="collBody"><tr><td colspan="8" style="text-align:center;color:var(--muted);">Loading...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Activity Log / Detail Modal -->
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <!-- Print header (visible only when printing) -->
+    <div class="print-header">
+      <div class="co">RUMBU INDUSTRIES GROUP</div>
+      <div class="sub">PET Collection — Detailed Record</div>
+    </div>
+
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px;" class="no-print">
+      <h3 id="modalTitle" style="margin:0;">Collection Detail</h3>
+      <div style="display:flex;gap:8px;">
+        <button onclick="window.print()" style="padding:7px 14px;font-size:12px;">Print / PDF</button>
+        <button class="btn-ghost" onclick="closeModal()" style="padding:7px 14px;font-size:12px;">Close</button>
+      </div>
+    </div>
+
+    <div id="modalDetail"></div>
+
+    <h4 style="color:var(--heading);margin:16px 0 8px;">Activity Log</h4>
+    <div id="modalLog">Loading...</div>
+  </div>
+</div>
+
+<script>
+let ME=null;
+
+const STATUS_LABELS={
+  submitted:'Awaiting Quality Control Fill',
+  stage2_approval:'Quality Control Approval Pending',
+  rejected_to_stage1:'Returned to Initiator',
+  stage3p1_filling:'Payment Phase 1 Fill',
+  stage3p1_approval:'Payment Phase 1 Approval',
+  rejected_to_stage2:'Returned to Quality Control',
+  stage4_filling:'Production Fill',
+  stage4_approval:'Production Approval',
+  rejected_to_stage3p1:'Returned to Payment Ph.1',
+  stage3p2_filling:'Payment Phase 2 Fill',
+  stage3p2_approval:'Payment Phase 2 Approval',
+  rejected_to_stage4:'Returned to Production',
+  completed:'Completed'
+};
+
+const STATUS_COLORS={
+  submitted:'#dbeafe',stage2_approval:'#fef3c7',rejected_to_stage1:'#fee2e2',
+  stage3p1_filling:'#e0f2fe',stage3p1_approval:'#fef3c7',rejected_to_stage2:'#fee2e2',
+  stage4_filling:'#d1fae5',stage4_approval:'#fef3c7',rejected_to_stage3p1:'#fee2e2',
+  stage3p2_filling:'#e0f2fe',stage3p2_approval:'#fef3c7',rejected_to_stage4:'#fee2e2',
+  completed:'#d1fae5'
+};
+
+const STATUS_TEXT_COLORS={
+  submitted:'#1e40af',stage2_approval:'#92400e',rejected_to_stage1:'#991b1b',
+  stage3p1_filling:'#075985',stage3p1_approval:'#92400e',rejected_to_stage2:'#991b1b',
+  stage4_filling:'#065f46',stage4_approval:'#92400e',rejected_to_stage3p1:'#991b1b',
+  stage3p2_filling:'#075985',stage3p2_approval:'#92400e',rejected_to_stage4:'#991b1b',
+  completed:'#065f46'
+};
+
+function statusBadge(s){
+  const bg=STATUS_COLORS[s]||'#f3f4f6', tc=STATUS_TEXT_COLORS[s]||'#374151';
+  return `<span class="badge" style="background:${bg};color:${tc};">${STATUS_LABELS[s]||s}</span>`;
+}
+
+async function loadBranches(){
+  const { data, error } = await sb.from("app_sections").select("name").order("name");
+  if(error) throw new Error("Could not load branches: "+error.message);
+  const sel = document.getElementById("fSection");
+  sel.innerHTML = `<option value="">All</option>` + (data||[]).map(s=>`<option value="${s.name}">${s.name}</option>`).join("");
+}
+
+async function init(){
+  const cs=document.getElementById("connStatus");
+  try{
+    ME=await requireAuth("../../login.html");
+    if(!ME) return;
+    await loadBranches();
+    await loadCollections();
+    cs.style.color="var(--ok)"; cs.textContent="Connected.";
+  }catch(e){ cs.style.color="var(--bad)"; cs.textContent="Error: "+e.message; }
+}
+
+async function loadCollections(){
+  const from=document.getElementById("fFrom").value;
+  const to=document.getElementById("fTo").value;
+  const status=document.getElementById("fStatus").value;
+  const section=document.getElementById("fSection").value;
+  const agent=document.getElementById("fAgent").value.trim();
+
+  let q=sb.from("pet_collections")
+    .select("id,form_number,form_date,agent_name,agent_code,section,status,rumbu_weighbridge_weight,updated_at,pet_stage2_qc(offload_location)")
+    .order("created_at",{ascending:false});
+  if(from) q=q.gte("form_date",from);
+  if(to)   q=q.lte("form_date",to);
+  if(status)  q=q.eq("status",status);
+  if(section) q=q.eq("section",section);
+  if(agent)   q=q.ilike("agent_code",`%${agent}%`);
+
+  const { data,error }=await q;
+  if(error){ document.getElementById("collBody").innerHTML=`<tr><td colspan="8">Error: ${error.message}</td></tr>`; return; }
+  const rows=data||[];
+  document.getElementById("countLine").textContent=rows.length+" collection(s) found.";
+
+  if(!rows.length){ document.getElementById("collBody").innerHTML=`<tr><td colspan="8" style="text-align:center;color:var(--muted);">No collections match the filters.</td></tr>`; return; }
+
+  document.getElementById("collBody").innerHTML=rows.map(c=>{
+    const qc=(Array.isArray(c.pet_stage2_qc)?c.pet_stage2_qc[0]:c.pet_stage2_qc)||{};
+    return `<tr>
+      <td><b>${c.form_number}</b></td>
+      <td>${c.form_date}</td>
+      <td>${c.agent_name}<br><span style="font-size:11px;color:var(--muted);">${c.agent_code}</span></td>
+      <td>${c.section}</td>
+      <td>${c.rumbu_weighbridge_weight||"—"}</td>
+      <td>${qc.offload_location||"—"}</td>
+      <td>${statusBadge(c.status)}</td>
+      <td><button onclick="openDetail(${c.id})" style="padding:5px 12px;font-size:12px;">View / Log</button></td>
+    </tr>`;
+  }).join("");
+}
+
+async function openDetail(id){
+  document.getElementById("modalDetail").innerHTML="Loading...";
+  document.getElementById("modalLog").innerHTML="Loading...";
+  document.getElementById("modal").classList.add("open");
+
+  const [{ data:c },{ data:qc },{ data:pay },{ data:prod },{ data:log }]=await Promise.all([
+    sb.from("pet_collections").select("*").eq("id",id).single(),
+    sb.from("pet_stage2_qc").select("*").eq("collection_id",id).single(),
+    sb.from("pet_stage3_payment").select("*").eq("collection_id",id).single(),
+    sb.from("pet_stage4_production").select("*").eq("collection_id",id).single(),
+    sb.from("pet_activity_log").select("*").eq("collection_id",id).order("created_at",{ascending:true})
+  ]);
+
+  document.getElementById("modalTitle").textContent="Collection — "+(c?.form_number||id);
+
+  // Detail section
+  let html=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px;margin-top:12px;">`;
+  function row(l,v){ return `<div style="padding:5px 0;border-bottom:1px solid var(--line);"><span style="font-size:11px;color:var(--muted);">${l}</span><br><b>${v||"—"}</b></div>`; }
+  if(c){
+    html+=row("Form Number",c.form_number)+row("Form Date",c.form_date)+row("Status",STATUS_LABELS[c.status]||c.status)+row("Section",c.section)+row("Agent",`${c.agent_name} (${c.agent_code})`)+row("Waybill Weight",c.agent_waybill_weight+" kg")+row("Rumbu Weight",c.rumbu_weighbridge_weight+" kg")+row("Initiated by",c.initiator_username);
+  }
+  html+="</div>";
+  if(qc){
+    html+=`<h4 style="color:var(--heading);margin:14px 0 6px;">Stage 2 — Quality Control</h4><div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:12px;">`;
+    html+=row("Grade",qc.bottle_grade)+row("LOT",qc.offload_location)+row("Bales",qc.number_of_bales)+row("Avg Bale Weight",qc.avg_bale_weight_kg+" kg")+row("Avg Bale Volume",qc.avg_bale_volume)+row("Bale Density",qc.bale_density);
+    html+="</div>";
+  }
+  if(pay){
+    html+=`<h4 style="color:var(--heading);margin:14px 0 6px;">Stage 3 — Payments</h4><div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px;">`;
+    html+=row("Odoo PO",pay.odoo_po_number)+row("Deduction %",pay.deduction_pct?pay.deduction_pct+"% ("+pay.deduction_amount+" NGN)":"—")+row("90% Receipt",pay.payment_90pct_attachment?`<a href="${pay.payment_90pct_attachment}" target="_blank">View</a>`:"—")+row("10% Receipt",pay.payment_10pct_attachment?`<a href="${pay.payment_10pct_attachment}" target="_blank">View</a>`:"—");
+    html+="</div>";
+  }
+  if(prod){
+    html+=`<h4 style="color:var(--heading);margin:14px 0 6px;">Stage 4 — Production</h4><div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:12px;">`;
+    html+=row("Start",prod.production_start?new Date(prod.production_start).toLocaleString("en-GB"):"—")+row("End",prod.production_end?new Date(prod.production_end).toLocaleString("en-GB"):"—")+row("Total Colored Flex",prod.colored_flex_kg+" kg")+row("Total Non-Colored Flex",prod.non_colored_flex_kg+" kg")+row("Total Production",prod.total_production_kg+" kg");
+    html+="</div>";
+    html+=`<div style="font-size:11px;color:var(--muted);margin:10px 0 4px;">Waste Breakdown (kg)</div><div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;font-size:12px;">`;
+    html+=row("Coloured PET",prod.waste_coloured_kg)+row("Labelled Bottles",prod.waste_labels_kg)+row("Caps & Rings",prod.waste_caps_rings_kg)+row("Non-Food Contact",prod.waste_non_food_kg)+row("Non-PET Product",prod.waste_non_pet_kg)+row("Aged PET Bottles",prod.waste_aged_kg)+row("Oily PET Bottles",prod.waste_oily_kg)+row("Metal Ring",prod.waste_metal_kg);
+    html+="</div>";
+    html+=`<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:12px;margin-top:6px;">`;
+    html+=row("Total Waste",prod.total_waste_kg+" kg")+row("Accepted Waste",prod.accepted_waste_kg+" kg")+row("Unacceptable Waste",prod.unacceptable_waste_kg+" kg")+row("Unacceptable Waste Value",prod.unacceptable_waste_value+" kg")+row("Weight Difference",prod.weight_difference_kg+" kg")+row("Total Production + Waste",prod.total_production_plus_waste_kg+" kg")+row("LOT Freed","After approval")+row("Bag Labels PDF",prod.labels_pdf_url?`<a href="${prod.labels_pdf_url}" target="_blank">Download</a>`:"—");
+    html+="</div>";
+  }
+  document.getElementById("modalDetail").innerHTML=html;
+
+  // Activity log
+  const logRows=log||[];
+  if(!logRows.length){ document.getElementById("modalLog").innerHTML=`<p style="font-size:12px;color:var(--muted);">No activity recorded yet.</p>`; return; }
+  document.getElementById("modalLog").innerHTML=logRows.map(r=>`<div class="log-row">
+    <span class="log-ts">${new Date(r.created_at).toLocaleString("en-GB",{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"})}</span>
+    <span class="log-action">${r.action.replace(/_/g," ")}</span>
+    <span style="color:var(--muted);font-size:11px;">Stage: ${r.stage||"—"} | By: ${r.actor_username||"—"}</span>
+    ${r.note?`<span class="log-note">— ${r.note}</span>`:""}
+  </div>`).join("");
+}
+
+function closeModal(){ document.getElementById("modal").classList.remove("open"); }
+document.getElementById("modal").addEventListener("click",function(e){ if(e.target===this) closeModal(); });
+init();
+</script>
+</body>
+</html>

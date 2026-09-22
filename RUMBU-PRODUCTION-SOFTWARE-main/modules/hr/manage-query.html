@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>HR — Manage Query / Memo</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;color:var(--text);}
+  .wrap{max-width:1050px;margin:0 auto;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;}
+  .card h3{color:var(--navy);margin:0 0 4px;font-size:16px;}
+  .card .sub{color:var(--blue);font-size:12px;margin:0 0 14px;}
+  label{display:block;font-size:12px;font-weight:bold;color:var(--text);margin:10px 0 4px;}
+  input,select{width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;}
+  .row > div{flex:1;min-width:150px;}
+  button{padding:10px 14px;border:none;border-radius:8px;font-weight:bold;font-size:13px;cursor:pointer;background:var(--blue);color:#fff;}
+  button:hover{background:var(--blue-dark);}
+  button.mini{padding:6px 10px;font-size:12px;}
+  button.del{background:var(--red);}
+  button.del:hover{background:#96242e;}
+  button.reprint{background:#6b7280;}
+  button.reprint:hover{background:#4b5563;}
+  .status{margin-top:10px;font-weight:bold;font-size:13px;min-height:16px;}
+  .status.ok{color:var(--green);} .status.err{color:var(--red);}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;}
+  table{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px;}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top;}
+  thead th{background:var(--navy);color:#fff;font-size:12px;position:sticky;top:0;}
+  tbody tr:nth-child(even){background:#f6f8fb;}
+  .tag{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:bold;color:#fff;}
+  .tag.QUERY{background:#2E75B6;}
+  .tag.LASTWARNING{background:#d97706;}
+  .tag.SURCHARGE{background:#c0392b;}
+  .tag.CUSTOMQUERY{background:#6b7280;}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<div id="connStatus">Loading...</div>
+
+<div class="card">
+  <h3>Manage Query / Memo</h3>
+  <p class="sub" id="scopeNote"></p>
+
+  <div class="row">
+    <div>
+      <label>From Date</label>
+      <input type="date" id="fromDate">
+    </div>
+    <div>
+      <label>To Date</label>
+      <input type="date" id="toDate">
+    </div>
+    <div>
+      <label>Type</label>
+      <select id="typeFilter">
+        <option value="">All</option>
+        <option value="QUERY">QUERY</option>
+        <option value="LAST WARNING">LAST WARNING</option>
+        <option value="SURCHARGE">SURCHARGE</option>
+        <option value="CUSTOM QUERY">CUSTOM QUERY</option>
+      </select>
+    </div>
+    <div>
+      <label>Search (name / ID / tracking)</label>
+      <input type="text" id="search" placeholder="Type to filter" oninput="applyFilters()">
+    </div>
+    <div style="flex:0 0 auto;">
+      <button onclick="loadRecords()">Refresh</button>
+    </div>
+  </div>
+  <div class="status" id="status"></div>
+</div>
+
+<div class="card">
+  <div id="tableWrap"></div>
+</div>
+</div>
+
+<script>
+let ME = null;
+let ALL = [];   // all rows fetched (already branch-scoped)
+const COMPANY = "Rumbu Industries Limited";
+
+async function logActivity(actionType, description){
+  try{
+    await sb.from("activity_log").insert({
+      actor_id: ME.id, actor_username: ME.username, actor_role: ME.role,
+      section_id: ME.sectionId, action_type: actionType, description: description
+    });
+  }catch(e){ console.warn("Activity log write failed (non-fatal):", e); }
+}
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+
+    document.getElementById("scopeNote").textContent = ME.role === "super_admin"
+      ? "Showing memos from every Branch."
+      : "Showing memos for your own Branch only" + (ME.sectionName ? " (" + ME.sectionName + ")." : ".");
+
+    status.style.color = "#1d8a4e";
+    status.textContent = "Connected.";
+    await loadRecords();
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "❌ " + e.message;
+    console.error(e);
+  }
+}
+
+async function loadRecords(){
+  const status = document.getElementById("status");
+  status.className = "status"; status.textContent = "Loading...";
+  try{
+    let q = sb.from("hr_queries").select("*").order("created_at", { ascending: false });
+
+    // Branch scoping: everyone except Super Admin sees only their own Branch(es).
+    if(ME.role !== "super_admin"){
+      if(ME.sectionNames && ME.sectionNames.length){
+        q = q.in("branch", ME.sectionNames);
+      } else {
+        // No branch assigned — show nothing rather than everything.
+        q = q.eq("branch", "___none___");
+      }
+    }
+
+    const { data, error } = await q;
+    if(error) throw error;
+    ALL = data || [];
+    status.className = "status ok"; status.textContent = ALL.length + " record(s) loaded.";
+    applyFilters();
+  }catch(e){
+    status.className = "status err"; status.textContent = "❌ " + e.message;
+  }
+}
+
+function applyFilters(){
+  const from = document.getElementById("fromDate").value;
+  const to = document.getElementById("toDate").value;
+  const type = document.getElementById("typeFilter").value;
+  const search = document.getElementById("search").value.trim().toLowerCase();
+
+  let rows = ALL.slice();
+
+  if(from) rows = rows.filter(r => (r.memo_date || "") >= from);
+  if(to)   rows = rows.filter(r => (r.memo_date || "") <= to);
+  if(type) rows = rows.filter(r => r.letter_type === type);
+  if(search){
+    rows = rows.filter(r =>
+      (r.employee_name || "").toLowerCase().includes(search) ||
+      (r.employee_id || "").toLowerCase().includes(search) ||
+      (r.tracking_number || "").toLowerCase().includes(search)
+    );
+  }
+  render(rows);
+}
+
+function render(rows){
+  const wrap = document.getElementById("tableWrap");
+  if(!rows.length){ wrap.innerHTML = "<p>No records match.</p>"; return; }
+
+  const canDelete = (ME.role === "super_admin" || ME.role === "admin");
+
+  let html = "<table><thead><tr>" +
+    "<th>Tracking</th><th>Date</th><th>Type</th><th>Employee</th><th>ID</th>" +
+    "<th>Dept</th><th>Branch</th><th>Details</th><th>By</th><th>Actions</th>" +
+    "</tr></thead><tbody>";
+
+  rows.forEach(r=>{
+    const tagCls = (r.letter_type || "").replace(/\s+/g, "");
+    let summary = r.details || r.custom_subject || "";
+    if(r.letter_type === "SURCHARGE" && r.amount) summary += " (₦" + r.amount + ")";
+    html += "<tr>" +
+      `<td>${r.tracking_number || ""}</td>` +
+      `<td>${r.memo_date || ""}</td>` +
+      `<td><span class="tag ${tagCls}">${r.letter_type || ""}</span></td>` +
+      `<td>${r.employee_name || ""}</td>` +
+      `<td>${r.employee_id || ""}</td>` +
+      `<td>${r.department || ""}</td>` +
+      `<td>${r.branch || ""}</td>` +
+      `<td>${summary}</td>` +
+      `<td>${r.created_by_username || ""}</td>` +
+      `<td>` +
+        `<button class="mini reprint" onclick="reprint(${r.id})">Reprint</button> ` +
+        (canDelete ? `<button class="mini del" onclick="removeRow(${r.id})">Delete</button>` : "") +
+      `</td>` +
+    "</tr>";
+  });
+  html += "</tbody></table>";
+  wrap.innerHTML = html;
+}
+
+// ---- Reprint: rebuild the exact memo from the stored row ----
+const CC_BLOCK = `
+<div style="margin-top:60px;">
+Kingsley Onulaka<br>
+Head, H.R.<br>
+Cc: Chairman &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Sign: &hellip;.&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;..<br>
+Vice Chairman<br>
+Admin Directors &nbsp;&nbsp;&nbsp; Name: &hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;...<br>
+Executive Directors<br>
+Heads of Corporate<br>
+Heads of Admin/Departments<br>
+C.S.O.
+</div>`;
+
+function buildBody(r){
+  if(r.letter_type === "QUERY"){
+    return `
+<p style="text-align:center; font-weight:bold; font-size:16pt; margin:20px 0;">Subject: QUERY</p>
+<p style="line-height:1.6;">Could you explain within <b>${r.hours} hours</b> why disciplinary action should not be taken against you for <b>${r.title} (${r.details})</b>?</p>
+<p style="line-height:1.6;">This is viewed as misconduct. Reference to Section <b>${r.service_section}</b> of the Condition of Service, which attracts disciplinary action as this attitude will not be condoned by management.</p>`;
+  } else if(r.letter_type === "LAST WARNING"){
+    return `
+<p style="text-align:center; font-weight:bold; font-size:16pt; margin:20px 0;">Subject: LAST WARNING</p>
+<p style="line-height:1.6;">It has come to the attention of Management with dismay for ${r.details}.</p>
+<p style="line-height:1.6;">This letter is hereby issued to you as a <b>LAST WARNING</b>. Further occurrence will lead to stricter disciplinary action. It is hoped you will adjust your attitude to work going forward.</p>`;
+  } else if(r.letter_type === "SURCHARGE"){
+    return `
+<p style="text-align:center; font-weight:bold; font-size:16pt; margin:20px 0;">Subject: SURCHARGE</p>
+<p style="line-height:1.6;">Having gone through your reply to the query issued on <b>${r.query_date}</b> for ${r.details}. You are hereby surcharged <b>₦${r.amount}</b> to be deducted from your salary.</p>
+<p style="line-height:1.6;">It is hoped this will serve as a deterrent in the future.</p>`;
+  } else if(r.letter_type === "CUSTOM QUERY"){
+    const paras = [r.para1, r.para2, r.para3, r.para4, r.para5].filter(p=>p);
+    return `
+<p style="text-align:center; font-weight:bold; font-size:16pt; margin:20px 0;">Subject: ${r.custom_subject}</p>
+${paras.map(p=>`<p style="line-height:1.6;">${p}</p>`).join("")}`;
+  }
+  return "";
+}
+
+function reprint(id){
+  const r = ALL.find(x => x.id === id);
+  if(!r) return;
+  const html = `
+<html><head><style>
+@page { size:A4; margin:40pt 50pt 40pt 50pt; }
+body { font-family:"Times New Roman", serif; font-size:12pt; line-height:1.6; margin:0; padding:40px; }
+h2 { text-align:center; font-size:18pt; margin-bottom:5px; }
+h3 { text-align:center; font-size:14pt; margin-top:0; margin-bottom:20px; }
+p { margin:10px 0; }
+.right { text-align:right; }
+</style></head><body>
+<h2>${COMPANY}</h2>
+<h3>MEMO</h3>
+<div class="right">
+<p><b>Tracking No:</b> ${r.tracking_number}</p>
+<p>${r.memo_from || ""}</p>
+<p><b>Date:</b> ${r.memo_date}</p>
+</div>
+<p><b>To:</b> ${r.employee_name} (${r.employee_id || ""})</p>
+<p><b>Department:</b> ${r.department || ""}</p>
+${buildBody(r)}
+${CC_BLOCK}
+</body></html>`;
+  const w = window.open("", "_blank");
+  w.document.write(html);
+  w.document.close();
+  w.onload = function(){ w.focus(); w.print(); };
+}
+
+async function removeRow(id){
+  const r = ALL.find(x => x.id === id);
+  if(!r) return;
+  if(!confirm("Delete memo " + r.tracking_number + " for " + r.employee_name + "? This cannot be undone.")) return;
+
+  const status = document.getElementById("status");
+  status.className = "status"; status.textContent = "Deleting...";
+  try{
+    const { error } = await sb.from("hr_queries").delete().eq("id", id);
+    if(error) throw error;
+    await logActivity("hr_query_deleted", ME.username + " deleted memo " + r.tracking_number + " (" + r.employee_name + ")");
+    status.className = "status ok"; status.textContent = "✅ Deleted " + r.tracking_number + ".";
+    await loadRecords();
+  }catch(e){
+    status.className = "status err"; status.textContent = "❌ " + e.message;
+  }
+}
+
+init();
+</script>
+</body>
+</html>

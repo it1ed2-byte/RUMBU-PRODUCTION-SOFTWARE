@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>HR Department — Daily Log</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;color:var(--text);}
+  .wrap{max-width:720px;margin:0 auto;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;}
+  .card h3{color:var(--navy);margin:0 0 4px;font-size:16px;}
+  .card .sub{color:var(--blue);font-size:12px;margin:0 0 14px;}
+  label{display:block;font-size:12px;font-weight:bold;color:var(--text);margin:10px 0 4px;}
+  input,textarea{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;}
+  textarea{resize:vertical;min-height:70px;}
+  button{padding:11px 16px;border:none;border-radius:8px;font-weight:bold;font-size:14px;cursor:pointer;background:var(--blue);color:#fff;margin-top:14px;}
+  button:hover{background:var(--blue-dark);}
+  button:disabled{opacity:.6;cursor:not-allowed;}
+  .status{margin-top:10px;font-weight:bold;font-size:13px;min-height:16px;}
+  .status.ok{color:var(--green);} .status.err{color:var(--red);}
+  table{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px;}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;}
+  thead th{background:var(--navy);color:#fff;font-size:12px;}
+  tbody tr:nth-child(even){background:#f6f8fb;}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<div id="connStatus">Loading...</div>
+
+<div class="card">
+  <h3>HR Department — Daily Log</h3>
+  <p class="sub" id="branchNote"></p>
+
+  <label>Date</label>
+  <input type="date" id="entryDate">
+  <label>Note</label>
+  <textarea id="entryNote" placeholder="e.g. New staff onboarding completed, leave request approved, etc."></textarea>
+  <button onclick="saveEntry()">SAVE ENTRY</button>
+  <div class="status" id="status"></div>
+</div>
+
+<div class="card">
+  <h3>Recent Entries</h3>
+  <p class="sub" id="listScopeNote"></p>
+  <div id="entriesWrap"></div>
+</div>
+</div>
+
+<script>
+let ME = null;
+
+function todayISO(){ return new Date().toISOString().slice(0,10); }
+
+async function logActivity(actionType, description){
+  try{
+    await sb.from("activity_log").insert({
+      actor_id: ME.id, actor_username: ME.username, actor_role: ME.role,
+      section_id: ME.sectionId, action_type: actionType, description: description
+    });
+  }catch(e){
+    console.warn("Activity log write failed (non-fatal):", e);
+  }
+}
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+
+    document.getElementById("entryDate").value = todayISO();
+    document.getElementById("branchNote").textContent = ME.sectionName
+      ? "Logging for: " + ME.sectionName
+      : "Signed in as " + ME.username;
+    document.getElementById("listScopeNote").textContent = ME.role === "super_admin"
+      ? "Showing entries from every Branch."
+      : "Showing entries for your own Branch only.";
+
+    status.style.color = "#1d8a4e";
+    status.textContent = "Connected.";
+    await loadEntries();
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "❌ " + e.message;
+    console.error(e);
+  }
+}
+
+async function saveEntry(){
+  const status = document.getElementById("status");
+  const date = document.getElementById("entryDate").value;
+  const note = document.getElementById("entryNote").value.trim();
+
+  if(!date || !note){ status.className = "status err"; status.textContent = "Enter both a date and a note."; return; }
+  if(!ME.sectionId){ status.className = "status err"; status.textContent = "Your account has no Branch assigned — ask your Super Admin to set one."; return; }
+
+  status.className = "status"; status.textContent = "Saving...";
+  try{
+    const { error } = await sb.from("hr_records").insert({
+      section_id: ME.sectionId, entry_date: date, note: note, created_by_username: ME.username
+    });
+    if(error) throw error;
+    status.className = "status ok"; status.textContent = "✅ Entry saved.";
+    await logActivity("hr_entry_added", ME.username + " added an HR Department entry: \"" + note + "\"");
+    document.getElementById("entryNote").value = "";
+    await loadEntries();
+  }catch(e){
+    status.className = "status err"; status.textContent = "❌ " + e.message;
+  }
+}
+
+async function loadEntries(){
+  const wrap = document.getElementById("entriesWrap");
+  const { data, error } = await sb
+    .from("hr_records")
+    .select("entry_date, note, created_by_username, created_at")
+    .order("entry_date", { ascending: false })
+    .limit(50);
+
+  if(error){ wrap.innerHTML = "Error: " + error.message; return; }
+  if(!data || !data.length){ wrap.innerHTML = "<p>No entries yet.</p>"; return; }
+
+  let html = "<table><tr><th>Date</th><th>Note</th><th>Entered By</th></tr>";
+  data.forEach(r=>{
+    html += `<tr><td>${r.entry_date||""}</td><td>${r.note||""}</td><td>${r.created_by_username||""}</td></tr>`;
+  });
+  html += "</table>";
+  wrap.innerHTML = html;
+}
+
+init();
+</script>
+</body>
+</html>

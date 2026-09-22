@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>LOT Map — PET Collection</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme")||"navy"); }catch(e){} })();
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) document.documentElement.setAttribute("data-theme",e.data.rumbuTheme); });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1100px;margin:0 auto;}
+  .legend{display:flex;gap:20px;align-items:center;margin-bottom:16px;flex-wrap:wrap;}
+  .legend-item{display:flex;align-items:center;gap:6px;font-size:13px;}
+  .legend-dot{width:16px;height:16px;border-radius:4px;display:inline-block;}
+  .lot-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;margin-top:8px;}
+  .lot-card{border-radius:10px;padding:12px 10px;text-align:center;cursor:pointer;transition:transform .12s,box-shadow .12s;position:relative;}
+  .lot-card:hover{transform:translateY(-2px);box-shadow:0 4px 12px rgba(0,0,0,.15);}
+  .lot-card.free{background:#d1fae5;border:2px solid #6ee7b7;}
+  .lot-card.occupied{background:#fee2e2;border:2px solid #fca5a5;}
+  .lot-card .lot-name{font-weight:800;font-size:13px;color:#1f2430;}
+  .lot-card .lot-status{font-size:11px;font-weight:700;margin-top:3px;}
+  .lot-card.free .lot-status{color:#065f46;}
+  .lot-card.occupied .lot-status{color:#991b1b;}
+  .lot-card .lot-info{font-size:10px;color:#6b7280;margin-top:4px;line-height:1.4;}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:16px;}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center;}
+  .stat .n{font-size:26px;font-weight:800;color:var(--heading);}
+  .stat .l{font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;margin-top:4px;}
+  .stat.free-s .n{color:#065f46;}
+  .stat.occ-s .n{color:#991b1b;}
+  .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;justify-content:center;align-items:center;padding:16px;}
+  .modal-overlay.open{display:flex;}
+  .modal{background:var(--card);border-radius:12px;padding:24px;width:100%;max-width:440px;}
+  .modal h4{color:var(--heading);margin:0 0 12px;}
+  .detail-row{font-size:13px;padding:6px 0;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;}
+  .detail-row:last-child{border-bottom:none;}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;}
+  @media(max-width:640px){ .grid3{grid-template-columns:1fr;} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
+    <button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;background:var(--accent);color:var(--logo-fg);">&larr; Back</button>
+    <button onclick="loadLots()" style="max-width:150px;">&#8635; Refresh</button>
+  </div>
+  <div id="connStatus" style="font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);">Loading...</div>
+
+  <div class="stats" id="statsBar"></div>
+
+  <div class="card-panel">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
+      <h3 style="margin:0;color:var(--heading);">LOT Occupancy Map</h3>
+      <div class="legend">
+        <div class="legend-item"><span class="legend-dot" style="background:#6ee7b7;border:2px solid #6ee7b7;"></span>Free</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#fca5a5;border:2px solid #fca5a5;"></span>Occupied</div>
+      </div>
+    </div>
+    <div class="lot-grid" id="lotGrid"></div>
+  </div>
+
+  <div class="card-panel" style="margin-top:16px;">
+    <div style="font-weight:700;font-size:14px;color:var(--heading);margin:0 0 8px;">LOT History Report</div>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Every collection that has ever occupied a LOT, grouped by LOT. Filter by date and/or a specific LOT, then export to PDF for your records.</p>
+    <div class="grid3">
+      <div><label>From Date</label><input type="date" id="lhFrom" onchange="loadLotHistory()"></div>
+      <div><label>To Date</label><input type="date" id="lhTo" onchange="loadLotHistory()"></div>
+      <div><label>LOT</label>
+        <select id="lhLot" onchange="loadLotHistory()"><option value="">All LOTs</option></select>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:10px;">
+      <button class="btn-ghost" onclick="clearLotHistoryFilters()" style="width:100%;">Clear Filters</button>
+      <button onclick="downloadLotHistoryPdf()" style="width:100%;">⬇ Download PDF</button>
+    </div>
+    <div id="lotHistoryWrap" style="margin-top:14px;overflow-x:auto;"></div>
+  </div>
+</div>
+
+<!-- Detail modal -->
+<div class="modal-overlay" id="modal">
+  <div class="modal">
+    <h4 id="modalTitle">LOT Detail</h4>
+    <div id="modalContent"></div>
+    <button class="btn-ghost" onclick="closeModal()" style="width:100%;margin-top:14px;">Close</button>
+  </div>
+</div>
+
+<script>
+let ME=null, LOTS=[], LOT_HISTORY_ROWS=[];
+
+async function init(){
+  const cs=document.getElementById("connStatus");
+  try{
+    ME=await requireAuth("../../login.html");
+    if(!ME) return;
+    await loadLots();
+    document.getElementById("lhLot").innerHTML = '<option value="">All LOTs</option>' +
+      LOTS.map(l=>`<option value="${l.lot_name}">${l.lot_name}</option>`).join("");
+    await loadLotHistory();
+    cs.style.color="var(--ok)"; cs.textContent="Live — click any LOT for details.";
+  }catch(e){ cs.style.color="var(--bad)"; cs.textContent="Error: "+e.message; }
+}
+
+async function loadLots(){
+  const { data,error }=await sb.from("pet_lots")
+    .select("*, pet_collections(form_number,agent_name,agent_code,section,status,form_date)")
+    .order("id");
+  if(error){ document.getElementById("lotGrid").innerHTML=`<p style="color:var(--bad);">Error: ${error.message}</p>`; return; }
+  LOTS=data||[];
+
+  const total=LOTS.length;
+  const free=LOTS.filter(l=>!l.is_occupied).length;
+  const occ=LOTS.filter(l=>l.is_occupied).length;
+
+  document.getElementById("statsBar").innerHTML=`
+    <div class="stat"><div class="n">${total}</div><div class="l">Total LOTs</div></div>
+    <div class="stat free-s"><div class="n">${free}</div><div class="l">Free</div></div>
+    <div class="stat occ-s"><div class="n">${occ}</div><div class="l">Occupied</div></div>
+    <div class="stat"><div class="n">${total>0?Math.round(occ/total*100):0}%</div><div class="l">Utilisation</div></div>`;
+
+  document.getElementById("lotGrid").innerHTML=LOTS.map(l=>{
+    const c=(Array.isArray(l.pet_collections)?l.pet_collections[0]:l.pet_collections)||{};
+    return `<div class="lot-card ${l.is_occupied?'occupied':'free'}" onclick="showDetail(${l.id})">
+      <div class="lot-name">${l.lot_name}</div>
+      <div class="lot-status">${l.is_occupied?'Occupied':'Free'}</div>
+      ${l.is_occupied&&c.form_number?`<div class="lot-info">${c.form_number}<br>${c.agent_name||""}</div>`:""}
+    </div>`;
+  }).join("");
+}
+
+function showDetail(id){
+  const l=LOTS.find(x=>x.id===id);
+  if(!l) return;
+  const c=(Array.isArray(l.pet_collections)?l.pet_collections[0]:l.pet_collections)||{};
+  document.getElementById("modalTitle").textContent=l.lot_name+" — "+(l.is_occupied?"Occupied":"Free");
+
+  if(l.is_occupied&&c.form_number){
+    document.getElementById("modalContent").innerHTML=`
+      <div class="detail-row"><span>Form Number</span><b>${c.form_number}</b></div>
+      <div class="detail-row"><span>Agent</span><b>${c.agent_name||"—"} (${c.agent_code||"—"})</b></div>
+      <div class="detail-row"><span>Section</span><b>${c.section||"—"}</b></div>
+      <div class="detail-row"><span>Form Date</span><b>${c.form_date||"—"}</b></div>
+      <div class="detail-row"><span>Current Status</span><b>${c.status?.replace(/_/g," ")||"—"}</b></div>
+      <p style="font-size:12px;color:var(--muted);margin-top:10px;">This LOT will be freed automatically when Stage 4 (Production) is approved.</p>`;
+  } else {
+    document.getElementById("modalContent").innerHTML=`
+      <p style="color:#065f46;font-weight:700;text-align:center;padding:16px 0;">This LOT is available for a new delivery.</p>`;
+  }
+  document.getElementById("modal").classList.add("open");
+}
+
+function closeModal(){ document.getElementById("modal").classList.remove("open"); }
+
+async function loadLotHistory(){
+  const from = document.getElementById("lhFrom").value;
+  const to = document.getElementById("lhTo").value;
+  const lot = document.getElementById("lhLot").value;
+  const wrap = document.getElementById("lotHistoryWrap");
+
+  let q = sb.from("pet_stage2_qc")
+    .select("offload_location,filled_at,pet_collections(form_number,agent_name,agent_code,section,form_date,status)")
+    .not("offload_location","is",null)
+    .order("filled_at",{ascending:false});
+  if(from) q = q.gte("filled_at", from+"T00:00:00");
+  if(to)   q = q.lte("filled_at", to+"T23:59:59");
+  if(lot)  q = q.eq("offload_location", lot);
+
+  const { data, error } = await q;
+  if(error){ wrap.innerHTML = `<p style="color:var(--bad);font-size:13px;">Error: ${error.message}</p>`; return; }
+
+  LOT_HISTORY_ROWS = data||[];
+  if(!LOT_HISTORY_ROWS.length){ wrap.innerHTML = `<p style="font-size:13px;color:var(--muted);">No history matches these filters.</p>`; return; }
+
+  const byLot = {};
+  LOT_HISTORY_ROWS.forEach(r=>{
+    const key = r.offload_location||"Unassigned";
+    if(!byLot[key]) byLot[key]=[];
+    byLot[key].push(r);
+  });
+
+  wrap.innerHTML = Object.keys(byLot).sort().map(lotName=>{
+    const rows = byLot[lotName];
+    return `<div style="margin-bottom:16px;">
+      <div style="font-weight:700;font-size:13px;color:var(--heading);margin-bottom:6px;">${lotName} (${rows.length})</div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <thead><tr style="text-align:left;border-bottom:2px solid var(--line);">
+          <th style="padding:5px;">Form #</th><th style="padding:5px;">Agent</th><th style="padding:5px;">Section</th>
+          <th style="padding:5px;">Assigned On</th><th style="padding:5px;">Status</th>
+        </tr></thead>
+        <tbody>${rows.map(r=>{
+          const c=r.pet_collections||{};
+          return `<tr style="border-bottom:1px solid var(--line);">
+            <td style="padding:5px;"><b>${c.form_number||"—"}</b></td>
+            <td style="padding:5px;">${c.agent_name||"—"} (${c.agent_code||"—"})</td>
+            <td style="padding:5px;">${c.section||"—"}</td>
+            <td style="padding:5px;">${r.filled_at?new Date(r.filled_at).toLocaleString("en-GB"):"—"}</td>
+            <td style="padding:5px;">${(c.status||"—").replace(/_/g," ")}</td>
+          </tr>`;
+        }).join("")}</tbody>
+      </table>
+    </div>`;
+  }).join("");
+}
+
+function clearLotHistoryFilters(){
+  document.getElementById("lhFrom").value="";
+  document.getElementById("lhTo").value="";
+  document.getElementById("lhLot").value="";
+  loadLotHistory();
+}
+
+function downloadLotHistoryPdf(){
+  if(!LOT_HISTORY_ROWS.length){ alert("Nothing to export — no records match the current filters."); return; }
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation:"landscape", unit:"pt", format:"a4" });
+  const navy=[31,56,100];
+
+  doc.setFillColor(navy[0],navy[1],navy[2]);
+  doc.rect(0,0,doc.internal.pageSize.getWidth(),56,"F");
+  doc.setTextColor(255,255,255); doc.setFont("helvetica","bold"); doc.setFontSize(13);
+  doc.text("RUMBU INDUSTRIES GROUP", 30, 24);
+  doc.setFont("helvetica","normal"); doc.setFontSize(10);
+  doc.text("PET Collection — LOT History Report", 30, 40);
+  doc.text("Printed "+new Date().toLocaleString("en-GB"), doc.internal.pageSize.getWidth()-30, 24, {align:"right"});
+
+  doc.setTextColor(60,60,60); doc.setFontSize(9);
+  const from=document.getElementById("lhFrom").value||"—";
+  const to=document.getElementById("lhTo").value||"—";
+  const lot=document.getElementById("lhLot").value||"All";
+  doc.text(`Date range: ${from} to ${to}   |   LOT: ${lot}   |   ${LOT_HISTORY_ROWS.length} records`, 30, 72);
+
+  const body = LOT_HISTORY_ROWS
+    .slice()
+    .sort((a,b)=> (a.offload_location||"").localeCompare(b.offload_location||""))
+    .map(r=>{
+      const c=r.pet_collections||{};
+      return [
+        r.offload_location||"—",
+        c.form_number||"—",
+        (c.agent_name||"—")+(c.agent_code?" ("+c.agent_code+")":""),
+        c.section||"—",
+        r.filled_at?new Date(r.filled_at).toLocaleString("en-GB"):"—",
+        (c.status||"—").replace(/_/g," ")
+      ];
+    });
+
+  doc.autoTable({
+    startY: 84,
+    head: [["LOT","Form #","Agent","Section","Assigned On","Status"]],
+    body,
+    styles:{fontSize:8,cellPadding:4},
+    headStyles:{fillColor:navy,textColor:255,fontStyle:"bold"},
+    alternateRowStyles:{fillColor:[240,244,249]},
+    margin:{left:30,right:30},
+    didDrawPage: function(){
+      const pageCount=doc.internal.getNumberOfPages();
+      doc.setFontSize(8); doc.setTextColor(120,120,120);
+      doc.text("CONFIDENTIAL", 30, doc.internal.pageSize.getHeight()-16);
+      doc.text("Page "+doc.internal.getCurrentPageInfo().pageNumber+" of "+pageCount,
+        doc.internal.pageSize.getWidth()-30, doc.internal.pageSize.getHeight()-16, {align:"right"});
+    }
+  });
+
+  doc.save("PET_LOT_History_"+new Date().toISOString().slice(0,10)+".pdf");
+}
+
+document.getElementById("modal").addEventListener("click",function(e){ if(e.target===this) closeModal(); });
+init();
+</script>
+</body>
+</html>

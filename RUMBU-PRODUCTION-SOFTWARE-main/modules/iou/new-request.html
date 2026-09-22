@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Loan / IOU Application — New Request</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:900px;margin:0 auto;}
+  #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);}
+  .amount-row{display:flex;gap:8px;} .amount-row input{flex:1;}
+  .ro{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;font-size:14px;color:var(--muted);min-height:40px;}
+  .g-row{display:flex;gap:8px;align-items:flex-start;margin-top:8px;}
+  .g-row .g-pick{flex:1;} .g-row .g-name{flex:1;}
+  .g-no{flex:0 0 26px;text-align:center;font-weight:bold;color:var(--muted);padding-top:12px;}
+  .rm-item{background:var(--bad);color:#fff;border:none;border-radius:6px;width:34px;height:38px;font-size:16px;font-weight:bold;cursor:pointer;padding:0;}
+  .rm-item:disabled{opacity:.4;cursor:not-allowed;}
+  .add{background:var(--ok);color:#fff;border:none;border-radius:8px;padding:9px 13px;font-weight:700;font-size:13px;cursor:pointer;}
+  .add:disabled{opacity:.5;cursor:not-allowed;}
+  .scope-note{font-size:12px;color:var(--muted);margin:4px 0 0;}
+  .dropzone{background:var(--bg);border:1px dashed var(--line-2);border-radius:var(--radius);padding:18px 12px;text-align:center;cursor:pointer;}
+  .dropzone:hover,.dropzone.drag{border-color:var(--accent);}
+  .dropzone .dz-action{color:var(--primary);font-weight:700;font-size:13px;}
+  .dropzone .dz-hint{font-size:11px;color:var(--muted);margin-top:2px;}
+  .dropzone input[type=file]{display:none;}
+  .file-list{margin-top:8px;display:flex;flex-direction:column;gap:6px;}
+  .file-chip{display:flex;align-items:center;justify-content:space-between;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:7px;padding:5px 10px;font-size:12px;}
+  .file-chip .fc-remove{color:var(--bad);cursor:pointer;font-weight:700;background:none;border:0;padding:0 4px;font-size:14px;}
+  .btn-bar{display:flex;gap:10px;margin-top:18px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<button class="no-print" onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:240px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back to Dashboard</button>
+<div id="connStatus">Loading...</div>
+
+<div class="card-panel">
+  <h3>Loan / IOU Application</h3>
+  <p class="sub">One application is for one applicant. Ensure the applicant has no outstanding IOU. Fields marked * are required to submit.</p>
+
+  <div class="form-row">
+    <div class="field"><label>Form No.</label><div class="ro">Assigned automatically on save</div></div>
+    <div class="field"><label>Date *</label><input type="date" id="fDate"></div>
+  </div>
+
+  <div class="form-row">
+    <div class="field"><label>Loan Type</label><select id="fLoanType"><option value="">Select loan type (optional)</option></select></div>
+    <div class="field"></div>
+  </div>
+
+  <div class="form-row">
+    <div class="field"><label>Branch *</label><select id="fBranch" onchange="onBranch()"><option value="">Select branch</option></select></div>
+    <div class="field"><label>Department *</label><select id="fDept" onchange="onDept()" disabled><option value="">Select branch first</option></select></div>
+    <div class="field"><label>Unit *</label><select id="fUnit" onchange="onUnit()" disabled><option value="">Select department first</option></select></div>
+  </div>
+
+  <h3 style="margin-top:20px;">Applicant</h3>
+  <p class="scope-note" id="applScopeNote">Choose a Branch, Department and Unit above; the applicant must be a staff member of the selected unit.</p>
+  <div class="form-row">
+    <div class="field">
+      <label>ID of Applicant *</label>
+      <input id="fApplicant" list="empListUnit" placeholder="Staff ID or name" autocomplete="off" oninput="onApplicant()" disabled>
+      <div class="ro" id="applicantName" style="margin-top:6px;">—</div>
+    </div>
+    <div class="field">
+      <label>IOU Amount *</label>
+      <div class="amount-row"><input type="number" step="any" min="0" id="fAmount" placeholder="0.00" disabled></div>
+    </div>
+  </div>
+
+  <h3 style="margin-top:20px;">Guarantors</h3>
+  <p class="scope-note">At least two guarantors are required. Guarantors may be any staff member. Add more if you need to.</p>
+  <div id="guarBody"></div>
+  <div style="margin-top:10px;"><button type="button" class="add" onclick="addGuarantor()">+ Add guarantor</button></div>
+
+  <div class="field" style="margin-top:20px;">
+    <label>Attach IOU Application Letter *</label>
+    <div class="dropzone" data-target="application_letter" data-multi="false">
+      <div class="dz-action">Upload file — IOU application letter</div>
+      <div class="dz-hint">Drag and drop or paste from clipboard</div>
+      <input type="file">
+    </div>
+    <div class="file-list" data-list="application_letter"></div>
+  </div>
+
+  <div class="btn-bar">
+    <button class="btn-ghost" onclick="saveDraft()">Save Draft</button>
+    <button onclick="submitRequest()">Submit</button>
+  </div>
+  <div class="status" id="formStatus"></div>
+</div>
+</div>
+
+<datalist id="empListAll"></datalist>
+<datalist id="empListUnit"></datalist>
+
+<script>
+let ME = null, MY_EMPLOYEE_REF_ID = null, FIRST_STAGE_ID = null;
+let EMP_ALL = [], EMP_BY_CODE_ALL = {}, EMP_BY_CODE_UNIT = {};
+let BRANCHES = [], DEPTS = [], UNITS = [];
+let GUAR_SEQ = 0, APPLICANT_ID = null;
+let SEL_BRANCH = "", SEL_DEPT_NAME = "", SEL_UNIT_NAME = "";
+const STAGED_FILES = { application_letter: [] };
+
+function esc(s){ return (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c])); }
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    const { data: emp, error: empErr } = await sb.from("employees").select("id").eq("linked_profile_id", ME.id).maybeSingle();
+    if(empErr) throw empErr;
+    if(!emp){ throw new Error("No employee record is linked to your account."); }
+    MY_EMPLOYEE_REF_ID = emp.id;
+
+    const { data: initRows } = await sb.from("iou_initiators").select("branch").eq("employee_ref_id", MY_EMPLOYEE_REF_ID);
+    if(!initRows || !initRows.length){ throw new Error("Your account is not authorized to raise IOU applications."); }
+    const allInitBranches = initRows.some(r => !r.branch);
+    const myInitBranches = new Set(initRows.map(r => r.branch).filter(Boolean));
+
+    document.getElementById("fDate").value = new Date().toISOString().slice(0,10);
+
+    const [{ data: types }, { data: emps }, { data: secs }, { data: depts }, { data: units }, { data: stages }] = await Promise.all([
+      sb.from("iou_loan_types").select("id,name").eq("is_active", true).order("name"),
+      sb.from("employees").select("id, employee_id, full_name, branch, department, unit").order("full_name"),
+      sb.from("app_sections").select("name").order("name"),
+      sb.from("departments").select("id, name, section").order("name"),
+      sb.from("units").select("id, name, department_id").order("name"),
+      sb.from("iou_workflow_stages").select("id, sequence_order").order("sequence_order")
+    ]);
+    const tSel = document.getElementById("fLoanType");
+    (types||[]).forEach(t => tSel.insertAdjacentHTML("beforeend", `<option value="${t.id}">${esc(t.name)}</option>`));
+
+    EMP_ALL = emps || [];
+    const dlAll = document.getElementById("empListAll");
+    EMP_ALL.forEach(e => { const code = e.employee_id || String(e.id); EMP_BY_CODE_ALL[code] = e;
+      dlAll.insertAdjacentHTML("beforeend", `<option value="${esc(code)}">${esc(e.full_name)}${e.department ? " · " + esc(e.department) : ""}</option>`); });
+
+    const allSecNames = (secs||[]).map(s => s.name);
+    BRANCHES = allInitBranches ? allSecNames : allSecNames.filter(n => myInitBranches.has(n));
+    if(!allInitBranches){ myInitBranches.forEach(b => { if(BRANCHES.indexOf(b) === -1) BRANCHES.push(b); }); }
+    DEPTS = depts || []; UNITS = units || [];
+    const bSel = document.getElementById("fBranch");
+    BRANCHES.forEach(b => bSel.insertAdjacentHTML("beforeend", `<option value="${esc(b)}">${esc(b)}</option>`));
+    if(!BRANCHES.length){ document.getElementById("applScopeNote").textContent = "You are not set as an initiator for any branch. Ask an admin to add you in IOU Setup."; }
+
+    FIRST_STAGE_ID = (stages && stages.length) ? stages[0].id : null;
+    wireDropzones();
+    addGuarantor(); addGuarantor(); // start with the two required rows
+    status.style.color = "#1d8a4e"; status.textContent = "Connected.";
+  }catch(e){ status.style.color = "#c0392b"; status.textContent = "❌ " + e.message; console.error(e); }
+}
+
+/* ---------- Branch → Department → Unit ---------- */
+function onBranch(){
+  SEL_BRANCH = document.getElementById("fBranch").value;
+  const dSel = document.getElementById("fDept"), uSel = document.getElementById("fUnit");
+  uSel.innerHTML = "<option value=''>Select department first</option>"; uSel.disabled = true;
+  SEL_DEPT_NAME = ""; SEL_UNIT_NAME = "";
+  if(!SEL_BRANCH){ dSel.innerHTML = "<option value=''>Select branch first</option>"; dSel.disabled = true; resetApplicant(); return; }
+  const rows = DEPTS.filter(d => String(d.section) === String(SEL_BRANCH));
+  dSel.innerHTML = "<option value=''>Select department</option>" + rows.map(d => `<option value="${d.id}">${esc(d.name)}</option>`).join("");
+  dSel.disabled = false; resetApplicant();
+}
+window.onBranch = onBranch;
+function onDept(){
+  const dSel = document.getElementById("fDept"), uSel = document.getElementById("fUnit");
+  const deptId = dSel.value;
+  SEL_DEPT_NAME = dSel.options[dSel.selectedIndex] ? dSel.options[dSel.selectedIndex].text : "";
+  SEL_UNIT_NAME = "";
+  if(!deptId){ uSel.innerHTML = "<option value=''>Select department first</option>"; uSel.disabled = true; resetApplicant(); return; }
+  const rows = UNITS.filter(u => String(u.department_id) === String(deptId));
+  uSel.innerHTML = "<option value=''>Select unit</option>" + rows.map(u => `<option value="${u.id}">${esc(u.name)}</option>`).join("");
+  uSel.disabled = false; resetApplicant();
+}
+window.onDept = onDept;
+function onUnit(){
+  const uSel = document.getElementById("fUnit");
+  SEL_UNIT_NAME = uSel.options[uSel.selectedIndex] ? uSel.options[uSel.selectedIndex].text : "";
+  buildUnitPool(); resetApplicant();
+}
+window.onUnit = onUnit;
+
+function buildUnitPool(){
+  EMP_BY_CODE_UNIT = {};
+  const dlUnit = document.getElementById("empListUnit"); dlUnit.innerHTML = "";
+  if(!SEL_UNIT_NAME) return;
+  const pool = EMP_ALL.filter(e =>
+    String(e.unit||"") === String(SEL_UNIT_NAME) &&
+    String(e.department||"") === String(SEL_DEPT_NAME) &&
+    String(e.branch||"") === String(SEL_BRANCH));
+  pool.forEach(e => { const code = e.employee_id || String(e.id); EMP_BY_CODE_UNIT[code] = e;
+    dlUnit.insertAdjacentHTML("beforeend", `<option value="${esc(code)}">${esc(e.full_name)}</option>`); });
+  const note = document.getElementById("applScopeNote");
+  note.textContent = pool.length
+    ? ("Applicant must be a staff of " + SEL_UNIT_NAME + " (" + SEL_BRANCH + " · " + SEL_DEPT_NAME + ") — " + pool.length + " staff available.")
+    : ("No staff recorded under " + SEL_UNIT_NAME + " (" + SEL_BRANCH + " · " + SEL_DEPT_NAME + "). Check the unit in Admin, or pick another unit.");
+}
+
+function resetApplicant(){
+  const enabled = !!SEL_UNIT_NAME;
+  const a = document.getElementById("fApplicant"), amt = document.getElementById("fAmount");
+  a.disabled = !enabled; amt.disabled = !enabled;
+  a.value = ""; amt.value = ""; APPLICANT_ID = null;
+  document.getElementById("applicantName").textContent = "—";
+}
+function onApplicant(){
+  const code = document.getElementById("fApplicant").value.trim();
+  const e = EMP_BY_CODE_UNIT[code];
+  APPLICANT_ID = e ? e : null;
+  document.getElementById("applicantName").textContent = e ? e.full_name : (code ? "Not in this unit" : "—");
+}
+window.onApplicant = onApplicant;
+
+/* ---------- Guarantors (min 2, any staff) ---------- */
+function addGuarantor(){
+  const id = ++GUAR_SEQ;
+  const row = document.createElement("div");
+  row.className = "g-row"; row.id = "guar-" + id;
+  row.innerHTML =
+    "<div class='g-no gn'></div>" +
+    "<div class='g-pick'><input list='empListAll' id='g-code-" + id + "' placeholder='Staff ID or name' autocomplete='off' oninput='onGuarantor(" + id + ")'></div>" +
+    "<div class='g-name'><div class='ro' id='g-name-" + id + "'>—</div></div>" +
+    "<button type='button' class='rm-item' onclick='removeGuarantor(" + id + ")' title='Remove'>&times;</button>";
+  document.getElementById("guarBody").appendChild(row);
+  renumberGuar();
+}
+window.addGuarantor = addGuarantor;
+function onGuarantor(id){
+  const code = document.getElementById("g-code-" + id).value.trim();
+  const e = EMP_BY_CODE_ALL[code];
+  document.getElementById("g-name-" + id).textContent = e ? e.full_name : (code ? "No staff match" : "—");
+}
+window.onGuarantor = onGuarantor;
+function removeGuarantor(id){
+  if(document.querySelectorAll("#guarBody .g-row").length <= 2){ return; } // keep at least 2
+  const row = document.getElementById("guar-" + id); if(row) row.remove();
+  renumberGuar();
+}
+window.removeGuarantor = removeGuarantor;
+function renumberGuar(){
+  const rows = document.querySelectorAll("#guarBody .g-row");
+  rows.forEach((r,i)=>{ const c=r.querySelector(".gn"); if(c) c.textContent=(i+1); const btn=r.querySelector(".rm-item"); if(btn) btn.disabled = rows.length <= 2; });
+}
+function collectGuarantors(){
+  const out = [];
+  document.querySelectorAll("#guarBody .g-row").forEach(r=>{
+    const id = r.id.replace("guar-","");
+    const code = (document.getElementById("g-code-"+id).value||"").trim();
+    if(!code) return;
+    out.push({ code, emp: EMP_BY_CODE_ALL[code] || null });
+  });
+  return out;
+}
+
+/* ---------- Files ---------- */
+function wireDropzones(){
+  document.querySelectorAll(".dropzone").forEach(zone=>{
+    const key = zone.getAttribute("data-target");
+    const input = zone.querySelector("input[type=file]");
+    zone.addEventListener("click", ()=>input.click());
+    input.addEventListener("change", e => stageFiles(key, e.target.files));
+    zone.addEventListener("dragover", e => { e.preventDefault(); zone.classList.add("drag"); });
+    zone.addEventListener("dragleave", () => zone.classList.remove("drag"));
+    zone.addEventListener("drop", e => { e.preventDefault(); zone.classList.remove("drag"); stageFiles(key, e.dataTransfer.files); });
+    zone.addEventListener("paste", e => { const items = (e.clipboardData||{}).files; if(items && items.length) stageFiles(key, items); });
+  });
+}
+function stageFiles(key, fileList){ const files = Array.from(fileList||[]); if(!files.length) return; STAGED_FILES[key] = [files[0]]; renderFileList(key); }
+function renderFileList(key){
+  const wrap = document.querySelector(`.file-list[data-list="${key}"]`); if(!wrap) return;
+  wrap.innerHTML = (STAGED_FILES[key]||[]).map((f,i)=>`<div class="file-chip"><span>${esc(f.name)}</span><button class="fc-remove" onclick="removeStagedFile('${key}',${i})">&times;</button></div>`).join("");
+}
+function removeStagedFile(key, idx){ STAGED_FILES[key].splice(idx,1); renderFileList(key); }
+window.removeStagedFile = removeStagedFile;
+
+/* ---------- Save / Submit ---------- */
+function readValues(){
+  return {
+    request_date: document.getElementById("fDate").value,
+    loan_type_id: document.getElementById("fLoanType").value || null,
+    branch: SEL_BRANCH || null, department: SEL_DEPT_NAME || null, unit: SEL_UNIT_NAME || null,
+    amount: (document.getElementById("fAmount").value||"").trim()
+  };
+}
+function validate(v, forSubmit){
+  if(!v.request_date) return "Date is required.";
+  if(!v.branch) return "Branch is required.";
+  if(!v.department) return "Department is required.";
+  if(!v.unit) return "Unit is required.";
+  if(!APPLICANT_ID) return "Select a valid applicant from the selected unit.";
+  if(v.amount === "" || isNaN(parseFloat(v.amount)) || parseFloat(v.amount) <= 0) return "Enter an IOU amount greater than 0.";
+  const g = collectGuarantors();
+  const valid = g.filter(x => x.emp);
+  if(valid.length < 2) return "At least two valid guarantors are required.";
+  const ids = valid.map(x => String(x.emp.id));
+  if(new Set(ids).size !== ids.length) return "Guarantors must be different people.";
+  if(ids.indexOf(String(APPLICANT_ID.id)) !== -1) return "A guarantor cannot be the applicant.";
+  if(forSubmit && !STAGED_FILES.application_letter.length) return "The IOU application letter is required.";
+  return null;
+}
+
+async function nextNumber(){
+  const d = new Date(); const p = "IOU-" + d.getFullYear() + String(d.getMonth()+1).padStart(2,"0") + String(d.getDate()).padStart(2,"0");
+  const { data } = await sb.from("iou_requests").select("reference_no").like("reference_no", p + "%").order("reference_no", { ascending:false }).limit(1);
+  let seq = 1; if(data && data.length){ seq = parseInt(data[0].reference_no.slice(p.length+1),10) + 1; }
+  return p + "-" + String(seq).padStart(4,"0");
+}
+
+async function createRow(v, submit){
+  const g = collectGuarantors().filter(x => x.emp);
+  const amount = parseFloat(v.amount);
+  const number = await nextNumber();
+  const { data: header, error } = await sb.from("iou_requests").insert({
+    reference_no: number, form_no: number, request_date: v.request_date,
+    loan_type_id: v.loan_type_id,
+    branch: v.branch, department: v.department, unit: v.unit,
+    guarantor_emp_id: g.length ? g[0].emp.id : null,
+    payment_value: amount, submitted_by: MY_EMPLOYEE_REF_ID,
+    status: submit ? "in_progress" : "draft",
+    current_stage_id: submit ? FIRST_STAGE_ID : null, cycle: 1
+  }).select("id").single();
+  if(error) throw error;
+
+  await sb.from("iou_applicants").insert({
+    request_id: header.id, applicant_emp_id: APPLICANT_ID.id, applicant_name: APPLICANT_ID.full_name,
+    staff_id_value: (APPLICANT_ID.employee_id||""), iou_amount: amount
+  });
+  const gRows = g.map(x => ({ request_id: header.id, guarantor_emp_id: x.emp.id, guarantor_name: x.emp.full_name, staff_id_value: (x.emp.employee_id||"") }));
+  const { error: gErr } = await sb.from("iou_guarantors").insert(gRows);
+  if(gErr) throw gErr;
+
+  for(const key of Object.keys(STAGED_FILES)){
+    for(const file of STAGED_FILES[key]){
+      const path = `iou/${header.id}/${key}/${Date.now()}_${file.name}`;
+      const { error: upErr } = await sb.storage.from("request-attachments").upload(path, file);
+      if(upErr) throw upErr;
+      const { data: pub } = sb.storage.from("request-attachments").getPublicUrl(path);
+      await sb.from("iou_request_attachments").insert({ request_id: header.id, field_key: key, file_name: file.name, file_url: pub.publicUrl, uploaded_by: MY_EMPLOYEE_REF_ID });
+    }
+  }
+  return number;
+}
+
+async function saveDraft(){
+  const status = document.getElementById("formStatus");
+  const v = readValues(); const err = validate(v, false);
+  if(err){ status.className = "status err"; status.textContent = err; return; }
+  status.className = "status"; status.textContent = "Saving...";
+  try{ const num = await createRow(v, false); status.className = "status ok"; status.textContent = "✅ Saved as draft " + num + ". Find it under My Requests to submit later."; }
+  catch(e){ status.className = "status err"; status.textContent = "❌ " + (e.message || e); }
+}
+window.saveDraft = saveDraft;
+
+async function submitRequest(){
+  const status = document.getElementById("formStatus");
+  const v = readValues(); const err = validate(v, true);
+  if(err){ status.className = "status err"; status.textContent = err; return; }
+  if(!FIRST_STAGE_ID){ status.className = "status err"; status.textContent = "No workflow stage is configured. Run the IOU schema first."; return; }
+  status.className = "status"; status.textContent = "Submitting...";
+  try{
+    const num = await createRow(v, true);
+    status.className = "status ok"; status.textContent = "✅ Submitted " + num + " — now at Accounts.";
+    document.getElementById("fBranch").value = ""; onBranch();
+    document.getElementById("guarBody").innerHTML = ""; GUAR_SEQ = 0; addGuarantor(); addGuarantor();
+    STAGED_FILES.application_letter = []; renderFileList("application_letter");
+  }catch(e){ status.className = "status err"; status.textContent = "❌ " + (e.message || e); }
+}
+window.submitRequest = submitRequest;
+
+init();
+</script>
+</body>
+</html>

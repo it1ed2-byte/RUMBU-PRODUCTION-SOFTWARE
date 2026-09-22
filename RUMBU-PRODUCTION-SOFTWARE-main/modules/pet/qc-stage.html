@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Quality Control Stage — PET Collection</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme")||"navy"); }catch(e){} })();
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) document.documentElement.setAttribute("data-theme",e.data.rumbuTheme); });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="review-modal.js"></script>
+<script src="queue-collapse.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1100px;margin:0 auto;}
+  label{font-size:12px;font-weight:700;display:block;margin:10px 0 4px;color:var(--muted);}
+  input,select,textarea{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);}
+  input[readonly]{background:var(--bg);color:var(--muted);}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;}
+  .grid4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;}
+  .sec-title{font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--heading);margin:18px 0 10px;padding-bottom:4px;border-bottom:2px solid var(--line);}
+  .queue-row{padding:10px 14px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;background:var(--card);gap:10px;flex-wrap:wrap;}
+  .queue-row .meta{font-size:12px;color:var(--muted);}
+  .badge-status{display:inline-block;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:700;}
+  .bs-submitted{background:#dbeafe;color:#1e40af;}
+  .bs-rejected{background:#fee2e2;color:#991b1b;}
+  .bs-approval{background:#fef3c7;color:#92400e;}
+  .panel{border:1px solid var(--line);border-radius:10px;padding:18px;margin-bottom:16px;}
+  .panel-title{font-weight:700;font-size:14px;color:var(--heading);margin:0 0 14px;}
+  .correction-note{background:#fef3c7;border:1px solid #d97706;border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:12px;}
+  .approve-card{border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:10px;background:var(--card);}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back</button>
+  <div id="connStatus" style="font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);">Loading...</div>
+
+  <!-- Fill queue -->
+  <div id="fillSection" style="display:none;">
+    <div class="panel">
+      <div class="panel-title" id="fillQueueTitle">Your Fill Queue — Stage 2: Quality Control</div>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Collections waiting for Quality Control data entry. Select one to fill.</p>
+      <div id="fillQueue"></div>
+    </div>
+
+    <!-- QC Form (hidden until collection selected) -->
+    <div id="qcForm" style="display:none;">
+      <div class="card-panel">
+        <h3 style="color:var(--heading);margin:0 0 4px;" id="qcFormTitle">Quality Control Data Entry</h3>
+        <div id="qcCorrectionNote" style="display:none;" class="correction-note"></div>
+        <div class="grid3" style="margin-bottom:8px;">
+          <div><label>Form Number</label><input type="text" id="qfFormNum" readonly></div>
+          <div><label>Agent Name</label><input type="text" id="qfAgent" readonly></div>
+          <div><label>Agent Code (AGENT_CODE)</label><input type="text" id="qfAgentCode" readonly></div>
+        </div>
+        <div class="grid2">
+          <div><label>Tonnage kg (RUMBU_WEIGHBRIDGE_WEIGHT)</label><input type="number" id="qfTonnage" readonly></div>
+          <div><label>Section</label><input type="text" id="qfSection" readonly></div>
+        </div>
+
+        <!-- a. Bottle Grade -->
+        <div class="sec-title">a. Bottle Grade</div>
+        <div class="grid3">
+          <div><label>Bottle Grade *</label>
+            <select id="qfGrade">
+              <option value="">--</option>
+              <option value="A">A</option>
+              <option value="B">B</option>
+              <option value="C">C</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- b. Physical form -->
+        <div class="sec-title">b. Pet Bottles Physical Form</div>
+        <div class="grid3">
+          <div><label>Avg Bale Weight (kg) *</label><input type="number" id="qfAvgWeight" step="0.001"></div>
+          <div><label>Avg Bale Volume *</label><input type="number" id="qfAvgVol" step="0.001"></div>
+          <div><label>Bale Density *</label><input type="number" id="qfDensity" step="0.001"></div>
+        </div>
+
+        <!-- c. Bottle off-loading -->
+        <div class="sec-title">c. Bottle Off-Loading</div>
+        <div class="grid2">
+          <div><label>Number of Bales *</label><input type="number" id="qfNumBales"></div>
+          <div>
+            <label>Offload Location (LOT) — OFFLOAD_LOCATION *</label>
+            <select id="qfLot" onchange="setLotName()">
+              <option value="">Select available LOT...</option>
+            </select>
+          </div>
+        </div>
+        <input type="hidden" id="qfLotId">
+        <input type="hidden" id="qfLotName">
+
+        <div style="margin-top:20px;display:flex;gap:10px;">
+          <button onclick="submitQC()">Submit for Approval</button>
+          <button class="btn-ghost" onclick="closeQCForm()">Cancel</button>
+        </div>
+        <div id="qcFormStatus" style="margin-top:10px;font-size:13px;font-weight:700;min-height:16px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Approval queue -->
+  <div id="approvalSection" style="display:none;">
+    <div class="panel" style="margin-top:16px;">
+      <div class="panel-title" id="approvalQueueTitle">Your Approval Queue — Stage 2: Quality Control</div>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Review and approve or reject the following Quality Control submissions. ALL assigned approvers must approve.</p>
+      <div id="approvalQueue"></div>
+    </div>
+  </div>
+
+  <div id="noQueue" style="display:none;text-align:center;color:var(--muted);padding:40px 0;font-size:14px;">
+    No collections assigned to you at this stage.
+  </div>
+</div>
+
+<script>
+let ME=null, MY_SECTIONS=[], ALL_SECTIONS=[], IS_FILLER=false, IS_APPROVER=false, CURRENT_COLLECTION=null, FREE_LOTS=[], QC_QUEUE_DATA=[];
+const WM = 660;
+
+const NEXT_STATUS   = { stage2:'stage3p1_filling' };
+const REJECT_STATUS = { stage2:'rejected_to_stage1' };
+
+async function init(){
+  const cs = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+
+    const mySections = (ME.sectionNames&&ME.sectionNames.length) ? ME.sectionNames : [];
+    const { data: secData } = await sb.from("app_sections").select("name").order("name");
+    ALL_SECTIONS = (secData||[]).map(s=>s.name);
+
+    // Check assignments
+    const [{ data: fillerRows }, { data: approverRows }] = await Promise.all([
+      sb.from("pet_stage_fillers").select("section").eq("stage","stage2").eq("profile_id",ME.id),
+      sb.from("pet_stage_approvers").select("section").eq("stage","stage2").eq("profile_id",ME.id)
+    ]);
+    IS_FILLER   = (fillerRows&&fillerRows.length>0) || ME.role==="super_admin";
+    IS_APPROVER = (approverRows&&approverRows.length>0) || ME.role==="super_admin";
+
+    const fillerSections   = fillerRows   ? fillerRows.map(r=>r.section)   : [];
+    const approverSections = approverRows ? approverRows.map(r=>r.section) : [];
+
+    await Promise.all([
+      IS_FILLER   ? loadFillQueue(fillerSections)   : null,
+      IS_APPROVER ? loadApprovalQueue(approverSections) : null
+    ]);
+
+    if(!IS_FILLER && !IS_APPROVER){
+      document.getElementById("noQueue").style.display="block";
+    }
+
+    cs.style.color="var(--ok)"; cs.textContent="Connected.";
+  }catch(e){
+    cs.style.color="var(--bad)"; cs.textContent="Error: "+e.message;
+  }
+}
+
+async function loadFillQueue(sections){
+  const { data } = await sb.from("pet_collections")
+    .select("id,form_number,agent_name,agent_code,section,status,updated_at")
+    .in("status",["submitted","rejected_to_stage2"])
+    .in("section", sections.length ? sections : ALL_SECTIONS)
+    .order("updated_at",{ascending:false});
+
+  const el = document.getElementById("fillSection");
+  const queue = document.getElementById("fillQueue");
+  el.style.display = "block";
+
+  if(!data||!data.length){
+    queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No collections waiting for Quality Control entry.</p>`;
+    setupCollapsibleQueue("fillQueueTitle", "fillQueue", 0, "Your Fill Queue — Stage 2: Quality Control");
+    return;
+  }
+  queue.innerHTML = data.map(c=>`<div class="queue-row">
+    <div>
+      <b style="font-size:13px;">${c.form_number}</b>
+      <span class="meta" style="margin-left:8px;">${c.agent_name} (${c.agent_code}) — ${c.section}</span>
+      <span class="badge-status bs-${c.status==='submitted'?'submitted':'rejected'}" style="margin-left:8px;">
+        ${c.status==='submitted'?'New':'Returned for correction'}
+      </span>
+    </div>
+    <button onclick="openQCForm(${c.id})">Fill Quality Control Data</button>
+  </div>`).join("");
+  setupCollapsibleQueue("fillQueueTitle", "fillQueue", data.length, "Your Fill Queue — Stage 2: Quality Control");
+}
+
+async function loadApprovalQueue(sections){
+  const { data } = await sb.from("pet_collections")
+    .select("id,form_number,agent_name,agent_code,section,status,cycle,updated_at,agent_waybill_weight,rumbu_weighbridge_weight,agent_waybill_attachment,agent_invoice_attachment,rumbu_weighbridge_attachment,pet_stage2_qc(*)")
+    .eq("status","stage2_approval")
+    .in("section", sections.length ? sections : ALL_SECTIONS)
+    .order("updated_at",{ascending:false});
+
+  const el = document.getElementById("approvalSection");
+  el.style.display = "block";
+
+  if(!data||!data.length){
+    document.getElementById("approvalQueue").innerHTML=`<p style="font-size:13px;color:var(--muted);">No submissions awaiting your approval.</p>`;
+    setupCollapsibleQueue("approvalQueueTitle", "approvalQueue", 0, "Your Approval Queue — Stage 2: Quality Control");
+    return;
+  }
+
+  // Check which ones this user has already decided on, for THIS cycle specifically —
+  // a decision from an earlier cycle (before a reject/correct loop) must not hide the
+  // buttons once the form has been corrected and resubmitted as a new cycle.
+  const { data: myDecisions } = await sb.from("pet_approvals")
+    .select("collection_id,decision,cycle").eq("approver_profile_id",ME.id).eq("stage","stage2");
+  const decided = new Set((myDecisions||[]).map(d=>d.collection_id+":"+d.cycle));
+
+  QC_QUEUE_DATA = data;
+  document.getElementById("approvalQueue").innerHTML = data.map(c=>{
+    const qc = c.pet_stage2_qc?.[0]||c.pet_stage2_qc||{};
+    const hasDec = decided.has(c.id+":"+c.cycle);
+    return `<div class="approve-card">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
+        <div>
+          <b>${c.form_number}</b> — ${c.agent_name} (${c.section})
+          <div style="font-size:12px;color:var(--muted);margin-top:4px;">
+            LOT: ${qc.offload_location||"—"} | Bales: ${qc.number_of_bales||"—"} | Grade: ${qc.bottle_grade||"—"}
+          </div>
+        </div>
+        ${hasDec ? `<span class="badge-status bs-approval">Decision submitted — awaiting others</span>` : ""}
+      </div>
+      ${!hasDec ? `
+      <div style="margin-top:10px;">
+        <button onclick="openQCReview(${c.id})">Review to Confirm or Reject</button>
+      </div>` : ""}
+    </div>`;
+  }).join("");
+  setupCollapsibleQueue("approvalQueueTitle", "approvalQueue", data.length, "Your Approval Queue — Stage 2: Quality Control");
+}
+
+function openQCReview(collectionId){
+  const c = QC_QUEUE_DATA.find(x=>x.id===collectionId);
+  if(!c) return;
+  const qc = c.pet_stage2_qc?.[0]||c.pet_stage2_qc||{};
+  showReviewModal({
+    title: "Quality Control — Review Submission",
+    subtitle: c.form_number + " — " + c.agent_name + " (" + c.agent_code + ") — " + c.section,
+    mode: "decide",
+    sections: [
+      { heading: "Collection Documents", rows: [
+        ["Agent Waybill Weight", (c.agent_waybill_weight||0) + " kg"],
+        ["Rumbu Weighbridge Weight", (c.rumbu_weighbridge_weight||0) + " kg"],
+        ["Waybill Attachment", reviewModalFileLink(c.agent_waybill_attachment, "View waybill")],
+        ["Invoice Attachment", reviewModalFileLink(c.agent_invoice_attachment, "View invoice")],
+        ["Weighbridge Attachment", reviewModalFileLink(c.rumbu_weighbridge_attachment, "View weighbridge slip")],
+      ]},
+      { heading: "Bottle Grade", rows: [
+        ["Bottle Grade", qc.bottle_grade],
+      ]},
+      { heading: "Physical Form", rows: [
+        ["Avg Bale Weight (kg)", qc.avg_bale_weight_kg],
+        ["Avg Bale Volume", qc.avg_bale_volume],
+        ["Bale Density", qc.bale_density],
+      ]},
+      { heading: "Off-Loading", rows: [
+        ["Number of Bales", qc.number_of_bales],
+        ["Offload LOT", qc.offload_location],
+      ]}
+    ],
+    onApprove: ()=>decide(collectionId,'stage2','approved',null),
+    onReject: (note)=>decide(collectionId,'stage2','rejected',note)
+  });
+}
+
+async function openQCForm(id){
+  const { data: c } = await sb.from("pet_collections")
+    .select("*, pet_stage2_qc(*)").eq("id",id).single();
+  if(!c) return;
+  CURRENT_COLLECTION = c;
+
+  // Load existing QC data if re-filling
+  const qc = (Array.isArray(c.pet_stage2_qc) ? c.pet_stage2_qc[0] : c.pet_stage2_qc) || {};
+
+  document.getElementById("qfFormNum").value   = c.form_number;
+  document.getElementById("qfAgent").value     = c.agent_name;
+  document.getElementById("qfAgentCode").value = c.agent_code;
+  document.getElementById("qfTonnage").value   = c.rumbu_weighbridge_weight||"";
+  document.getElementById("qfSection").value   = c.section;
+
+  // Pre-fill if returning
+  if(qc.id){
+    setField("qfGrade",qc.bottle_grade);
+    setField("qfAvgWeight",qc.avg_bale_weight_kg);
+    setField("qfAvgVol",qc.avg_bale_volume);
+    setField("qfDensity",qc.bale_density);
+    setField("qfNumBales",qc.number_of_bales);
+    if(qc.lot_id){ document.getElementById("qfLotId").value=qc.lot_id; }
+  }
+
+  // Rejection note
+  if(c.status==="rejected_to_stage2"){
+    const { data: log } = await sb.from("pet_activity_log")
+      .select("note").eq("collection_id",id).eq("action","rejected")
+      .order("created_at",{ascending:false}).limit(1);
+    if(log&&log.length&&log[0].note){
+      const el = document.getElementById("qcCorrectionNote");
+      el.style.display="block";
+      el.innerHTML=`<b>Rejection reason:</b> ${log[0].note}`;
+    }
+  } else {
+    document.getElementById("qcCorrectionNote").style.display="none";
+  }
+
+  // Load free LOTs
+  const { data: lots } = await sb.from("pet_lots")
+    .select("id,lot_name").eq("is_occupied",false).order("lot_name");
+  FREE_LOTS = lots||[];
+  // If re-filling and had a lot, add it back
+  if(qc.lot_id){
+    const existing = FREE_LOTS.find(l=>l.id===qc.lot_id);
+    if(!existing && qc.offload_location){
+      FREE_LOTS.unshift({ id: qc.lot_id, lot_name: qc.offload_location+" (current)" });
+    }
+  }
+  const lotSel = document.getElementById("qfLot");
+  lotSel.innerHTML = '<option value="">Select available LOT...</option>' +
+    FREE_LOTS.map(l=>`<option value="${l.id}">${l.lot_name}</option>`).join("");
+  if(qc.lot_id) lotSel.value = qc.lot_id;
+
+  document.getElementById("qcFormTitle").textContent =
+    "Quality Control Data Entry — " + c.form_number + (c.status==="rejected_to_stage2"?" (CORRECTION)":"");
+  document.getElementById("qcFormStatus").textContent = "";
+  document.getElementById("qcForm").style.display="block";
+  document.getElementById("qcForm").scrollIntoView({behavior:"smooth"});
+}
+
+function setField(id, val){
+  const el = document.getElementById(id);
+  if(el && val!=null) el.value = val;
+}
+
+function setLotName(){
+  const sel = document.getElementById("qfLot");
+  const opt = sel.options[sel.selectedIndex];
+  document.getElementById("qfLotId").value = sel.value;
+  document.getElementById("qfLotName").value = opt ? opt.text.replace(" (current)","") : "";
+}
+
+async function submitQC(){
+  const st = document.getElementById("qcFormStatus");
+  const lotId = document.getElementById("qfLotId").value;
+  const lotName = document.getElementById("qfLot").options[document.getElementById("qfLot").selectedIndex]?.text||"";
+
+  // Every remaining field on this form is mandatory.
+  const requiredFields = [
+    ["qfGrade","Bottle Grade"],
+    ["qfAvgWeight","Avg Bale Weight (kg)"],
+    ["qfAvgVol","Avg Bale Volume"],
+    ["qfDensity","Bale Density"],
+    ["qfNumBales","Number of Bales"]
+  ];
+  for(const [id,label] of requiredFields){
+    if(document.getElementById(id).value===""){ st.style.color="var(--bad)"; st.textContent=`"${label}" is required.`; return; }
+  }
+  if(!lotId){ st.style.color="var(--bad)"; st.textContent="Select an offload LOT."; return; }
+
+  st.textContent = "";
+  showReviewModal({
+    title: "Review Before Submitting",
+    subtitle: (CURRENT_COLLECTION?.form_number||"") + " — check everything below before it goes for approval",
+    mode: "submit",
+    sections: [
+      { heading: "Bottle Grade", rows: [
+        ["Bottle Grade", document.getElementById("qfGrade").value],
+      ]},
+      { heading: "Physical Form", rows: [
+        ["Avg Bale Weight (kg)", document.getElementById("qfAvgWeight").value],
+        ["Avg Bale Volume", document.getElementById("qfAvgVol").value],
+        ["Bale Density", document.getElementById("qfDensity").value],
+      ]},
+      { heading: "Off-Loading", rows: [
+        ["Number of Bales", document.getElementById("qfNumBales").value],
+        ["Offload LOT", lotName.replace(" (current)","")],
+      ]}
+    ],
+    onConfirm: proceedWithQCSubmit
+  });
+}
+
+async function proceedWithQCSubmit(){
+  const st = document.getElementById("qcFormStatus");
+  const lotId = document.getElementById("qfLotId").value;
+  const lotName = document.getElementById("qfLot").options[document.getElementById("qfLot").selectedIndex]?.text||"";
+
+  st.style.color="var(--muted)"; st.textContent="Saving...";
+  try{
+    const rumbuW = parseFloat(document.getElementById("qfTonnage").value)||0;
+    const qcPayload = {
+      collection_id:       CURRENT_COLLECTION.id,
+      tonnage_kg:          rumbuW,
+      agent_code_ref:      CURRENT_COLLECTION.agent_code,
+      bottle_grade:        document.getElementById("qfGrade").value||null,
+      avg_bale_weight_kg:  parseFloat(document.getElementById("qfAvgWeight").value)||null,
+      avg_bale_volume:     parseFloat(document.getElementById("qfAvgVol").value)||null,
+      bale_density:        parseFloat(document.getElementById("qfDensity").value)||null,
+      number_of_bales:     parseInt(document.getElementById("qfNumBales").value)||null,
+      lot_id:              parseInt(lotId),
+      offload_location:    lotName.replace(" (current)",""),
+      filled_by_profile_id: ME.id,
+      filled_at:           new Date().toISOString()
+    };
+
+    // Upsert QC data
+    const { data: existing } = await sb.from("pet_stage2_qc").select("id").eq("collection_id",CURRENT_COLLECTION.id).maybeSingle();
+    if(existing){
+      const { error: qcErr } = await sb.from("pet_stage2_qc").update(qcPayload).eq("collection_id",CURRENT_COLLECTION.id);
+      if(qcErr) throw new Error("Could not save QC data: "+qcErr.message);
+    } else {
+      const { error: qcErr } = await sb.from("pet_stage2_qc").insert(qcPayload);
+      if(qcErr) throw new Error("Could not save QC data: "+qcErr.message);
+    }
+
+    // Advance status
+    const oldStatus = CURRENT_COLLECTION.status;
+    const { error: stErr } = await sb.from("pet_collections").update({ status:"stage2_approval", updated_at: new Date().toISOString() }).eq("id",CURRENT_COLLECTION.id);
+    if(stErr) throw new Error("QC data was saved, but could not advance status: "+stErr.message);
+
+    const { error: logErr } = await sb.from("pet_activity_log").insert({
+      collection_id:    CURRENT_COLLECTION.id,
+      action:           "stage2_filled",
+      stage:            "stage2",
+      actor_profile_id: ME.id,
+      actor_username:   ME.username,
+      old_status:       oldStatus,
+      new_status:       "stage2_approval"
+    });
+    if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
+
+    st.style.color="var(--ok)"; st.textContent="Submitted for approval.";
+    setTimeout(()=>{ closeQCForm(); init(); }, 1200);
+  }catch(e){
+    st.style.color="var(--bad)"; st.textContent="Error: "+e.message;
+  }
+}
+
+function closeQCForm(){
+  document.getElementById("qcForm").style.display="none";
+  CURRENT_COLLECTION=null;
+}
+
+async function decide(collectionId, stage, decision, note){
+  if(decision==="rejected" && !note){ alert("Rejection reason is required."); return; }
+  try{
+    const { data: c, error: cErr } = await sb.from("pet_collections").select("section,cycle,status").eq("id",collectionId).single();
+    if(cErr) throw new Error("Could not load collection: "+cErr.message);
+
+    // Record this approver's decision
+    const { error: apprErr } = await sb.from("pet_approvals").insert({
+      collection_id:       collectionId,
+      stage:               stage,
+      cycle:               c.cycle,
+      approver_profile_id: ME.id,
+      approver_username:   ME.username,
+      decision:            decision,
+      correction_note:     note||null,
+      decided_at:          new Date().toISOString()
+    });
+    if(apprErr) throw new Error("Could not record your decision: "+apprErr.message);
+
+    if(decision==="rejected"){
+      const newStatus = REJECT_STATUS[stage];
+      const newCycle  = (c.cycle||1) + 1;
+      const { error: updErr } = await sb.from("pet_collections").update({ status: newStatus, cycle: newCycle, updated_at: new Date().toISOString() }).eq("id",collectionId);
+      if(updErr) throw new Error("Could not update status: "+updErr.message);
+      const { error: logErr } = await sb.from("pet_activity_log").insert({
+        collection_id: collectionId, action:"rejected", stage,
+        actor_profile_id: ME.id, actor_username: ME.username,
+        old_status: c.status, new_status: newStatus, note
+      });
+      if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
+    } else {
+      // Check if all approvers have now approved.
+      // A super_admin's own decision is always sufficient on its own — lets you
+      // solo-test the whole pipeline end-to-end before real approvers are assigned.
+      // Non-super_admin approvers are still bound by the normal "all must approve" rule.
+      const allApproved = (ME.role==="super_admin") ? true : await checkAllApproved(collectionId, stage, c.cycle, c.section);
+      if(allApproved){
+        const newStatus = NEXT_STATUS[stage];
+        const { error: updErr } = await sb.from("pet_collections").update({ status: newStatus, updated_at: new Date().toISOString() }).eq("id",collectionId);
+        if(updErr) throw new Error("Could not advance status: "+updErr.message);
+        // Stage 2 approval → occupy the LOT
+        const { data: qc, error: qcSelErr } = await sb.from("pet_stage2_qc").select("lot_id").eq("collection_id",collectionId).maybeSingle();
+        if(qcSelErr) throw new Error("Status advanced, but could not read QC data to occupy LOT: "+qcSelErr.message);
+        if(qc?.lot_id){
+          // Release any OTHER LOT still tagged to this collection from an earlier
+          // approval cycle (e.g. a correction that switched to a different LOT) —
+          // prevents LOTs being permanently stuck "occupied" after reject/correct loops.
+          const { error: relErr } = await sb.from("pet_lots")
+            .update({ is_occupied:false, current_collection_id:null })
+            .eq("current_collection_id", collectionId)
+            .neq("id", qc.lot_id);
+          if(relErr) console.warn("Could not release a stale LOT link (non-fatal):", relErr.message);
+
+          const { error: lotErr } = await sb.from("pet_lots").update({ is_occupied:true, current_collection_id:collectionId }).eq("id",qc.lot_id);
+          if(lotErr) throw new Error("Status advanced, but could not mark LOT as occupied: "+lotErr.message);
+        } else {
+          console.warn("No LOT recorded on this collection's QC data — LOT occupancy was not set.");
+        }
+        const { error: logErr } = await sb.from("pet_activity_log").insert({
+          collection_id: collectionId, action:"approved_all", stage,
+          actor_profile_id: ME.id, actor_username: ME.username,
+          old_status: c.status, new_status: newStatus
+        });
+        if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
+      } else {
+        const { error: logErr } = await sb.from("pet_activity_log").insert({
+          collection_id: collectionId, action:"approved_partial", stage,
+          actor_profile_id: ME.id, actor_username: ME.username,
+          old_status: c.status, new_status: c.status,
+          note: "Awaiting remaining approvers"
+        });
+        if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
+      }
+    }
+    await init();
+  }catch(e){ alert("Error: "+e.message); }
+}
+
+async function checkAllApproved(collectionId, stage, cycle, section){
+  const [{ data: approvers }, { data: approvals }] = await Promise.all([
+    sb.from("pet_stage_approvers").select("profile_id").eq("section",section).eq("stage",stage),
+    sb.from("pet_approvals").select("approver_profile_id").eq("collection_id",collectionId).eq("stage",stage).eq("cycle",cycle).eq("decision","approved")
+  ]);
+  if(!approvers||!approvers.length) return true; // no approvers configured = auto-approve
+  const assignedIds  = new Set(approvers.map(a=>a.profile_id));
+  const approvedIds  = new Set((approvals||[]).map(a=>a.approver_profile_id));
+  return [...assignedIds].every(id=>approvedIds.has(id));
+}
+
+init();
+</script>
+</body>
+</html>

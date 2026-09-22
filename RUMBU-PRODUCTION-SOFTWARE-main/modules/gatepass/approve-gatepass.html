@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Gatepass — Approve</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<script src="../../auth.js"></script>
+<style>
+  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;--amber:#d97706;}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;color:var(--text);}
+  .wrap{max-width:1050px;margin:0 auto;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;}
+  .card h3{color:var(--navy);margin:0 0 4px;font-size:16px;}
+  .card .sub{color:var(--blue);font-size:12px;margin:0 0 14px;}
+  label{display:block;font-size:12px;font-weight:bold;color:var(--text);margin:10px 0 4px;}
+  select,input{width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;background:var(--card);color:var(--text);}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;}
+  .row > div{flex:1;min-width:150px;}
+  button{padding:10px 14px;border:none;border-radius:8px;font-weight:bold;font-size:13px;cursor:pointer;background:var(--blue);color:#fff;}
+  button:hover{background:var(--blue-dark);}
+  button.mini{padding:6px 10px;font-size:12px;}
+  button.grey{background:#6b7280;} button.grey:hover{background:#4b5563;}
+  button.green{background:var(--green);} button.green:hover{background:#166a2c;}
+  button.ok{background:var(--green);} button.ok:hover{background:#166a2c;}
+  button.rej{background:var(--red);} button.rej:hover{background:#96242e;}
+  .status{margin-top:10px;font-weight:bold;font-size:13px;min-height:16px;}
+  .status.ok{color:var(--green);} .status.err{color:var(--red);}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;color:var(--muted);}
+  table.list{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px;}
+  table.list th,table.list td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top;}
+  table.list thead th{background:var(--navy);color:#fff;font-size:12px;}
+  table.list tbody tr{cursor:pointer;}
+  table.list tbody tr:nth-child(even){background:var(--bg);}
+  table.list tbody tr:hover td{background:rgba(46,117,182,.10);}
+  .tag{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:bold;color:#fff;}
+  .tag.pending{background:var(--amber);}
+  .tag.approved{background:var(--green);}
+  .tag.rejected{background:var(--red);}
+  .detail-actions{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;}
+  .noaccess{color:var(--red);font-weight:bold;text-align:center;padding:30px;}
+  .gp-paper{background:#fff;color:#000;max-width:720px;margin:0 auto;padding:36px 40px;border:1px solid #ccc;font-family:"Times New Roman",serif;}
+  .gp-paper h2{text-align:center;font-size:22px;margin:0 0 4px;}
+  .gp-paper h3{text-align:center;font-size:15px;letter-spacing:2px;margin:0 0 22px;}
+  .gp-paper table{width:100%;border-collapse:collapse;}
+  .gp-paper td{padding:8px 10px;border:1px solid #000;vertical-align:top;font-size:13px;}
+  .gp-paper td.k{width:32%;font-weight:bold;background:#f0f0f0;}
+  .gp-paper .items-tbl td.k2{background:#f0f0f0;font-weight:bold;text-align:center;}
+  .gp-paper .stamp{margin-top:18px;border:2px solid #1d8a4e;border-radius:6px;padding:12px 14px;color:#0f5c33;font-size:13px;}
+  .gp-paper .stamp.rej{border-color:#c0392b;color:#8f2531;}
+  .gp-paper .stamp.pend{border-color:#d97706;color:#9a5a08;}
+  .gp-paper .stamp b{font-size:14px;letter-spacing:.5px;}
+  .gp-paper .sign{margin-top:60px;display:flex;justify-content:space-between;}
+  .gp-paper .sign div{width:45%;border-top:1px solid #000;padding-top:6px;text-align:center;font-size:12px;}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<div id="connStatus">Loading...</div>
+
+<div id="appArea" style="display:none;">
+  <div id="listView">
+    <div class="card">
+      <h3>Approve Gatepass</h3>
+      <p class="sub" id="scopeNote"></p>
+      <div class="row">
+        <div>
+          <label>Status</label>
+          <select id="statusFilter" onchange="applyFilters()">
+            <option value="pending">Pending (awaiting decision)</option>
+            <option value="approved">Approved</option>
+            <option value="rejected">Rejected</option>
+            <option value="">All</option>
+          </select>
+        </div>
+        <div><label>Search (part / person / number)</label><input type="text" id="search" placeholder="Type to filter" oninput="applyFilters()"></div>
+        <div style="flex:0 0 auto;"><button onclick="loadRecords()">Refresh</button></div>
+      </div>
+      <div class="status" id="status"></div>
+    </div>
+    <div class="card">
+      <p class="sub" style="margin:0 0 4px;">Click a gatepass to open it, review the items, then approve or reject.</p>
+      <div id="tableWrap"></div>
+    </div>
+  </div>
+
+  <div id="detailView" style="display:none;">
+    <button class="grey" style="margin-bottom:12px;" onclick="backToList()">&larr; Back to list</button>
+    <div class="card">
+      <div class="detail-actions" id="detailActions"></div>
+      <div id="paperWrap"></div>
+      <div class="status" id="decideStatus"></div>
+    </div>
+  </div>
+</div>
+
+<div id="noAccess" class="noaccess" style="display:none;">
+  You do not have permission to approve gatepasses. Only Admins, Super Admins, or assigned type approvers can.
+</div>
+</div>
+
+<script>
+let ME = null;
+let ALL = [];
+let CURRENT = null, CURRENT_ITEMS = [];
+let MY_APPROVABLE_TYPE_IDS = [];
+const COMPANY = "Rumbu Industries Limited";
+
+function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+
+async function logActivity(actionType, description){
+  try{
+    await sb.from("activity_log").insert({
+      actor_id: ME.id, actor_username: ME.username, actor_role: ME.role,
+      section_id: ME.sectionId, action_type: actionType, description: description
+    });
+  }catch(e){ console.warn("Activity log write failed (non-fatal):", e); }
+}
+
+async function loadMyApproverAssignments(){
+  try{
+    const { data: emp } = await sb.from("employees").select("id").eq("linked_profile_id", ME.id).maybeSingle();
+    if(!emp) return;
+    const { data: links } = await sb.from("hr_gatepass_type_approvers").select("gatepass_type_id").eq("employee_id", emp.id);
+    MY_APPROVABLE_TYPE_IDS = (links || []).map(l => l.gatepass_type_id);
+  }catch(e){ console.warn("Could not load approver assignments:", e.message); }
+}
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    await loadMyApproverAssignments();
+    const isAdminOrAbove = (ME.role === "super_admin" || ME.role === "admin");
+    if(!isAdminOrAbove && !MY_APPROVABLE_TYPE_IDS.length){
+      status.style.color = "#1d8a4e"; status.textContent = "Connected.";
+      document.getElementById("noAccess").style.display = "block"; return;
+    }
+    document.getElementById("appArea").style.display = "block";
+    document.getElementById("scopeNote").textContent = ME.role === "super_admin"
+      ? "You can approve gatepasses from every Branch."
+      : (ME.role === "admin"
+          ? "You can approve gatepasses for your own Branch" + (ME.sectionName ? " (" + ME.sectionName + ")" : "") + (MY_APPROVABLE_TYPE_IDS.length ? ", plus any type you are assigned to approve." : ".")
+          : "You can approve gatepasses of the type(s) you are assigned as an approver for.");
+    status.style.color = "#1d8a4e"; status.textContent = "Connected.";
+    await loadRecords();
+  }catch(e){ status.style.color = "#c0392b"; status.textContent = "❌ " + e.message; console.error(e); }
+}
+
+async function loadRecords(){
+  const status = document.getElementById("status");
+  status.className = "status"; status.textContent = "Loading...";
+  try{
+    let q = sb.from("hr_gatepass").select("*").order("created_at", { ascending: false });
+    if(ME.role !== "super_admin"){
+      const branchList = (ME.sectionNames && ME.sectionNames.length) ? ME.sectionNames : [];
+      const isAdmin = (ME.role === "admin") && branchList.length;
+      const hasTypes = MY_APPROVABLE_TYPE_IDS.length > 0;
+      if(isAdmin && hasTypes){
+        const branchCsv = branchList.map(b => `"${b}"`).join(",");
+        const typeCsv = MY_APPROVABLE_TYPE_IDS.join(",");
+        q = q.or(`branch.in.(${branchCsv}),gatepass_type_id.in.(${typeCsv})`);
+      } else if(isAdmin){ q = q.in("branch", branchList); }
+      else if(hasTypes){ q = q.in("gatepass_type_id", MY_APPROVABLE_TYPE_IDS); }
+      else { q = q.eq("branch", "___none___"); }
+    }
+    const { data, error } = await q;
+    if(error) throw error;
+    ALL = data || [];
+    status.className = "status ok"; status.textContent = ALL.length + " gatepass(es) loaded.";
+    applyFilters();
+  }catch(e){ status.className = "status err"; status.textContent = "❌ " + e.message; }
+}
+window.loadRecords = loadRecords;
+
+function applyFilters(){
+  const st = document.getElementById("statusFilter").value;
+  const search = document.getElementById("search").value.trim().toLowerCase();
+  let rows = ALL.slice();
+  if(st) rows = rows.filter(r => (r.status || "pending") === st);
+  if(search){
+    rows = rows.filter(r =>
+      (r.part_name || "").toLowerCase().includes(search) ||
+      (r.person_name || "").toLowerCase().includes(search) ||
+      (r.gatepass_number || "").toLowerCase().includes(search));
+  }
+  render(rows);
+}
+window.applyFilters = applyFilters;
+
+function canApprove(r){
+  if(ME.role === "super_admin") return true;
+  if(ME.role === "admin" && (ME.sectionNames||[]).indexOf(r.branch) !== -1) return true;
+  if(r.gatepass_type_id != null && MY_APPROVABLE_TYPE_IDS.indexOf(r.gatepass_type_id) !== -1) return true;
+  return false;
+}
+
+function itemsLabel(r){
+  if(r.item_count && r.item_count > 1) return r.item_count + " items";
+  return r.part_name || "—";
+}
+
+function render(rows){
+  const wrap = document.getElementById("tableWrap");
+  if(!rows.length){ wrap.innerHTML = "<p>No gatepasses match.</p>"; return; }
+  let html = "<table class='list'><thead><tr>" +
+    "<th>Number</th><th>Date</th><th>Type</th><th>Items</th><th>Person</th><th>Branch</th><th>Status</th><th></th>" +
+    "</tr></thead><tbody>";
+  rows.forEach(r=>{
+    const st = r.status || "pending";
+    const tail = st === "pending"
+      ? (canApprove(r) ? "<button class='mini green' onclick=\"event.stopPropagation(); openDetail(" + r.id + ")\">Review</button>"
+                       : "<span style='font-size:11px;color:#6b7280;'>Not yours to approve</span>")
+      : "<button class='mini grey' onclick=\"event.stopPropagation(); openDetail(" + r.id + ")\">View</button>";
+    html += "<tr onclick=\"openDetail(" + r.id + ")\">" +
+      "<td>" + esc(r.gatepass_number || "") + "</td>" +
+      "<td>" + esc(r.pass_date || "") + "</td>" +
+      "<td>" + esc(r.gatepass_type_name || "—") + "</td>" +
+      "<td>" + esc(itemsLabel(r)) + "</td>" +
+      "<td>" + esc(r.person_name || "") + "</td>" +
+      "<td>" + esc(r.branch || "") + "</td>" +
+      "<td><span class='tag " + st + "'>" + st.toUpperCase() + "</span></td>" +
+      "<td>" + tail + "</td>" +
+    "</tr>";
+  });
+  html += "</tbody></table>";
+  wrap.innerHTML = html;
+}
+
+async function fetchItems(gatepassId){
+  const { data, error } = await sb.from("hr_gatepass_items").select("item_name, quantity, unit").eq("gatepass_id", gatepassId).order("id");
+  if(error){ console.warn("Could not load items:", error.message); return []; }
+  return data || [];
+}
+
+function row(k, v){ return "<tr><td class='k'>" + esc(k) + "</td><td>" + esc(v == null ? "" : v) + "</td></tr>"; }
+
+function paperHTML(r, items){
+  const st = (r.status || "pending").toUpperCase();
+  const list = (items && items.length) ? items : [{ item_name: r.part_name, quantity: r.quantity, unit: null }];
+  let itemsRows = "";
+  list.forEach((it, i) => {
+    itemsRows += "<tr><td class='k2'>" + (i+1) + "</td><td>" + esc(it.item_name || "") + "</td><td>" +
+      (it.quantity != null ? esc(it.quantity) : "") + "</td><td>" + esc(it.unit || "") + "</td></tr>";
+  });
+  let stamp = "";
+  if(st === "APPROVED"){
+    stamp = "<div class='stamp'><b>✔ APPROVED ONLINE</b><br>This gate pass was approved on the system by <b>" +
+      esc(r.approved_by || "—") + "</b>" + (r.approved_at ? " on " + esc(new Date(r.approved_at).toLocaleString()) : "") +
+      ". It is valid without a physical signature.</div>";
+  } else if(st === "REJECTED"){
+    stamp = "<div class='stamp rej'><b>✕ REJECTED</b><br>Rejected by <b>" + esc(r.approved_by || "—") + "</b>" +
+      (r.approved_at ? " on " + esc(new Date(r.approved_at).toLocaleString()) : "") +
+      (r.reject_reason ? ".<br>Reason: " + esc(r.reject_reason) : ".") + "</div>";
+  } else {
+    stamp = "<div class='stamp pend'><b>PENDING APPROVAL</b><br>Not valid until approved on the system.</div>";
+  }
+  return "<div class='gp-paper' id='gpPaper'>" +
+    "<h2>" + esc(COMPANY) + "</h2><h3>MATERIAL GATE PASS</h3>" +
+    "<table>" +
+      row("Gatepass No.", r.gatepass_number) + row("Date", r.pass_date) + row("Branch", r.branch) +
+      row("Gatepass Type", r.gatepass_type_name || "—") + row("Person (carrying out)", r.person_name) +
+      row("Raised By", r.created_by_username || "") + row("Description", r.description || "") +
+    "</table>" +
+    "<div style='margin-top:14px;font-weight:bold;font-size:13px;'>Items (" + list.length + ")</div>" +
+    "<table class='items-tbl' style='margin-top:4px;'>" +
+      "<tr><td class='k2' style='width:34px;'>#</td><td class='k' style='width:auto;'>Item / Part name</td><td class='k' style='width:22%;'>Quantity</td><td class='k' style='width:20%;'>Unit</td></tr>" +
+      itemsRows +
+    "</table>" + stamp +
+    "<div class='sign'><div>Issued By (" + esc(r.created_by_username || "") + ")</div><div>Security / Gate Officer</div></div>" +
+  "</div>";
+}
+
+async function openDetail(id){
+  const r = ALL.find(x => x.id === id);
+  if(!r) return;
+  CURRENT = r; CURRENT_ITEMS = [];
+  document.getElementById("decideStatus").textContent = "";
+  document.getElementById("paperWrap").innerHTML = "<p class='sub'>Loading…</p>";
+  document.getElementById("listView").style.display = "none";
+  document.getElementById("detailView").style.display = "block";
+  try{ window.scrollTo(0,0); }catch(e){}
+  CURRENT_ITEMS = await fetchItems(id);
+  document.getElementById("paperWrap").innerHTML = paperHTML(r, CURRENT_ITEMS);
+  renderActions(r);
+}
+window.openDetail = openDetail;
+
+function renderActions(r){
+  const wrap = document.getElementById("detailActions");
+  let html = "<button class='green' onclick=\"downloadPDF()\">Download PDF</button>" +
+             "<button onclick=\"printPass()\">Print</button>";
+  if((r.status || "pending") === "pending" && canApprove(r)){
+    html += "<button class='ok' onclick=\"decide('approved')\">Approve</button>" +
+            "<button class='rej' onclick=\"decide('rejected')\">Reject</button>";
+  }
+  wrap.innerHTML = html;
+}
+
+function backToList(){
+  document.getElementById("detailView").style.display = "none";
+  document.getElementById("listView").style.display = "block";
+  CURRENT = null; CURRENT_ITEMS = [];
+  try{ window.scrollTo(0,0); }catch(e){}
+}
+window.backToList = backToList;
+
+async function decide(decision){
+  const r = CURRENT; if(!r) return;
+  if(!canApprove(r)){ alert("You are not authorized to approve this gatepass."); return; }
+  let reason = null;
+  if(decision === "rejected"){
+    reason = prompt("Reason for rejecting gatepass " + r.gatepass_number + " (optional):", "");
+    if(reason === null) return;
+  } else {
+    if(!confirm("Approve gatepass " + r.gatepass_number + " for " + r.person_name + "?")) return;
+  }
+  const status = document.getElementById("decideStatus");
+  status.className = "status"; status.textContent = "Saving decision...";
+  try{
+    const { error } = await sb.from("hr_gatepass").update({
+      status: decision, approved_by: ME.username, approved_at: new Date().toISOString(),
+      reject_reason: decision === "rejected" ? (reason || null) : null
+    }).eq("id", r.id);
+    if(error) throw error;
+    await logActivity("gatepass_" + decision, ME.username + " " + decision + " gatepass " + r.gatepass_number + " (" + r.person_name + ")");
+    // reflect locally and re-render the stamp
+    r.status = decision; r.approved_by = ME.username; r.approved_at = new Date().toISOString();
+    r.reject_reason = decision === "rejected" ? (reason || null) : null;
+    document.getElementById("paperWrap").innerHTML = paperHTML(r, CURRENT_ITEMS);
+    renderActions(r);
+    status.className = "status ok";
+    status.textContent = decision === "approved"
+      ? "✅ Approved. You can now download or print the copy — it shows it was approved online."
+      : "✅ Rejected.";
+    loadRecords();
+  }catch(e){ status.className = "status err"; status.textContent = "❌ " + e.message; }
+}
+window.decide = decide;
+
+function downloadPDF(){
+  if(!CURRENT) return;
+  const node = document.getElementById("gpPaper");
+  const fname = (CURRENT.gatepass_number || "gatepass") + ".pdf";
+  if(typeof html2pdf === "undefined"){ printPass(); return; }
+  const opt = { margin: 10, filename: fname, image: { type: "jpeg", quality: 0.98 },
+    html2canvas: { scale: 2, backgroundColor: "#ffffff" }, jsPDF: { unit: "mm", format: "a4", orientation: "portrait" } };
+  html2pdf().set(opt).from(node).save().catch(()=>printPass());
+}
+window.downloadPDF = downloadPDF;
+
+function printPass(){
+  if(!CURRENT) return;
+  const html = "<html><head><style>" +
+    "@page{size:A4;margin:40pt 50pt;}" +
+    "body{font-family:'Times New Roman',serif;font-size:12pt;margin:0;padding:0;color:#000;}" +
+    ".gp-paper{max-width:100%;margin:0;padding:0;border:0;}" +
+    ".gp-paper h2{text-align:center;font-size:18pt;margin:0 0 4px;}" +
+    ".gp-paper h3{text-align:center;font-size:14pt;letter-spacing:2px;margin:0 0 24px;}" +
+    ".gp-paper table{width:100%;border-collapse:collapse;}" +
+    ".gp-paper td{padding:8px 10px;border:1px solid #000;vertical-align:top;}" +
+    ".gp-paper td.k{width:32%;font-weight:bold;background:#f0f0f0;}" +
+    ".gp-paper .items-tbl td.k2{background:#f0f0f0;font-weight:bold;text-align:center;}" +
+    ".gp-paper .stamp{margin-top:18px;border:2px solid #1d8a4e;border-radius:6px;padding:12px 14px;color:#0f5c33;font-size:12pt;}" +
+    ".gp-paper .stamp.rej{border-color:#c0392b;color:#8f2531;}" +
+    ".gp-paper .stamp.pend{border-color:#d97706;color:#9a5a08;}" +
+    ".gp-paper .sign{margin-top:60px;display:flex;justify-content:space-between;}" +
+    ".gp-paper .sign div{width:45%;border-top:1px solid #000;padding-top:6px;text-align:center;font-size:11pt;}" +
+    "</style></head><body>" + paperHTML(CURRENT, CURRENT_ITEMS) + "</body></html>";
+  const frame = document.createElement("iframe");
+  frame.style.position = "fixed"; frame.style.right = "0"; frame.style.bottom = "0";
+  frame.style.width = "0"; frame.style.height = "0"; frame.style.border = "0";
+  document.body.appendChild(frame);
+  const doc = frame.contentWindow.document;
+  doc.open(); doc.write(html); doc.close();
+  frame.onload = function(){
+    try{ frame.contentWindow.focus(); frame.contentWindow.print(); }catch(e){ console.warn("Print failed:", e); }
+    setTimeout(()=>{ document.body.removeChild(frame); }, 1500);
+  };
+}
+window.printPass = printPass;
+
+init();
+</script>
+</body>
+</html>

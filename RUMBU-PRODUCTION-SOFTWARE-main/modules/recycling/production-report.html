@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Recycling — Production Report</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  :root{
+    --navy:#1F3864; --blue:#2E75B6; --blue-dark:#245d92;
+    --line:#d8dee8; --bg:#eef2f7; --muted:#6b7280;
+    --red:#c0392b; --green:#1d8a4e; --amber:#d97706;
+  }
+  *{box-sizing:border-box;}
+  body{font-family:Arial,Helvetica,sans-serif;background:var(--bg);margin:0;padding:18px;color:#1f2430;}
+  .wrap{max-width:1200px;margin:0 auto;}
+  .card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;}
+  h3{color:var(--navy);margin:0 0 12px;font-size:15px;}
+  label{display:block;font-size:12px;font-weight:bold;color:#374151;margin:0 0 4px;}
+  input,select{width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;}
+  .row>div{flex:1;min-width:140px;}
+  button{padding:10px 16px;border:none;border-radius:8px;font-weight:bold;
+    font-size:13px;cursor:pointer;background:var(--blue);color:#fff;}
+  button:hover{background:var(--blue-dark);}
+  button.sec{background:#6b7280;} button.sec:hover{background:#4b5563;}
+  .quickbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;}
+  .qbtn{background:#e6edf5;color:var(--navy);padding:6px 11px;border:1px solid var(--line);
+    border-radius:8px;font-size:12px;font-weight:bold;cursor:pointer;}
+  .qbtn.active{background:var(--blue);color:#fff;border-color:var(--blue);}
+  .status{margin-top:8px;font-weight:bold;font-size:13px;min-height:14px;}
+  .status.err{color:var(--red);} .status.ok{color:var(--green);}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;}
+
+  /* KPI cards */
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px;}
+  .kpi{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px;text-align:center;}
+  .kpi .n{font-size:24px;font-weight:800;color:var(--navy);}
+  .kpi .l{font-size:11px;color:var(--muted);margin-top:4px;font-weight:bold;text-transform:uppercase;}
+  .kpi.good .n{color:var(--green);} .kpi.warn .n{color:var(--amber);} .kpi.bad .n{color:var(--red);}
+
+  /* Tabs */
+  .tabs{display:flex;gap:0;border-bottom:2px solid var(--navy);margin-bottom:0;}
+  .tab{padding:9px 22px;cursor:pointer;font-weight:bold;font-size:13px;
+    border-radius:8px 8px 0 0;background:#e6edf5;color:var(--navy);
+    border:1px solid var(--line);border-bottom:none;margin-right:4px;}
+  .tab.active{background:var(--navy);color:#fff;}
+
+  /* Tables */
+  .tbl-wrap{overflow-x:auto;}
+  table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;}
+  th,td{border:1px solid var(--line);padding:7px 6px;text-align:center;white-space:nowrap;}
+  th{background:var(--navy);color:#fff;font-size:11px;}
+  th.grp-m{background:#245d92;} th.grp-a{background:#0f766e;}
+  th.grp-n{background:#4338ca;} th.grp-t{background:#374151;}
+  tr:nth-child(even) td{background:#f8fafc;}
+  td.asset-cell{text-align:left;font-weight:bold;color:var(--navy);}
+  .total-row td{background:#e6edf5 !important;font-weight:bold;color:var(--navy);}
+  .g{color:var(--green);font-weight:bold;}
+  .w{color:var(--amber);font-weight:bold;}
+  .b{color:var(--red);font-weight:bold;}
+  .dash{color:var(--muted);}
+
+  /* ── Print styles ── */
+  .print-only{display:none;}
+
+  @media print{
+    body{background:#fff;padding:10px;}
+    .no-print{display:none !important;}
+    .print-only{display:block !important;}
+
+    /* Print header */
+    #printHeader{
+      margin-bottom:16px;
+      border-bottom:2px solid #1F3864;
+      padding-bottom:12px;
+    }
+    #printHeader .ph-org{
+      font-size:11pt;font-weight:bold;letter-spacing:1px;
+      color:#1F3864;text-align:center;
+    }
+    #printHeader .ph-title{
+      font-size:17pt;font-weight:bold;color:#1F3864;
+      text-align:center;margin:4px 0 8px;
+    }
+    #printHeader .ph-filters{
+      font-size:9.5pt;color:#333;
+      border:1px solid #ccc;border-radius:4px;
+      padding:8px 14px;background:#f8fafc;
+      display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px 20px;
+    }
+    #printHeader .ph-filters span{display:block;}
+    #printHeader .ph-filters b{color:#1F3864;}
+    #printHeader .ph-generated{
+      font-size:8.5pt;color:#888;text-align:right;margin-top:6px;
+    }
+
+    /* KPI cards for print */
+    .kpis{gap:8px;}
+    .kpi{border:1px solid #ccc;border-radius:6px;padding:8px;}
+    .kpi .n{font-size:18px;}
+
+    /* Tables for print */
+    table{font-size:9pt;}
+    th,td{padding:5px 4px;}
+    .card{border:none;padding:0;margin-bottom:12px;box-shadow:none;}
+    .tabs{display:none;}
+    /* Show both views stacked when printing */
+    #viewShift{display:block !important;}
+    #viewAsset{display:block !important;}
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <div id="connStatus">Loading...</div>
+
+  <div id="appArea" style="display:none;">
+
+    <!-- Filters (hidden when printing) -->
+    <div class="card no-print">
+      <h3>Filters</h3>
+      <div class="quickbar">
+        <button class="qbtn" onclick="setRange('week',this)">This Week</button>
+        <button class="qbtn active" onclick="setRange('month',this)">This Month</button>
+        <button class="qbtn" onclick="setRange('quarter',this)">Last 3 Months</button>
+        <button class="qbtn" onclick="setRange('year',this)">This Year</button>
+        <button class="qbtn" onclick="setRange('custom',this)">Custom</button>
+      </div>
+      <div class="row">
+        <div><label>From</label><input type="date" id="fromDate"></div>
+        <div><label>To</label><input type="date" id="toDate"></div>
+        <div>
+          <label>Shift</label>
+          <select id="shiftFilter">
+            <option value="All">All Shifts</option>
+            <option value="Morning">Morning</option>
+            <option value="Afternoon">Afternoon</option>
+            <option value="Night">Night</option>
+          </select>
+        </div>
+        <div><label>Branch</label><select id="branchFilter"></select></div>
+      </div>
+      <div class="row" style="margin-top:10px;">
+        <div>
+          <label>Machine</label>
+          <select id="assetFilter">
+            <option value="All">All Machines</option>
+          </select>
+        </div>
+        <div>
+          <label>Operator</label>
+          <select id="operatorFilter" onchange="applyOperatorFilter()" disabled>
+            <option value="">All Operators</option>
+          </select>
+        </div>
+        <div style="flex:0 0 auto;"><label>&nbsp;</label><button onclick="runReport()">Run</button></div>
+        <div style="flex:0 0 auto;"><label>&nbsp;</label><button class="sec" onclick="window.print()">Print / PDF</button></div>
+      </div>
+      <div class="status" id="status"></div>
+    </div>
+
+    <!-- Report output -->
+    <div id="reportArea" style="display:none;">
+
+      <!-- Print-only header — visible only when printing -->
+      <div class="print-only" id="printHeader">
+        <div class="ph-org">RUMBU INDUSTRIES GROUP</div>
+        <div class="ph-title">♻️ Recycling Production Report</div>
+        <div class="ph-filters" id="printFilters"></div>
+        <div class="ph-generated" id="printGenerated"></div>
+      </div>
+
+      <div class="kpis" id="kpiRow"></div>
+
+      <div class="card">
+        <!-- Tabs — visible on screen only; both views stack when printing -->
+        <div class="tabs no-print">
+          <div class="tab active" onclick="showView('shift',this)">By Shift</div>
+          <div class="tab"        onclick="showView('asset',this)">By Asset</div>
+        </div>
+
+        <!-- Print view labels -->
+        <div class="print-only" style="font-weight:bold;color:#1F3864;margin:10px 0 4px;font-size:11pt;">
+          Production by Shift
+        </div>
+        <div class="tbl-wrap" id="viewShift"></div>
+
+        <div class="print-only" style="font-weight:bold;color:#1F3864;margin:16px 0 4px;font-size:11pt;">
+          Production by Asset
+        </div>
+        <div class="tbl-wrap" id="viewAsset" style="display:none;"></div>
+      </div>
+
+    </div><!-- #reportArea -->
+  </div>
+</div>
+
+<script>
+let ME=null, MY_SECTIONS=[], ASSETS=[];
+let ROWS=[];      // all records from server for the current run
+let FILTERED=[];  // ROWS after operator filter
+
+const SHIFTS = ["Morning","Afternoon","Night"];
+
+function authHeaders(){
+  return {"apikey":SUPABASE_ANON_KEY,"Authorization":"Bearer "+SUPABASE_ANON_KEY};
+}
+function iso(d){ return d.toISOString().slice(0,10); }
+function fmt(v,dec=1){
+  const x=parseFloat(v);
+  return isNaN(x)?"-":x.toLocaleString(undefined,{minimumFractionDigits:dec,maximumFractionDigits:dec});
+}
+function effStr(kg,tgt){
+  if(!tgt) return '<span class="dash">—</span>';
+  const e=(kg/tgt)*100;
+  return `<span class="${e>=100?"g":e>=75?"w":"b"}">${e.toFixed(1)}%</span>`;
+}
+function fmtDate(d){
+  if(!d) return "—";
+  return new Date(d).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"});
+}
+
+// ── Init ──────────────────────────────────────────────────
+async function init(){
+  const cs=document.getElementById("connStatus");
+  try{
+    ME=await requireAuth("../../login.html");
+    if(!ME) return;
+
+    MY_SECTIONS=(ME.sectionNames&&ME.sectionNames.length)
+      ?ME.sectionNames.filter(s=>["Rumbu","MamaSannu"].includes(s))
+      :["Rumbu","MamaSannu"];
+    if(!MY_SECTIONS.length) MY_SECTIONS=["Rumbu","MamaSannu"];
+
+    const bf=document.getElementById("branchFilter");
+    bf.innerHTML='<option value="All">All Branches</option>'+
+      MY_SECTIONS.map(s=>`<option value="${s}">${s==="MamaSannu"?"Mama Sannu":s}</option>`).join("");
+
+    const res=await fetch(
+      SUPABASE_URL+"/rest/v1/recycling_assets?select=asset_code,asset_name,target_kg&is_active=eq.true&order=asset_code.asc",
+      {headers:authHeaders()}
+    );
+    if(!res.ok) throw new Error("recycling_assets: HTTP "+res.status);
+    ASSETS=await res.json();
+
+    const af=document.getElementById("assetFilter");
+    af.innerHTML='<option value="All">All Machines</option>'+
+      ASSETS.map(a=>`<option value="${a.asset_code}">${a.asset_name}</option>`).join("");
+
+    setRange("month",document.querySelector(".qbtn.active"));
+    cs.style.color="#1d8a4e"; cs.textContent="✔ Connected.";
+    document.getElementById("appArea").style.display="block";
+    runReport();
+  }catch(e){
+    cs.style.color="#c0392b"; cs.textContent="❌ "+e.message; console.error(e);
+  }
+}
+
+// ── Quick date buttons ─────────────────────────────────────
+function setRange(range,btn){
+  document.querySelectorAll(".qbtn").forEach(b=>b.classList.remove("active"));
+  if(btn) btn.classList.add("active");
+  const t=new Date(); let from;
+  if(range==="week"){ const d=(t.getDay()+6)%7; from=new Date(t); from.setDate(t.getDate()-d); }
+  else if(range==="month"){ from=new Date(t.getFullYear(),t.getMonth(),1); }
+  else if(range==="quarter"){ from=new Date(t); from.setMonth(t.getMonth()-3); }
+  else if(range==="year"){ from=new Date(t.getFullYear(),0,1); }
+  else return;
+  document.getElementById("fromDate").value=iso(from);
+  document.getElementById("toDate").value=iso(t);
+}
+
+// ── Fetch and render ──────────────────────────────────────
+async function runReport(){
+  const status=document.getElementById("status");
+  const from  =document.getElementById("fromDate").value;
+  const to    =document.getElementById("toDate").value;
+  const shift =document.getElementById("shiftFilter").value;
+  const branch=document.getElementById("branchFilter").value;
+  const asset =document.getElementById("assetFilter").value;
+  if(!from||!to){ status.className="status err"; status.textContent="Select a date range."; return; }
+
+  status.className="status"; status.textContent="Loading...";
+  document.getElementById("reportArea").style.display="none";
+
+  try{
+    let url=SUPABASE_URL+"/rest/v1/recycling_production"+
+      "?select=production_date,shift,asset_code,branch,kg_produced,operator_name"+
+      "&production_date=gte."+from+"&production_date=lte."+to+
+      "&order=production_date.asc";
+
+    if(shift!=="All") url+="&shift=eq."+encodeURIComponent(shift);
+    if(asset!=="All") url+="&asset_code=eq."+encodeURIComponent(asset);
+    if(branch!=="All"){
+      url+="&branch=eq."+encodeURIComponent(branch);
+    } else {
+      const list=MY_SECTIONS.map(s=>`"${s}"`).join(",");
+      url+="&branch=in.("+encodeURIComponent(list)+")";
+    }
+
+    const res=await fetch(url,{headers:authHeaders()});
+    if(!res.ok) throw new Error("recycling_production: HTTP "+res.status);
+    ROWS=await res.json();
+
+    // Reset operator filter and repopulate from new records
+    populateOperatorFilter(ROWS);
+    FILTERED=ROWS;
+
+    status.className="status ok";
+    status.textContent=ROWS.length.toLocaleString()+" record(s) loaded.";
+
+    if(!ROWS.length){
+      document.getElementById("reportArea").style.display="none";
+      status.textContent="No data for the selected filters.";
+      return;
+    }
+
+    document.getElementById("reportArea").style.display="block";
+    renderAll(FILTERED);
+
+  }catch(e){
+    status.className="status err"; status.textContent="❌ "+e.message;
+  }
+}
+
+// ── Populate operator dropdown from loaded records ─────────
+function populateOperatorFilter(rows){
+  const ops=[...new Set(rows.map(r=>r.operator_name).filter(Boolean))].sort();
+  const sel=document.getElementById("operatorFilter");
+  sel.innerHTML='<option value="">All Operators</option>'+
+    ops.map(o=>`<option value="${o}">${o}</option>`).join("");
+  sel.disabled = ops.length===0;
+}
+
+// ── Operator client-side filter ────────────────────────────
+function applyOperatorFilter(){
+  const op=document.getElementById("operatorFilter").value;
+  FILTERED=op?ROWS.filter(r=>r.operator_name===op):ROWS;
+  renderAll(FILTERED);
+  const status=document.getElementById("status");
+  status.className="status ok";
+  status.textContent=op
+    ?"Showing "+FILTERED.length+" record(s) for "+op+"."
+    :ROWS.length.toLocaleString()+" record(s) loaded.";
+}
+
+// ── Render all ────────────────────────────────────────────
+function renderAll(rows){
+  renderKPIs(rows);
+  renderByShift(rows);
+  renderByAsset(rows);
+  updatePrintHeader();
+}
+
+// ── Update print header with current filter selections ─────
+function updatePrintHeader(){
+  const from   = document.getElementById("fromDate").value;
+  const to     = document.getElementById("toDate").value;
+  const shiftV = document.getElementById("shiftFilter").value;
+  const branchV= document.getElementById("branchFilter").value;
+  const assetV = document.getElementById("assetFilter").value;
+  const opSel  = document.getElementById("operatorFilter");
+  const opV    = opSel.value;
+  const opLabel= opV
+    ? (opSel.options[opSel.selectedIndex]?.text || opV)
+    : "All Operators";
+
+  const getBranch = v => v==="All"?"All Branches":(v==="MamaSannu"?"Mama Sannu":v);
+  const getAsset  = v => {
+    if(v==="All") return "All Machines";
+    const a=ASSETS.find(x=>x.asset_code===v);
+    return a?a.asset_name:v;
+  };
+
+  document.getElementById("printFilters").innerHTML =
+    `<span><b>Period:</b> ${fmtDate(from)} – ${fmtDate(to)}</span>`+
+    `<span><b>Branch:</b> ${getBranch(branchV)}</span>`+
+    `<span><b>Records:</b> ${FILTERED.length}</span>`+
+    `<span><b>Shift:</b> ${shiftV==="All"?"All Shifts":shiftV}</span>`+
+    `<span><b>Machine:</b> ${getAsset(assetV)}</span>`+
+    `<span><b>Operator:</b> ${opLabel}</span>`;
+
+  document.getElementById("printGenerated").textContent =
+    "Generated: " + new Date().toLocaleString("en-GB",{
+      day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"
+    });
+}
+
+function getTarget(code){ const a=ASSETS.find(x=>x.asset_code===code); return a?parseFloat(a.target_kg):0; }
+
+// ── KPI cards ─────────────────────────────────────────────
+function renderKPIs(rows){
+  const totalKg =rows.reduce((s,r)=>s+parseFloat(r.kg_produced||0),0);
+  const totalTgt=rows.reduce((s,r)=>s+getTarget(r.asset_code),0);
+  const eff=totalTgt?(totalKg/totalTgt)*100:0;
+  const cls=eff>=100?"good":(eff>=75?"warn":"bad");
+  document.getElementById("kpiRow").innerHTML=
+    `<div class="kpi"><div class="n">${fmt(totalKg)}</div><div class="l">Total KG Produced</div></div>`+
+    `<div class="kpi"><div class="n">${fmt(totalTgt)}</div><div class="l">Total Target KG</div></div>`+
+    `<div class="kpi ${cls}"><div class="n">${eff.toFixed(1)}%</div><div class="l">Overall Efficiency</div></div>`+
+    `<div class="kpi"><div class="n">${rows.length}</div><div class="l">Total Entries</div></div>`;
+}
+
+// ── By Shift view ──────────────────────────────────────────
+function renderByShift(rows){
+  const map={};
+  ASSETS.forEach(a=>{ map[a.asset_code]={}; SHIFTS.forEach(s=>{ map[a.asset_code][s]={kg:0,tgt:0}; }); });
+  rows.forEach(r=>{
+    if(!map[r.asset_code]) map[r.asset_code]={};
+    if(!map[r.asset_code][r.shift]) map[r.asset_code][r.shift]={kg:0,tgt:0};
+    map[r.asset_code][r.shift].kg  +=parseFloat(r.kg_produced||0);
+    map[r.asset_code][r.shift].tgt +=getTarget(r.asset_code);
+  });
+
+  let html='<table><thead><tr>'+
+    '<th rowspan="2" style="text-align:left;min-width:80px;">Machine</th>'+
+    '<th colspan="3" class="grp-m">Morning</th>'+
+    '<th colspan="3" class="grp-a">Afternoon</th>'+
+    '<th colspan="3" class="grp-n">Night</th>'+
+    '<th colspan="3" class="grp-t">Overall</th>'+
+    '</tr><tr>'+
+    SHIFTS.map(()=>'<th>KG</th><th>Target</th><th>Eff%</th>').join("")+
+    '<th>KG</th><th>Target</th><th>Eff%</th>'+
+    '</tr></thead><tbody>';
+
+  const tots={Morning:{kg:0,tgt:0},Afternoon:{kg:0,tgt:0},Night:{kg:0,tgt:0}};
+  let gKg=0,gTgt=0;
+
+  ASSETS.forEach(a=>{
+    const d=map[a.asset_code]||{};
+    let rKg=0,rTgt=0,cells="";
+    SHIFTS.forEach(s=>{
+      const kg=(d[s]||{kg:0}).kg, tgt=(d[s]||{tgt:0}).tgt;
+      cells+=`<td>${fmt(kg)}</td><td>${fmt(tgt)}</td><td>${effStr(kg,tgt)}</td>`;
+      tots[s].kg+=kg; tots[s].tgt+=tgt; rKg+=kg; rTgt+=tgt;
+    });
+    gKg+=rKg; gTgt+=rTgt;
+    html+=`<tr><td class="asset-cell">${a.asset_name}</td>${cells}`+
+      `<td><b>${fmt(rKg)}</b></td><td>${fmt(rTgt)}</td><td>${effStr(rKg,rTgt)}</td></tr>`;
+  });
+
+  let totCells="";
+  SHIFTS.forEach(s=>{
+    totCells+=`<td><b>${fmt(tots[s].kg)}</b></td><td>${fmt(tots[s].tgt)}</td><td>${effStr(tots[s].kg,tots[s].tgt)}</td>`;
+  });
+  html+=`<tr class="total-row"><td class="asset-cell">TOTAL</td>${totCells}`+
+    `<td>${fmt(gKg)}</td><td>${fmt(gTgt)}</td><td>${effStr(gKg,gTgt)}</td></tr>`;
+  html+="</tbody></table>";
+  document.getElementById("viewShift").innerHTML=html;
+}
+
+// ── By Asset view ──────────────────────────────────────────
+function renderByAsset(rows){
+  const map={};
+  rows.forEach(r=>{
+    if(!map[r.asset_code]) map[r.asset_code]={kg:0,tgt:0,entries:0};
+    map[r.asset_code].kg      +=parseFloat(r.kg_produced||0);
+    map[r.asset_code].tgt     +=getTarget(r.asset_code);
+    map[r.asset_code].entries +=1;
+  });
+
+  let html='<table><thead><tr>'+
+    '<th style="text-align:left;">Machine</th>'+
+    '<th>Entries</th><th>KG Produced</th><th>Target KG</th><th>Efficiency %</th>'+
+    '</tr></thead><tbody>';
+
+  let tKg=0,tTgt=0,tEnt=0;
+  ASSETS.forEach(a=>{
+    const d=map[a.asset_code]||{kg:0,tgt:0,entries:0};
+    tKg+=d.kg; tTgt+=d.tgt; tEnt+=d.entries;
+    html+=`<tr><td class="asset-cell">${a.asset_name}</td>`+
+      `<td>${d.entries}</td><td>${fmt(d.kg)}</td><td>${fmt(d.tgt)}</td>`+
+      `<td>${effStr(d.kg,d.tgt)}</td></tr>`;
+  });
+
+  html+=`<tr class="total-row"><td class="asset-cell">TOTAL</td>`+
+    `<td>${tEnt}</td><td>${fmt(tKg)}</td><td>${fmt(tTgt)}</td>`+
+    `<td>${effStr(tKg,tTgt)}</td></tr>`;
+  html+="</tbody></table>";
+  document.getElementById("viewAsset").innerHTML=html;
+}
+
+// ── Tab switching (screen only) ────────────────────────────
+function showView(view,tabEl){
+  document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));
+  tabEl.classList.add("active");
+  document.getElementById("viewShift").style.display=view==="shift"?"block":"none";
+  document.getElementById("viewAsset").style.display=view==="asset"?"block":"none";
+}
+
+init();
+</script>
+</body>
+</html>

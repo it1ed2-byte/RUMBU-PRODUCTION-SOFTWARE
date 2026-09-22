@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Weaving Summary Report</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<style>
+*{box-sizing:border-box;}
+body{margin:0;font-family:var(--sans);background:linear-gradient(135deg,#0b5394,#073763);
+  display:flex;justify-content:center;padding:18px;min-height:100vh;}
+.container{width:100%;max-width:1100px;background:var(--card);border-radius:14px;box-shadow:0 15px 35px rgba(0,0,0,.25);padding:26px;}
+.header{text-align:center;margin-bottom:20px;}
+.header h2{margin:0;color:var(--heading);font-size:24px;}
+.header p{margin:4px 0 0;color:#666;font-size:13px;}
+.form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;}
+.form-group{display:flex;flex-direction:column;}
+label{font-weight:600;margin-bottom:5px;font-size:13px;color:var(--heading);}
+input,select{padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;}
+.shed-box{grid-column:1/-1;}
+#shedContainer{border:1px solid var(--line);border-radius:10px;padding:10px;display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:6px;max-height:140px;overflow-y:auto;background:var(--bg);}
+#shedContainer label{font-weight:500;font-size:12px;display:flex;align-items:center;gap:5px;cursor:pointer;}
+.btn-row{display:flex;gap:10px;margin-top:18px;}
+button{flex:1;padding:12px;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;}
+button.primary{background:linear-gradient(135deg,#0b5394,#073763);color:#fff;}
+button.alt{background:#1d8a4e;color:#fff;}
+#status{margin-top:14px;text-align:center;font-weight:600;font-size:13px;}
+.success{color:#0a7f2e;} .error{color:#c62828;} .loading{color:var(--heading);}
+h3{color:var(--heading);} h4{margin:6px 0;}
+table{border-collapse:collapse;width:100%;font-size:12px;margin-top:6px;}
+th,td{border:1px solid #666;padding:5px;text-align:center;}
+th{background:#0b5394;color:#fff;}
+tr:nth-child(even){background:#f2f2f2;}
+.dept-block{margin-bottom:12px;padding:10px;border-bottom:1px solid #ddd;}
+.pending{background:var(--card)8e1;border:1px dashed #d4a017;padding:10px;border-radius:8px;font-size:12px;color:#7a5b00;}
+@media print{ .no-print{display:none !important;} body{background:var(--card);padding:0;} .container{box-shadow:none;} }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+</head>
+<body>
+<div class="container">
+
+<div class="header no-print">
+<h2>🧶 Weaving Summary Report</h2>
+<p>Live from Supabase &middot; read only</p>
+</div>
+
+<div class="form-grid no-print">
+<div class="form-group"><label>From Date</label><input type="date" id="fromDate"></div>
+<div class="form-group"><label>To Date</label><input type="date" id="toDate"></div>
+<div class="form-group"><label>Shift</label><select id="shift"><option value="All">All</option><option>Morning</option><option>Night</option></select></div>
+<div class="form-group"><label>Group</label><select id="group"><option value="All">All</option><option>A</option><option>B</option></select></div>
+<div class="form-group"><label>Section</label><select id="section"><option value="All">All</option></select></div>
+<div class="form-group"><label>Work Type</label><select id="workType"><option value="All">All</option><option value="Overtime">Holiday Days</option><option value="Normal">Working Days</option><option value="B grade">B Grade Days</option></select></div>
+<div class="form-group"><label>Work Duration</label><select id="workMinutes"><option value="660">11 Hours</option><option value="600">10 Hours</option><option value="540">9 Hours</option></select></div>
+<div class="form-group shed-box">
+<label>Shed (Select Multiple)</label>
+<div id="shedContainer">
+<label><input type="checkbox" value="1"> Shed 1</label>
+<label><input type="checkbox" value="2"> Shed 2</label>
+<label><input type="checkbox" value="3"> Shed 3</label>
+<label><input type="checkbox" value="4"> Shed 4</label>
+<label><input type="checkbox" value="5"> Shed 5</label>
+<label><input type="checkbox" value="6"> Shed 6</label>
+<label><input type="checkbox" value="CR"> Computer Mat</label>
+<label><input type="checkbox" value="MamaSannu"> Mama Sannu</label>
+</div>
+</div>
+</div>
+
+<div class="btn-row no-print">
+<button class="primary" onclick="generate()">Generate Report</button>
+<button class="alt" onclick="window.print()">Print / Save as PDF</button>
+</div>
+
+<div id="status" class="no-print">Connecting to Supabase...</div>
+
+<div id="reportArea"></div>
+
+<div class="pending no-print" style="background:#eaf6ee;border-color:#1d8a4e;color:#1d8a4e;">
+  job_table exclusion and the Complaints section are now live from Supabase.
+</div>
+
+</div>
+
+<script>
+const SECTION_LABEL = { "Rumbu": "Rumbu", "MamaSannu": "Mama Sannu" };
+
+let MW_ROWS = [], CTRL_ROWS = [], COMPLAINTS_ROWS = [], EXCLUDED_JOB_CODES = new Set(); CTRL_ROWS.forEach(normalizeControlRow);
+
+function parseDT(v){ const d=new Date(v); return isNaN(d)?null:d; }
+function minutesBetween(a,b){ return (!a||!b) ? 0 : Math.round((b-a)/60000); }
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
+
+
+function normalizeControlRow(r){
+  if(r.date_col === undefined) r.date_col = r.date;
+  if(r.names === undefined) r.names = r.nurse_name;
+  if(r.stop_time === undefined) r.stop_time = r.mc_stoppage_time;
+  if(r.extimated_time === undefined) r.extimated_time = r.estimated_duration;
+  if(r.discription === undefined) r.discription = r.description;
+  return r;
+}
+
+async function init(){
+  const status = document.getElementById("status");
+  try{
+    const me = await requireAuth("../../login.html");
+    if(!me) return;
+
+    const mySections = (me.sectionNames && me.sectionNames.length) ? me.sectionNames : ["Rumbu","MamaSannu"];
+    document.getElementById("section").innerHTML = '<option value="All">All</option>' +
+      mySections.map(s=>`<option value="${s}">${SECTION_LABEL[s]||s}</option>`).join("");
+    // Default-select and lock the dropdown to the user's own Section when they only have one.
+    if(mySections.length === 1){
+      document.getElementById("section").value = mySections[0];
+      document.getElementById("section").disabled = true;
+    }
+
+    const [mwRes, ctrlRes, jobRes, compRes] = await Promise.all([
+      fetch(SUPABASE_URL + "/rest/v1/matweaving?select=*", { headers: authHeaders() }),
+      fetch(SUPABASE_URL + "/rest/v1/control?select=*", { headers: authHeaders() }),
+      fetch(SUPABASE_URL + "/rest/v1/job_table?select=job_code", { headers: authHeaders() }),
+      fetch(SUPABASE_URL + "/rest/v1/complaints?select=*", { headers: authHeaders() })
+    ]);
+    if(!mwRes.ok) throw new Error("matweaving: HTTP " + mwRes.status);
+    if(!ctrlRes.ok) throw new Error("control: HTTP " + ctrlRes.status);
+    MW_ROWS = await mwRes.json();
+    CTRL_ROWS = await ctrlRes.json(); CTRL_ROWS.forEach(normalizeControlRow);
+    if(jobRes.ok){
+      const jobRows = await jobRes.json();
+      EXCLUDED_JOB_CODES = new Set(jobRows.map(r => r.job_code));
+    }
+    COMPLAINTS_ROWS = compRes.ok ? await compRes.json() : [];
+    status.className="success";
+    status.textContent = "Connected. matweaving: " + MW_ROWS.length + " rows, control: " + CTRL_ROWS.length +
+      " rows, excluded job codes: " + EXCLUDED_JOB_CODES.size + ", complaints: " + COMPLAINTS_ROWS.length + ".";
+  }catch(e){
+    status.className="error";
+    status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+function getFormData(){
+  return {
+    fromDate: document.getElementById("fromDate").value,
+    toDate: document.getElementById("toDate").value,
+    shift: document.getElementById("shift").value,
+    group: document.getElementById("group").value,
+    section: document.getElementById("section").value,
+    workType: document.getElementById("workType").value,
+    shedType: [...document.querySelectorAll("#shedContainer input:checked")].map(cb=>cb.value),
+    workMinutes: Number(document.getElementById("workMinutes").value) || 660
+  };
+}
+
+function generate(){
+  const f = getFormData();
+  const status = document.getElementById("status");
+  if(!f.fromDate || !f.toDate){ status.className="error"; status.textContent="⚠ Please select From & To dates."; return; }
+
+  if(!MW_ROWS.length){
+    document.getElementById("reportArea").innerHTML =
+      "<p style='color:red'>⚠️ The matweaving table returned 0 rows from Supabase. This usually means it " +
+      "has no SELECT (read) policy yet, not that there is no matching data. Check with: " +
+      "<code>select policyname, cmd from pg_policies where tablename = 'matweaving';</code></p>";
+    return;
+  }
+
+  // ---- filter production rows ----
+  const prod = MW_ROWS.filter(r=>{
+    if(r.date_col < f.fromDate || r.date_col > f.toDate) return false;
+    if(f.shift !== "All" && r.shift !== f.shift) return false;
+    if(f.group !== "All" && r.group_name !== f.group) return false;
+    if(f.section !== "All" && r.section !== f.section) return false;
+    if(f.workType !== "All" && r.work_type !== f.workType) return false;
+    if(f.shedType.length && !f.shedType.includes(String(r.shed))) return false;
+    return true;
+  });
+  if(!prod.length){
+    document.getElementById("reportArea").innerHTML = `<p style='color:red'>⚠️ No data found for selected filters. ` +
+      `matweaving had ${MW_ROWS.length} rows total, but none matched date ${f.fromDate} to ${f.toDate}, ` +
+      `shift=${f.shift}, group=${f.group}, section=${f.section}, workType=${f.workType}, ` +
+      `sheds=${f.shedType.join(",")||"(none selected = all)"}.</p>`;
+    return;
+  }
+
+  // ---- downtime per unit+date (control), same date range + shift/section (not shed/group/worktype) ----
+  const downtimeByUnitDate = {};
+  CTRL_ROWS.forEach(r=>{
+    if(r.date_col < f.fromDate || r.date_col > f.toDate) return;
+    if(f.shift !== "All" && r.shift !== f.shift) return;
+    if(f.section !== "All" && r.section !== f.section) return;
+    if(EXCLUDED_JOB_CODES.has(r.job_code)) return;
+    const stop = parseDT(r.stop_time), finish = parseDT(r.finish_time);
+    if(!stop || !finish) return;
+    const key = r.unit + "||" + r.date_col;
+    downtimeByUnitDate[key] = (downtimeByUnitDate[key] || 0) + minutesBetween(stop, finish);
+  });
+
+  // ---- production per unit+date (for MatLoss calc) ----
+  const prodByUnitDate = {};
+  prod.forEach(r=>{
+    const key = r.units + "||" + r.date_col;
+    if(!prodByUnitDate[key]) prodByUnitDate[key] = { target:0, total:0, assets:0 };
+    prodByUnitDate[key].target += Number(r.target||0);
+    prodByUnitDate[key].total += Number(r.total||0);
+    prodByUnitDate[key].assets += 1;
+  });
+
+  // ---- production grouped by Mat Type (daily MLD summed) ----
+  const byType = {};
+  prod.forEach(r=>{
+    const type = r.mat_type || "(blank)";
+    if(!byType[type]) byType[type] = { type, assets:0, A:0, B:0, C:0, total:0, target:0, downtime:0, mld:0 };
+    const t = byType[type];
+    t.assets += 1;
+    t.A += Number(r.a_double||0) + Number(r.a_single||0);
+    t.B += Number(r.b||0);
+    t.C += Number(r.c||0);
+    t.total += Number(r.total||0);
+    t.target += Number(r.target||0);
+    const ukey = r.units + "||" + r.date_col;
+    const dt = downtimeByUnitDate[ukey] || 0;
+    const pu = prodByUnitDate[ukey] || { assets:1 };
+    const mld = r.target ? Math.round((Number(r.target||0) * dt) / (f.workMinutes * (pu.assets||1))) : 0;
+    t.downtime += dt / (pu.assets||1); // spread unit-level downtime across its rows once per row's share
+    t.mld += mld;
+  });
+
+  // ---- overall totals ----
+  const overall = { A:0,B:0,C:0,total:0,target:0,downtime:0,mld:0,mlu:0,assets:0,actualTarget:0 };
+  Object.values(byType).forEach(t=>{
+    const ATG = t.target - t.mld;
+    const MLU = t.total - ATG;
+    overall.A += t.A; overall.B += t.B; overall.C += t.C; overall.total += t.total;
+    overall.target += t.target; overall.downtime += t.downtime; overall.mld += t.mld;
+    overall.mlu += MLU; overall.assets += t.assets; overall.actualTarget += ATG;
+  });
+  const overallATG = overall.target - overall.mld;
+  const pB = overall.total ? Math.round((overall.B/overall.total)*100) : 0;
+  const pC = overall.total ? Math.round((overall.C/overall.total)*100) : 0;
+  const prodEff = overall.target ? Math.round((overall.total/overall.target)*100) : 0;
+  const actualEff = overallATG ? Math.round((overall.total/overallATG)*100) : 0;
+
+  // ---- Department Downtime Summary (from control) ----
+  const byDept = {};
+  CTRL_ROWS.forEach(r=>{
+    if(r.date_col < f.fromDate || r.date_col > f.toDate) return;
+    if(f.shift !== "All" && r.shift !== f.shift) return;
+    if(f.section !== "All" && r.section !== f.section) return;
+    if(EXCLUDED_JOB_CODES.has(r.job_code)) return;
+    const stop = parseDT(r.stop_time), finish = parseDT(r.finish_time);
+    if(!stop || !finish) return;
+    const key = r.department || "(blank)";
+    if(!byDept[key]) byDept[key] = { department:key, downtime:0, matLoss:0 };
+    const dt = minutesBetween(stop, finish);
+    byDept[key].downtime += dt;
+    const ukey = r.unit + "||" + r.date_col;
+    const pu = prodByUnitDate[ukey];
+    if(pu){
+      const loss = Math.round((pu.target * dt) / (f.workMinutes * (pu.assets||1)));
+      byDept[key].matLoss += loss;
+    }
+  });
+
+  // ---- build HTML ----
+  let html = `<h3>Overall Production</h3>
+    <p>Total Assets Used = ${overall.assets}</p>
+    <p>Our A Grade Production = ${Math.round(overall.A)}</p>
+    <p>Our B Grade Production = ${Math.round(overall.B)}</p>
+    <p>Our C Grade Production = ${Math.round(overall.C)}</p>
+    <p>Our Total Production = ${Math.round(overall.total)}</p>
+    <p>Our Total Target = ${Math.round(overall.target)}</p>
+    <p>Our Actual Target = ${Math.round(overall.actualTarget)}</p>
+    <p>Our B % = ${pB}%</p>
+    <p>Our C % = ${pC}%</p>
+    <p>Our Production Efficiency = ${prodEff}%</p>
+    <p>Our Actual Production Efficiency = ${actualEff}%</p>
+    <p>Our Operational Loss = ${Math.round(overall.mlu)}</p>
+    <h4>Down time report</h4>
+    <p>Total Downtime = ${Math.round(overall.downtime)} minutes</p>
+    <p>Mat Loss by Downtime = ${Math.round(overall.mld)}</p>
+    <div style="page-break-after: always;"></div>`;
+
+  html += "<h3>📊 Department Downtime Summary</h3>";
+  const deptList = Object.values(byDept);
+  if(deptList.length){
+    deptList.sort((a,b)=>b.downtime-a.downtime).forEach(d=>{
+      const percent = overall.total ? (d.matLoss/overall.total)*100 : 0;
+      html += `<div class="dept-block"><h4>Department: ${d.department}</h4>
+        <p>Our Downtime is: ${Math.round(d.downtime)} minutes</p>
+        <p>Our Mat Loss due to downtime is: ${Math.round(d.matLoss)}</p>
+        <p>Our Percentage Loss is: ${percent.toFixed(2)}%</p></div>`;
+    });
+  } else {
+    html += "<p>No department data found.</p>";
+  }
+  html += `<div style="page-break-after: always;"></div>`;
+
+  let typeCount = 0;
+  const typeEntries = Object.values(byType);
+  typeEntries.forEach((t,idx)=>{
+    const ATG = t.target - t.mld;
+    const MLU = t.total - ATG;
+    const percB = t.total ? Math.round((t.B/t.total)*100) : 0;
+    const percC = t.total ? Math.round((t.C/t.total)*100) : 0;
+    const prodEffT = t.target ? Math.round((t.total/t.target)*100) : 0;
+    const actualEffT = ATG ? Math.round((t.total/ATG)*100) : 0;
+    html += `<div style="margin-bottom:16px;">
+      <h3>Production By Type: ${t.type}</h3>
+      <p>Our A Grade Production = ${Math.round(t.A)}</p>
+      <p>Our B Grade Production = ${Math.round(t.B)}</p>
+      <p>Our C Grade Production = ${Math.round(t.C)}</p>
+      <p>Our Total Production = ${Math.round(t.total)}</p>
+      <p>Our B % = ${percB}%</p>
+      <p>Our C % = ${percC}%</p>
+      <p>Our Production Efficiency = ${prodEffT}%</p>
+      <p>Our Actual Production Efficiency = ${actualEffT}%</p>
+      <p>Our Operational Loss = ${Math.round(MLU)}</p>
+      <h4>Down time report</h4>
+      <p>Total Downtime = ${Math.round(t.downtime)} minutes</p>
+      <p>Mat Loss by Downtime = ${Math.round(t.mld)}</p>
+    </div>`;
+    typeCount++;
+    if(typeCount % 2 === 0 && idx < typeEntries.length-1) html += `<div style="page-break-after: always;"></div>`;
+  });
+
+  const complaints = COMPLAINTS_ROWS.filter(r=>{
+    if(String(r.department||"").toLowerCase() !== "weaving") return false;
+    if(r.date_col < f.fromDate || r.date_col > f.toDate) return false;
+    if(f.shift !== "All" && r.shift !== f.shift) return false;
+    if(f.section !== "All" && r.section !== f.section) return false;
+    return true;
+  }).sort((a,b)=> (a.date_col+a.from_time).localeCompare(b.date_col+b.from_time));
+
+  html += `<h2 style="text-align:center;">📢 Complaints Report</h2>`;
+  if(complaints.length){
+    html += "<table><tr><th>ID</th><th>Section</th><th>Shift</th><th>Date</th><th>Type</th><th>From</th><th>To</th><th>Description</th></tr>";
+    complaints.forEach(c=>{
+      html += `<tr><td>${c.complaint_id||""}</td><td>${c.section||""}</td><td>${c.shift||""}</td>` +
+        `<td>${c.date_col||""}</td><td>${c.complaint_type||""}</td><td>${c.from_time||""}</td>` +
+        `<td>${c.to_time||""}</td><td>${c.description||""}</td></tr>`;
+    });
+    html += "</table>";
+  } else {
+    html += `<p style="text-align:center;">No complaints found for selected filters.</p>`;
+  }
+
+  document.getElementById("reportArea").innerHTML = html;
+  status.className="success"; status.textContent = "✅ Report generated";
+}
+
+init();
+</script>
+</body>
+</html>

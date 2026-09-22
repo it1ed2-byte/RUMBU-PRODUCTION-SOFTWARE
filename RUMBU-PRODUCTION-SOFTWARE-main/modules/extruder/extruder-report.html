@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Extruder — Production Report</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  :root{
+    --navy:#1F3864; --blue:#2E75B6; --blue-dark:#245d92;
+    --line:#d8dee8; --bg:#eef2f7; --muted:#6b7280;
+    --red:#c0392b; --green:#1d8a4e; --amber:#d97706;
+  }
+  *{box-sizing:border-box;}
+  body{font-family:Arial,Helvetica,sans-serif;background:var(--bg);margin:0;padding:18px;color:#1f2430;}
+  .wrap{max-width:1100px;margin:0 auto;}
+  .card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;}
+  h3{color:var(--navy);margin:0 0 12px;font-size:15px;}
+  label{display:block;font-size:12px;font-weight:bold;color:#374151;margin:0 0 4px;}
+  input,select{width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;}
+  .row>div{flex:1;min-width:140px;}
+  button{padding:10px 16px;border:none;border-radius:8px;font-weight:bold;
+    font-size:13px;cursor:pointer;background:var(--blue);color:#fff;}
+  button:hover{background:var(--blue-dark);}
+  button.sec{background:#6b7280;} button.sec:hover{background:#4b5563;}
+  .quickbar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;}
+  .qbtn{background:#e6edf5;color:var(--navy);padding:6px 11px;border:1px solid var(--line);
+    border-radius:8px;font-size:12px;font-weight:bold;cursor:pointer;}
+  .qbtn.active{background:var(--blue);color:#fff;border-color:var(--blue);}
+  .status{margin-top:8px;font-weight:bold;font-size:13px;min-height:14px;}
+  .status.err{color:var(--red);} .status.ok{color:var(--green);}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;}
+
+  /* KPI cards */
+  .kpis{display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap;}
+  .kpi{flex:1;min-width:150px;background:#fff;border:1px solid var(--line);
+    border-radius:12px;padding:14px;text-align:center;}
+  .kpi .n{font-size:26px;font-weight:800;color:var(--navy);}
+  .kpi .l{font-size:11px;color:var(--muted);margin-top:4px;font-weight:bold;text-transform:uppercase;}
+  .kpi.good .n{color:var(--green);} .kpi.warn .n{color:var(--amber);} .kpi.bad .n{color:var(--red);}
+
+  /* Table */
+  .tbl-wrap{overflow-x:auto;}
+  table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;}
+  th,td{border:1px solid var(--line);padding:7px 8px;text-align:center;white-space:nowrap;}
+  th{background:var(--navy);color:#fff;font-size:11px;text-transform:uppercase;letter-spacing:.3px;}
+  td.left{text-align:left;font-weight:bold;color:var(--navy);}
+  tr:nth-child(even) td{background:#f8fafc;}
+  .grand-row td{background:#e9eef5 !important;font-weight:bold;color:var(--navy);
+    border-top:2px solid var(--navy);}
+  .g{color:var(--green);font-weight:bold;}
+  .w{color:var(--amber);font-weight:bold;}
+  .b{color:var(--red);font-weight:bold;}
+  .print-only{display:none;}
+
+  /* Print */
+  @media print{
+    body{background:#fff;padding:10px;}
+    .no-print{display:none !important;}
+    .print-only{display:block !important;}
+    #printLetterhead{
+      display:flex;justify-content:space-between;align-items:flex-end;
+      border-bottom:3px solid #1F3864;padding-bottom:10px;margin-bottom:6px;
+    }
+    #printLetterhead .co{font-size:11pt;font-weight:bold;letter-spacing:.5px;color:#1F3864;}
+    #printLetterhead .dt{font-size:10pt;color:#555;}
+    #printTitle{text-align:center;color:#1F3864;font-size:17pt;
+      font-weight:bold;margin:12px 0 4px;}
+    #printSubtitle{text-align:center;font-size:10pt;color:#555;margin-bottom:12px;}
+    #printMeta{border:1px solid #d7dde5;border-radius:4px;background:#f7f9fc;
+      padding:10px 14px;margin-bottom:16px;font-size:10pt;}
+    #printMeta table{width:100%;border-collapse:collapse;}
+    #printMeta td{padding:3px 6px;border:none;}
+    .ml{color:#555;font-weight:bold;width:90px;}
+    .mv{color:#1F3864;font-weight:bold;}
+    .kpis{gap:8px;} .kpi{border:1px solid #ccc;padding:10px;} .kpi .n{font-size:18px;}
+    table{font-size:9pt;} th,td{padding:5px 4px;}
+    .card{border:none;padding:0;margin-bottom:12px;box-shadow:none;}
+    #printFooter{margin-top:24px;padding-top:8px;border-top:1px solid #d7dde5;
+      display:flex;justify-content:space-between;font-size:8pt;color:#777;}
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <button class="no-print" onclick="window.location.href='../../index.html'"
+    style="max-width:200px;margin-bottom:12px;padding:10px 16px;border:none;
+           border-radius:8px;font-weight:bold;font-size:13px;cursor:pointer;
+           background:#1F3864;color:#fff;">&larr; Back to Menu</button>
+
+  <div id="connStatus">Loading...</div>
+
+  <div id="appArea" style="display:none;">
+
+    <!-- Filters -->
+    <div class="card no-print">
+      <h3>Filters</h3>
+      <div class="quickbar">
+        <button class="qbtn" onclick="setRange('week',this)">This Week</button>
+        <button class="qbtn active" onclick="setRange('month',this)">This Month</button>
+        <button class="qbtn" onclick="setRange('quarter',this)">Last 3 Months</button>
+        <button class="qbtn" onclick="setRange('year',this)">This Year</button>
+        <button class="qbtn" onclick="setRange('custom',this)">Custom</button>
+      </div>
+      <div class="row">
+        <div><label>From</label><input type="date" id="fromDate"></div>
+        <div><label>To</label><input type="date" id="toDate"></div>
+        <div>
+          <label>Section</label>
+          <select id="sectionFilter" onchange="onSectionFilter()">
+            <option value="">All Sections</option>
+            <option value="Rumbu">Rumbu</option>
+            <option value="MamaSannu">Mama Sannu</option>
+          </select>
+        </div>
+        <div>
+          <label>Shift</label>
+          <select id="shiftFilter">
+            <option value="">All Shifts</option>
+            <option value="Morning">Morning</option>
+            <option value="Night">Night</option>
+          </select>
+        </div>
+        <div>
+          <label>Extruder</label>
+          <select id="extruderFilter">
+            <option value="">All Extruders</option>
+            <option value="Extruder 1">Extruder 1</option>
+            <option value="Extruder 2">Extruder 2</option>
+            <option value="Extruder 3">Extruder 3</option>
+            <option value="Extruder 4">Extruder 4</option>
+            <option value="Extruder 5">Extruder 5</option>
+            <option value="Extruder MSN">Extruder MSN</option>
+          </select>
+        </div>
+        <div style="flex:0 0 auto;"><label>&nbsp;</label><button onclick="runReport()">Run</button></div>
+        <div style="flex:0 0 auto;"><label>&nbsp;</label><button class="sec" onclick="window.print()">Print / PDF</button></div>
+      </div>
+      <div class="status" id="status"></div>
+    </div>
+
+    <!-- Report output -->
+    <div id="reportArea" style="display:none;">
+
+      <!-- Print-only header -->
+      <div class="print-only">
+        <div id="printLetterhead">
+          <div class="co">RUMBU INDUSTRIES GROUP</div>
+          <div class="dt">Extruder Production Report</div>
+        </div>
+        <div id="printTitle">EXTRUDER PRODUCTION REPORT</div>
+        <div id="printSubtitle"></div>
+        <div id="printMeta">
+          <table>
+            <tr>
+              <td class="ml">Period</td><td class="mv" id="pm_period"></td>
+              <td class="ml">Shift</td><td class="mv" id="pm_shift"></td>
+            </tr>
+            <tr>
+              <td class="ml">Section</td><td class="mv" id="pm_section"></td>
+              <td class="ml">Extruder</td><td class="mv" id="pm_extruder"></td>
+            </tr>
+          </table>
+        </div>
+      </div>
+
+      <!-- KPI cards -->
+      <div class="kpis" id="kpiRow"></div>
+
+      <!-- Data table -->
+      <div class="card">
+        <div class="tbl-wrap" id="dataTable"></div>
+      </div>
+
+      <!-- Print footer -->
+      <div class="print-only" id="printFooter">
+        <div>CONFIDENTIAL — Rumbu Industries Group</div>
+        <div id="printGenerated"></div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Extruder targets (no target column in DB — derived here) ─
+const EXTRUDER_TARGETS = {
+  "Extruder 1":   1463.0,
+  "Extruder 2":   2325.6,
+  "Extruder 3":   2325.6,
+  "Extruder 4":   1394.2,
+  "Extruder 5":   1520.0,
+  "Extruder MSN": 1450.0
+};
+
+const EXTRUDER_BY_SECTION = {
+  "Rumbu":     ["Extruder 1","Extruder 2","Extruder 3","Extruder 4","Extruder 5"],
+  "MamaSannu": ["Extruder MSN"]
+};
+
+const SECTION_LABEL = {"Rumbu":"Rumbu","MamaSannu":"Mama Sannu"};
+
+let ME=null, MY_SECTIONS=[];
+
+function authHeaders(){
+  return {"apikey":SUPABASE_ANON_KEY,"Authorization":"Bearer "+SUPABASE_ANON_KEY};
+}
+function iso(d){ return d.toISOString().slice(0,10); }
+function R(v){ return Math.round(Number(v)||0); }
+function pct(part,whole){ return whole?(part/whole)*100:0; }
+function fmtDate(d){
+  if(!d) return "—";
+  return new Date(d).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"});
+}
+
+// Target per shift for a given extruder name
+function getTarget(name){ return EXTRUDER_TARGETS[name]||0; }
+
+// ── Init ──────────────────────────────────────────────────
+async function init(){
+  const cs=document.getElementById("connStatus");
+  try{
+    ME=await requireAuth("../../login.html");
+    if(!ME) return;
+    MY_SECTIONS=(ME.sectionNames&&ME.sectionNames.length)
+      ?ME.sectionNames.filter(s=>["Rumbu","MamaSannu"].includes(s))
+      :["Rumbu","MamaSannu"];
+    if(!MY_SECTIONS.length) MY_SECTIONS=["Rumbu","MamaSannu"];
+    setRange("month",document.querySelector(".qbtn.active"));
+    cs.style.color="#1d8a4e"; cs.textContent="✔ Connected.";
+    document.getElementById("appArea").style.display="block";
+    runReport();
+  }catch(e){
+    cs.style.color="#c0392b"; cs.textContent="❌ "+e.message; console.error(e);
+  }
+}
+
+// ── Section filter → update extruder dropdown ──────────────
+function onSectionFilter(){
+  const sec=document.getElementById("sectionFilter").value;
+  const extSel=document.getElementById("extruderFilter");
+  let opts=['<option value="">All Extruders</option>'];
+  const list=sec?(EXTRUDER_BY_SECTION[sec]||[]):[
+    "Extruder 1","Extruder 2","Extruder 3","Extruder 4","Extruder 5","Extruder MSN"
+  ];
+  list.forEach(n=>{ opts.push(`<option value="${n}">${n}</option>`); });
+  extSel.innerHTML=opts.join("");
+}
+
+// ── Date quickbar ──────────────────────────────────────────
+function setRange(range,btn){
+  document.querySelectorAll(".qbtn").forEach(b=>b.classList.remove("active"));
+  if(btn) btn.classList.add("active");
+  const t=new Date(); let from;
+  if(range==="week"){ const d=(t.getDay()+6)%7; from=new Date(t); from.setDate(t.getDate()-d); }
+  else if(range==="month"){ from=new Date(t.getFullYear(),t.getMonth(),1); }
+  else if(range==="quarter"){ from=new Date(t); from.setMonth(t.getMonth()-3); }
+  else if(range==="year"){ from=new Date(t.getFullYear(),0,1); }
+  else return;
+  document.getElementById("fromDate").value=iso(from);
+  document.getElementById("toDate").value=iso(t);
+}
+
+// ── Fetch from extruder_new ────────────────────────────────
+async function runReport(){
+  const status   =document.getElementById("status");
+  const from     =document.getElementById("fromDate").value;
+  const to       =document.getElementById("toDate").value;
+  const section  =document.getElementById("sectionFilter").value;
+  const shift    =document.getElementById("shiftFilter").value;
+  const extruder =document.getElementById("extruderFilter").value;
+
+  if(!from||!to){ status.className="status err"; status.textContent="Select a date range."; return; }
+
+  status.className="status"; status.textContent="Loading...";
+  document.getElementById("reportArea").style.display="none";
+
+  try{
+    // ── SELECT uses actual extruder_new column names ───────
+    // extruder_name, section, a, b, c, total
+    // No target column in DB — calculated client-side from EXTRUDER_TARGETS
+    let url=SUPABASE_URL+"/rest/v1/extruder_new"+
+      "?select=extruder_name,section,a,b,c,total"+
+      "&date_col=gte."+from+"&date_col=lte."+to;
+
+    if(shift)    url+="&shift=eq."         +encodeURIComponent(shift);
+    if(extruder) url+="&extruder_name=eq." +encodeURIComponent(extruder);
+    if(section){
+      url+="&section=eq."+encodeURIComponent(section);
+    } else {
+      const list=MY_SECTIONS.map(s=>`"${s}"`).join(",");
+      url+="&section=in.("+encodeURIComponent(list)+")";
+    }
+
+    const res=await fetch(url,{headers:authHeaders()});
+    if(!res.ok) throw new Error("extruder_new: HTTP "+res.status);
+    const rows=await res.json();
+
+    status.className="status ok";
+    status.textContent=rows.length.toLocaleString()+" record(s) loaded.";
+
+    if(!rows.length){
+      status.textContent="No data found for the selected filters.";
+      return;
+    }
+
+    document.getElementById("reportArea").style.display="block";
+    render(rows,{from,to,section,shift,extruder});
+
+  }catch(e){
+    status.className="status err"; status.textContent="❌ "+e.message;
+  }
+}
+
+// ── Aggregate + render ─────────────────────────────────────
+function render(rows,filters){
+  // Aggregate by extruder_name + section
+  // Target = number of records × target per shift (no target column in DB)
+  const agg={};
+  rows.forEach(r=>{
+    const key=(r.extruder_name||"Unknown")+"||"+(r.section||"");
+    if(!agg[key]) agg[key]={
+      name:    r.extruder_name||"Unknown",
+      section: r.section||"",
+      a:0, b:0, c:0, total:0, target:0
+    };
+    agg[key].a      +=Number(r.a||0);
+    agg[key].b      +=Number(r.b||0);
+    agg[key].c      +=Number(r.c||0);
+    agg[key].total  +=Number(r.total||0);
+    agg[key].target +=getTarget(r.extruder_name); // 1 record = 1 shift
+  });
+
+  const data=Object.values(agg).sort((a,b)=>
+    a.section.localeCompare(b.section)||a.name.localeCompare(b.name)
+  );
+
+  const grand=data.reduce((s,d)=>({
+    a:s.a+d.a, b:s.b+d.b, c:s.c+d.c, total:s.total+d.total, target:s.target+d.target
+  }),{a:0,b:0,c:0,total:0,target:0});
+
+  const achPct=pct(grand.total,grand.target);
+  const achCls=achPct>=100?"good":achPct>=80?"warn":"bad";
+
+  // Labels for print
+  const shiftLbl   =filters.shift    ?filters.shift.toUpperCase()+" SHIFT":"ALL SHIFTS";
+  const sectionLbl =filters.section  ?(SECTION_LABEL[filters.section]||filters.section).toUpperCase():"ALL SECTIONS";
+  const extruderLbl=filters.extruder ?filters.extruder.toUpperCase():"ALL EXTRUDERS";
+
+  // KPI cards — matches Apps Script kpi-row
+  document.getElementById("kpiRow").innerHTML=
+    `<div class="kpi"><div class="n">${R(grand.total).toLocaleString()}</div><div class="l">Total Output (KG)</div></div>`+
+    `<div class="kpi"><div class="n">${R(grand.target).toLocaleString()}</div><div class="l">Target (KG)</div></div>`+
+    `<div class="kpi ${achCls}"><div class="n">${R(achPct)}%</div><div class="l">Achieved</div></div>`;
+
+  // Data table rows — matches Apps Script column layout exactly
+  let tRows="";
+  data.forEach((d,i)=>{
+    const bg=i%2===0?"":"background:#f4f7fb;";
+    const eff=pct(d.total,d.target);
+    const cls=eff>=100?"g":eff>=80?"w":"b";
+    tRows+=
+      `<tr style="${bg}">`+
+      `<td class="left">${d.name}</td>`+
+      `<td>${SECTION_LABEL[d.section]||d.section}</td>`+
+      `<td>${R(d.a)}</td>`+
+      `<td>${R(d.b)}</td>`+
+      `<td>${R(d.c)}</td>`+
+      `<td><b>${R(d.total)}</b></td>`+
+      `<td>${R(d.target)}</td>`+
+      `<td>${R(pct(d.a,d.target))}%</td>`+
+      `<td>${R(pct(d.b,d.target))}%</td>`+
+      `<td>${R(pct(d.c,d.target))}%</td>`+
+      `<td class="${cls}"><b>${R(eff)}%</b></td>`+
+      `</tr>`;
+  });
+
+  document.getElementById("dataTable").innerHTML=
+    `<table>
+      <thead><tr>
+        <th style="text-align:left;">Extruder</th>
+        <th>Section</th>
+        <th>A Grade (KG)</th>
+        <th>B Grade (KG)</th>
+        <th>C Grade (KG)</th>
+        <th>Total (KG)</th>
+        <th>Target (KG)</th>
+        <th>%A</th><th>%B</th><th>%C</th>
+        <th>% Achieved</th>
+      </tr></thead>
+      <tbody>${tRows}</tbody>
+      <tfoot><tr class="grand-row">
+        <td class="left" colspan="2">GRAND TOTAL</td>
+        <td>${R(grand.a)}</td>
+        <td>${R(grand.b)}</td>
+        <td>${R(grand.c)}</td>
+        <td>${R(grand.total)}</td>
+        <td>${R(grand.target)}</td>
+        <td>${R(pct(grand.a,grand.target))}%</td>
+        <td>${R(pct(grand.b,grand.target))}%</td>
+        <td>${R(pct(grand.c,grand.target))}%</td>
+        <td class="${achCls}"><b>${R(achPct)}%</b></td>
+      </tr></tfoot>
+    </table>`;
+
+  // Print header
+  document.getElementById("printSubtitle").textContent=
+    shiftLbl+" | "+sectionLbl+" | "+extruderLbl;
+  document.getElementById("pm_period").textContent  =fmtDate(filters.from)+" – "+fmtDate(filters.to);
+  document.getElementById("pm_shift").textContent   =shiftLbl;
+  document.getElementById("pm_section").textContent =sectionLbl;
+  document.getElementById("pm_extruder").textContent=extruderLbl;
+  document.getElementById("printGenerated").textContent=
+    "Generated: "+new Date().toLocaleString("en-GB",{
+      day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"
+    })+" (WAT)";
+}
+
+init();
+</script>
+</body>
+</html>

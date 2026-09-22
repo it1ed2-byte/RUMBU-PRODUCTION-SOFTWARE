@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Extruder — Enter Production</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  :root{
+    --navy:#1F3864; --blue:#2E75B6; --blue-dark:#245d92;
+    --line:#d8dee8; --bg:#eef2f7; --muted:#6b7280;
+    --red:#c0392b; --green:#1d8a4e;
+  }
+  *{box-sizing:border-box;}
+  body{font-family:Arial,Helvetica,sans-serif;background:var(--bg);margin:0;padding:18px;color:#1f2430;}
+  .wrap{max-width:520px;margin:0 auto;}
+  .card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:22px;margin-bottom:16px;}
+  h3{color:var(--navy);margin:0 0 16px;font-size:16px;
+    border-bottom:2px solid var(--navy);padding-bottom:8px;}
+  label{display:block;font-size:12px;font-weight:bold;color:#374151;margin:0 0 4px;}
+  input,select{
+    width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;
+    font-size:14px;font-family:inherit;margin-bottom:14px;
+  }
+  input:focus,select:focus{outline:2px solid var(--blue);border-color:var(--blue);}
+  input[readonly]{background:#f8fafc;color:var(--muted);cursor:default;}
+  .total-row{
+    display:flex;justify-content:space-between;align-items:center;
+    background:#f0f4f8;border:1px solid var(--line);border-radius:8px;
+    padding:10px 14px;margin-bottom:14px;
+  }
+  .total-row .lbl{font-size:12px;font-weight:bold;color:#374151;}
+  .total-row .val{font-size:20px;font-weight:800;color:var(--navy);}
+  button.main{
+    width:100%;padding:12px;border:none;border-radius:8px;
+    font-weight:bold;font-size:14px;cursor:pointer;background:var(--blue);color:#fff;
+  }
+  button.main:hover{background:var(--blue-dark);}
+  button.main:disabled{background:#94a3b8;cursor:not-allowed;}
+  .status{
+    margin-top:10px;font-weight:bold;font-size:13px;
+    padding:10px 14px;border-radius:8px;display:none;
+  }
+  .status.err{color:var(--red);background:#fef2f2;border:1px solid #fecaca;}
+  .status.ok{color:var(--green);background:#f0fdf4;border:1px solid #bbf7d0;}
+  .status.info{color:var(--navy);background:#eff6ff;border:1px solid #bfdbfe;}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <button onclick="window.location.href='../../index.html'"
+    style="max-width:200px;margin-bottom:12px;padding:10px 16px;border:none;
+           border-radius:8px;font-weight:bold;font-size:13px;cursor:pointer;
+           background:#1F3864;color:#fff;">&larr; Back to Menu</button>
+
+  <div id="connStatus">Loading...</div>
+
+  <div id="appArea" style="display:none;">
+    <div class="card">
+      <h3>🧵 Enter Extruder Production</h3>
+
+      <label>Section</label>
+      <select id="section" onchange="onSectionChange()">
+        <option value="">— Select Section —</option>
+      </select>
+
+      <label>Date</label>
+      <input type="date" id="prodDate">
+
+      <label>Shift</label>
+      <select id="shift">
+        <option value="">— Select Shift —</option>
+        <option value="Morning">Morning</option>
+        <option value="Night">Night</option>
+      </select>
+
+      <label>Extruder</label>
+      <select id="extruder" onchange="onExtruderChange()" disabled>
+        <option value="">— Select Section first —</option>
+      </select>
+
+      <label>Target KG (per shift)</label>
+      <input type="text" id="targetKg" readonly
+             placeholder="Auto-filled when extruder is selected">
+
+      <label>A Grade (KG)</label>
+      <input type="number" id="aGrade" min="0" step="0.01"
+             oninput="recalcTotal()" placeholder="0">
+
+      <label>B Grade (KG)</label>
+      <input type="number" id="bGrade" min="0" step="0.01"
+             oninput="recalcTotal()" placeholder="0">
+
+      <label>C Grade (KG)</label>
+      <input type="number" id="cGrade" min="0" step="0.01"
+             oninput="recalcTotal()" placeholder="0">
+
+      <div class="total-row">
+        <span class="lbl">Total (A + B + C)</span>
+        <span class="val" id="totalDisplay">0 KG</span>
+      </div>
+
+      <button class="main" id="submitBtn" onclick="submitEntry()">
+        Submit Record
+      </button>
+      <div class="status" id="status"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Extruder config — targets per shift ───────────────────
+const EXTRUDER_CONFIG = {
+  "Rumbu": [
+    { name:"Extruder 1", target:1463.0  },
+    { name:"Extruder 2", target:2325.6  },
+    { name:"Extruder 3", target:2325.6  },
+    { name:"Extruder 4", target:1394.2  },
+    { name:"Extruder 5", target:1520.0  }
+  ],
+  "MamaSannu": [
+    { name:"Extruder MSN", target:1450.0 }
+  ]
+};
+
+function configKey(s){ return s==="Rumbu"?"Rumbu":"MamaSannu"; }
+
+let ME=null, MY_SECTIONS=[];
+
+function authHeaders(){
+  return {
+    "apikey":        SUPABASE_ANON_KEY,
+    "Authorization": "Bearer "+SUPABASE_ANON_KEY,
+    "Content-Type":  "application/json"
+  };
+}
+function today(){ return new Date().toISOString().slice(0,10); }
+
+// ── Init ──────────────────────────────────────────────────
+async function init(){
+  const cs=document.getElementById("connStatus");
+  try{
+    ME=await requireAuth("../../login.html");
+    if(!ME) return;
+
+    MY_SECTIONS=(ME.sectionNames&&ME.sectionNames.length)
+      ?ME.sectionNames.filter(s=>["Rumbu","MamaSannu"].includes(s))
+      :["Rumbu","MamaSannu"];
+    if(!MY_SECTIONS.length) MY_SECTIONS=["Rumbu","MamaSannu"];
+
+    const secSel=document.getElementById("section");
+    secSel.innerHTML='<option value="">— Select Section —</option>'+
+      MY_SECTIONS.map(s=>
+        `<option value="${s}">${s==="MamaSannu"?"Mama Sannu":s}</option>`
+      ).join("");
+
+    if(MY_SECTIONS.length===1){
+      secSel.value=MY_SECTIONS[0];
+      secSel.disabled=true;
+      onSectionChange();
+    }
+
+    document.getElementById("prodDate").value=today();
+    cs.style.color="#1d8a4e"; cs.textContent="✔ Connected.";
+    document.getElementById("appArea").style.display="block";
+  }catch(e){
+    cs.style.color="#c0392b"; cs.textContent="❌ "+e.message; console.error(e);
+  }
+}
+
+// ── Section change ─────────────────────────────────────────
+function onSectionChange(){
+  const section=document.getElementById("section").value;
+  const extSel=document.getElementById("extruder");
+  document.getElementById("targetKg").value="";
+  extSel.innerHTML='<option value="">— Select Extruder —</option>';
+  extSel.disabled=!section;
+  if(!section) return;
+  const list=EXTRUDER_CONFIG[configKey(section)]||[];
+  list.forEach(e=>extSel.add(new Option(e.name,e.name)));
+  if(list.length===1){ extSel.value=list[0].name; onExtruderChange(); }
+}
+
+// ── Extruder change → auto-fill target ────────────────────
+function onExtruderChange(){
+  const section=document.getElementById("section").value;
+  const extName=document.getElementById("extruder").value;
+  const tInput=document.getElementById("targetKg");
+  if(!section||!extName){ tInput.value=""; return; }
+  const list=EXTRUDER_CONFIG[configKey(section)]||[];
+  const found=list.find(e=>e.name===extName);
+  tInput.value=found
+    ?found.target.toLocaleString(undefined,{maximumFractionDigits:1})+" KG"
+    :"";
+}
+
+// ── Live total ─────────────────────────────────────────────
+function recalcTotal(){
+  const a=parseFloat(document.getElementById("aGrade").value)||0;
+  const b=parseFloat(document.getElementById("bGrade").value)||0;
+  const c=parseFloat(document.getElementById("cGrade").value)||0;
+  document.getElementById("totalDisplay").textContent=
+    (a+b+c).toLocaleString(undefined,{maximumFractionDigits:2})+" KG";
+}
+
+// ── Duplicate check ────────────────────────────────────────
+// Uses actual column names: extruder_name, date_col, shift, section
+async function checkDuplicate(date,shift,extName,section){
+  const url=SUPABASE_URL+"/rest/v1/extruder_new"+
+    "?select=id"+
+    "&date_col=eq."+date+
+    "&shift=eq."+encodeURIComponent(shift)+
+    "&extruder_name=eq."+encodeURIComponent(extName)+
+    "&section=eq."+encodeURIComponent(section)+
+    "&limit=1";
+  const res=await fetch(url,{headers:authHeaders()});
+  if(!res.ok) return false;
+  const rows=await res.json();
+  return rows.length>0;
+}
+
+// ── Submit ─────────────────────────────────────────────────
+async function submitEntry(){
+  const btn    =document.getElementById("submitBtn");
+  const section=document.getElementById("section").value;
+  const date   =document.getElementById("prodDate").value;
+  const shift  =document.getElementById("shift").value;
+  const extName=document.getElementById("extruder").value;
+  const a      =parseFloat(document.getElementById("aGrade").value);
+  const b      =parseFloat(document.getElementById("bGrade").value);
+  const c      =parseFloat(document.getElementById("cGrade").value);
+
+  if(!section)              {showStatus("err","Select a section."); return;}
+  if(!date)                 {showStatus("err","Select a date."); return;}
+  if(date>today())          {showStatus("err","Date cannot be in the future."); return;}
+  if(!shift)                {showStatus("err","Select a shift."); return;}
+  if(!extName)              {showStatus("err","Select an extruder."); return;}
+  if(isNaN(a)||a<0)         {showStatus("err","Enter a valid A Grade value."); return;}
+  if(isNaN(b)||b<0)         {showStatus("err","Enter a valid B Grade value."); return;}
+  if(isNaN(c)||c<0)         {showStatus("err","Enter a valid C Grade value."); return;}
+
+  const total=a+b+c;
+  btn.disabled=true;
+  showStatus("info","Checking for duplicates...");
+
+  try{
+    const isDup=await checkDuplicate(date,shift,extName,section);
+    if(isDup){
+      throw new Error(extName+" ("+shift+" shift) already has a record for "+date+".");
+    }
+
+    showStatus("info","Saving...");
+
+    // ── INSERT — uses actual extruder_new column names ────
+    // Columns: date_col, section, shift, extruder_name, a, b, c, total
+    // No target column in extruder_new — it is derived client-side only
+    const res=await fetch(
+      SUPABASE_URL+"/rest/v1/extruder_new",
+      {
+        method:"POST",
+        headers:Object.assign({},authHeaders(),{"Prefer":"return=minimal"}),
+        body:JSON.stringify({
+          date_col:      date,
+          section:       section,
+          shift:         shift,
+          extruder_name: extName,
+          a:             a,
+          b:             b,
+          c:             c,
+          total:         total
+        })
+      }
+    );
+
+    if(res.status===409){
+      throw new Error("Duplicate record detected. This entry already exists.");
+    }
+    if(!res.ok){
+      const j=await res.json().catch(()=>({}));
+      throw new Error(j.message||j.details||"Save failed (HTTP "+res.status+").");
+    }
+
+    showStatus("ok",
+      "✅ Record submitted — "+extName+" ("+section+"), "+
+      shift+" shift, "+date+". Total: "+total.toLocaleString()+" KG."
+    );
+
+    // Reset — keep section and shift
+    document.getElementById("extruder").value      ="";
+    document.getElementById("prodDate").value       =today();
+    document.getElementById("targetKg").value       ="";
+    document.getElementById("aGrade").value         ="";
+    document.getElementById("bGrade").value         ="";
+    document.getElementById("cGrade").value         ="";
+    document.getElementById("totalDisplay").textContent="0 KG";
+
+  }catch(e){
+    showStatus("err","❌ "+e.message);
+  } finally {
+    btn.disabled=false;
+  }
+}
+
+function showStatus(type,msg){
+  const el=document.getElementById("status");
+  el.className="status "+type;
+  el.textContent=msg;
+  el.style.display=msg?"block":"none";
+}
+
+init();
+</script>
+</body>
+</html>

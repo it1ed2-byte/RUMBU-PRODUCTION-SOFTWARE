@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Production Stage — PET Collection</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme")||"navy"); }catch(e){} })();
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) document.documentElement.setAttribute("data-theme",e.data.rumbuTheme); });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="review-modal.js"></script>
+<script src="queue-collapse.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1000px;margin:0 auto;}
+  label{font-size:12px;font-weight:700;display:block;margin:10px 0 4px;color:var(--muted);}
+  input{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);}
+  input[readonly]{background:var(--bg);color:var(--muted);}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;}
+  .grid4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;}
+  .sec-title{font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--heading);margin:18px 0 10px;padding-bottom:4px;border-bottom:2px solid var(--line);}
+  .queue-row{padding:10px 14px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;background:var(--card);gap:10px;flex-wrap:wrap;}
+  .approve-card{border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:10px;}
+  .correction-note{background:#fef3c7;border:1px solid #d97706;border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:12px;}
+  .info-box{background:var(--bg);border-radius:8px;padding:12px;margin-bottom:14px;font-size:12px;line-height:1.8;}
+  .info-box b{color:var(--heading);}
+  /* Plain numeric entry — no up/down spinner arrows, so the person types the
+     number directly instead of clicking tiny increment controls. */
+  input.no-spinner::-webkit-outer-spin-button,
+  input.no-spinner::-webkit-inner-spin-button{ -webkit-appearance:none; margin:0; }
+  input.no-spinner{ -moz-appearance:textfield; }
+
+  /* Bag Tracking */
+  .bag-label{border:1px solid var(--line);border-radius:8px;padding:10px;text-align:center;background:var(--card);}
+  .bag-label .ref{font-size:11px;font-weight:700;color:var(--heading);margin-top:6px;word-break:break-all;}
+  @media print{
+    body *{visibility:hidden;}
+    #bagQrGrid, #bagQrGrid *{visibility:visible;}
+    #bagQrGrid{position:absolute;top:0;left:0;width:100%;grid-template-columns:repeat(3,1fr)!important;gap:10px!important;}
+    .bag-label{break-inside:avoid;border:1px dashed #999;}
+  }
+</style>
+<script>
+  var QR_LOOKUP_BASE = "https://rumbu-production-software-my4h.vercel.app/modules/pet/bag-lookup.html";
+</script>
+</head>
+<body>
+<div class="wrap">
+  <button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back</button>
+  <div id="connStatus" style="font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);">Loading...</div>
+
+  <!-- Fill queue -->
+  <div id="fillSection" style="display:none;">
+    <div class="card-panel">
+      <div class="panel-title" id="fillQueueTitle" style="font-weight:700;font-size:14px;color:var(--heading);margin:0 0 10px;">Stage 4 — Production (Fill Queue)</div>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Enter production details for collections ready to go into production.</p>
+      <div id="fillQueue"></div>
+    </div>
+
+    <!-- Production form -->
+    <div id="prodForm" style="display:none;">
+      <div class="card-panel">
+        <h3 id="prodFormTitle" style="color:var(--heading);margin:0 0 6px;">Production Data Entry</h3>
+        <div id="prodCorrNote" style="display:none;" class="correction-note"></div>
+
+        <div class="info-box" id="prodSummary"></div>
+
+        <div class="grid3">
+          <div><label>Form Number</label><input type="text" id="pfFormNum" readonly></div>
+          <div><label>Agent Code (AGENT_CODE)</label><input type="text" id="pfAgentCode" readonly></div>
+          <div><label>LOT (OFFLOAD_LOCATION)</label><input type="text" id="pfLot" readonly></div>
+        </div>
+
+        <div class="sec-title">Production Time</div>
+        <div class="grid2">
+          <div>
+            <label>Production Start *</label>
+            <input type="datetime-local" id="pfStart">
+          </div>
+          <div>
+            <label>Production End *</label>
+            <input type="datetime-local" id="pfEnd">
+          </div>
+        </div>
+
+        <div class="sec-title">Production Entry</div>
+        <div class="grid3">
+          <div>
+            <label>Total Colored Flex (kg) *</label>
+            <input type="number" id="pfColoredFlex" step="0.01" oninput="computeProductionTotals()">
+          </div>
+          <div>
+            <label>Total Non-Colored Flex (kg) *</label>
+            <input type="number" id="pfNonColoredFlex" step="0.01" oninput="computeProductionTotals()">
+          </div>
+          <div>
+            <label>Total Production (kg) — Colored + Non-Colored Flex</label>
+            <input type="number" id="pfTotalProduction" readonly>
+          </div>
+        </div>
+
+        <div class="sec-title">Waste Data</div>
+        <div class="grid4">
+          <div>
+            <label>Coloured PET (kg) *</label>
+            <input type="number" class="no-spinner" id="pfWasteColoured" min="0" step="1" inputmode="numeric" oninput="computeWaste()">
+          </div>
+          <div>
+            <label>Labelled Bottles (kg) *</label>
+            <input type="number" class="no-spinner" id="pfWasteLabels" min="0" step="1" inputmode="numeric" oninput="computeWaste()">
+          </div>
+          <div>
+            <label>Caps &amp; Rings (kg) *</label>
+            <input type="number" class="no-spinner" id="pfWasteCapsRings" min="0" step="1" inputmode="numeric" oninput="computeWaste()">
+          </div>
+          <div>
+            <label>Non-Food Contact (kg) *</label>
+            <input type="number" class="no-spinner" id="pfWasteNonFood" min="0" step="1" inputmode="numeric" oninput="computeWaste()">
+          </div>
+          <div>
+            <label>Non-PET Product (kg) *</label>
+            <input type="number" class="no-spinner" id="pfWasteNonPet" min="0" step="1" inputmode="numeric" oninput="computeWaste()">
+          </div>
+          <div>
+            <label>Aged PET Bottles (kg) *</label>
+            <input type="number" class="no-spinner" id="pfWasteAged" min="0" step="1" inputmode="numeric" oninput="computeWaste()">
+          </div>
+          <div>
+            <label>Oily PET Bottles (kg) *</label>
+            <input type="number" class="no-spinner" id="pfWasteOily" min="0" step="1" inputmode="numeric" oninput="computeWaste()">
+          </div>
+          <div>
+            <label>Bottles with Metal Ring (kg) *</label>
+            <input type="number" class="no-spinner" id="pfWasteMetal" min="0" step="1" inputmode="numeric" oninput="computeWaste()">
+          </div>
+        </div>
+        <div class="grid3" style="margin-top:6px;">
+          <div>
+            <label>Total Waste Record (kg) — sum of all 8 waste categories above</label>
+            <input type="number" id="pfTotalWaste" readonly>
+          </div>
+          <div>
+            <label>Accepted Waste (Rumbu Weighbridge Weight × 3%)</label>
+            <input type="number" id="pfAcceptedWaste" readonly>
+          </div>
+          <div>
+            <label>Unacceptable Waste (kg)</label>
+            <input type="number" id="pfUnacceptableKg" readonly>
+          </div>
+          <div>
+            <label>Unacceptable Waste Value (if &gt; 0)</label>
+            <input type="number" id="pfUnacceptableVal" readonly>
+          </div>
+          <div>
+            <label>Weight Difference (Rumbu − Agent)</label>
+            <input type="number" id="pfWeightDiff" readonly>
+          </div>
+          <div>
+            <label>Total Production + Total Waste (kg)</label>
+            <input type="number" id="pfProductionPlusWaste" readonly>
+          </div>
+        </div>
+
+        <div style="margin-top:20px;display:flex;gap:10px;" id="prodSaveRow">
+          <button onclick="saveAndContinue()">Save and Continue</button>
+          <button class="btn-ghost" onclick="closeProdForm()">Cancel</button>
+        </div>
+        <div id="prodFormStatus" style="margin-top:10px;font-size:13px;font-weight:700;min-height:16px;"></div>
+
+        <!-- Bag Tracking — appears after Save and Continue, or immediately if
+             reopening a collection where this step was already started. -->
+        <div id="bagTrackingCard" style="display:none;margin-top:10px;padding-top:20px;border-top:2px solid var(--line);">
+          <div class="sec-title">Bag Tracking</div>
+          <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">
+            Production data is saved. Enter how many bags this batch produced, then generate a unique reference number and QR code for each — print and paste one on every bag.
+          </p>
+          <div class="grid2">
+            <div>
+              <label>Number of Bags Produced *</label>
+              <input type="number" class="no-spinner" id="bagCount" min="1" step="1" inputmode="numeric">
+            </div>
+            <div style="display:flex;align-items:flex-end;">
+              <button onclick="generateBagReferences()" id="bagGenBtn" style="width:100%;">Generate Reference Numbers &amp; QR Codes</button>
+            </div>
+          </div>
+          <div id="bagGenStatus" style="margin-top:8px;font-size:13px;font-weight:700;min-height:16px;"></div>
+          <div id="bagQrGrid" style="margin-top:14px;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px;"></div>
+          <div id="bagPrintActions" style="display:none;margin-top:14px;" class="no-print">
+            <button onclick="window.print()">🖨️ Print All Labels</button>
+          </div>
+        </div>
+
+        <div style="margin-top:20px;gap:10px;display:none;" id="finalSubmitRow">
+          <button onclick="submitProd()">Submit for Approval</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Approval queue -->
+  <div id="approvalSection" style="display:none;margin-top:16px;">
+    <div class="card-panel">
+      <div class="panel-title" id="approvalQueueTitle" style="font-weight:700;font-size:14px;color:var(--heading);margin:0 0 10px;">Stage 4 — Production (Approval Queue)</div>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Review and approve or reject. Approval frees the LOT and triggers Phase 2 payment.</p>
+      <div id="approvalQueue"></div>
+    </div>
+  </div>
+
+  <div id="noQueue" style="display:none;text-align:center;color:var(--muted);padding:40px;font-size:14px;">
+    No production actions assigned to you at this stage.
+  </div>
+</div>
+
+<script>
+let ME=null, CURRENT_PROD=null, CURRENT_PROD_ID=null, ALL_SECTIONS=[], PROD_QUEUE_DATA=[];
+
+const NEXT_STATUS={stage4:'stage3p2_filling'};
+const REJECT_STATUS={stage4:'rejected_to_stage3p1'};
+
+async function init(){
+  const cs=document.getElementById("connStatus");
+  try{
+    ME=await requireAuth("../../login.html");
+    if(!ME) return;
+
+    const { data: secData } = await sb.from("app_sections").select("name").order("name");
+    ALL_SECTIONS = (secData||[]).map(s=>s.name);
+
+    const [{ data:fillerRows },{ data:approverRows }]=await Promise.all([
+      sb.from("pet_stage_fillers").select("section").eq("stage","stage4").eq("profile_id",ME.id),
+      sb.from("pet_stage_approvers").select("section").eq("stage","stage4").eq("profile_id",ME.id)
+    ]);
+    const isFiller   =(fillerRows&&fillerRows.length>0)||ME.role==="super_admin";
+    const isApprover =(approverRows&&approverRows.length>0)||ME.role==="super_admin";
+    const fSecs=(fillerRows||[]).map(r=>r.section);
+    const aSecs=(approverRows||[]).map(r=>r.section);
+
+    let anyQ=false;
+    if(isFiller){   await loadFillQueue(fSecs);   document.getElementById("fillSection").style.display="block"; anyQ=true; }
+    if(isApprover){ await loadApprovalQueue(aSecs); document.getElementById("approvalSection").style.display="block"; anyQ=true; }
+    if(!anyQ) document.getElementById("noQueue").style.display="block";
+
+    cs.style.color="var(--ok)"; cs.textContent="Connected.";
+  }catch(e){ cs.style.color="var(--bad)"; cs.textContent="Error: "+e.message; }
+}
+
+async function loadFillQueue(sections){
+  const { data }=await sb.from("pet_collections")
+    .select("id,form_number,agent_name,agent_code,section,status,updated_at")
+    .in("status",["stage4_filling","rejected_to_stage4","stage4_bagging"])
+    .in("section",sections.length?sections:ALL_SECTIONS)
+    .order("updated_at",{ascending:false});
+  const queue=document.getElementById("fillQueue");
+  if(!data||!data.length){
+    queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No collections ready for production entry.</p>`;
+    setupCollapsibleQueue("fillQueueTitle","fillQueue",0,"Stage 4 — Production (Fill Queue)");
+    return;
+  }
+  queue.innerHTML=data.map(c=>`<div class="queue-row">
+    <div><b>${c.form_number}</b> <span style="font-size:12px;color:var(--muted);margin-left:8px;">${c.agent_name} (${c.agent_code}) — ${c.section}</span>
+    ${c.status==="rejected_to_stage4"?`<span style="font-size:11px;color:var(--bad);margin-left:8px;">(Returned for correction)</span>`:""}
+    ${c.status==="stage4_bagging"?`<span style="font-size:11px;color:var(--accent);margin-left:8px;">(Bag tracking pending)</span>`:""}
+    </div>
+    <button onclick="openProdForm(${c.id})">${c.status==="stage4_bagging"?"Continue Bag Tracking":"Enter Production Data"}</button>
+  </div>`).join("");
+  setupCollapsibleQueue("fillQueueTitle","fillQueue",data.length,"Stage 4 — Production (Fill Queue)");
+}
+
+async function loadApprovalQueue(sections){
+  const { data }=await sb.from("pet_collections")
+    .select("id,form_number,agent_name,agent_code,section,status,cycle,updated_at,pet_stage4_production(*),pet_stage2_qc(offload_location)")
+    .eq("status","stage4_approval")
+    .in("section",sections.length?sections:ALL_SECTIONS)
+    .order("updated_at",{ascending:false});
+  const queue=document.getElementById("approvalQueue");
+  if(!data||!data.length){
+    queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No production submissions awaiting approval.</p>`;
+    setupCollapsibleQueue("approvalQueueTitle","approvalQueue",0,"Stage 4 — Production (Approval Queue)");
+    return;
+  }
+
+  // Scoped to THIS cycle — a decision from before a reject/correct loop must not
+  // hide the buttons once the form has been corrected and resubmitted.
+  const { data:myDec }=await sb.from("pet_approvals").select("collection_id,cycle").eq("approver_profile_id",ME.id).eq("stage","stage4");
+  const decided=new Set((myDec||[]).map(d=>d.collection_id+":"+d.cycle));
+
+  PROD_QUEUE_DATA = data;
+  queue.innerHTML=data.map(c=>{
+    const prod=(Array.isArray(c.pet_stage4_production)?c.pet_stage4_production[0]:c.pet_stage4_production)||{};
+    const qc=(Array.isArray(c.pet_stage2_qc)?c.pet_stage2_qc[0]:c.pet_stage2_qc)||{};
+    const hasDec=decided.has(c.id+":"+c.cycle);
+    return `<div class="approve-card">
+      <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+        <div>
+          <b>${c.form_number}</b> — ${c.agent_name} (${c.section})
+          <div style="font-size:12px;color:var(--muted);margin-top:4px;">
+            LOT: ${qc.offload_location||prod.offload_location||"—"} |
+            Total Production: ${prod.total_production_kg||0} kg |
+            Total Waste: ${prod.total_waste_kg||0} kg
+          </div>
+          <div style="font-size:12px;color:var(--muted);">
+            Start: ${prod.production_start?new Date(prod.production_start).toLocaleString("en-GB"):"—"} |
+            End: ${prod.production_end?new Date(prod.production_end).toLocaleString("en-GB"):"—"}
+          </div>
+        </div>
+        ${hasDec?`<span style="color:var(--ok);font-size:12px;font-weight:700;">Decision submitted</span>`:""}
+      </div>
+      ${!hasDec?`<div style="margin-top:10px;">
+        <button onclick="openProdReview(${c.id})">Review to Confirm or Reject</button>
+      </div>`:""}
+    </div>`;
+  }).join("");
+  setupCollapsibleQueue("approvalQueueTitle","approvalQueue",data.length,"Stage 4 — Production (Approval Queue)");
+}
+
+async function openProdReview(collectionId){
+  const c = PROD_QUEUE_DATA.find(x=>x.id===collectionId);
+  if(!c) return;
+  const prod = (Array.isArray(c.pet_stage4_production)?c.pet_stage4_production[0]:c.pet_stage4_production)||{};
+  const qc   = (Array.isArray(c.pet_stage2_qc)?c.pet_stage2_qc[0]:c.pet_stage2_qc)||{};
+  const { data:bags } = await sb.from("pet_stage4_bags").select("reference_number").eq("collection_id",collectionId).order("bag_index");
+  showReviewModal({
+    title: "Production — Review Submission",
+    subtitle: c.form_number + " — " + c.agent_name + " (" + c.agent_code + ") — " + c.section + " — Approving frees the LOT and triggers Phase 2 payment",
+    mode: "decide",
+    sections: [
+      { heading: "Production Time", rows: [
+        ["LOT", qc.offload_location||prod.offload_location],
+        ["Production Start", prod.production_start ? new Date(prod.production_start).toLocaleString("en-GB") : null],
+        ["Production End", prod.production_end ? new Date(prod.production_end).toLocaleString("en-GB") : null],
+      ]},
+      { heading: "Production Entry", rows: [
+        ["Total Colored Flex (kg)", prod.colored_flex_kg],
+        ["Total Non-Colored Flex (kg)", prod.non_colored_flex_kg],
+        ["Total Production (kg)", prod.total_production_kg],
+      ]},
+      { heading: "Waste Data", rows: [
+        ["Coloured PET (kg)", prod.waste_coloured_kg],
+        ["Labelled Bottles (kg)", prod.waste_labels_kg],
+        ["Caps & Rings (kg)", prod.waste_caps_rings_kg],
+        ["Non-Food Contact (kg)", prod.waste_non_food_kg],
+        ["Non-PET Product (kg)", prod.waste_non_pet_kg],
+        ["Aged PET Bottles (kg)", prod.waste_aged_kg],
+        ["Oily PET Bottles (kg)", prod.waste_oily_kg],
+        ["Bottles with Metal Ring (kg)", prod.waste_metal_kg],
+        ["Total Waste Record (kg)", prod.total_waste_kg],
+        ["Accepted Waste (kg)", prod.accepted_waste_kg],
+        ["Unacceptable Waste (kg)", prod.unacceptable_waste_kg],
+        ["Weight Difference (kg)", prod.weight_difference_kg],
+        ["Total Production + Total Waste (kg)", prod.total_production_plus_waste_kg],
+      ]},
+      { heading: "Bag Tracking", rows: [
+        ["Number of Bags Produced", (bags||[]).length],
+        ["Reference Range", (bags&&bags.length) ? (bags[0].reference_number+" — "+bags[bags.length-1].reference_number) : "—"],
+      ]}
+    ],
+    onApprove: ()=>decide(collectionId,'approved',null),
+    onReject: (note)=>decide(collectionId,'rejected',note)
+  });
+}
+
+async function openProdForm(id){
+  const { data:c }=await sb.from("pet_collections").select("*,pet_stage2_qc(*),pet_stage4_production(*)").eq("id",id).single();
+  if(!c) return;
+  CURRENT_PROD=c;
+  const qc=(Array.isArray(c.pet_stage2_qc)?c.pet_stage2_qc[0]:c.pet_stage2_qc)||{};
+  const prod=(Array.isArray(c.pet_stage4_production)?c.pet_stage4_production[0]:c.pet_stage4_production)||{};
+
+  document.getElementById("pfFormNum").value=c.form_number;
+  document.getElementById("pfAgentCode").value=c.agent_code;
+  document.getElementById("pfLot").value=qc.offload_location||prod.offload_location||"—";
+
+  document.getElementById("prodSummary").innerHTML=`
+    <b>Agent:</b> ${c.agent_name} (${c.agent_code})<br>
+    <b>LOT:</b> ${qc.offload_location||"—"} — <b>Section:</b> ${c.section}<br>
+    <b>Rumbu Weighbridge Weight:</b> ${c.rumbu_weighbridge_weight||0} kg<br>
+    <b>Agent Waybill Weight:</b> ${c.agent_waybill_weight||0} kg`;
+
+  if(prod.id){
+    CURRENT_PROD_ID=prod.id;
+    document.getElementById("pfStart").value=prod.production_start?prod.production_start.slice(0,16):"";
+    document.getElementById("pfEnd").value=prod.production_end?prod.production_end.slice(0,16):"";
+    document.getElementById("pfColoredFlex").value=prod.colored_flex_kg||"";
+    document.getElementById("pfNonColoredFlex").value=prod.non_colored_flex_kg||"";
+    document.getElementById("pfWasteColoured").value=prod.waste_coloured_kg||"";
+    document.getElementById("pfWasteLabels").value=prod.waste_labels_kg||"";
+    document.getElementById("pfWasteCapsRings").value=prod.waste_caps_rings_kg||"";
+    document.getElementById("pfWasteNonFood").value=prod.waste_non_food_kg||"";
+    document.getElementById("pfWasteNonPet").value=prod.waste_non_pet_kg||"";
+    document.getElementById("pfWasteAged").value=prod.waste_aged_kg||"";
+    document.getElementById("pfWasteOily").value=prod.waste_oily_kg||"";
+    document.getElementById("pfWasteMetal").value=prod.waste_metal_kg||"";
+    computeProductionTotals();
+    computeWaste();
+  } else {
+    ["pfStart","pfEnd","pfColoredFlex","pfNonColoredFlex","pfTotalProduction",
+     "pfWasteColoured","pfWasteLabels","pfWasteCapsRings","pfWasteNonFood","pfWasteNonPet","pfWasteAged","pfWasteOily","pfWasteMetal",
+     "pfTotalWaste","pfAcceptedWaste","pfUnacceptableKg","pfUnacceptableVal","pfWeightDiff","pfProductionPlusWaste"].forEach(id=>{ document.getElementById(id).value=""; });
+  }
+
+  if(c.status==="rejected_to_stage4"){
+    const { data:log }=await sb.from("pet_activity_log").select("note").eq("collection_id",id).eq("action","rejected").order("created_at",{ascending:false}).limit(1);
+    if(log&&log.length){ const el=document.getElementById("prodCorrNote"); el.style.display="block"; el.innerHTML=`<b>Rejection reason:</b> ${log[0].note}`; }
+  } else document.getElementById("prodCorrNote").style.display="none";
+
+  document.getElementById("prodFormTitle").textContent="Production Entry — "+c.form_number;
+  document.getElementById("prodFormStatus").textContent="";
+
+  // Reset the bag-tracking UI, then decide what to show based on where this
+  // collection actually is in the flow.
+  document.getElementById("bagCount").value="";
+  document.getElementById("bagGenStatus").textContent="";
+  document.getElementById("bagQrGrid").innerHTML="";
+  document.getElementById("bagPrintActions").style.display="none";
+  document.getElementById("bagTrackingCard").style.display="none";
+  document.getElementById("finalSubmitRow").style.display="none";
+  document.getElementById("prodSaveRow").style.display="flex";
+  GENERATED_BAGS=[];
+
+  if(c.status==="stage4_bagging"){
+    // Production data was already saved on a previous visit — skip straight
+    // to bag tracking. If references were already generated, show them
+    // again rather than risk generating a second, duplicate set.
+    document.getElementById("prodSaveRow").style.display="none";
+    document.getElementById("bagTrackingCard").style.display="block";
+    const { data:bags } = await sb.from("pet_stage4_bags").select("*").eq("collection_id",id).order("bag_index");
+    if(bags&&bags.length){
+      document.getElementById("bagCount").value=bags.length;
+      document.getElementById("bagCount").disabled=true;
+      document.getElementById("bagGenBtn").disabled=true;
+      renderBagQrGrid(bags);
+      document.getElementById("bagPrintActions").style.display="block";
+      document.getElementById("finalSubmitRow").style.display="flex";
+    } else {
+      document.getElementById("bagCount").disabled=false;
+      document.getElementById("bagGenBtn").disabled=false;
+    }
+  }
+
+  document.getElementById("prodForm").style.display="block";
+  document.getElementById("prodForm").scrollIntoView({behavior:"smooth"});
+}
+
+function computeProductionTotals(){
+  const colored = parseFloat(document.getElementById("pfColoredFlex").value)||0;
+  const nonColored = parseFloat(document.getElementById("pfNonColoredFlex").value)||0;
+  document.getElementById("pfTotalProduction").value = (colored+nonColored).toFixed(2);
+  computeProductionPlusWaste();
+}
+
+function computeWaste(){
+  const coloured  = parseFloat(document.getElementById("pfWasteColoured").value)||0;
+  const labels    = parseFloat(document.getElementById("pfWasteLabels").value)||0;
+  const capsRings = parseFloat(document.getElementById("pfWasteCapsRings").value)||0;
+  const nonFood   = parseFloat(document.getElementById("pfWasteNonFood").value)||0;
+  const np        = parseFloat(document.getElementById("pfWasteNonPet").value)||0;
+  const ag        = parseFloat(document.getElementById("pfWasteAged").value)||0;
+  const oi        = parseFloat(document.getElementById("pfWasteOily").value)||0;
+  const metal     = parseFloat(document.getElementById("pfWasteMetal").value)||0;
+  const totalWaste = coloured+labels+capsRings+nonFood+np+ag+oi+metal;
+  document.getElementById("pfTotalWaste").value = totalWaste.toFixed(2);
+
+  // Moved here from QC — this used to run once QC was filled, now it runs
+  // once Production's waste breakdown is filled, since that's the actual
+  // source of the waste figures. Feeds Payment Phase 2's deduction %.
+  const rumbuW = parseFloat(CURRENT_PROD?.rumbu_weighbridge_weight)||0;
+  const agentW = parseFloat(CURRENT_PROD?.agent_waybill_weight)||0;
+  const accepted = rumbuW*0.03;
+  const unaccKg  = totalWaste-accepted;
+  const unaccVal = unaccKg>0 ? unaccKg : 0;
+  const diff     = rumbuW-agentW;
+  document.getElementById("pfAcceptedWaste").value  = accepted.toFixed(2);
+  document.getElementById("pfUnacceptableKg").value = unaccKg.toFixed(2);
+  document.getElementById("pfUnacceptableVal").value= unaccVal.toFixed(2);
+  document.getElementById("pfWeightDiff").value      = diff.toFixed(2);
+
+  computeProductionPlusWaste();
+}
+
+function computeProductionPlusWaste(){
+  const totalProd = parseFloat(document.getElementById("pfTotalProduction").value)||0;
+  const totalWaste = parseFloat(document.getElementById("pfTotalWaste").value)||0;
+  document.getElementById("pfProductionPlusWaste").value = (totalProd+totalWaste).toFixed(2);
+}
+
+async function saveAndContinue(){
+  const st=document.getElementById("prodFormStatus");
+  const start=document.getElementById("pfStart").value;
+  const end=document.getElementById("pfEnd").value;
+  if(!start||!end){ st.style.color="var(--bad)"; st.textContent="Production start and end times are required."; return; }
+
+  const wasteFields = [
+    ["pfWasteColoured","Coloured PET (kg)"],
+    ["pfWasteLabels","Labelled Bottles (kg)"],
+    ["pfWasteCapsRings","Caps & Rings (kg)"],
+    ["pfWasteNonFood","Non-Food Contact (kg)"],
+    ["pfWasteNonPet","Non-PET Product (kg)"],
+    ["pfWasteAged","Aged PET Bottles (kg)"],
+    ["pfWasteOily","Oily PET Bottles (kg)"],
+    ["pfWasteMetal","Bottles with Metal Ring (kg)"]
+  ];
+  for(const [id,label] of wasteFields){
+    const v = document.getElementById(id).value;
+    if(v===""){ st.style.color="var(--bad)"; st.textContent=`"${label}" is required (enter 0 if none).`; return; }
+    if(!/^\d+$/.test(v)){ st.style.color="var(--bad)"; st.textContent=`"${label}" must be a positive whole number.`; return; }
+  }
+
+  // Colored/Non-Colored Flex are mandatory — Total Production, and in turn
+  // Total Production + Waste, are both derived from them, so leaving either
+  // blank would make every downstream figure meaningless.
+  const productionFields = [
+    ["pfColoredFlex","Total Colored Flex (kg)"],
+    ["pfNonColoredFlex","Total Non-Colored Flex (kg)"]
+  ];
+  for(const [id,label] of productionFields){
+    if(document.getElementById(id).value===""){ st.style.color="var(--bad)"; st.textContent=`"${label}" is required (enter 0 if none).`; return; }
+  }
+
+  st.style.color="var(--muted)"; st.textContent="Saving...";
+  try{
+    const qc=(Array.isArray(CURRENT_PROD.pet_stage2_qc)?CURRENT_PROD.pet_stage2_qc[0]:CURRENT_PROD.pet_stage2_qc)||{};
+    const coloured  = parseFloat(document.getElementById("pfWasteColoured").value)||0;
+    const labels    = parseFloat(document.getElementById("pfWasteLabels").value)||0;
+    const capsRings = parseFloat(document.getElementById("pfWasteCapsRings").value)||0;
+    const nonFood   = parseFloat(document.getElementById("pfWasteNonFood").value)||0;
+    const np = parseFloat(document.getElementById("pfWasteNonPet").value)||0;
+    const ag = parseFloat(document.getElementById("pfWasteAged").value)||0;
+    const oi = parseFloat(document.getElementById("pfWasteOily").value)||0;
+    const metal = parseFloat(document.getElementById("pfWasteMetal").value)||0;
+    const colored=parseFloat(document.getElementById("pfColoredFlex").value)||0;
+    const nonColored=parseFloat(document.getElementById("pfNonColoredFlex").value)||0;
+    const totalProduction=parseFloat((colored+nonColored).toFixed(2));
+    const totalWaste=parseFloat((coloured+labels+capsRings+nonFood+np+ag+oi+metal).toFixed(2));
+
+    const rumbuW = parseFloat(CURRENT_PROD.rumbu_weighbridge_weight)||0;
+    const agentW = parseFloat(CURRENT_PROD.agent_waybill_weight)||0;
+    const accepted = parseFloat((rumbuW*0.03).toFixed(2));
+    const unaccKg  = parseFloat((totalWaste-accepted).toFixed(2));
+    const unaccVal = unaccKg>0 ? unaccKg : 0;
+    const diff     = parseFloat((rumbuW-agentW).toFixed(2));
+
+    const payload={
+      collection_id:        CURRENT_PROD.id,
+      agent_code:           CURRENT_PROD.agent_code,
+      lot_id:               qc.lot_id||null,
+      offload_location:     qc.offload_location||null,
+      production_start:     new Date(start).toISOString(),
+      production_end:       new Date(end).toISOString(),
+      colored_flex_kg:      colored,
+      non_colored_flex_kg:  nonColored,
+      total_production_kg:  totalProduction,
+      waste_coloured_kg:    coloured,
+      waste_labels_kg:      labels,
+      waste_caps_rings_kg:  capsRings,
+      waste_non_food_kg:    nonFood,
+      waste_non_pet_kg:     np,
+      waste_aged_kg:        ag,
+      waste_oily_kg:        oi,
+      waste_metal_kg:       metal,
+      total_waste_kg:       totalWaste,
+      accepted_waste_kg:    accepted,
+      unacceptable_waste_kg: unaccKg,
+      unacceptable_waste_value: unaccVal,
+      weight_difference_kg: diff,
+      total_production_plus_waste_kg: parseFloat((totalProduction+totalWaste).toFixed(2)),
+      filled_by_profile_id: ME.id,
+      filled_at:            new Date().toISOString()
+    };
+
+    const { data:ex }=await sb.from("pet_stage4_production").select("id").eq("collection_id",CURRENT_PROD.id).maybeSingle();
+    if(ex){
+      const { error: prodErr } = await sb.from("pet_stage4_production").update(payload).eq("collection_id",CURRENT_PROD.id);
+      if(prodErr) throw new Error("Could not save production data: "+prodErr.message);
+      CURRENT_PROD_ID = ex.id;
+    } else {
+      const { data:ins, error: prodErr } = await sb.from("pet_stage4_production").insert(payload).select("id").single();
+      if(prodErr) throw new Error("Could not save production data: "+prodErr.message);
+      CURRENT_PROD_ID = ins.id;
+    }
+
+    const oldStatus=CURRENT_PROD.status;
+    const { error: stErr } = await sb.from("pet_collections").update({ status:"stage4_bagging", updated_at:new Date().toISOString() }).eq("id",CURRENT_PROD.id);
+    if(stErr) throw new Error("Production data was saved, but could not move to bag tracking: "+stErr.message);
+    CURRENT_PROD.status="stage4_bagging";
+    const { error: logErr } = await sb.from("pet_activity_log").insert({ collection_id:CURRENT_PROD.id, action:"stage4_production_saved", stage:"stage4", actor_profile_id:ME.id, actor_username:ME.username, old_status:oldStatus, new_status:"stage4_bagging" });
+    if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
+
+    st.style.color="var(--ok)"; st.textContent="Production data saved. Now enter bag tracking below.";
+    document.getElementById("prodSaveRow").style.display="none";
+    document.getElementById("bagTrackingCard").style.display="block";
+    document.getElementById("bagTrackingCard").scrollIntoView({behavior:"smooth"});
+  }catch(e){ st.style.color="var(--bad)"; st.textContent="Error: "+e.message; }
+}
+
+async function generateBagReferences(){
+  const st=document.getElementById("bagGenStatus");
+  const countEl=document.getElementById("bagCount");
+  const count=parseInt(countEl.value);
+  if(!count||count<1||!/^\d+$/.test(countEl.value)){ st.style.color="var(--bad)"; st.textContent="Enter a whole number of bags (at least 1)."; return; }
+
+  st.style.color="var(--muted)"; st.textContent="Generating reference numbers...";
+  try{
+    const { data, error } = await sb.rpc("generate_bag_references", {
+      p_production_id: CURRENT_PROD_ID,
+      p_collection_id: CURRENT_PROD.id,
+      p_bag_count: count
+    });
+    if(error) throw new Error(error.message);
+
+    countEl.disabled=true;
+    document.getElementById("bagGenBtn").disabled=true;
+    renderBagQrGrid(data);
+    document.getElementById("bagPrintActions").style.display="block";
+    document.getElementById("finalSubmitRow").style.display="flex";
+    st.style.color="var(--ok)"; st.textContent=count+" reference number(s) and QR codes generated. Archiving labels...";
+
+    // Archive the labels as a PDF straight away — not dependent on whether
+    // the person actually prints successfully — so a lost/damaged physical
+    // label can always be regenerated from the Production Report later.
+    await archiveLabelsPdf(data);
+    st.style.color="var(--ok)"; st.textContent=count+" reference number(s) and QR codes generated. Labels archived.";
+  }catch(e){ st.style.color="var(--bad)"; st.textContent="Error: "+e.message; }
+}
+
+let GENERATED_BAGS=[];
+let GENERATED_CANVASES=[];
+function renderBagQrGrid(bags){
+  GENERATED_BAGS=bags;
+  GENERATED_CANVASES=[];
+  const grid=document.getElementById("bagQrGrid");
+  grid.innerHTML="";
+  bags.forEach(b=>{
+    const cell=document.createElement("div");
+    cell.className="bag-label";
+    const qrBox=document.createElement("div");
+    cell.appendChild(qrBox);
+    const refText=document.createElement("div");
+    refText.className="ref";
+    refText.textContent=b.reference_number;
+    cell.appendChild(refText);
+    grid.appendChild(cell);
+    new QRCode(qrBox, { text: QR_LOOKUP_BASE+"?ref="+encodeURIComponent(b.reference_number), width:120, height:120 });
+    GENERATED_CANVASES.push(qrBox);
+  });
+}
+
+async function archiveLabelsPdf(bags){
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit:"pt", format:"a4" });
+  const cols=3, cell=170, margin=30;
+  let x=margin, y=margin, col=0;
+
+  doc.setFont("helvetica","bold"); doc.setFontSize(11);
+  doc.text("PET Production — Bag Labels — "+(CURRENT_PROD?.form_number||""), margin, y);
+  y += 24;
+
+  bags.forEach((b,i)=>{
+    const qrBox = GENERATED_CANVASES[i];
+    const canvas = qrBox ? qrBox.querySelector("canvas") : null;
+    if(canvas){
+      const imgData = canvas.toDataURL("image/png");
+      doc.addImage(imgData, "PNG", x, y, 110, 110);
+    }
+    doc.setFont("helvetica","normal"); doc.setFontSize(9);
+    doc.text(b.reference_number, x+55, y+124, { align:"center" });
+
+    col++; x += cell;
+    if(col>=cols){ col=0; x=margin; y+=150; }
+    if(y > 700){ doc.addPage(); y=margin; x=margin; col=0; }
+  });
+
+  const blob = doc.output("blob");
+  const path = `labels/${CURRENT_PROD.id}-${Date.now()}.pdf`;
+  const { error: upErr } = await sb.storage.from("pet-attachments").upload(path, blob, { contentType:"application/pdf" });
+  if(upErr) throw new Error("Labels generated, but archiving the PDF failed: "+upErr.message);
+  const { data: urlData } = sb.storage.from("pet-attachments").getPublicUrl(path);
+
+  const { error: saveErr } = await sb.from("pet_stage4_production").update({ labels_pdf_url: urlData.publicUrl }).eq("id", CURRENT_PROD_ID);
+  if(saveErr) throw new Error("Labels PDF was archived, but could not be linked to this production record: "+saveErr.message);
+}
+
+async function submitProd(){
+  const st=document.getElementById("prodFormStatus");
+  if(!GENERATED_BAGS.length){ st.style.color="var(--bad)"; st.textContent="Generate bag reference numbers before submitting."; return; }
+
+  st.textContent = "";
+  showReviewModal({
+    title: "Review Before Submitting",
+    subtitle: (CURRENT_PROD?.form_number||"") + " — check everything below before it goes for approval",
+    mode: "submit",
+    sections: [
+      { heading: "Production Entry", rows: [
+        ["Total Production (kg)", document.getElementById("pfTotalProduction").value],
+        ["Total Waste Record (kg)", document.getElementById("pfTotalWaste").value],
+        ["Total Production + Total Waste (kg)", document.getElementById("pfProductionPlusWaste").value],
+      ]},
+      { heading: "Bag Tracking", rows: [
+        ["Number of Bags Produced", GENERATED_BAGS.length],
+        ["Reference Range", GENERATED_BAGS[0].reference_number + " — " + GENERATED_BAGS[GENERATED_BAGS.length-1].reference_number],
+      ]}
+    ],
+    onConfirm: proceedWithProdSubmit
+  });
+}
+
+async function proceedWithProdSubmit(){
+  const st=document.getElementById("prodFormStatus");
+  st.style.color="var(--muted)"; st.textContent="Submitting...";
+  try{
+    const oldStatus=CURRENT_PROD.status;
+    const { error: stErr } = await sb.from("pet_collections").update({ status:"stage4_approval", updated_at:new Date().toISOString() }).eq("id",CURRENT_PROD.id);
+    if(stErr) throw new Error("Could not advance status: "+stErr.message);
+    const { error: logErr } = await sb.from("pet_activity_log").insert({ collection_id:CURRENT_PROD.id, action:"stage4_filled", stage:"stage4", actor_profile_id:ME.id, actor_username:ME.username, old_status:oldStatus, new_status:"stage4_approval" });
+    if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
+
+    st.style.color="var(--ok)"; st.textContent="Submitted for approval.";
+    setTimeout(()=>{ closeProdForm(); init(); },1200);
+  }catch(e){ st.style.color="var(--bad)"; st.textContent="Error: "+e.message; }
+}
+
+function closeProdForm(){ document.getElementById("prodForm").style.display="none"; CURRENT_PROD=null; CURRENT_PROD_ID=null; GENERATED_BAGS=[]; }
+
+async function decide(collectionId, decision, note){
+  const stage="stage4";
+  if(decision==="rejected"&&!note){ alert("Rejection reason is required."); return; }
+  try{
+    const { data:c, error:cErr }=await sb.from("pet_collections").select("section,cycle,status").eq("id",collectionId).single();
+    if(cErr) throw new Error("Could not load collection: "+cErr.message);
+    const { error: apprErr } = await sb.from("pet_approvals").insert({ collection_id:collectionId, stage, cycle:c.cycle, approver_profile_id:ME.id, approver_username:ME.username, decision, correction_note:note||null, decided_at:new Date().toISOString() });
+    if(apprErr) throw new Error("Could not record your decision: "+apprErr.message);
+
+    if(decision==="rejected"){
+      const newStatus=REJECT_STATUS[stage];
+      const { error: updErr } = await sb.from("pet_collections").update({ status:newStatus, cycle:(c.cycle||1)+1, updated_at:new Date().toISOString() }).eq("id",collectionId);
+      if(updErr) throw new Error("Could not update status: "+updErr.message);
+      const { error: logErr } = await sb.from("pet_activity_log").insert({ collection_id:collectionId, action:"rejected", stage, actor_profile_id:ME.id, actor_username:ME.username, old_status:c.status, new_status:newStatus, note });
+      if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
+    } else {
+      const allApproved=(ME.role==="super_admin") ? true : await checkAllApproved(collectionId,stage,c.cycle,c.section);
+      if(allApproved){
+        const newStatus=NEXT_STATUS[stage];
+        // Free the LOT
+        const { data:prod4, error:prodSelErr }=await sb.from("pet_stage4_production").select("lot_id").eq("collection_id",collectionId).maybeSingle();
+        if(prodSelErr) throw new Error("Could not read production data to free LOT: "+prodSelErr.message);
+        if(prod4?.lot_id){
+          const { error: lotErr } = await sb.from("pet_lots").update({ is_occupied:false, current_collection_id:null }).eq("id",prod4.lot_id);
+          if(lotErr) throw new Error("Could not free the LOT: "+lotErr.message);
+        } else {
+          console.warn("No LOT recorded on this collection's production data — LOT was not freed.");
+        }
+        const { error: updErr } = await sb.from("pet_collections").update({ status:newStatus, updated_at:new Date().toISOString() }).eq("id",collectionId);
+        if(updErr) throw new Error("LOT freed, but could not advance status: "+updErr.message);
+        const { error: logErr } = await sb.from("pet_activity_log").insert({ collection_id:collectionId, action:"approved_all_lot_freed", stage, actor_profile_id:ME.id, actor_username:ME.username, old_status:c.status, new_status:newStatus, note:"LOT freed. Phase 2 payment triggered." });
+        if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
+      }
+    }
+    await init();
+  }catch(e){ alert("Error: "+e.message); }
+}
+
+async function checkAllApproved(collectionId,stage,cycle,section){
+  const [{ data:approvers },{ data:approvals }]=await Promise.all([
+    sb.from("pet_stage_approvers").select("profile_id").eq("section",section).eq("stage",stage),
+    sb.from("pet_approvals").select("approver_profile_id").eq("collection_id",collectionId).eq("stage",stage).eq("cycle",cycle).eq("decision","approved")
+  ]);
+  if(!approvers||!approvers.length) return true;
+  const assigned=new Set(approvers.map(a=>a.profile_id));
+  const approved=new Set((approvals||[]).map(a=>a.approver_profile_id));
+  return [...assigned].every(id=>approved.has(id));
+}
+
+init();
+</script>
+</body>
+</html>

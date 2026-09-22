@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Asset Summary</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+  :root{--navy:var(--heading);}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:16px;}
+  .card{max-width:1200px;margin:0 auto 16px;background:var(--card);border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.15);padding:20px;}
+  h2{text-align:center;color:var(--navy);border-bottom:2px solid var(--navy);padding-bottom:10px;}
+  h3{color:var(--navy);}
+  label{font-weight:600;margin-top:8px;display:block;font-size:13px;}
+  input,select{width:100%;padding:8px;margin-top:4px;border:1px solid var(--line);border-radius:6px;font-size:13px;}
+  .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;}
+  .btn-row{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;}
+  button{flex:1 1 160px;padding:11px;border:none;border-radius:8px;background:var(--navy);color:#fff;font-weight:bold;cursor:pointer;}
+  button.alt{background:#38761d;}
+  #status{margin-top:10px;font-weight:bold;font-size:13px;}
+  table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px;}
+  th,td{border:1px solid #333;padding:4px;text-align:center;}
+  th{background:var(--navy);color:#fff;}
+  tr:nth-child(even){background:#f9f9f9;}
+  .total{font-weight:bold;background:#e2efda;}
+  .grandtotal{font-weight:bold;background:#f4cccc;}
+  @media (max-width:700px){ .grid{grid-template-columns:1fr 1fr;} }
+  @media print{ .no-print{display:none !important;} }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="../../table-resolver.js"></script>
+</head>
+<body>
+
+<div class="card no-print">
+  <h2>🧶 Asset Summary</h2>
+  <div class="grid">
+    <div><label>From Date</label><input type="date" id="fromDate"></div>
+    <div><label>To Date</label><input type="date" id="toDate"></div>
+    <div><label>Shift</label><select id="shift"><option value="All">All</option><option>Morning</option><option>Night</option></select></div>
+    <div><label>Group_Name</label><select id="groupName"><option value="All">All</option><option>A</option><option>B</option></select></div>
+    <div><label>Section</label><select id="section"><option value="All">All</option></select></div>
+    <div><label>Work Duration</label><select id="workHours"><option value="660">11 hours</option><option value="600">10 hours</option><option value="540">9 hours</option></select></div>
+    <div><label>Work Type</label><select id="workType"><option value="All">All</option><option value="Overtime">Holiday Days</option><option value="Normal">Working Days</option><option value="B grade">B Grade Days</option></select></div>
+  </div>
+  <div style="margin-top:10px;">
+    <label style="display:block;font-weight:600;font-size:13px;margin-bottom:6px;">Shed (Select Multiple)</label>
+    <div id="shedContainer" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:6px;border:1px solid var(--line);border-radius:8px;padding:10px;background:var(--bg);">
+      <label style="font-weight:500;font-size:13px;display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" value="1"> Shed 1</label>
+      <label style="font-weight:500;font-size:13px;display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" value="2"> Shed 2</label>
+      <label style="font-weight:500;font-size:13px;display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" value="3"> Shed 3</label>
+      <label style="font-weight:500;font-size:13px;display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" value="4"> Shed 4</label>
+      <label style="font-weight:500;font-size:13px;display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" value="5"> Shed 5</label>
+      <label style="font-weight:500;font-size:13px;display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" value="6"> Shed 6</label>
+      <label style="font-weight:500;font-size:13px;display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" value="CR"> Computer Mat</label>
+      <label style="font-weight:500;font-size:13px;display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" value="MamaSannu"> Mama Sannu</label>
+    </div>
+  </div>
+  <div class="btn-row">
+    <button onclick="viewQuick()">📊 View Report (quick)</button>
+    <button class="alt" onclick="generateDetailed()">Generate Detailed Report</button>
+    <button class="alt" onclick="window.print()">Print / Save as PDF</button>
+  </div>
+  <div id="status">Connecting to Supabase...</div>
+</div>
+
+<div id="quickArea"></div>
+<div id="detailArea"></div>
+
+<script>
+let MW_TABLE = "mat_weaving"; // resolved properly in init() below
+let MW_ROWS = [], CTRL_ROWS = [], EXCLUDED_JOB_CODES = new Set(); CTRL_ROWS.forEach(normalizeControlRow);
+const WEAVING_ASSETS = new Set([
+  'WA-01','WA-02','WA-03','WA-04','WA-05','WA-06','WA-07','WA-08','WA-09','WA-10','WA-11','WA-12',
+  'WB-01','WB-02','WB-03','WB-04','WB-05','WB-06','WB-07','WB-08','WB-09','WB-10','WB-11','WB-12',
+  'WC-01','WC-02','WC-03','WC-04','WC-05','WC-06','WC-07','WC-08','WC-09','WC-10','WC-11','WC-12',
+  'WD-01','WD-02','WD-03','WD-04','WD-05','WD-06','WD-07','WD-08','WD-09','WD-10','WD-11','WD-12',
+  'WE-01','WE-02','WE-03','WE-04','WE-05','WE-06','WE-07','WE-08','WE-09','WE-10','WE-11','WE-12',
+  'WF-01','WF-02','WF-03','WF-04','WF-05','WF-06','WF-07','WF-08','WF-09','WF-10','WF-11','WF-12',
+  'WG-01','WG-02','WG-03','WG-04','WG-05','WG-06','WG-07','WG-08','WG-09','WG-10','WG-11','WG-12','WG-13','WG-14',
+  'WH-01','WH-02','WH-03','WH-04','WH-05','WH-06','WH-07','WH-08','WH-09','WH-10','WH-11','WH-12',
+  'WI-01','WI-02','WI-03','WI-04','WI-05','WI-06','WI-07','WI-08','WI-09','WI-10','WI-11','WI-12',
+  'WJ-01','WJ-02','WJ-03','WJ-04','WJ-05','WJ-06','WJ-07','WJ-08','WJ-09','WJ-10','WJ-11','WJ-12',
+  'WK-01','WK-02','WK-03','WK-04','WK-05','WK-06','WK-07','WK-08','WK-09','WK-10','WK-11','WK-12',
+  'WL-01','WL-02','WL-03','WL-04','WL-05','WL-06','WL-07','WL-08','WL-09','WL-10','WL-11','WL-12',
+  'WM-01','WM-02','WM-03','WM-04','WM-05','WM-06','WM-07','WM-08','WM-09','WM-10','WM-11','WM-12',
+  'WN-01','WN-02','WN-03','WN-04','WN-05','WN-06','WN-07','WN-08','WN-09','WN-10','WN-11','WN-12',
+  'WO-01','WO-02','WO-03','WO-04','WO-05','WO-06','WO-07','WO-08','WO-09','WO-10','WO-11','WO-12',
+  'WP-01','WP-02','WP-03','WP-04','WP-05','WP-06','WP-07','WP-08','WP-09','WP-10','WP-11','WP-12',
+  'WQ-01','WQ-02','WQ-03','WQ-04','WQ-05','WQ-06','WQ-07','WQ-08','WQ-09','WQ-10','WQ-11','WQ-12',
+  'WR-01','WR-02','WR-03','WR-04','WR-05','WR-06','WR-07','WR-08','WR-09','WR-10','WR-11','WR-12',
+  'WS-01','WS-02','WS-03','WS-04','WS-05','WS-06','WS-07','WS-08','WS-09','WS-10','WS-11','WS-12',
+  'WS-13','WS-14','WS-15','WS-16','WS-17','WS-18','WS-19','WS-20','WS-21','WS-22','WS-23',
+  'WT-01','WT-02','WT-03','WT-04','WT-05','WT-06','WT-07','WT-08','WT-09','WT-10','WT-11','WT-12','WT-13',
+  'WU-01','WU-02','WU-03','WU-04','WU-05','WU-06','WU-07','WU-08','WU-09','WU-10','WU-11','WU-12',
+  'WU-13','WU-14','WU-15','WU-16','WU-17','WU-18','WU-19','WU-20','WU-21','WU-22',
+  'WV-01','WV-02','WV-03','WV-04','WV-05','WV-06','WV-07','WV-08','WV-09','WV-10','WV-11','WV-12',
+  'WV-13','WV-14','WV-15','WV-16','WV-17','WV-18','WV-19',
+  'WW-01','WW-02','WW-03','WW-04','WW-05','WW-06','WW-07','WW-08','WW-09','WW-10','WW-11','WW-12',
+  'WW-13','WW-14','WW-15','WW-16',
+  'WX-01','WX-02','WX-03','WX-04','WX-05','WX-06','WX-07','WX-08','WX-09','WX-10','WX-11','WX-12',
+  'WY-01','WY-02','WY-03','WY-04','WY-05','WY-06','WY-07','WY-08','WY-09','WY-10','WY-11','WY-12',
+  'WY-13','WY-14','WY-15','WY-16','WY-17',
+  'WZ-01','WZ-02','WZ-03','WZ-04','WZ-05','WZ-06','WZ-07','WZ-08','WZ-09','WZ-10','WZ-11','WZ-12',
+  'WZ-13','WZ-14','WZ-15','WZ-16','WZ-17','WZ-18'
+]);
+
+const SECTION_LABEL = { "Rumbu": "Rumbu", "MamaSannu": "Mama Sannu" };
+
+function parseDT(v){ const d=new Date(v); return isNaN(d)?null:d; }
+function minutesBetween(a,b){ return (!a||!b) ? 0 : Math.round((b-a)/60000); }
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
+
+
+// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
+async function fetchAllRows(table, select, query){
+  let all = [], offset = 0; const pageSize = 1000;
+  const q = query || "";
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=" + (select||"*") + q, { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+function normalizeControlRow(r){
+  if(r.date_col === undefined) r.date_col = r.date;
+  if(r.names === undefined) r.names = r.nurse_name;
+  if(r.stop_time === undefined) r.stop_time = r.mc_stoppage_time;
+  if(r.extimated_time === undefined) r.extimated_time = r.estimated_duration;
+  if(r.discription === undefined) r.discription = r.description;
+  return r;
+}
+
+async function fetchRangeData(fromDate, toDate){
+  const [mw, ctrl] = await Promise.all([
+    fetchAllRows(MW_TABLE,"*", "&date_col=gte."+fromDate+"&date_col=lte."+toDate),
+    fetchAllRows("control","*", "&date=gte."+fromDate+"&date=lte."+toDate)
+  ]);
+  MW_ROWS = mw;
+  CTRL_ROWS = ctrl; CTRL_ROWS.forEach(normalizeControlRow);
+}
+
+async function init(){
+  const status = document.getElementById("status");
+  try{
+    const me = await requireAuth("../../login.html");
+    if(!me) return;
+    MW_TABLE = await resolveWeavingTable();
+
+    const mySections = (me.sectionNames && me.sectionNames.length) ? me.sectionNames : ["Rumbu","MamaSannu"];
+    document.getElementById("section").innerHTML = '<option value="All">All</option>' +
+      mySections.map(s=>`<option value="${s}">${SECTION_LABEL[s]||s}</option>`).join("");
+    // Default-select and lock the dropdown to the user's own Section when they only have one.
+    if(mySections.length === 1){
+      document.getElementById("section").value = mySections[0];
+      document.getElementById("section").disabled = true;
+    }
+
+    const jobRes = await fetch(SUPABASE_URL + "/rest/v1/job_table?select=job_code", { headers: authHeaders() });
+    if(jobRes.ok){
+      const jobRows = await jobRes.json();
+      EXCLUDED_JOB_CODES = new Set(jobRows.map(r => r.job_code));
+    }
+    status.style.color = "#1d8a4e";
+    status.textContent = "Ready. Select a date range and click Generate.";
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+function getFilters(){
+  return {
+    fromDate: document.getElementById("fromDate").value,
+    toDate: document.getElementById("toDate").value,
+    shift: document.getElementById("shift").value,
+    groupName: document.getElementById("groupName").value,
+    section: document.getElementById("section").value,
+    workType: document.getElementById("workType").value,
+    shedType: Array.from(document.querySelectorAll("#shedContainer input:checked")).map(cb=>cb.value),
+    workMinutes: Number(document.getElementById("workHours").value) || 660
+  };
+}
+
+function filterProd(f){
+  const shedSet = f.shedType && f.shedType.length ? new Set(f.shedType) : null;
+  return MW_ROWS.filter(r=>{
+    if(r.date_col < f.fromDate || r.date_col > f.toDate) return false;
+    if(f.shift !== "All" && r.shift !== f.shift) return false;
+    if(f.groupName !== "All" && r.group_name !== f.groupName) return false;
+    if(f.section !== "All" && r.section !== f.section) return false;
+    if(f.workType !== "All" && r.work_type !== f.workType) return false; // matches GAS p.Work_Type
+    if(shedSet && !shedSet.has(String(r.shed))) return false;             // matches GAS p.Shed IN (...)
+    return true;
+  });
+}
+
+// downtime by Assets only (whole range), job_table excluded, WEAVING_ASSETS whitelist applied
+// mirrors GAS whereMaint: m.Assets IN (WA-01,...,WZ-18) AND j.Job_Code IS NULL
+function downtimeByAsset(f){
+  const map = {};
+  CTRL_ROWS.forEach(r=>{
+    if(r.date_col < f.fromDate || r.date_col > f.toDate) return;
+    if(f.shift !== "All" && r.shift !== f.shift) return;
+    if(f.section !== "All" && r.section !== f.section) return;
+    if(EXCLUDED_JOB_CODES.has(r.job_code)) return;          // j.Job_Code IS NULL in GAS
+    if(!WEAVING_ASSETS.has(r.assets)) return;               // m.Assets IN (...) whitelist
+    const stop = parseDT(r.stop_time), finish = parseDT(r.finish_time);
+    if(!stop || !finish) return;
+    map[r.assets] = (map[r.assets] || 0) + minutesBetween(stop, finish);
+  });
+  return map;
+}
+
+// repairs by Assets+Shift, job_table excluded — matches getAdvancedReportHTML / advanced shift analysis
+function repairsByAssetShift(f){
+  const map = {};
+  CTRL_ROWS.forEach(r=>{
+    if(r.date_col < f.fromDate || r.date_col > f.toDate) return;
+    if(f.section !== "All" && r.section !== f.section) return;
+    if(EXCLUDED_JOB_CODES.has(r.job_code)) return;
+    const key = r.assets + "||" + r.shift;
+    map[key] = (map[key] || 0) + 1;
+  });
+  return map;
+}
+
+/* =========================================================
+   QUICK VIEW — mirrors getAdvancedReportHTML: raw Total/Target
+   per shift, no downtime adjustment.
+   NOTE: made async so it loads its own data — the old version
+   pre-loaded everything in init(); this version uses lazy loading.
+   ========================================================= */
+async function viewQuick(){
+  const f = getFilters();
+  if(!f.fromDate || !f.toDate){ alert("Please select From & To dates."); return; }
+
+  const status = document.getElementById("status");
+  if(status){ status.style.color="#555"; status.textContent="Loading "+f.fromDate+" to "+f.toDate+"…"; }
+  try{ await fetchRangeData(f.fromDate, f.toDate); }
+  catch(e){
+    if(status){ status.style.color="#c0392b"; status.textContent="Could not read data: "+(e.message||e); }
+    return;
+  }
+  if(status){ status.textContent=""; }
+
+  if(!MW_ROWS.length){
+    document.getElementById("quickArea").innerHTML=`<div class="card"><p>⚠️ Mat_Weaving returned 0 rows for this range — check its read policy.</p></div>`;
+    return;
+  }
+
+  const prod = filterProd(f);
+  if(!prod.length){
+    document.getElementById("quickArea").innerHTML = `<div class="card"><p>⚠️ No data found for the selected filters.</p></div>`;
+    return;
+  }
+  const repairs = repairsByAssetShift(f);
+
+  // base: per Shed+Assets+Shift, sum Total/Target
+  const base = {};
+  prod.forEach(r=>{
+    const key = [r.shed, r.assets, r.shift].join("||");
+    if(!base[key]) base[key] = { shed:r.shed, assets:r.assets, shift:r.shift, total:0, target:0 };
+    base[key].total += Number(r.total||0);
+    base[key].target += Number(r.target||0);
+  });
+
+  // calc: per Shed+Assets, pick Morning/Night values
+  const calc = {};
+  Object.values(base).forEach(b=>{
+    const key = b.shed + "||" + b.assets;
+    if(!calc[key]) calc[key] = { shed:b.shed, assets:b.assets, P_M:null, P_N:null, R_M:0, R_N:0 };
+    const pct = b.target ? (b.total/b.target)*100 : null;
+    if(b.shift === "Morning"){ calc[key].P_M = pct; calc[key].R_M = repairs[b.assets+"||Morning"] || 0; }
+    if(b.shift === "Night"){ calc[key].P_N = pct; calc[key].R_N = repairs[b.assets+"||Night"] || 0; }
+  });
+
+  const sheds = {};
+  Object.values(calc).forEach(c=>{ if(!sheds[c.shed]) sheds[c.shed]=[]; sheds[c.shed].push(c); });
+
+  function color(p){ return p==null ? "#000" : (p>=90 ? "green" : "red"); }
+
+  let html = `<div class="card"><h2>📊 Advanced Asset Report (Quick View)</h2>`;
+  Object.keys(sheds).forEach(shed=>{
+    html += `<h3>SHED ${shed}</h3><table><tr><th>Asset</th><th>Morning %</th><th>Night %</th><th>Rep M</th><th>Rep N</th></tr>`;
+    sheds[shed].forEach(r=>{
+      const pM = r.P_M!=null ? Math.round(r.P_M) : "-";
+      const pN = r.P_N!=null ? Math.round(r.P_N) : "-";
+      html += `<tr><td>${r.assets}</td><td style="color:${color(r.P_M)}">${pM}</td>` +
+        `<td style="color:${color(r.P_N)}">${pN}</td><td>${r.R_M}</td><td>${r.R_N}</td></tr>`;
+    });
+    html += "</table>";
+  });
+  html += "</div>";
+  document.getElementById("quickArea").innerHTML = html;
+}
+
+/* =========================================================
+   DETAILED REPORT — mirrors generateAssetPDFBlob:
+   Shed > Unit > Asset with MLD/ATG/MLU, grand + shed pass counts,
+   plus Morning-vs-Night advanced analysis if Shift = All.
+   ========================================================= */
+async function generateDetailed(){
+  const f = getFilters();
+  if(!f.fromDate || !f.toDate){ alert("Please select From & To dates."); return; }
+  const status = document.getElementById("status");
+  if(status){ status.style.color="#555"; status.textContent="Loading "+f.fromDate+" to "+f.toDate+"…"; }
+  try{ await fetchRangeData(f.fromDate, f.toDate); }
+  catch(e){ if(status){ status.style.color="#c0392b"; status.textContent="Could not read data: "+(e.message||e);} return; }
+  if(status){ status.textContent=""; }
+  if(!MW_ROWS.length){ alert("No production rows found for this date range."); return; }
+
+  const prod = filterProd(f);
+  if(!prod.length){
+    document.getElementById("detailArea").innerHTML = `<div class="card"><p>⚠️ No data found for the selected filters.</p></div>`;
+    return;
+  }
+  const downtime = downtimeByAsset(f);
+
+  // group by Shed + Units + Assets (this is the "prod" grouping in the original)
+  const groups = {};
+  prod.forEach(r=>{
+    const key = [r.shed, r.units, r.assets].join("||");
+    if(!groups[key]) groups[key] = { shed:r.shed, unit:r.units, asset:r.assets, A:0,B:0,C:0,total:0,target:0, occ:0 };
+    const g = groups[key];
+    g.A += Number(r.a_double||0) + Number(r.a_single||0);
+    g.B += Number(r.b||0);
+    g.C += Number(r.c||0);
+    g.total += Number(r.total||0);
+    g.target += Number(r.target||0);
+    g.occ += 1;
+  });
+
+  function computeRow(g){
+    let target = g.target;
+    if(f.workMinutes !== 660) target = Math.round(target * f.workMinutes / 660);
+    const D = downtime[g.asset] || 0;
+    const MLD = Math.round((target * D) / (f.workMinutes * (g.occ||1)));
+    const ATG = target - MLD;
+    const MLU = g.total - ATG;
+    const pA = ATG ? Math.round(g.A/ATG*100) : 0;
+    const pB = ATG ? Number((g.B/ATG*100).toFixed(2)) : 0;
+    const pP = ATG ? Math.round(g.total/ATG*100) : 0;
+    return { ...g, target, D, MLD, ATG, MLU, pA, pB, pP };
+  }
+
+  const rows = Object.values(groups).map(computeRow);
+
+  // grand + shed pass counts (>=90 / <=89 on pP)
+  let grandAbove=0, grandBelow=0;
+  const shedCounts = {};
+  rows.forEach(r=>{
+    if(r.pP >= 90) grandAbove++; else if(r.pP <= 89) grandBelow++;
+    if(!shedCounts[r.shed]) shedCounts[r.shed] = { shed:r.shed, above:0, below:0, total:0 };
+    if(r.pP >= 90) shedCounts[r.shed].above++; else if(r.pP <= 89) shedCounts[r.shed].below++;
+    shedCounts[r.shed].total++;
+  });
+
+  // ── Overall Production Summary — mirrors GAS generateWeavingPDF top section ──
+  const overallA = prod.reduce((s,r)=>s+Number(r.a_double||0)+Number(r.a_single||0),0);
+  const overallB = prod.reduce((s,r)=>s+Number(r.b||0),0);
+  const overallC = prod.reduce((s,r)=>s+Number(r.c||0),0);
+  const overallTotal  = prod.reduce((s,r)=>s+Number(r.total||0),0);
+  const overallTarget = prod.reduce((s,r)=>s+Number(r.target||0),0);
+  const overallAssetsUsed = new Set(prod.map(r=>r.assets)).size;
+  // downtime totals for overall summary
+  const dtMap = downtimeByAsset(f);
+  const totalDowntime = Object.values(dtMap).reduce((s,v)=>s+v,0);
+  // MLD (Mat Loss by Downtime) across all assets
+  let totalMLD = 0;
+  Object.values(groups).forEach(g=>{
+    const tgt = g.target * (f.workMinutes/660);
+    const D = dtMap[g.asset]||0;
+    totalMLD += Math.round((tgt*D)/(f.workMinutes*(g.occ||1)));
+  });
+  const overallATG = overallTarget - totalMLD;
+  const overallMLU = overallTotal  - overallATG;
+  const overallPercB   = overallTotal>0 ? Math.round((overallB/overallTotal)*100) : 0;
+  const overallPercC   = overallTotal>0 ? Math.round((overallC/overallTotal)*100) : 0;
+  const overallProdEff = overallTarget>0 ? Math.round((overallTotal/overallTarget)*100) : 0;
+  const overallActEff  = overallATG>0    ? Math.round((overallTotal/overallATG)*100)    : 0;
+
+  let html = `<div class="card"><h2>🧶 Asset Summary Report (Detailed)</h2>
+    <p style="text-align:center;">${f.fromDate} to ${f.toDate} | Shift: ${f.shift} | Group: ${f.groupName} | Section: ${f.section} | Work: ${f.workMinutes/60} hrs</p>`;
+
+  html += `<h3>🏭 Overall Production Summary</h3>
+    <p>Total Assets Used: <b>${overallAssetsUsed}</b></p>
+    <p>A Grade Production: <b>${Math.round(overallA)}</b></p>
+    <p>B Grade Production: <b>${Math.round(overallB)}</b></p>
+    <p>C Grade Production: <b>${Math.round(overallC)}</b></p>
+    <p>Total Production: <b>${Math.round(overallTotal)}</b></p>
+    <p>Total Target: <b>${Math.round(overallTarget)}</b></p>
+    <p>Actual Target (ATG): <b>${Math.round(overallATG)}</b></p>
+    <p>B%: <b>${overallPercB}%</b></p>
+    <p>C%: <b>${overallPercC}%</b></p>
+    <p>Production Efficiency: <b>${overallProdEff}%</b></p>
+    <p>Actual Production Efficiency: <b>${overallActEff}%</b></p>
+    <p>Operational Loss (MLU): <b>${Math.round(overallMLU)}</b></p>
+    <h4>Downtime Report</h4>
+    <p>Total Downtime: <b>${Math.round(totalDowntime)} minutes</b></p>
+    <p>Mat Loss by Downtime (MLD): <b>${Math.round(totalMLD)}</b></p>
+    <hr>`;
+
+  html += `<h3>📈 Grand Summary (All Sheds)</h3><table><tr><th>Metric</th><th>Count</th></tr>
+    <tr><td>Assets ≥90%</td><td>${grandAbove}</td></tr>
+    <tr><td>Assets ≤89%</td><td>${grandBelow}</td></tr>
+    <tr><td>Total Assets</td><td>${rows.length}</td></tr></table>`;
+
+  html += `<h3>📊 Shed Summary (Performance)</h3><table><tr><th>Shed</th><th>Assets ≥90%</th><th>Assets ≤89%</th><th>Total</th></tr>`;
+  Object.values(shedCounts).forEach(s=>{
+    html += `<tr><td>${s.shed}</td><td>${s.above}</td><td>${s.below}</td><td>${s.total}</td></tr>`;
+  });
+  html += "</table>";
+
+  // Shed > Unit tables with Unit/Shed totals
+  const bySh = {};
+  rows.forEach(r=>{ if(!bySh[r.shed]) bySh[r.shed]=[]; bySh[r.shed].push(r); });
+
+  const headers = ["S/N","Unit","Asset","A","B","C","Total","Target","Downtime","MLD","ATG","MLU","%A","%B","%P"];
+  let grand = {A:0,B:0,C:0,total:0,target:0,D:0,MLD:0,ATG:0,MLU:0};
+
+  Object.keys(bySh).forEach(shed=>{
+    html += `<h3>SHED ${shed}</h3><table><tr>${headers.map(h=>`<th>${h}</th>`).join("")}</tr>`;
+    const shedRows = bySh[shed];
+    const byUnit = {};
+    shedRows.forEach(r=>{ if(!byUnit[r.unit]) byUnit[r.unit]=[]; byUnit[r.unit].push(r); });
+    let shedTot = {A:0,B:0,C:0,total:0,target:0,D:0,MLD:0,ATG:0,MLU:0};
+
+    Object.keys(byUnit).forEach(unit=>{
+      let unitTot = {A:0,B:0,C:0,total:0,target:0,D:0,MLD:0,ATG:0,MLU:0};
+      byUnit[unit].forEach((r,i)=>{
+        html += `<tr><td>${i+1}</td><td>${unit}</td><td>${r.asset}</td><td>${Math.round(r.A)}</td>` +
+          `<td>${Math.round(r.B)}</td><td>${Math.round(r.C)}</td><td>${Math.round(r.total)}</td>` +
+          `<td>${Math.round(r.target)}</td><td>${Math.round(r.D)}</td><td>${Math.round(r.MLD)}</td>` +
+          `<td>${Math.round(r.ATG)}</td><td>${Math.round(r.MLU)}</td><td>${r.pA}</td><td>${r.pB}</td><td>${r.pP}</td></tr>`;
+        unitTot.A+=r.A; unitTot.B+=r.B; unitTot.C+=r.C; unitTot.total+=r.total; unitTot.target+=r.target;
+        unitTot.D+=r.D; unitTot.MLD+=r.MLD; unitTot.ATG+=r.ATG; unitTot.MLU+=r.MLU;
+      });
+      html += `<tr class="total"><td></td><td>UNIT TOTAL</td><td></td><td>${Math.round(unitTot.A)}</td>` +
+        `<td>${Math.round(unitTot.B)}</td><td>${Math.round(unitTot.C)}</td><td>${Math.round(unitTot.total)}</td>` +
+        `<td>${Math.round(unitTot.target)}</td><td>${Math.round(unitTot.D)}</td><td>${Math.round(unitTot.MLD)}</td>` +
+        `<td>${Math.round(unitTot.ATG)}</td><td>${Math.round(unitTot.MLU)}</td>` +
+        `<td>${unitTot.ATG?Math.round(unitTot.A/unitTot.ATG*100):0}</td>` +
+        `<td>${unitTot.ATG?(unitTot.B/unitTot.ATG*100).toFixed(2):"0.00"}</td>` +
+        `<td>${unitTot.ATG?Math.round(unitTot.total/unitTot.ATG*100):0}</td></tr>`;
+      Object.keys(shedTot).forEach(k=> shedTot[k]+=unitTot[k]);
+    });
+
+    html += `<tr class="grandtotal"><td></td><td>SHED TOTAL</td><td></td><td>${Math.round(shedTot.A)}</td>` +
+      `<td>${Math.round(shedTot.B)}</td><td>${Math.round(shedTot.C)}</td><td>${Math.round(shedTot.total)}</td>` +
+      `<td>${Math.round(shedTot.target)}</td><td>${Math.round(shedTot.D)}</td><td>${Math.round(shedTot.MLD)}</td>` +
+      `<td>${Math.round(shedTot.ATG)}</td><td>${Math.round(shedTot.MLU)}</td>` +
+      `<td>${shedTot.ATG?Math.round(shedTot.A/shedTot.ATG*100):0}</td>` +
+      `<td>${shedTot.ATG?(shedTot.B/shedTot.ATG*100).toFixed(2):"0.00"}</td>` +
+      `<td>${shedTot.ATG?Math.round(shedTot.total/shedTot.ATG*100):0}</td></tr>`;
+    html += "</table>";
+    Object.keys(grand).forEach(k=> grand[k]+=shedTot[k]);
+  });
+
+  html += `<h3>🏁 GRAND TOTAL (ALL SHEDS)</h3><table><tr>${headers.map(h=>`<th>${h}</th>`).join("")}</tr>` +
+    `<tr class="grandtotal"><td></td><td>GRAND TOTAL</td><td></td><td>${Math.round(grand.A)}</td>` +
+    `<td>${Math.round(grand.B)}</td><td>${Math.round(grand.C)}</td><td>${Math.round(grand.total)}</td>` +
+    `<td>${Math.round(grand.target)}</td><td>${Math.round(grand.D)}</td><td>${Math.round(grand.MLD)}</td>` +
+    `<td>${Math.round(grand.ATG)}</td><td>${Math.round(grand.MLU)}</td>` +
+    `<td>${grand.ATG?Math.round(grand.A/grand.ATG*100):0}</td>` +
+    `<td>${grand.ATG?(grand.B/grand.ATG*100).toFixed(2):"0.00"}</td>` +
+    `<td>${grand.ATG?Math.round(grand.total/grand.ATG*100):0}</td></tr></table>`;
+
+  // Advanced Morning vs Night analysis — only when Shift = All
+  if(f.shift === "All"){
+    const repairs = repairsByAssetShift(f);
+    const base = {};
+    prod.forEach(r=>{
+      const key = [r.shed, r.assets, r.shift].join("||");
+      if(!base[key]) base[key] = { shed:r.shed, assets:r.assets, shift:r.shift, total:0, target:0 };
+      base[key].total += Number(r.total||0);
+      base[key].target += Number(r.target||0);
+    });
+    const calc = {};
+    Object.values(base).forEach(b=>{
+      const key = b.shed + "||" + b.assets;
+      if(!calc[key]) calc[key] = { shed:b.shed, assets:b.assets, P_M:null, P_N:null, R_M:0, R_N:0 };
+      const pct = b.target ? (b.total/b.target)*100 : null;
+      if(b.shift === "Morning"){ calc[key].P_M = pct; calc[key].R_M = repairs[b.assets+"||Morning"] || 0; }
+      if(b.shift === "Night"){ calc[key].P_N = pct; calc[key].R_N = repairs[b.assets+"||Night"] || 0; }
+    });
+    const shAdv = {};
+    Object.values(calc).forEach(c=>{ if(!shAdv[c.shed]) shAdv[c.shed]=[]; shAdv[c.shed].push(c); });
+    function getColor(p){ return p==null ? "#000" : (p>=90 ? "#008000" : "#c00000"); }
+
+    Object.keys(shAdv).forEach(shed=>{
+      const list = shAdv[shed];
+      html += `<h3>🔵 ALL ASSETS - SHED ${shed}</h3><table><tr><th>Asset</th><th>% Morning</th><th>% Night</th><th>Rep M</th><th>Rep N</th><th>Status</th></tr>`;
+      list.forEach(r=>{
+        const pM = r.P_M!=null?Math.round(r.P_M):null, pN = r.P_N!=null?Math.round(r.P_N):null;
+        const status = (pM>=90 && pN>=90) ? "OK" : "NOT OK";
+        html += `<tr><td>${r.assets}</td><td style="color:${getColor(pM)}">${pM??"-"}</td>` +
+          `<td style="color:${getColor(pN)}">${pN??"-"}</td><td>${r.R_M}</td><td>${r.R_N}</td><td>${status}</td></tr>`;
+      });
+      html += "</table>";
+
+      html += `<h3>🟡 MIXED PERFORMANCE</h3><table><tr><th>Asset</th><th>% Morning</th><th>% Night</th><th>Rep M</th><th>Rep N</th></tr>`;
+      list.forEach(r=>{
+        const pM = r.P_M!=null?Math.round(r.P_M):null, pN = r.P_N!=null?Math.round(r.P_N):null;
+        if(pM!=null && pN!=null && ((pM>=90&&pN<90)||(pN>=90&&pM<90))){
+          html += `<tr><td>${r.assets}</td><td style="color:${getColor(pM)}">${pM}</td><td style="color:${getColor(pN)}">${pN}</td><td>${r.R_M}</td><td>${r.R_N}</td></tr>`;
+        }
+      });
+      html += "</table>";
+
+      html += `<h3>🔴 BOTH BELOW 90</h3><table><tr><th>Asset</th><th>% Morning</th><th>% Night</th><th>Rep M</th><th>Rep N</th></tr>`;
+      list.forEach(r=>{
+        const pM = r.P_M!=null?Math.round(r.P_M):null, pN = r.P_N!=null?Math.round(r.P_N):null;
+        if(pM!=null && pN!=null && pM<90 && pN<90){
+          html += `<tr><td>${r.assets}</td><td style="color:${getColor(pM)}">${pM}</td><td style="color:${getColor(pN)}">${pN}</td><td>${r.R_M}</td><td>${r.R_N}</td></tr>`;
+        }
+      });
+      html += "</table>";
+
+      html += `<h3>⚫ SINGLE SHIFT ONLY</h3><table><tr><th>Asset</th><th>% Morning</th><th>% Night</th><th>Rep M</th><th>Rep N</th></tr>`;
+      list.forEach(r=>{
+        const pM = r.P_M!=null?Math.round(r.P_M):null, pN = r.P_N!=null?Math.round(r.P_N):null;
+        if(pM==null || pN==null){
+          html += `<tr><td>${r.assets}</td><td style="color:${getColor(pM)}">${pM??0}</td><td style="color:${getColor(pN)}">${pN??0}</td><td>${r.R_M}</td><td>${r.R_N}</td></tr>`;
+        }
+      });
+      html += "</table>";
+    });
+  }
+
+  html += "</div>";
+  document.getElementById("detailArea").innerHTML = html;
+}
+
+init();
+</script>
+<script src="../../assets/letterhead.js"></script>
+</body>
+</html>

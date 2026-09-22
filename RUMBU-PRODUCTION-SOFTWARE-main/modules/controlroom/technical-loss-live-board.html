@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Technical Loss Live Board</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+  :root{--sans:"Inter","Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  body { font-family:var(--sans); background: #0b1b2b; color: white; margin: 0; padding: 20px; }
+  .header { text-align: center; font-size: 22px; font-weight: bold; color: #00e5ff; }
+  .clock { text-align: center; margin: 10px; color: #ffd54f; }
+  #status { text-align: center; font-size: 12px; font-weight: bold; margin-bottom: 8px; }
+  table { width: 100%; border-collapse: collapse; }
+  th { background: #1565c0; padding: 10px; }
+  td { padding: 10px; border-bottom: 1px solid #555; text-align: center; }
+  select { padding: 6px 10px; border-radius: 5px; }
+  button { background: #00c853; border: none; padding: 6px 10px; color: white; cursor: pointer; border-radius: 5px; }
+  button.refresh { background:#ff9800; }
+  .no-data { text-align: center; color: red; }
+</style>
+</head>
+<body>
+
+<div class="header">TECHNICAL LOSS LIVE BOARD</div>
+<div class="clock" id="clock"></div>
+<div id="status">Connecting to Supabase...</div>
+
+<select id="shedFilter" onchange="loadData()">
+  <option value="All">All</option>
+  <option value="1">Shed 1</option><option value="2">Shed 2</option><option value="3">Shed 3</option>
+  <option value="4">Shed 4</option><option value="5">Shed 5</option><option value="6">Shed 6</option>
+</select>
+<br><br>
+<button class="refresh" onclick="loadData()">Refresh Data</button>
+
+<table>
+  <thead><tr><th>Assets</th><th>Downtime (Min)</th><th>Shed</th><th>Description</th><th>Action</th></tr></thead>
+  <tbody id="tableBody"><tr><td colspan="5" class="no-data">Loading data...</td></tr></tbody>
+</table>
+
+<script>
+const SUPABASE_URL = "https://betfhunzmhtdzgvufmfk.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp";
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY, "Content-Type": "application/json" }; }
+
+setInterval(()=>{ document.getElementById("clock").innerHTML = new Date().toLocaleString(); }, 1000);
+
+// Compute the current shift and working date using fixed UTC+1 (WAT),
+// matching the original's GMT+1 logic regardless of the viewer's own
+// device timezone.
+function watNow(){
+  const now = new Date();
+  const utcMs = now.getTime() + now.getTimezoneOffset()*60000;
+  return new Date(utcMs + 1*3600000);
+}
+function currentShiftAndDate(){
+  const wat = watNow();
+  const hour = wat.getHours();
+  const shift = (hour >= 7 && hour < 19) ? "Morning" : "Night";
+  let workingDate = wat;
+  if(shift === "Night" && hour < 7){
+    workingDate = new Date(wat); workingDate.setDate(wat.getDate()-1);
+  }
+  const y = workingDate.getFullYear(), m = String(workingDate.getMonth()+1).padStart(2,"0"), d = String(workingDate.getDate()).padStart(2,"0");
+  return { shift, dateStr: y+"-"+m+"-"+d };
+}
+
+// Extract WAT date string (YYYY-MM-DD) from a mc_stoppage_time UTC string
+function watDateFromStoppage(ts){
+  if(!ts) return "";
+  // mc_stoppage_time format: "2026-07-23 03:33:25.501 UTC"
+  // Replace space+UTC with Z so JS Date parses it as UTC
+  const utcStr = ts.replace(" UTC","Z").replace(" ","T");
+  const d = new Date(utcStr);
+  if(isNaN(d)) return "";
+  // Add WAT offset (+1h) to get local Nigeria date
+  const wat = new Date(d.getTime() + 3600000);
+  return wat.getFullYear()+"-"+String(wat.getMonth()+1).padStart(2,"0")+"-"+String(wat.getDate()).padStart(2,"0");
+}
+
+let MON_ROWS = [], TREATED_IDS = new Set();
+
+// Paginated fetch matching GAS tracking_table query
+async function fetchAllRows(table, query){
+  let all = [], offset = 0; const pageSize = 1000;
+  const q = query || "";
+  while(true){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset+"-"+(offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=*" + q + "&order=id.asc", { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+async function init(){
+  const status = document.getElementById("status");
+  try{
+    const { shift, dateStr } = currentShiftAndDate();
+
+    // date_col is NULL/corrupt and mc_stoppage_time is TEXT (not TIMESTAMP),
+    // so server-side date filters are unreliable. Instead fetch the latest
+    // 1000 rows by id DESC — these are the most recently inserted records —
+    // and filter entirely client-side using watDateFromStoppage().
+    const [trackingRows, treatedRes] = await Promise.all([
+      fetch(SUPABASE_URL + "/rest/v1/tracking_table?select=*&order=id.desc&limit=1000",
+        { headers: authHeaders() }).then(r => r.ok ? r.json() : []),
+      fetch(SUPABASE_URL + "/rest/v1/treated_table?select=id_number",
+        { headers: authHeaders() })
+    ]);
+
+    MON_ROWS = Array.isArray(trackingRows) ? trackingRows : [];
+
+    if(treatedRes.ok){
+      const treatedRows = await treatedRes.json();
+      TREATED_IDS = new Set(treatedRows.map(r=>String(r.id_number)));
+    }
+
+    const techLossCount = MON_ROWS.filter(r=>
+      watDateFromStoppage(r.mc_stoppage_time) === dateStr &&
+      (r.job_code||"").trim().toLowerCase() === "technical loss" &&
+      (r.shift||"").toLowerCase() === shift.toLowerCase()
+    ).length;
+
+    status.style.color = "#7fffb0";
+    status.textContent = "Connected. tracking_table: " + MON_ROWS.length + " recent rows | " + techLossCount + " Technical Loss (" + dateStr + " / " + shift + ") | treated: " + TREATED_IDS.size + ".";
+    loadData();
+  }catch(e){
+    status.style.color = "#ff8a80";
+    status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+function loadData(){
+  const shed = document.getElementById("shedFilter").value;
+  const { shift, dateStr } = currentShiftAndDate();
+  const now = new Date();
+
+  // Filter client-side:
+  // - WAT date derived from mc_stoppage_time (date_col is null/corrupt)
+  // - shift and job_code case-insensitive
+  // - exclude already-treated machines
+  const rows = MON_ROWS.filter(r=>{
+    if(watDateFromStoppage(r.mc_stoppage_time) !== dateStr) return false;
+    if((r.job_code||"").trim().toLowerCase() !== "technical loss") return false;
+    if((r.shift||"").toLowerCase() !== shift.toLowerCase()) return false;
+    if(TREATED_IDS.has(String(r.asset_id))) return false;
+    if(shed !== "All" && String(r.shed) !== shed) return false;
+    return true;
+  });
+
+  const body = document.getElementById("tableBody");
+  body.innerHTML = "";
+  if(!rows.length){
+    body.innerHTML = '<tr><td colspan="5" class="no-data">No Data</td></tr>';
+    return;
+  }
+
+  rows.forEach(r=>{
+    // Parse mc_stoppage_time: "2026-07-23 03:33:25.501 UTC" → UTC Date
+    const stopUtcStr = (r.mc_stoppage_time||"").replace(" UTC","Z").replace(" ","T");
+    const stop = stopUtcStr ? new Date(stopUtcStr) : null;
+    const downtimeMin = stop && !isNaN(stop) ? (Math.round(((now - stop)/60000)*100)/100) : "";
+    const tr = document.createElement("tr");
+    // GAS uses t.ID as the join key — Supabase tracking_table column is 'id'
+    tr.id = "row-" + r.asset_id;
+    tr.innerHTML = `<td>${r.assets||""}</td><td>${downtimeMin}</td><td>${r.shed||""}</td><td>${r.description||""}</td>` +
+      `<td><button onclick="confirmTreat('${r.asset_id}')">TREATED</button></td>`;
+    body.appendChild(tr);
+  });
+}
+
+async function confirmTreat(id){
+  if(!confirm("Mark as treated?")) return;
+  try{
+    // GAS MERGE inserts (ID, treated_time) into treated_table
+    // Supabase treated_table column is 'id_number' (confirmed from codebase)
+    const row = { id_number: id, treated_time: new Date().toISOString() };
+    const res = await fetch(SUPABASE_URL + "/rest/v1/treated_table", {
+      method: "post", headers: authHeaders(), body: JSON.stringify(row)
+    });
+    if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
+    TREATED_IDS.add(String(id));
+    const el = document.getElementById("row-" + id);
+    if(el) el.remove();
+  }catch(e){
+    alert("Error: " + (e.message||e));
+  }
+}
+
+init();
+</script>
+</body>
+</html>

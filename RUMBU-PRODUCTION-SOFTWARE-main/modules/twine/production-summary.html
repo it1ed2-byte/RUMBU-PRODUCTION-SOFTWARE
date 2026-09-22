@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Twine Production Summary</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme") || "navy"); }catch(e){} })();
+  window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme){ document.documentElement.setAttribute("data-theme", e.data.rumbuTheme); } });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:900px;margin:0 auto;}
+  #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);}
+  .summary-bar{display:none;gap:18px;flex-wrap:wrap;margin:14px 0;padding:12px 14px;background:var(--bg);border-radius:var(--radius-sm);font-size:13px;}
+  .summary-bar b{color:var(--heading);}
+  tfoot td{font-weight:700;background:var(--bg);border-top:2px solid var(--line-2);}
+  @media print{ .no-print{display:none !important;} }
+</style>
+</head>
+<body>
+<div class="wrap">
+<div id="connStatus">Loading...</div>
+
+<div class="card-panel no-print">
+  <h3>Twine Production Summary</h3>
+  <div class="filters">
+    <div class="f"><label>From Date</label><input type="date" id="fStart"></div>
+    <div class="f"><label>To Date</label><input type="date" id="fEnd"></div>
+    <div class="f"><label>Shift</label><select id="fShift"><option value="">All</option><option>Morning</option><option>Night</option></select></div>
+    <div class="f"><label>Section</label><select id="fSection"><option value="">All</option><option value="Rumbu">Rumbu</option><option value="MamaSannu">MamaSannu</option></select></div>
+    <div class="f"><label>Asset</label><select id="fAsset"><option value="">All</option></select></div>
+    <div class="f"><label>Twine Type</label><select id="fType"><option value="">All</option></select></div>
+    <div class="f f-min"><button onclick="fetchSummary()">Fetch Summary</button></div>
+    <div class="f f-min"><button class="btn-ghost" onclick="clearFilters()">Clear</button></div>
+    <div class="f f-min"><button class="btn-ghost" onclick="window.print()">Print / Save as PDF</button></div>
+  </div>
+</div>
+
+<div class="summary-bar" id="summaryBar"></div>
+
+<div class="table-wrap">
+  <div class="table-scroll">
+    <table id="summaryTable">
+      <thead><tr><th>Asset</th><th>Total Bags</th><th>Total Target</th><th>Total Remainder</th></tr></thead>
+      <tbody id="summaryBody"><tr><td colspan="4">Select a date range and click Fetch Summary.</td></tr></tbody>
+      <tfoot id="summaryFoot"></tfoot>
+    </table>
+  </div>
+</div>
+<div class="status" id="status" style="display:none;"></div>
+
+</div>
+
+<script>
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    const me = await requireAuth("../../login.html");
+    if(!me) return;
+
+    const { data: assets } = await sb.from("twine_assets").select("asset_code").order("asset_code");
+    document.getElementById("fAsset").innerHTML = '<option value="">All</option>' + (assets||[]).map(a=>`<option>${a.asset_code}</option>`).join("");
+
+    const { data: types } = await sb.from("twine_types").select("type_code").order("type_code");
+    document.getElementById("fType").innerHTML = '<option value="">All</option>' + (types||[]).map(t=>`<option>${t.type_code}</option>`).join("");
+
+    status.style.color = "var(--ok)"; status.textContent = "Connected.";
+  }catch(e){
+    status.style.color = "var(--bad)"; status.textContent = "Could not load: " + e.message;
+  }
+}
+
+async function fetchSummary(){
+  const from = document.getElementById("fStart").value;
+  const to = document.getElementById("fEnd").value;
+  const shift = document.getElementById("fShift").value;
+  const section = document.getElementById("fSection").value;
+  const asset = document.getElementById("fAsset").value;
+  const type = document.getElementById("fType").value;
+  const statusEl = document.getElementById("status");
+  const body = document.getElementById("summaryBody");
+  const foot = document.getElementById("summaryFoot");
+  const bar = document.getElementById("summaryBar");
+
+  if(!from && !to){
+    statusEl.style.display = "block"; statusEl.className = "status err";
+    statusEl.textContent = "Select a From Date and/or To Date, then click Fetch Summary.";
+    return;
+  }
+  statusEl.style.display = "none";
+
+  let query = sb.from("twine_production").select("asset_code, bags, target, remainder").limit(5000);
+  if(from) query = query.gte("production_date", from);
+  if(to) query = query.lte("production_date", to);
+  if(shift) query = query.eq("shift", shift);
+  if(section) query = query.eq("section", section);
+  if(asset) query = query.eq("asset_code", asset);
+  if(type) query = query.eq("twine_type", type);
+
+  const { data, error } = await query;
+  if(error){ body.innerHTML = `<tr><td colspan="4">Error: ${error.message}</td></tr>`; return; }
+  const rows = data || [];
+  if(!rows.length){
+    body.innerHTML = `<tr><td colspan="4">No records match the selected filters.</td></tr>`;
+    foot.innerHTML = ""; bar.style.display = "none";
+    return;
+  }
+
+  const byAsset = {};
+  rows.forEach(r=>{
+    if(!byAsset[r.asset_code]) byAsset[r.asset_code] = { bags:0, target:0, remainder:0 };
+    byAsset[r.asset_code].bags += r.bags;
+    byAsset[r.asset_code].target += r.target;
+    byAsset[r.asset_code].remainder += r.remainder;
+  });
+
+  let grandBags = 0, grandTarget = 0, grandRem = 0;
+  const assetCodes = Object.keys(byAsset).sort();
+  body.innerHTML = assetCodes.map(code=>{
+    const s = byAsset[code];
+    grandBags += s.bags; grandTarget += s.target; grandRem += s.remainder;
+    return `<tr><td>${code}</td><td>${s.bags}</td><td>${s.target}</td><td>${s.remainder}</td></tr>`;
+  }).join("");
+  foot.innerHTML = `<tr><td>Grand Total</td><td>${grandBags}</td><td>${grandTarget}</td><td>${grandRem}</td></tr>`;
+  bar.style.display = "flex";
+  bar.innerHTML = `<span>Assets: <b>${assetCodes.length}</b></span><span>Grand Total Bags: <b>${grandBags}</b></span><span>Grand Total Target: <b>${grandTarget}</b></span><span>Grand Total Remainder: <b>${grandRem}</b></span>`;
+}
+
+function clearFilters(){
+  document.getElementById("fStart").value = "";
+  document.getElementById("fEnd").value = "";
+  document.getElementById("fShift").value = "";
+  document.getElementById("fSection").value = "";
+  document.getElementById("fAsset").value = "";
+  document.getElementById("fType").value = "";
+  document.getElementById("summaryBody").innerHTML = `<tr><td colspan="4">Select a date range and click Fetch Summary.</td></tr>`;
+  document.getElementById("summaryFoot").innerHTML = "";
+  document.getElementById("summaryBar").style.display = "none";
+}
+
+init();
+</script>
+</body>
+</html>

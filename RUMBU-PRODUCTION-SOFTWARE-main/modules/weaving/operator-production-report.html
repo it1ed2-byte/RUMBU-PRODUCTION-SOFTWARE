@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Operator Production Report</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+  :root{--navy:var(--heading);}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:16px;}
+  .container{max-width:1000px;margin:0 auto 16px;background:var(--card);border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.2);padding:20px;}
+  h2{text-align:center;color:var(--navy);}
+  label{font-weight:600;margin-top:8px;display:block;font-size:13px;}
+  input,select{width:100%;padding:8px;margin-top:4px;border:1px solid var(--line);border-radius:6px;font-size:13px;}
+  .grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;}
+  button{width:100%;padding:10px;margin-top:16px;background:var(--navy);color:#fff;border:none;border-radius:6px;font-weight:bold;cursor:pointer;}
+  table{width:100%;border-collapse:collapse;margin-top:12px;font-size:12px;}
+  th,td{border:1px solid #333;padding:4px;text-align:center;}
+  th{background:var(--navy);color:#fff;}
+  #status{margin-top:12px;font-weight:bold;text-align:center;font-size:13px;}
+  canvas{margin-top:20px;}
+  @media (max-width:700px){ .grid{grid-template-columns:1fr 1fr;} }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="../../table-resolver.js"></script>
+</head>
+<body>
+
+<div class="container">
+  <h2>👷 Operator Production Report</h2>
+  <div class="grid">
+    <div><label>From Date</label><input type="date" id="fromDate" onchange="loadOperators()"></div>
+    <div><label>To Date</label><input type="date" id="toDate" onchange="loadOperators()"></div>
+    <div><label>Section</label><select id="section" onchange="loadOperators()">
+      <option value="All" selected>All</option>
+    </select></div>
+    <div><label>Work Minutes</label><select id="workMinutes">
+      <option value="660">11 Hours</option><option value="600">10 Hours</option><option value="540">9 Hours</option>
+    </select></div>
+    <div><label>Operator Search (by ID)</label><input type="text" id="operatorSearch" placeholder="Type operator ID" oninput="filterOperator()"></div>
+    <div><label>Operator</label><select id="operator"><option value="All" selected>All</option></select></div>
+  </div>
+  <button onclick="viewReport()">View Report</button>
+  <div id="status">Connecting to Supabase...</div>
+  <div id="reportArea"></div>
+</div>
+
+<script>
+const SECTION_LABEL = { "Rumbu": "Rumbu", "MamaSannu": "Mama Sannu" };
+
+let MW_TABLE = "mat_weaving"; // resolved properly in init() below
+let MW_ROWS = [], CTRL_ROWS = [], operatorsList = []; CTRL_ROWS.forEach(normalizeControlRow);
+
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
+
+
+// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
+async function fetchAllRows(table, select, query){
+  let all = [], offset = 0; const pageSize = 1000;
+  const q = query || "";
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=" + (select||"*") + q, { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+function normalizeControlRow(r){
+  if(r.date_col === undefined) r.date_col = r.date;
+  if(r.names === undefined) r.names = r.nurse_name;
+  if(r.stop_time === undefined) r.stop_time = r.mc_stoppage_time;
+  if(r.extimated_time === undefined) r.extimated_time = r.estimated_duration;
+  if(r.discription === undefined) r.discription = r.description;
+  return r;
+}
+
+async function init(){
+  const status = document.getElementById("status");
+  try{
+    const me = await requireAuth("../../login.html");
+    if(!me) return;
+    MW_TABLE = await resolveWeavingTable();
+
+    const mySections = (me.sectionNames && me.sectionNames.length) ? me.sectionNames : ["Rumbu","MamaSannu"];
+    document.getElementById("section").innerHTML = '<option value="All" selected>All</option>' +
+      mySections.map(s=>`<option value="${s}">${SECTION_LABEL[s]||s}</option>`).join("");
+    // Default-select and lock the dropdown to the user's own Section when they only have one.
+    if(mySections.length === 1){
+      document.getElementById("section").value = mySections[0];
+      document.getElementById("section").disabled = true;
+    }
+    status.style.color="#1d8a4e";
+    status.textContent = "Ready. Select a date range and click Generate.";
+  }catch(e){
+    status.style.color="#c0392b";
+    status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+// Fetch Mat_Weaving + control scoped to the selected date range (server-side).
+async function fetchRangeData(fromDate, toDate){
+  const [mw, ctrl] = await Promise.all([
+    fetchAllRows(MW_TABLE,"*", "&date_col=gte."+fromDate+"&date_col=lte."+toDate),
+    fetchAllRows("control","*", "&date=gte."+fromDate+"&date=lte."+toDate)
+  ]);
+  MW_ROWS = mw;
+  CTRL_ROWS = ctrl; CTRL_ROWS.forEach(normalizeControlRow);
+}
+
+// Made async so it fetches its own data — mirrors the original AppScript's
+// getOperatorsInRange backend call which ran a live BigQuery query.
+// Without this, the dropdown stays empty until View Report is clicked.
+async function loadOperators(){
+  const fromDate = document.getElementById("fromDate").value;
+  const toDate = document.getElementById("toDate").value;
+  const section = document.getElementById("section").value;
+  if(!fromDate || !toDate) return;
+  try{ await fetchRangeData(fromDate, toDate); }catch(e){ return; }
+  const seen = {};
+  MW_ROWS.forEach(r=>{
+    if(r.date_col < fromDate || r.date_col > toDate) return;
+    if(section !== "All" && r.section !== section) return;
+    if(r.operator_id && !seen[r.operator_id]) seen[r.operator_id] = r.operator_name || "";
+  });
+  operatorsList = Object.keys(seen).map(id => ({ Operator_ID:id, Operator_Name:seen[id] }))
+    .sort((a,b)=> a.Operator_Name.localeCompare(b.Operator_Name));
+  renderOperatorDropdown(operatorsList);
+}
+
+function renderOperatorDropdown(list){
+  const sel = document.getElementById("operator");
+  sel.innerHTML = '<option value="All" selected>All</option>';
+  list.forEach(o=>{
+    const opt = document.createElement("option");
+    opt.value = o.Operator_ID;
+    opt.textContent = o.Operator_Name + " (" + o.Operator_ID + ")";
+    sel.appendChild(opt);
+  });
+}
+
+function filterOperator(){
+  const q = document.getElementById("operatorSearch").value.toLowerCase();
+  renderOperatorDropdown(operatorsList.filter(o => o.Operator_ID.toLowerCase().includes(q)));
+}
+
+async function viewReport(){
+  const fromDate = document.getElementById("fromDate").value;
+  const toDate = document.getElementById("toDate").value;
+  const section = document.getElementById("section").value;
+  const operator = document.getElementById("operator").value;
+  const workMinutes = Number(document.getElementById("workMinutes").value) || 660;
+  const status = document.getElementById("status");
+  if(!fromDate || !toDate){ status.textContent = "⚠️ Select both dates"; return; }
+
+  status.style.color=""; status.textContent = "Loading…";
+  try{
+    await fetchRangeData(fromDate, toDate);
+  }catch(e){
+    status.style.color="#c0392b"; status.textContent = "Could not read data: " + (e.message||e); return;
+  }
+  loadOperators();
+  status.textContent = "";
+
+  // Production rows in range/section/operator.
+  const prod = MW_ROWS.filter(r=>{
+    if(r.date_col < fromDate || r.date_col > toDate) return false;
+    if(section !== "All" && r.section !== section) return false;
+    if(operator !== "All" && r.operator_id !== operator) return false;
+    return true;
+  });
+  if(!prod.length){ document.getElementById("reportArea").innerHTML = "<h3>No data found</h3>"; return; }
+
+  // Downtime: Assets+Date, over the ENTIRE control table with NO date/section
+  // filter — this matches the original script exactly (its downtime CTE has
+  // no WHERE clause at all), even though it looks unusual.
+  const downtime = {};
+  CTRL_ROWS.forEach(r=>{
+    const stop = new Date(r.stop_time), finish = new Date(r.finish_time);
+    if(isNaN(stop) || isNaN(finish)) return;
+    const key = r.assets + "||" + r.date_col;
+    downtime[key] = (downtime[key] || 0) + Math.trunc((finish-stop)/60000);  // Math.trunc matches BigQuery TIMESTAMP_DIFF truncation
+  });
+
+  function computeSummary(list){
+    let totalA=0,totalB=0,totalC=0,totalTotal=0,sumA=0,sumB=0,sumC=0,sumP=0;
+    let countP93=0,countA93=0,countB5=0,assetsUsed=0;
+    const workDays = new Set();
+    list.forEach(r=>{
+      const A = Number(r.a_double||0)+Number(r.a_single||0);
+      const B = Number(r.b||0), C = Number(r.c||0), Total = Number(r.total||0), Target = Number(r.target||0);
+      const D = downtime[r.assets+"||"+r.date_col] || 0;
+      const MLD = Target ? Math.round((Target*D)/workMinutes) : 0;
+      const ATG = Math.round(Target - MLD);
+      const pA = ATG ? Math.round(A/ATG*100) : 0;
+      const pB = ATG ? Math.round(B/ATG*100) : 0;
+      const pC = ATG ? Math.round(C/ATG*100) : 0;
+      const pP = ATG ? Math.round(Total/ATG*100) : 0;
+      if(pP>=93) countP93++; if(pA>=93) countA93++; if(pB>=5) countB5++;
+      totalA+=A; totalB+=B; totalC+=C; totalTotal+=Total;
+      sumA+=pA; sumB+=pB; sumC+=pC; sumP+=pP;
+      assetsUsed += 1;
+      workDays.add(r.date_col);
+    });
+    const count = list.length;
+    return {
+      totalA,totalB,totalC,totalTotal,countP93,countA93,countB5,
+      avgA: count?Math.round(sumA/count):0, avgB: count?Math.round(sumB/count):0,
+      avgC: count?Math.round(sumC/count):0, avgP: count?Math.round(sumP/count):0,
+      workDays: workDays.size, assetsUsed
+    };
+  }
+
+  const normalRows = prod.filter(r => r.work_type !== "B grade" && r.work_type !== "Overtime");
+  const bgradeRows = prod.filter(r => r.work_type === "B grade");
+  const overtimeRows = prod.filter(r => r.work_type === "Overtime");
+
+  const sNormal = computeSummary(normalRows);
+  const sBGrade = computeSummary(bgradeRows);
+  const sOvertime = computeSummary(overtimeRows);
+
+  function summaryTable(title, s){
+    return `<h3>${title} Performance Summary</h3><table>
+      <tr><th>%P ≥ 93</th><th>%A ≥ 93</th><th>%B ≥ 5</th><th>Avg %A</th><th>Avg %B</th><th>Avg %C</th><th>Avg %P</th><th>Work Days</th><th>Assets Used</th></tr>
+      <tr><td>${s.countP93}</td><td>${s.countA93}</td><td>${s.countB5}</td><td>${s.avgA}%</td><td>${s.avgB}%</td><td>${s.avgC}%</td><td>${s.avgP}%</td><td>${s.workDays}</td><td>${s.assetsUsed}</td></tr>
+    </table>`;
+  }
+
+  let detailRows = "";
+  prod.forEach(r=>{
+    const A = Number(r.a_double||0)+Number(r.a_single||0);
+    const B = Number(r.b||0), C = Number(r.c||0), Total = Number(r.total||0), Target = Number(r.target||0);
+    const D = downtime[r.assets+"||"+r.date_col] || 0;
+    const MLD = Target ? Math.round((Target*D)/workMinutes) : 0;
+    const ATG = Math.round(Target - MLD);
+    const MLU = Math.round(A - ATG);
+    const pA = ATG ? Math.round(A/ATG*100) : 0;
+    const pB = ATG ? Math.round(B/ATG*100) : 0;
+    const pC = ATG ? Math.round(C/ATG*100) : 0;
+    const pP = ATG ? Math.round(Total/ATG*100) : 0;
+    detailRows += `<tr><td>${r.date_col}</td><td>${r.assets}</td><td>${r.shift}</td><td>${r.work_type||""}</td>` +
+      `<td>${r.mat_type||""}</td><td>${Math.round(A)}</td><td>${Math.round(B)}</td><td>${Math.round(C)}</td>` +
+      `<td>${Math.round(Total)}</td><td>${Math.round(Target)}</td><td>${Math.round(D)}</td><td>${ATG}</td><td>${MLU}</td>` +
+      `<td>${pA}%</td><td>${pB}%</td><td>${pC}%</td><td>${pP}%</td></tr>`;
+  });
+
+  const chartLabels = [...new Set(prod.map(r=>r.date_col))].sort();
+  const chartValues = chartLabels.map(d => prod.filter(r=>r.date_col===d).reduce((s,r)=>s+Number(r.total||0),0));
+
+  document.getElementById("reportArea").innerHTML =
+    `<h3>📊 Production per Day</h3><canvas id="prodChart" height="150"></canvas>` +
+    summaryTable("Normal", sNormal) + summaryTable("B Grade", sBGrade) + summaryTable("Overtime", sOvertime) +
+    `<h3>Production Details</h3><table><tr><th>Date</th><th>Asset</th><th>Shift</th><th>Work Type</th><th>Mat Type</th>` +
+    `<th>A</th><th>B</th><th>C</th><th>Total</th><th>Target</th><th>Downtime</th><th>ATG</th><th>MLU</th>` +
+    `<th>%A</th><th>%B</th><th>%C</th><th>%P</th></tr>${detailRows}</table>`;
+
+  const ctx = document.getElementById("prodChart").getContext("2d");
+  new Chart(ctx, { type:"bar", data:{ labels: chartLabels, datasets:[{ label:"Total Production", data: chartValues }] } });
+}
+
+init();
+</script>
+</body>
+</html>

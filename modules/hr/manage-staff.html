@@ -32,6 +32,10 @@
   button{padding:10px 14px;border:none;border-radius:8px;font-weight:bold;font-size:13px;cursor:pointer;background:var(--blue);color:#fff;margin-top:10px;}
   button:hover{background:var(--blue-dark);}
   button.ghost{background:var(--bg);color:var(--heading);border:1px solid var(--line);}
+  button.danger{background:#fff;color:var(--red);border:1px solid var(--red);padding:6px 10px;margin-top:0;font-size:12px;}
+  button.danger:hover{background:var(--red);color:#fff;}
+  td.row-actions{white-space:nowrap;}
+  td.row-actions button{margin-top:0;padding:6px 10px;font-size:12px;}
   .status{margin-top:10px;font-weight:bold;font-size:13px;min-height:16px;}
   .status.ok{color:var(--green);} .status.err{color:var(--red);}
   #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;}
@@ -306,12 +310,51 @@ function renderList(){
     wrap.innerHTML = "<p class='sub'>" + (EMPLOYEES.length ? "No staff match." : "No staff records for this Branch yet.") + "</p>";
     return;
   }
-  let html = "<table><tr><th>ID</th><th>Name</th><th>Department</th><th>Phone</th></tr>";
+  let html = "<table><tr><th>ID</th><th>Name</th><th>Department</th><th>Phone</th>" + (CAN_MANAGE ? "<th>Actions</th>" : "") + "</tr>";
   rows.forEach(e=>{
-    html += `<tr onclick="openDetail(${e.id})"><td>${esc(e.employee_id)}</td><td>${esc(e.full_name)}</td><td>${esc(e.department)||"—"}</td><td>${esc(e.phone)||"—"}</td></tr>`;
+    html += `<tr onclick="openDetail(${e.id})"><td>${esc(e.employee_id)}</td><td>${esc(e.full_name)}</td><td>${esc(e.department)||"—"}</td><td>${esc(e.phone)||"—"}</td>`;
+    if(CAN_MANAGE){
+      html += `<td class="row-actions">` +
+        `<button class="ghost" onclick="event.stopPropagation(); enterEditMode(${e.id})">Edit</button> ` +
+        `<button class="danger" onclick="event.stopPropagation(); deleteEmployee(${e.id})">Delete</button>` +
+        `</td>`;
+    }
+    html += `</tr>`;
   });
   html += "</table>";
   wrap.innerHTML = html;
+}
+
+// Deletes one employee record outright, after a confirmation prompt. This
+// is a hard delete, not the reversible "deactivate" some other parts of
+// the schema support — there is no undo. Blocked at the database for
+// anyone who isn't Super Admin or HR Admin for this Branch, same as
+// Add/Edit; if the database rejects it for another reason (e.g. other
+// records still reference this employee), that error is shown as-is
+// rather than silently failing.
+async function deleteEmployee(empId){
+  if(!CAN_MANAGE) return;
+  const e = EMPLOYEES.find(x=>x.id === empId);
+  if(!e) return;
+  if(!confirm("Are you sure you want to delete?")) return;
+
+  const status = document.getElementById("list_status");
+  status.className = "status"; status.textContent = "Deleting…";
+  try{
+    const { error, count } = await sb.from("employees").delete({ count: "exact" }).eq("id", empId);
+    if(error) throw error;
+    if(!count){
+      status.className = "status err";
+      status.textContent = "❌ Nothing was deleted — you may not have permission to delete this record.";
+      return;
+    }
+    await logActivity("employee_deleted", ME.username + " deleted employee \"" + e.full_name + "\" (" + e.employee_id + ") via HR Manage Staff");
+    status.className = "status ok"; status.textContent = "✅ Deleted.";
+    await loadEmployees();
+  }catch(err){
+    status.className = "status err";
+    status.textContent = "❌ Could not delete: " + (err.message || err);
+  }
 }
 
 function toggleAddPanel(force){

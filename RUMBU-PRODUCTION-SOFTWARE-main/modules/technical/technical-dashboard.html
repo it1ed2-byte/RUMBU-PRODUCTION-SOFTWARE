@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Technical — Dashboard</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;--amber:#d97706;--teal:#0f766e;}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;color:var(--text);}
+  .wrap{max-width:1250px;margin:0 auto;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;}
+  .card h3{color:var(--navy);margin:0 0 12px;font-size:15px;}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;}
+  label{display:block;font-size:12px;font-weight:bold;color:var(--text);margin:0 0 4px;}
+  input,select{width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;}
+  .row > div{flex:1;min-width:150px;}
+  button{padding:10px 16px;border:none;border-radius:8px;font-weight:bold;font-size:13px;cursor:pointer;background:var(--blue);color:#fff;}
+  button:hover{background:var(--blue-dark);}
+  button.print{background:#6b7280;} button.print:hover{background:#4b5563;}
+  .quickbar{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0;}
+  .qbtn{background:var(--bg);color:var(--navy);padding:6px 11px;border:1px solid var(--line);border-radius:8px;font-size:12px;font-weight:bold;cursor:pointer;}
+  .qbtn.active{background:var(--blue);color:#fff;border-color:var(--blue);}
+  .status{margin-top:8px;font-weight:bold;font-size:13px;min-height:14px;}
+  .status.err{color:var(--red);} .status.ok{color:var(--green);}
+
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:12px;margin-bottom:16px;}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;text-align:center;}
+  .kpi .n{font-size:23px;font-weight:800;color:var(--navy);line-height:1.1;}
+  .kpi .l{font-size:11px;color:var(--muted);margin-top:4px;font-weight:bold;text-transform:uppercase;letter-spacing:.4px;}
+  .kpi.good .n{color:var(--green);} .kpi.warn .n{color:var(--amber);} .kpi.bad .n{color:var(--red);} .kpi.teal .n{color:var(--teal);}
+  .kpi .subv{font-size:11px;color:var(--muted);margin-top:2px;}
+
+  .bests{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;}
+  .best{border:1px solid var(--line);border-radius:10px;padding:12px;background:#fdf7f7;}
+  .best.good{background:#f5faf6;}
+  .best .t{font-size:11px;color:var(--muted);font-weight:bold;text-transform:uppercase;}
+  .best .v{font-size:16px;font-weight:800;color:var(--navy);margin-top:3px;word-break:break-word;}
+  .best .e{font-size:12px;font-weight:bold;margin-top:2px;color:var(--red);}
+  .best.good .e{color:var(--green);}
+
+  .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px;}
+  .bar-row{display:flex;align-items:center;gap:10px;margin:7px 0;font-size:13px;}
+  .bar-row .lbl{width:40%;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .bar-row .track{flex:1;background:#eef2f7;border-radius:6px;height:16px;overflow:hidden;}
+  .bar-row .fill{height:100%;background:var(--blue);}
+  .bar-row .fill.rep{background:var(--green);} .bar-row .fill.wait{background:var(--amber);}
+  .bar-row .fill.red{background:var(--red);} .bar-row .fill.teal{background:var(--teal);}
+  .bar-row .val{width:78px;text-align:right;font-weight:bold;color:var(--navy);font-size:12px;}
+  svg{width:100%;height:auto;display:block;}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;margin-top:8px;}
+  .legend span{display:inline-flex;align-items:center;gap:5px;}
+  .dot{width:11px;height:11px;border-radius:3px;display:inline-block;}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<div id="connStatus">Loading...</div>
+
+<div id="appArea" style="display:none;">
+  <div class="card">
+    <h3>Filters</h3>
+    <div class="quickbar" id="quickbar">
+      <button class="qbtn" data-range="week" onclick="setRange('week',this)">This Week</button>
+      <button class="qbtn active" data-range="month" onclick="setRange('month',this)">This Month</button>
+      <button class="qbtn" data-range="quarter" onclick="setRange('quarter',this)">Last 3 Months</button>
+      <button class="qbtn" data-range="year" onclick="setRange('year',this)">This Year</button>
+      <button class="qbtn" data-range="custom" onclick="setRange('custom',this)">Custom</button>
+    </div>
+    <div class="row">
+      <div><label>From</label><input type="date" id="fromDate"></div>
+      <div><label>To</label><input type="date" id="toDate"></div>
+      <div><label>Section</label><select id="section"></select></div>
+      <div><label>Shift</label><select id="shift"><option value="All">All</option><option value="Morning">Morning</option><option value="Night">Night</option></select></div>
+      <div style="flex:0 0 auto;"><label>&nbsp;</label><button onclick="runDashboard()">Run</button></div>
+    </div>
+    <div class="status" id="status"></div>
+  </div>
+
+  <div id="dash" style="display:none;">
+    <div class="kpis" id="kpis"></div>
+
+    <div class="card">
+      <h3>Worst by Occurrence &amp; Best Nurse</h3>
+      <div class="bests" id="bests"></div>
+      <div style="font-size:11px;color:#6b7280;margin-top:10px;">"Worst" = most breakdown occurrences. Best Nurse = most jobs completed (efficiency shown alongside). All figures exclude job codes listed in the exclusion table. Negative time spans from data-entry errors are treated as zero.</div>
+    </div>
+
+    <div class="grid2">
+      <div class="card"><h3>Morning vs Night — Downtime (hrs)</h3><div id="chartShift"></div></div>
+      <div class="card"><h3>Downtime Split — Repair vs Waiting (hrs)</h3><div id="chartSplit"></div></div>
+      <div class="card"><h3>Downtime by Department (hrs)</h3><div id="chartDept"></div></div>
+      <div class="card" id="cmpCard"><h3>Rumbu vs Mama Sannu — Downtime (hrs)</h3><div id="chartCompare"></div></div>
+      <div class="card"><h3>Top 10 Worst Assets (by occurrence)</h3><div id="chartAssets"></div></div>
+      <div class="card"><h3>Top 10 Worst Job Codes (by occurrence)</h3><div id="chartJobs"></div></div>
+      <div class="card"><h3>Top 10 Best Nurses (by jobs completed)</h3><div id="chartNurses"></div></div>
+    </div>
+
+    <div class="card"><h3>Daily Downtime Trend (hrs)</h3><div id="chartTrend"></div></div>
+  </div>
+</div>
+</div>
+
+<script>
+const SECTION_LABEL = { "Rumbu":"Rumbu", "MamaSannu":"Mama Sannu" };
+let ME = null, MY_SECTIONS = [], ROWS = [], EXCLUDED = new Set();
+
+function num(v){ if(v==null) return 0; const m=String(v).match(/\d+(\.\d+)?/); return m?Number(m[0]):0; }
+function parseDT(v){ const d=new Date(v); return isNaN(d)?null:d; }
+function mins(a,b){ if(!a||!b) return 0; const d=Math.round((b-a)/60000); return d>0?d:0; }
+function hrs(m){ return (m/60); }
+function fmtH(m){ return (m/60).toLocaleString(undefined,{maximumFractionDigits:1}); }
+function fmtN(v){ return Math.round(v).toLocaleString(); }
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    MY_SECTIONS = (ME.sectionNames && ME.sectionNames.length) ? ME.sectionNames.filter(s=>["Rumbu","MamaSannu"].includes(s)) : [];
+    if(ME.role === "super_admin" && !MY_SECTIONS.length) MY_SECTIONS = ["Rumbu","MamaSannu"];
+    if(!MY_SECTIONS.length) MY_SECTIONS = ["Rumbu","MamaSannu"];
+
+    const sel = document.getElementById("section");
+    let opts = "";
+    if(MY_SECTIONS.length > 1) opts += '<option value="All">All (comparison)</option>';
+    opts += MY_SECTIONS.map(s=>`<option value="${s}">${SECTION_LABEL[s]||s}</option>`).join("");
+    sel.innerHTML = opts;
+    if(MY_SECTIONS.length === 1){ sel.value = MY_SECTIONS[0]; sel.disabled = true; }
+
+    setRange("month", document.querySelector('.qbtn[data-range="month"]'));
+    status.style.color = "#1d8a4e"; status.textContent = "Connected.";
+    document.getElementById("appArea").style.display = "block";
+    runDashboard();
+  }catch(e){
+    status.style.color = "#c0392b"; status.textContent = "❌ " + e.message; console.error(e);
+  }
+}
+
+function iso(d){ return d.toISOString().slice(0,10); }
+function setRange(range, btn){
+  document.querySelectorAll(".qbtn").forEach(b=>b.classList.remove("active"));
+  if(btn) btn.classList.add("active");
+  const t = new Date(); let from, to = new Date(t);
+  if(range==="week"){ const day=(t.getDay()+6)%7; from=new Date(t); from.setDate(t.getDate()-day); }
+  else if(range==="month"){ from=new Date(t.getFullYear(), t.getMonth(), 1); }
+  else if(range==="quarter"){ from=new Date(t); from.setMonth(t.getMonth()-3); }
+  else if(range==="year"){ from=new Date(t.getFullYear(),0,1); }
+  else return;
+  document.getElementById("fromDate").value = iso(from);
+  document.getElementById("toDate").value = iso(to);
+}
+
+async function fetchControl(fromDate, toDate, sectionFilter){
+  let all = [], offset = 0; const pageSize = 1000;
+  let sectionClause;
+  if(sectionFilter && sectionFilter !== "All"){ sectionClause = "&section=eq." + encodeURIComponent(sectionFilter); }
+  else { const list = MY_SECTIONS.map(s=>`"${s}"`).join(","); sectionClause = "&section=in.(" + encodeURIComponent(list) + ")"; }
+  const base = SUPABASE_URL + "/rest/v1/control?select=*"
+    + "&date=gte." + fromDate + "&date=lte." + toDate + sectionClause + "&order=date.asc";
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(base, { headers });
+    if(!res.ok) throw new Error("control: HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  // Normalize new control column names to the names the rest of the code expects.
+  all.forEach(normalizeControlRow);
+  return all;
+}
+
+// Maps the current control schema to the field names used throughout the reports.
+function normalizeControlRow(r){
+  if(r.date_col === undefined) r.date_col = r.date;
+  if(r.names === undefined) r.names = r.nurse_name;
+  if(r.stop_time === undefined) r.stop_time = r.mc_stoppage_time;
+  if(r.extimated_time === undefined) r.extimated_time = r.estimated_duration;
+  if(r.discription === undefined) r.discription = r.description;
+  return r;
+}
+
+async function fetchExcluded(){
+  try{
+    const res = await fetch(SUPABASE_URL + "/rest/v1/job_table?select=job_code", { headers: authHeaders() });
+    if(res.ok){ const rows = await res.json(); return new Set(rows.map(r=>r.job_code)); }
+  }catch(e){ /* ignore */ }
+  return new Set();
+}
+
+// per-row derived minutes
+function rowMetrics(r){
+  const stop=parseDT(r.stop_time), start=parseDT(r.starting_time), finish=parseDT(r.finish_time);
+  return { downtime: mins(stop,finish), repair: mins(start,finish), waiting: mins(stop,start), est: num(r.extimated_time) };
+}
+
+function totals(rows){
+  let downtime=0, repair=0, waiting=0, est=0;
+  rows.forEach(r=>{ const m=rowMetrics(r); downtime+=m.downtime; repair+=m.repair; waiting+=m.waiting; est+=m.est; });
+  return { downtime, repair, waiting, est, count: rows.length, eff: repair>0 ? est/repair*100 : 0 };
+}
+
+// worst by occurrence: {k, count, downtime}
+function worstByOccurrence(rows, keyFn){
+  const g = {};
+  rows.forEach(r=>{ const k=keyFn(r); if(k==null||k==="") return; if(!g[k]) g[k]={count:0,downtime:0}; g[k].count++; g[k].downtime+=rowMetrics(r).downtime; });
+  const arr = Object.entries(g).map(([k,v])=>({k, count:v.count, downtime:v.downtime}));
+  if(!arr.length) return null;
+  arr.sort((a,b)=> b.count - a.count);
+  return arr[0];
+}
+
+// best nurse: ranked by frequency (most jobs); efficiency shown for info
+function bestNurse(rows){
+  const g = {};
+  rows.forEach(r=>{ const n=r.names; if(!n) return; if(!g[n]) g[n]={freq:0,repair:0,est:0}; const m=rowMetrics(r); g[n].freq++; g[n].repair+=m.repair; g[n].est+=m.est; });
+  const arr = Object.entries(g).map(([k,v])=>({k, freq:v.freq, eff: v.repair>0 ? v.est/v.repair*100 : 0}));
+  if(!arr.length) return null;
+  arr.sort((a,b)=> b.freq - a.freq);
+  return arr[0];
+}
+
+async function runDashboard(){
+  const status = document.getElementById("status");
+  const from = document.getElementById("fromDate").value;
+  const to = document.getElementById("toDate").value;
+  const section = document.getElementById("section").value;
+  const shift = document.getElementById("shift").value;
+  if(!from || !to){ status.className="status err"; status.textContent="Select a date range."; return; }
+
+  status.className="status"; status.textContent="Loading data...";
+  try{
+    if(!EXCLUDED.size) EXCLUDED = await fetchExcluded();
+    let rows = await fetchControl(from, to, section);
+    // shift is stored in the 'morning' column
+    if(shift !== "All") rows = rows.filter(r=>r.shift===shift);
+    // exclude job codes in the exclusion table
+    rows = rows.filter(r=> !EXCLUDED.has(r.job_code));
+    ROWS = rows;
+    status.className="status ok"; status.textContent = rows.length.toLocaleString() + " record(s) after exclusions.";
+    if(!rows.length){ document.getElementById("dash").style.display="none"; status.textContent="No data for these filters."; return; }
+    document.getElementById("dash").style.display="block";
+    renderKPIs(rows);
+    renderBests(rows);
+    renderCharts(rows, section);
+  }catch(e){
+    status.className="status err"; status.textContent="❌ "+e.message;
+  }
+}
+
+function renderKPIs(rows){
+  const t = totals(rows);
+  const cards = [
+    {n: fmtH(t.downtime), l:"Total Downtime (hrs)", cls:"bad"},
+    {n: fmtH(t.repair), l:"Total Repair (hrs)", cls:"teal"},
+    {n: fmtH(t.waiting), l:"Total Waiting (hrs)", cls:"warn"},
+    {n: fmtH(t.est), l:"Total Estimated (hrs)"},
+    {n: t.eff.toFixed(1)+"%", l:"Efficiency (Est/Repair)", cls: t.eff>=93?"good":(t.eff>=75?"teal":"warn")},
+    {n: fmtN(t.count), l:"Total Breakdowns"}
+  ];
+  document.getElementById("kpis").innerHTML = cards.map(k=>
+    `<div class="kpi ${k.cls||''}"><div class="n">${k.n}</div><div class="l">${k.l}</div></div>`).join("");
+}
+
+function renderBests(rows){
+  const worst = [
+    {t:"Worst Asset", key:r=>r.assets},
+    {t:"Worst Job Code", key:r=>r.job_code},
+    {t:"Worst Shed", key:r=>r.shed},
+    {t:"Worst Department", key:r=>r.department},
+    {t:"Worst Section", key:r=>SECTION_LABEL[r.section]||r.section}
+  ];
+  let html = worst.map(d=>{
+    const w = worstByOccurrence(rows, d.key);
+    if(!w) return `<div class="best"><div class="t">${d.t}</div><div class="v">—</div></div>`;
+    return `<div class="best"><div class="t">${d.t}</div><div class="v">${w.k}</div>`+
+           `<div class="e">${w.count} breakdowns · ${fmtH(w.downtime)} hrs down</div></div>`;
+  }).join("");
+  const bn = bestNurse(rows);
+  html += `<div class="best good"><div class="t">Best Nurse</div>`+
+          (bn ? `<div class="v">${bn.k}</div><div class="e">${bn.freq} jobs · ${bn.eff.toFixed(1)}% eff</div>`
+              : `<div class="v">—</div><div class="e">no data</div>`) + `</div>`;
+  document.getElementById("bests").innerHTML = html;
+}
+
+function sumBy(rows, keyFn, valFn){
+  const m={}; rows.forEach(r=>{ const k=keyFn(r); if(k==null||k==="") return; m[k]=(m[k]||0)+valFn(r); }); return m;
+}
+function countBy(rows, keyFn){
+  const m={}; rows.forEach(r=>{ const k=keyFn(r); if(k==null||k==="") return; m[k]=(m[k]||0)+1; }); return m;
+}
+
+function hbars(containerId, entries, cls, isHours){
+  const wrap = document.getElementById(containerId);
+  if(!entries.length){ wrap.innerHTML="<p style='color:#6b7280;font-size:13px;'>No data.</p>"; return; }
+  const max = Math.max.apply(null, entries.map(e=>e[1])) || 1;
+  wrap.innerHTML = entries.map(([label,val,extra])=>{
+    const pct = Math.round(val/max*100);
+    const shown = extra != null ? extra : (isHours ? fmtH(val) : fmtN(val));
+    return `<div class="bar-row"><div class="lbl" title="${label}">${label}</div>`+
+           `<div class="track"><div class="fill ${cls||''}" style="width:${pct}%"></div></div>`+
+           `<div class="val">${shown}</div></div>`;
+  }).join("");
+}
+
+function renderCharts(rows, section){
+  const t = totals(rows);
+
+  // Morning vs Night downtime (minutes -> hours)
+  const shiftMap = sumBy(rows, r=>r.shift, r=>rowMetrics(r).downtime);
+  hbars("chartShift", Object.entries(shiftMap).sort((a,b)=>b[1]-a[1]), "teal", true);
+
+  // Repair vs Waiting split
+  hbars("chartSplit", [["Repair", t.repair],["Waiting", t.waiting]], null, true);
+  const fills = document.querySelectorAll("#chartSplit .fill");
+  if(fills[0]) fills[0].classList.add("rep");
+  if(fills[1]) fills[1].classList.add("wait");
+
+  // Downtime by department
+  const deptMap = sumBy(rows, r=>r.department, r=>rowMetrics(r).downtime);
+  hbars("chartDept", Object.entries(deptMap).sort((a,b)=>b[1]-a[1]).slice(0,12), "red", true);
+
+  // Rumbu vs MamaSannu
+  const cmpCard = document.getElementById("cmpCard");
+  if(section === "All" && MY_SECTIONS.length > 1){
+    cmpCard.style.display = "block";
+    const secMap = sumBy(rows, r=>SECTION_LABEL[r.section]||r.section, r=>rowMetrics(r).downtime);
+    hbars("chartCompare", Object.entries(secMap).sort((a,b)=>b[1]-a[1]), "teal", true);
+  } else { cmpCard.style.display = "none"; }
+
+  // Top 10 worst assets (occurrence)
+  const asMap = countBy(rows, r=>r.assets);
+  hbars("chartAssets", Object.entries(asMap).sort((a,b)=>b[1]-a[1]).slice(0,10), "red", false);
+
+  // Top 10 worst job codes (occurrence)
+  const jobMap = countBy(rows, r=>r.job_code);
+  hbars("chartJobs", Object.entries(jobMap).sort((a,b)=>b[1]-a[1]).slice(0,10), "red", false);
+
+  // Top 10 best nurses (by freq) — show freq with eff as extra
+  const g = {};
+  rows.forEach(r=>{ const nm=r.names; if(!nm) return; if(!g[nm]) g[nm]={freq:0,repair:0,est:0}; const m=rowMetrics(r); g[nm].freq++; g[nm].repair+=m.repair; g[nm].est+=m.est; });
+  const nurses = Object.entries(g).map(([k,v])=>({k, freq:v.freq, eff: v.repair>0 ? v.est/v.repair*100 : 0}))
+    .sort((a,b)=>b.freq-a.freq).slice(0,10);
+  hbars("chartNurses", nurses.map(n=>[n.k, n.freq, n.freq+" jobs · "+n.eff.toFixed(0)+"%"]), "rep", false);
+
+  // Daily downtime trend
+  const dayMap = sumBy(rows, r=>r.date_col, r=>rowMetrics(r).downtime);
+  lineChart("chartTrend", Object.entries(dayMap).sort((a,b)=>a[0]<b[0]?-1:1));
+}
+
+function lineChart(containerId, series){
+  const wrap = document.getElementById(containerId);
+  if(!series.length){ wrap.innerHTML="<p style='color:#6b7280;font-size:13px;'>No data.</p>"; return; }
+  const W=1000, H=260, pad=44;
+  const xs = series.map((_,i)=> pad + i*((W-2*pad)/Math.max(1,series.length-1)));
+  const seriesH = series.map(s=>[s[0], hrs(s[1])]);
+  const maxV = Math.max.apply(null, seriesH.map(s=>s[1])) || 1;
+  const ys = seriesH.map(s=> H-pad - (s[1]/maxV)*(H-2*pad));
+  let path=""; xs.forEach((x,i)=>{ path += (i===0?"M":"L")+x.toFixed(1)+" "+ys[i].toFixed(1)+" "; });
+  const step = Math.max(1, Math.floor(series.length/8));
+  let labels=""; for(let i=0;i<series.length;i+=step){ labels += `<text x="${xs[i].toFixed(1)}" y="${H-pad+16}" font-size="10" fill="#6b7280" text-anchor="middle">${series[i][0].slice(5)}</text>`; }
+  const area = `M ${xs[0].toFixed(1)} ${(H-pad)} ` + seriesH.map((s,i)=>`L ${xs[i].toFixed(1)} ${ys[i].toFixed(1)}`).join(" ") + ` L ${xs[xs.length-1].toFixed(1)} ${(H-pad)} Z`;
+  wrap.innerHTML =
+    `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
+      <line x1="${pad}" y1="${H-pad}" x2="${W-pad}" y2="${H-pad}" stroke="#cbd5e1"/>
+      <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${H-pad}" stroke="#cbd5e1"/>
+      <path d="${area}" fill="#c0392b" opacity="0.08"/>
+      <path d="${path}" fill="none" stroke="#c0392b" stroke-width="2"/>
+      ${xs.map((x,i)=>`<circle cx="${x.toFixed(1)}" cy="${ys[i].toFixed(1)}" r="2.5" fill="#1F3864"/>`).join("")}
+      <text x="${pad-6}" y="${pad}" font-size="10" fill="#6b7280" text-anchor="end">${fmtH(maxV*60)}h</text>
+      <text x="${pad-6}" y="${H-pad}" font-size="10" fill="#6b7280" text-anchor="end">0</text>
+      ${labels}
+    </svg>
+    <div class="legend"><span><span class="dot" style="background:#c0392b"></span>Downtime hours per day</span></div>`;
+}
+
+init();
+</script>
+</body>
+</html>

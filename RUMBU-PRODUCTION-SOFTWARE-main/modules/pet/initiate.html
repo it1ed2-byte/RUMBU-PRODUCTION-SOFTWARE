@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Initiate Collection — PET</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme")||"navy"); }catch(e){} })();
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) document.documentElement.setAttribute("data-theme",e.data.rumbuTheme); });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="review-modal.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:820px;margin:0 auto;}
+  label{font-size:12px;font-weight:700;display:block;margin:12px 0 4px;color:var(--muted);}
+  input,select,textarea{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);}
+  input[readonly]{background:var(--bg);color:var(--muted);}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;}
+  .section-title{font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--heading);margin:20px 0 10px;padding-bottom:4px;border-bottom:2px solid var(--line);}
+  .file-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .file-row input[type=file]{flex:1;padding:6px;}
+  .file-url{font-size:11px;color:var(--ok);margin-top:3px;word-break:break-all;}
+  .agent-result{border:1px solid var(--line);border-radius:8px;max-height:180px;overflow-y:auto;position:absolute;width:100%;background:var(--card);z-index:99;box-shadow:0 4px 12px rgba(0,0,0,.12);}
+  .agent-row{padding:9px 12px;cursor:pointer;font-size:13px;}
+  .agent-row:hover{background:var(--bg);}
+  .agent-parent{position:relative;}
+  /* Rejected correction banner */
+  .correction-banner{background:#fef3c7;border:1px solid #d97706;border-radius:8px;padding:12px 16px;margin-bottom:16px;font-size:13px;}
+  .correction-banner b{color:#92400e;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back</button>
+  <div id="connStatus" style="font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);">Loading...</div>
+
+  <!-- Pending corrections queue -->
+  <div id="correctionQueue" style="display:none;margin-bottom:16px;">
+    <div class="card-panel">
+      <h3 style="color:var(--heading);margin:0 0 10px;">Awaiting Your Correction</h3>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 10px;">The following forms were rejected back to you. Select one to correct and resubmit.</p>
+      <div id="correctionList"></div>
+    </div>
+  </div>
+
+  <div class="card-panel">
+    <h3 style="color:var(--heading);margin:0 0 4px;" id="formHeading">New PET Collection — Stage 1: Initiation</h3>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 16px;">Fill all fields and submit. The form will move automatically to the Quality Control team.</p>
+
+    <div id="correctionNote" style="display:none;" class="correction-banner"></div>
+
+    <!-- Form header -->
+    <div class="grid3">
+      <div>
+        <label>Form Number</label>
+        <input type="text" id="fFormNum" readonly>
+      </div>
+      <div>
+        <label>Form Date</label>
+        <input type="text" id="fFormDate" readonly>
+      </div>
+      <div>
+        <label>Section (Branch) *</label>
+        <select id="fSection">
+          <option value="">Loading branches...</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Agent -->
+    <div class="section-title">Agent Information</div>
+    <label>Search Agent (by name or code) *</label>
+    <div class="agent-parent">
+      <input type="text" id="agentSearch" placeholder="Type to search..." oninput="searchAgent(this.value)" autocomplete="off">
+      <div class="agent-result" id="agentDrop" style="display:none;"></div>
+    </div>
+    <div class="grid2" style="margin-top:10px;">
+      <div>
+        <label>Agent Name</label>
+        <input type="text" id="fAgentName" readonly>
+      </div>
+      <div>
+        <label>Agent Code</label>
+        <input type="text" id="fAgentCode" readonly>
+      </div>
+    </div>
+    <input type="hidden" id="fAgentId">
+
+    <!-- Weights and Attachments -->
+    <div class="section-title">Weights and Documents</div>
+    <div class="grid2">
+      <div>
+        <label>Agent Waybill Weight (kg) *</label>
+        <input type="number" id="fWaybillWeight" step="0.01" placeholder="0.00">
+        <label>Agent Waybill Attachment *</label>
+        <div class="file-row">
+          <input type="file" id="fWaybillFile" accept=".pdf,.jpg,.jpeg,.png">
+        </div>
+        <div class="file-url" id="fWaybillUrl"></div>
+      </div>
+      <div>
+        <label>Agent Invoice Attachment *</label>
+        <div class="file-row">
+          <input type="file" id="fInvoiceFile" accept=".pdf,.jpg,.jpeg,.png">
+        </div>
+        <div class="file-url" id="fInvoiceUrl"></div>
+      </div>
+    </div>
+    <div class="grid2" style="margin-top:4px;">
+      <div>
+        <label>Rumbu Weighbridge Weight (kg) *</label>
+        <input type="number" id="fRumbuWeight" step="0.01" placeholder="0.00">
+        <label>Rumbu Weighbridge Attachment *</label>
+        <div class="file-row">
+          <input type="file" id="fWeighbridgeFile" accept=".pdf,.jpg,.jpeg,.png">
+        </div>
+        <div class="file-url" id="fWeighbridgeUrl"></div>
+      </div>
+    </div>
+
+    <div style="margin-top:22px;display:flex;gap:10px;">
+      <button onclick="submitForm()" id="submitBtn">Submit to Quality Control Team</button>
+      <button class="btn-ghost" onclick="resetForm()">Reset</button>
+    </div>
+    <div id="formStatus" style="margin-top:12px;font-size:13px;font-weight:700;min-height:16px;"></div>
+  </div>
+</div>
+
+<script>
+let ME = null, AGENTS = [], BRANCHES = [], EDITING_ID = null;
+
+async function loadBranches(){
+  // PET collection currently only happens at these two sites — restricted
+  // here at Initiation specifically. Agents, LOTs, and assignments elsewhere
+  // in the module still draw from the full real branch list.
+  const ACTIVE_PET_BRANCHES = ["LagosWash", "KanoWash"];
+  const { data, error } = await sb.from("app_sections").select("name").in("name", ACTIVE_PET_BRANCHES).order("name");
+  if(error) throw new Error("Could not load branches: "+error.message);
+  BRANCHES = (data||[]).map(s=>s.name);
+  const sel = document.getElementById("fSection");
+  sel.innerHTML = BRANCHES.length
+    ? BRANCHES.map(b=>`<option value="${b}">${b}</option>`).join("")
+    : `<option value="">No branches configured</option>`;
+}
+
+async function init(){
+  const cs = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    await loadBranches();
+    const { data } = await sb.from("pet_agents").select("id,agent_code,agent_name,section").eq("is_active",true).order("agent_name");
+    AGENTS = data||[];
+    await prepareNewForm();
+    await loadCorrectionQueue();
+    cs.style.color="var(--ok)"; cs.textContent="Connected.";
+  }catch(e){
+    cs.style.color="var(--bad)"; cs.textContent="Error: "+e.message;
+  }
+}
+
+async function prepareNewForm(){
+  document.getElementById("fFormDate").value = new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"});
+  const { count } = await sb.from("pet_collections").select("*",{count:"exact",head:true});
+  const num = "PET-" + new Date().getFullYear() + "-" + String((count||0)+1).padStart(4,"0");
+  document.getElementById("fFormNum").value = num;
+  EDITING_ID = null;
+  document.getElementById("formHeading").textContent = "New PET Collection — Stage 1: Initiation";
+  document.getElementById("correctionNote").style.display = "none";
+}
+
+async function loadCorrectionQueue(){
+  const { data } = await sb.from("pet_collections")
+    .select("id,form_number,agent_name,section,updated_at")
+    .eq("status","rejected_to_stage1")
+    .eq("initiator_profile_id", ME.id)
+    .order("updated_at",{ascending:false});
+  if(!data||!data.length){ document.getElementById("correctionQueue").style.display="none"; return; }
+  document.getElementById("correctionQueue").style.display = "block";
+  document.getElementById("correctionList").innerHTML = data.map(c=>`
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:8px;background:var(--bg);border-radius:8px;margin-bottom:6px;">
+      <div>
+        <b style="font-size:13px;">${c.form_number}</b>
+        <span style="font-size:12px;color:var(--muted);margin-left:8px;">${c.agent_name} — ${c.section}</span>
+      </div>
+      <button onclick="loadCorrection(${c.id})" style="padding:5px 14px;font-size:12px;">Correct &amp; Resubmit</button>
+    </div>`).join("");
+}
+
+async function loadCorrection(id){
+  const { data: c } = await sb.from("pet_collections").select("*").eq("id",id).single();
+  if(!c) return;
+  EDITING_ID = id;
+  document.getElementById("fFormNum").value = c.form_number;
+  document.getElementById("fFormDate").value = c.form_date;
+  document.getElementById("fSection").value = c.section;
+  document.getElementById("fAgentId").value = c.agent_id||"";
+  document.getElementById("fAgentName").value = c.agent_name;
+  document.getElementById("fAgentCode").value = c.agent_code;
+  document.getElementById("agentSearch").value = c.agent_name;
+  document.getElementById("fWaybillWeight").value = c.agent_waybill_weight||"";
+  document.getElementById("fRumbuWeight").value = c.rumbu_weighbridge_weight||"";
+  document.getElementById("fWaybillUrl").textContent = c.agent_waybill_attachment||"";
+  document.getElementById("fInvoiceUrl").textContent = c.agent_invoice_attachment||"";
+  document.getElementById("fWeighbridgeUrl").textContent = c.rumbu_weighbridge_attachment||"";
+
+  // Get rejection note
+  const { data: log } = await sb.from("pet_activity_log")
+    .select("note,created_at").eq("collection_id",id).eq("action","rejected")
+    .order("created_at",{ascending:false}).limit(1);
+  if(log&&log.length&&log[0].note){
+    const el = document.getElementById("correctionNote");
+    el.style.display="block";
+    el.innerHTML = `<b>Rejection reason:</b> ${log[0].note}`;
+  }
+  document.getElementById("formHeading").textContent = "Correct & Resubmit — "+c.form_number;
+  document.getElementById("submitBtn").textContent = "Resubmit to Quality Control Team";
+  window.scrollTo({top:0,behavior:"smooth"});
+}
+
+function searchAgent(q){
+  const drop = document.getElementById("agentDrop");
+  if(!q.trim()){ drop.style.display="none"; return; }
+  const matches = AGENTS.filter(a=>(a.agent_name+a.agent_code).toLowerCase().includes(q.toLowerCase())).slice(0,8);
+  if(!matches.length){ drop.style.display="none"; return; }
+  drop.innerHTML = matches.map(a=>`<div class="agent-row" onclick="selectAgent(${a.id})">
+    <b>${a.agent_code}</b> — ${a.agent_name}${a.section?` <span style="color:var(--muted);">(${a.section})</span>`:""}
+  </div>`).join("");
+  drop.style.display="block";
+}
+function selectAgent(id){
+  const a = AGENTS.find(x=>x.id===id);
+  if(!a) return;
+  document.getElementById("fAgentId").value = a.id;
+  document.getElementById("fAgentName").value = a.agent_name;
+  document.getElementById("fAgentCode").value = a.agent_code;
+  document.getElementById("agentSearch").value = a.agent_name;
+  document.getElementById("agentDrop").style.display="none";
+}
+document.addEventListener("click",function(e){ if(!e.target.closest(".agent-parent")) document.getElementById("agentDrop").style.display="none"; });
+
+async function uploadFile(file, folder){
+  if(!file) return null;
+  const ext = file.name.split(".").pop();
+  const path = `${folder}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+  const { data, error } = await sb.storage.from("pet-attachments").upload(path, file);
+  if(error) throw new Error("Upload failed: "+error.message);
+  const { data: urlData } = sb.storage.from("pet-attachments").getPublicUrl(path);
+  return urlData.publicUrl;
+}
+
+async function submitForm(){
+  const st = document.getElementById("formStatus");
+  const agentId  = document.getElementById("fAgentId").value;
+  const waybillW = document.getElementById("fWaybillWeight").value;
+  const rumbuW   = document.getElementById("fRumbuWeight").value;
+  if(!agentId){ st.style.color="var(--bad)"; st.textContent="Select an agent."; return; }
+  if(!waybillW){ st.style.color="var(--bad)"; st.textContent="Enter agent waybill weight."; return; }
+  if(!rumbuW){ st.style.color="var(--bad)"; st.textContent="Enter Rumbu weighbridge weight."; return; }
+
+  // All three attachments are mandatory — either a new file selected now,
+  // or (on a correction resubmit) one already attached from before.
+  const waybillFile     = document.getElementById("fWaybillFile").files[0];
+  const invoiceFile     = document.getElementById("fInvoiceFile").files[0];
+  const weighbridgeFile = document.getElementById("fWeighbridgeFile").files[0];
+  const existingWaybill     = document.getElementById("fWaybillUrl").textContent;
+  const existingInvoice     = document.getElementById("fInvoiceUrl").textContent;
+  const existingWeighbridge = document.getElementById("fWeighbridgeUrl").textContent;
+  if(!waybillFile && !existingWaybill){ st.style.color="var(--bad)"; st.textContent="Attach the agent waybill document."; return; }
+  if(!invoiceFile && !existingInvoice){ st.style.color="var(--bad)"; st.textContent="Attach the agent invoice document."; return; }
+  if(!weighbridgeFile && !existingWeighbridge){ st.style.color="var(--bad)"; st.textContent="Attach the Rumbu weighbridge document."; return; }
+
+  const agent = AGENTS.find(a=>a.id===parseInt(agentId));
+  st.textContent = "";
+  showReviewModal({
+    title: "Review Before Submitting",
+    subtitle: document.getElementById("fFormNum").value + " — check everything below before it goes to Quality Control",
+    mode: "submit",
+    sections: [{ rows: [
+      ["Branch", document.getElementById("fSection").value],
+      ["Agent", agent.agent_name + " (" + agent.agent_code + ")"],
+      ["Agent Waybill Weight", waybillW + " kg"],
+      ["Rumbu Weighbridge Weight", rumbuW + " kg"],
+      ["Waybill Attachment", waybillFile ? waybillFile.name : "Already attached"],
+      ["Invoice Attachment", invoiceFile ? invoiceFile.name : "Already attached"],
+      ["Weighbridge Attachment", weighbridgeFile ? weighbridgeFile.name : "Already attached"]
+    ]}],
+    onConfirm: proceedWithSubmit
+  });
+}
+
+async function proceedWithSubmit(){
+  const st = document.getElementById("formStatus");
+  const agentId  = document.getElementById("fAgentId").value;
+  const waybillW = document.getElementById("fWaybillWeight").value;
+  const rumbuW   = document.getElementById("fRumbuWeight").value;
+
+  st.style.color="var(--muted)"; st.textContent="Uploading files and saving...";
+  try{
+    const waybillUrl     = (document.getElementById("fWaybillFile").files[0])
+      ? await uploadFile(document.getElementById("fWaybillFile").files[0], "waybills")
+      : document.getElementById("fWaybillUrl").textContent || null;
+    const invoiceUrl     = (document.getElementById("fInvoiceFile").files[0])
+      ? await uploadFile(document.getElementById("fInvoiceFile").files[0], "invoices")
+      : document.getElementById("fInvoiceUrl").textContent || null;
+    const weighbridgeUrl = (document.getElementById("fWeighbridgeFile").files[0])
+      ? await uploadFile(document.getElementById("fWeighbridgeFile").files[0], "weighbridges")
+      : document.getElementById("fWeighbridgeUrl").textContent || null;
+
+    const agent = AGENTS.find(a=>a.id===parseInt(agentId));
+    const payload = {
+      form_number:                document.getElementById("fFormNum").value,
+      form_date:                  new Date().toISOString().slice(0,10),
+      section:                    document.getElementById("fSection").value,
+      agent_id:                   parseInt(agentId),
+      agent_name:                 agent.agent_name,
+      agent_code:                 agent.agent_code,
+      agent_waybill_weight:       parseFloat(waybillW),
+      agent_waybill_attachment:   waybillUrl,
+      agent_invoice_attachment:   invoiceUrl,
+      rumbu_weighbridge_weight:   parseFloat(rumbuW),
+      rumbu_weighbridge_attachment: weighbridgeUrl,
+      status:                     "submitted",
+      initiator_profile_id:       ME.id,
+      initiator_username:         ME.username,
+      updated_at:                 new Date().toISOString()
+    };
+
+    let savedId;
+    if(EDITING_ID){
+      const { error } = await sb.from("pet_collections").update({...payload, cycle: undefined}).eq("id", EDITING_ID);
+      if(error) throw error;
+      savedId = EDITING_ID;
+    } else {
+      const { data, error } = await sb.from("pet_collections").insert(payload).select("id").single();
+      if(error) throw error;
+      savedId = data.id;
+    }
+
+    // Activity log
+    await sb.from("pet_activity_log").insert({
+      collection_id:  savedId,
+      action:         EDITING_ID ? "resubmitted" : "initiated",
+      stage:          "stage1",
+      actor_profile_id: ME.id,
+      actor_username: ME.username,
+      old_status:     EDITING_ID ? "rejected_to_stage1" : null,
+      new_status:     "submitted"
+    });
+
+    st.style.color="var(--ok)";
+    st.textContent = EDITING_ID
+      ? "Resubmitted successfully. Quality Control team has been notified."
+      : "Collection initiated. Quality Control team has been notified.";
+    await loadCorrectionQueue();
+    if(!EDITING_ID) resetForm();
+    EDITING_ID = null;
+
+  }catch(e){
+    st.style.color="var(--bad)"; st.textContent="Error: "+e.message;
+  }
+}
+
+function resetForm(){
+  ["fAgentId","fAgentName","fAgentCode","agentSearch","fWaybillWeight","fRumbuWeight"].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el) el.value="";
+  });
+  ["fWaybillUrl","fInvoiceUrl","fWeighbridgeUrl"].forEach(id=>{ document.getElementById(id).textContent=""; });
+  ["fWaybillFile","fInvoiceFile","fWeighbridgeFile"].forEach(id=>{ document.getElementById(id).value=""; });
+  document.getElementById("fSection").selectedIndex = 0;
+  document.getElementById("correctionNote").style.display = "none";
+  document.getElementById("formHeading").textContent = "New PET Collection — Stage 1: Initiation";
+  document.getElementById("submitBtn").textContent = "Submit to QC Team";
+  document.getElementById("formStatus").textContent = "";
+  prepareNewForm();
+}
+
+init();
+</script>
+</body>
+</html>

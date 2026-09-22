@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Checklist Form</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+body { font-family:var(--sans); background:var(--bg); margin: 0; padding: 15px; display: flex; justify-content: center; }
+.card { background:var(--card); width: 100%; max-width: 420px; padding: 20px; border-radius: 12px; box-shadow: 0 6px 18px rgba(0,0,0,.1); }
+h2 { text-align: center; margin-bottom: 15px; }
+.auth { font-size: 12px; text-align: center; padding: 8px 10px; border-radius: 8px; margin-bottom: 15px; line-height: 1.4; }
+.auth.checking { background:var(--bg); color:#555; }
+.auth.ok { background:#e7f4ea; color:#1e7a34; }
+.auth.bad { background:#fdecea; color:#b3261e; }
+label { font-size: 13px; margin-top: 10px; display: block; color: #444; }
+input { width: 100%; padding: 12px; margin-top: 5px; border-radius: 8px; border: 1px solid var(--line); outline: none; box-sizing: border-box; }
+input:focus { border-color: #4a90e2; }
+.readonly { background:var(--bg); }
+input:disabled { background:var(--bg); cursor: not-allowed; }
+button { width: 100%; padding: 12px; margin-top: 15px; background:var(--accent); color: #fff; border: none; border-radius: 8px; font-size: 15px; cursor: pointer; }
+button:disabled { background: #9bbce6; cursor: not-allowed; }
+.msg { text-align: center; margin-top: 10px; font-size: 13px; }
+#status { font-size:11px; text-align:center; color:#666; margin-bottom:6px; }
+</style>
+</head>
+<body>
+
+<div class="card">
+<h2>Checklist Form</h2>
+<div id="status">Connecting to Supabase...</div>
+
+<div id="authBanner" class="auth checking">Enter the passcode to unlock this form.</div>
+<input id="passcodeInput" type="password" placeholder="Enter passcode" style="margin-bottom:10px;">
+<button onclick="checkAuth()" style="margin-top:0;">Unlock</button>
+
+<div id="formArea" style="display:none;">
+  <label>Part Number</label>
+  <input id="part_number" oninput="fetchPart()">
+  <label>Part Name</label>
+  <input id="part_name" class="readonly" readonly>
+  <label>Department</label>
+  <input id="department" class="readonly" readonly>
+  <label>Unit</label>
+  <input id="unit" class="readonly" readonly>
+  <label>Asset</label>
+  <input id="asset" placeholder="Enter Asset manually">
+  <label>Quantity</label>
+  <input id="quantity" type="number" min="1" placeholder="Enter Quantity">
+  <label>Percentage (0-100)</label>
+  <input id="rating" type="number" min="0" max="100">
+  <label>PM Schedule Date</label>
+  <input id="pm_schedule_date" type="date" onchange="autoMonth()">
+  <label>Month</label>
+  <input id="month" placeholder="Auto or manual">
+  <button id="submitBtn" onclick="submitData()">Submit</button>
+  <div class="msg" id="msg"></div>
+</div>
+</div>
+
+<script>
+const SUPABASE_URL = "https://betfhunzmhtdzgvufmfk.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp";
+const PASSCODE = "checklist2026"; // change this anytime
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY, "Content-Type": "application/json" }; }
+
+let STORE_ROWS = [], CHECKLIST_ROWS = [], TREATED_IDS = new Set();
+let unlocked = false;
+
+// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
+async function fetchAllRows(table, query){
+  let all = [], offset = 0; const pageSize = 1000;
+  const q = query || "";
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=*" + q, { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
+
+
+async function init(){
+  const status = document.getElementById("status");
+  try{
+    const [storeRows, checklistRows, treatedRes] = await Promise.all([
+      fetchAllRows("store",""),
+      fetchAllRows("checklist",""),
+      fetch(SUPABASE_URL + "/rest/v1/treated_items?select=item_id", { headers: authHeaders() })
+    ]);
+    STORE_ROWS = storeRows;
+    CHECKLIST_ROWS = checklistRows;
+    if(treatedRes.ok){
+      const t = await treatedRes.json();
+      TREATED_IDS = new Set(t.map(r=>r.item_id));
+    }
+    status.style.color = "#1d8a4e";
+    status.textContent = "Connected. store: " + STORE_ROWS.length + " rows, checklist: " + CHECKLIST_ROWS.length + " rows.";
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+function checkAuth(){
+  const pw = document.getElementById("passcodeInput").value;
+  const banner = document.getElementById("authBanner");
+  if(pw === PASSCODE){
+    unlocked = true;
+    banner.className = "auth ok";
+    banner.innerHTML = "Unlocked. You are authorized to submit.";
+    document.getElementById("formArea").style.display = "block";
+  } else {
+    unlocked = false;
+    banner.className = "auth bad";
+    banner.innerHTML = "Wrong passcode.";
+  }
+}
+
+function fetchPart(){
+  const partNumber = document.getElementById("part_number").value;
+  if(partNumber.length < 2) return;
+  const row = STORE_ROWS.find(r => String(r.part_number) === partNumber);
+  if(row){
+    document.getElementById("part_name").value = row.part_name || "";
+    document.getElementById("department").value = row.department || "";
+    document.getElementById("unit").value = row.unit || "";
+  } else {
+    clearAuto();
+  }
+}
+
+function autoMonth(){
+  const date = document.getElementById("pm_schedule_date").value;
+  if(!date) return;
+  const d = new Date(date);
+  document.getElementById("month").value = d.toLocaleString('default', { month:'long', year:'numeric' });
+}
+
+async function submitData(){
+  if(!unlocked){ alert("Enter the correct passcode first."); return; }
+  const btn = document.getElementById("submitBtn");
+  const msg = document.getElementById("msg");
+  btn.disabled = true; btn.innerText = "Submitting..."; msg.innerText = "";
+
+  const data = {
+    part_number: document.getElementById("part_number").value,
+    part_name: document.getElementById("part_name").value,
+    department: document.getElementById("department").value,
+    unit: document.getElementById("unit").value,
+    asset: document.getElementById("asset").value,
+    quantity: document.getElementById("quantity").value,
+    rating: document.getElementById("rating").value,
+    pm_schedule_date: document.getElementById("pm_schedule_date").value,
+    month: document.getElementById("month").value
+  };
+
+  try{
+    // duplicate check: same Part + Asset already pending (not treated)
+    const dup = CHECKLIST_ROWS.some(r =>
+      r.part_number === data.part_number && r.asset === data.asset && !TREATED_IDS.has(r.item_id)
+    );
+    if(dup){
+      msg.style.color = "red";
+      msg.innerText = "❌ Duplicate: This Part + Asset is already pending (not treated)";
+      btn.disabled = false; btn.innerText = "Submit";
+      return;
+    }
+
+    const itemId = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2));
+    const row = {
+      item_id: itemId,
+      part_number: data.part_number,
+      part_name: data.part_name,
+      department: data.department,
+      unit: data.unit,
+      asset: data.asset,
+      quantity: Number(data.quantity) || 0,
+      date_col: new Date().toISOString().slice(0,10),
+      app_rating: Number(data.rating) || 0,
+      pm_schedule_date: data.pm_schedule_date || null,
+      month: data.month
+    };
+
+    const res = await fetch(SUPABASE_URL + "/rest/v1/checklist", {
+      method: "post", headers: authHeaders(), body: JSON.stringify(row)
+    });
+    if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
+
+    CHECKLIST_ROWS.push(row);
+    msg.style.color = "green";
+    msg.innerText = "✅ Saved successfully";
+    clearForm();
+  }catch(e){
+    msg.style.color = "red";
+    msg.innerText = "❌ Error: " + (e.message||e);
+  }finally{
+    btn.disabled = false; btn.innerText = "Submit";
+  }
+}
+
+function clearForm(){
+  document.getElementById("part_number").value = "";
+  document.getElementById("asset").value = "";
+  document.getElementById("quantity").value = "";
+  document.getElementById("rating").value = "";
+  document.getElementById("pm_schedule_date").value = "";
+  document.getElementById("month").value = "";
+  clearAuto();
+}
+function clearAuto(){
+  document.getElementById("part_name").value = "";
+  document.getElementById("department").value = "";
+  document.getElementById("unit").value = "";
+}
+
+init();
+</script>
+</body>
+</html>

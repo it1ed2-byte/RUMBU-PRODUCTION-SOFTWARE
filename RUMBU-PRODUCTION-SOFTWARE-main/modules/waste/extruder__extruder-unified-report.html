@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Extruder Unified Report</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+  :root{--navy:var(--accent);}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);padding:20px;margin:0;}
+  .container{max-width:800px;margin:0 auto 16px;background:#fff;padding:20px;border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,.1);}
+  h2{text-align:center;color:var(--navy);}
+  .filters{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  input,select,button{width:100%;padding:10px;border:1px solid var(--line);border-radius:5px;}
+  button{background:var(--navy);color:#fff;font-weight:bold;border:none;cursor:pointer;margin-top:15px;}
+  button.alt{background:#38761d;}
+  button:disabled{background:gray;}
+  #status{margin-top:10px;text-align:center;font-size:13px;font-weight:bold;}
+  .wide{max-width:900px;margin:0 auto;}
+  table{width:100%;border-collapse:collapse;margin-bottom:25px;font-size:12px;background:#fff;}
+  th,td{border:1px solid #000;padding:5px;text-align:center;}
+  th{background:var(--navy);color:#fff;}
+  .unit-header{background:#222;color:#fff;font-weight:bold;text-align:left;}
+  .total{font-weight:bold;background:#f2f2f2;}
+  .section-title{background:#111;color:#fff;padding:8px;margin-top:25px;text-align:center;}
+  .guess{font-size:11px;color:#8a6d00;background:#fff8e1;border:1px dashed #d4a017;padding:6px;border-radius:6px;margin:6px 0;}
+  @media(max-width:600px){.filters{grid-template-columns:1fr;}}
+  @media print{ .no-print{display:none !important;} }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+</head>
+<body>
+
+<div class="container no-print">
+  <h2>EXTRUDER REPORT PDF</h2>
+  <div class="filters">
+    <input type="date" id="startDate">
+    <input type="date" id="endDate">
+    <select id="section"><option value="">ALL SECTION</option></select>
+    <select id="shift"><option value="">ALL SHIFT</option><option>Morning</option><option>Night</option></select>
+    <select id="extruder">
+      <option value="">ALL EXTRUDER</option>
+      <option>Extruder 1</option><option>Extruder 2</option><option>Extruder 3</option>
+      <option>Extruder 4</option><option>Extruder 5</option><option>Extruder MamaSannu</option>
+    </select>
+  </div>
+  <button id="btn" onclick="generate()">GENERATE REPORT</button>
+  <button class="alt" onclick="window.print()">PRINT / SAVE AS PDF</button>
+  <div id="status">Connecting to Supabase...</div>
+</div>
+
+<div class="wide" id="reportArea"></div>
+
+<script>
+function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
+const SECTION_DISPLAY_MAP = { "Rumbu": "Rumbu", "MamaSannu": "Mama Sannu" };
+
+let LOSS_ROWS=[], PROD_ROWS=[], WASTE_ROWS=[], SHUTDOWN_ROWS=[], REC_ROWS=[];
+
+async function fetchTable(table){
+  const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=*", { headers: authHeaders() });
+  if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+  return res.json();
+}
+
+async function init(){
+  const status = document.getElementById("status");
+  try{
+    const me = await requireAuth("../../login.html");
+    if(!me) return;
+
+    const mySections = (me.sectionNames && me.sectionNames.length)
+      ? me.sectionNames.map(s => SECTION_DISPLAY_MAP[s] || s)
+      : ["Rumbu","Mama Sannu"];
+    const sectionSelect = document.getElementById("section");
+    sectionSelect.innerHTML = '<option value="">ALL SECTION</option>' + mySections.map(s=>`<option>${s}</option>`).join("");
+    if(mySections.length === 1){ sectionSelect.value = mySections[0]; sectionSelect.disabled = true; }
+
+    const [loss, prod, rec] = await Promise.all([
+      fetchTable("extruder_report"),
+      fetchTable("extruder_new"),
+      fetchTable("recommendation")
+    ]);
+    LOSS_ROWS = loss; PROD_ROWS = prod; REC_ROWS = rec;
+
+    // waste_table / shutdown_assets: column names are best-guess, not yet
+    // confirmed against your real Supabase schema — fetched separately so
+    // a failure here doesn't block the rest of the report.
+    try{ WASTE_ROWS = await fetchTable("waste_table"); }
+    catch(e){ WASTE_ROWS = []; console.warn("waste_table:", e.message); }
+    try{ SHUTDOWN_ROWS = await fetchTable("shutdown_assets"); }
+    catch(e){ SHUTDOWN_ROWS = []; console.warn("shutdown_assets:", e.message); }
+
+    status.style.color = "#1d8a4e";
+    status.textContent = "Connected. Loss: " + LOSS_ROWS.length + ", Production: " + PROD_ROWS.length +
+      ", Recommendation: " + REC_ROWS.length + ", Waste: " + WASTE_ROWS.length + ", Shutdown: " + SHUTDOWN_ROWS.length + ".";
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "Could not read data: " + (e.message||e);
+  }
+}
+
+function getShiftMinutes(){ return 720; }
+function fmt(n){ return Number(n||0).toFixed(2); }
+
+function generate(){
+  const btn = document.getElementById("btn");
+  btn.disabled = true; btn.innerText = "GENERATING...";
+
+  const from = document.getElementById("startDate").value;
+  const to = document.getElementById("endDate").value;
+  const section = document.getElementById("section").value;
+  const shift = document.getElementById("shift").value;
+  const extruder = document.getElementById("extruder").value;
+
+  let html = `<h1 style="text-align:center;">EXTRUDER PRODUCTION REPORT</h1>
+    <div style="text-align:center;font-size:13px;margin-bottom:15px;">Report Period: ${from} TO ${to}</div><hr>`;
+
+  // ================= DOWNTIME / LOSS REPORT (extruder_report) =================
+  html += `<h2 class="section-title">DOWNTIME REPORT</h2><table><tr>
+    <th>Date</th><th>Extruder</th><th>No M/C</th><th>Start</th><th>Finish</th><th>DT</th><th>Loss (Kg)</th><th>Fault</th></tr>`;
+
+  let lossRows = LOSS_ROWS.filter(r=>{
+    if(from && r.date_col < from) return false;
+    if(to && r.date_col > to) return false;
+    if(shift && (r.shift||"").toUpperCase() !== shift.toUpperCase()) return false;
+    if(section && r.section !== section) return false;
+    if(extruder && r.extruder_name !== extruder) return false;
+    return true;
+  });
+  lossRows.sort((a,b)=> (a.unit||"").localeCompare(b.unit||"") || (a.fault||"").localeCompare(b.fault||""));
+
+  let currentUnit="", unitTotal=0, grandTotal=0, faultMap={};
+  function flushUnit(){
+    Object.entries(faultMap).forEach(([k,v])=>{
+      html += `<tr class="total"><td colspan="6">${k} TOTAL</td><td colspan="2">${fmt(v)}</td></tr>`;
+    });
+    html += `<tr class="total"><td colspan="6">${currentUnit} TOTAL</td><td colspan="2">${fmt(unitTotal)}</td></tr>`;
+  }
+  lossRows.forEach(r=>{
+    const loss = Number(r.loss_kg||0);
+    let duration = "";
+    if(r.start_time && r.end_time){
+      const s = new Date("1970-01-01T"+r.start_time), e = new Date("1970-01-01T"+r.end_time);
+      if(!isNaN(s) && !isNaN(e)){
+        let diff = e-s; if(diff<0) diff += 24*60*60*1000;
+        const mins = Math.floor(diff/60000);
+        duration = Math.floor(mins/60)+"h "+(mins%60)+"m";
+      }
+    }
+    if(r.unit !== currentUnit){
+      if(currentUnit !== "") flushUnit();
+      currentUnit = r.unit || ""; unitTotal = 0; faultMap = {};
+      html += `<tr class="unit-header"><td colspan="8">${currentUnit}</td></tr>`;
+    }
+    unitTotal += loss; grandTotal += loss;
+    faultMap[r.fault] = (faultMap[r.fault]||0) + loss;
+    html += `<tr><td>${r.date_col||""}</td><td>${r.extruder_name||""}</td><td>${r.no_of_assets||""}</td>` +
+      `<td>${r.start_time||""}</td><td>${r.end_time||""}</td><td>${duration}</td><td>${fmt(loss)}</td><td>${r.fault||""}</td></tr>`;
+  });
+  if(currentUnit !== "") flushUnit();
+  html += `<tr class="total"><td colspan="6">GRAND TOTAL</td><td colspan="2">${fmt(grandTotal)}</td></tr></table>`;
+
+  // ================= PRODUCTION REPORT (extruder_new) =================
+  // NOTE: preserved exactly as the original — "Target" here is the row's own
+  // Total production, not an RPM-based target, so %P will sit near 100%.
+  html += `<h2 class="section-title">PRODUCTION REPORT</h2>`;
+  let prodRows = PROD_ROWS.filter(r=>{
+    if(from && r.date_col < from) return false;
+    if(to && r.date_col > to) return false;
+    if(shift && (r.shift||"").toUpperCase() !== shift.toUpperCase()) return false;
+    if(section && r.section !== section) return false;
+    if(extruder && r.extruder_name !== extruder) return false;
+    return true;
+  });
+  const grouped = {};
+  prodRows.forEach(r=>{
+    const name = r.extruder_name || "(blank)";
+    if(!grouped[name]) grouped[name] = { A:0, B:0, T:0 };
+    grouped[name].A += Number(r.a||0);
+    grouped[name].B += Number(r.b||0);
+    grouped[name].T += Number(r.total||0);
+  });
+
+  html += `<h3>A PRODUCTION</h3><table><tr><th>Extruder Name</th><th>A</th><th>Target</th><th>%A</th></tr>`;
+  for(const name in grouped){
+    const A=Math.round(grouped[name].A), T=Math.round(grouped[name].T||1);
+    html += `<tr><td>${name}</td><td>${A}</td><td>${T}</td><td>${T?Math.round(A/T*100):0}%</td></tr>`;
+  }
+  html += `</table>`;
+
+  html += `<h3>B PRODUCTION</h3><table><tr><th>Extruder Name</th><th>B</th><th>Target</th><th>%B</th></tr>`;
+  for(const name in grouped){
+    const B=Math.round(grouped[name].B), T=Math.round(grouped[name].T||1);
+    html += `<tr><td>${name}</td><td>${B}</td><td>${T}</td><td>${T?Math.round(B/T*100):0}%</td></tr>`;
+  }
+  html += `</table>`;
+
+  html += `<h3>COMBINED PRODUCTION</h3><table><tr><th>Extruder Name</th><th>A</th><th>B</th><th>Total</th><th>Target</th><th>%A</th><th>%B</th><th>%P</th></tr>`;
+  for(const name in grouped){
+    const A=Math.round(grouped[name].A), B=Math.round(grouped[name].B), T=Math.round(grouped[name].T||1);
+    const total = A+B;
+    html += `<tr><td>${name}</td><td>${A}</td><td>${B}</td><td>${total}</td><td>${T}</td>` +
+      `<td>${T?Math.round(A/T*100):0}%</td><td>${T?Math.round(B/T*100):0}%</td><td>${T?Math.round(total/T*100):0}%</td></tr>`;
+  }
+  html += `</table>`;
+
+  // ================= WASTE REPORT (best-guess columns) =================
+  html += `<h2 class="section-title">WASTE REPORT</h2>
+    <table><tr><th>Waste Type</th><th>Qty (Kg)</th></tr>`;
+  let wasteRows = WASTE_ROWS.filter(r=>{
+    if(from && r.date_col && r.date_col < from) return false;
+    if(to && r.date_col && r.date_col > to) return false;
+    if(shift && r.shift && r.shift.toUpperCase() !== shift.toUpperCase()) return false;
+    if(section && r.section && r.section !== section) return false;
+    if(extruder && r.measured_by && r.measured_by !== extruder) return false;
+    return true;
+  });
+  const wasteGrouped = {};
+  wasteRows.forEach(r=>{
+    const unit = r.measured_by || "(blank)";
+    if(!wasteGrouped[unit]) wasteGrouped[unit] = {};
+    const type = r.waste_type || "(blank)";
+    wasteGrouped[unit][type] = (wasteGrouped[unit][type]||0) + Number(r.waste_weight||0);
+  });
+  let wasteGrand = 0;
+  Object.keys(wasteGrouped).forEach(unit=>{
+    html += `<tr class="unit-header"><td colspan="2">${unit}</td></tr>`;
+    let unitTot = 0;
+    Object.entries(wasteGrouped[unit]).forEach(([type,qty])=>{
+      unitTot += qty; wasteGrand += qty;
+      html += `<tr><td>${type}</td><td>${fmt(qty)}</td></tr>`;
+    });
+    html += `<tr class="total"><td>${unit} TOTAL</td><td>${fmt(unitTot)}</td></tr>`;
+  });
+  html += `<tr class="total"><td>GRAND TOTAL</td><td>${fmt(wasteGrand)}</td></tr></table>`;
+
+  // ================= SHUTDOWN ASSETS REPORT (best-guess columns) =================
+  html += `<h2 class="section-title">SHUTDOWN ASSETS REPORT</h2>
+    <div class="guess">Column names for shutdown_assets are an unverified guess (date_col, department, assets, reason, shift, section). Confirm against your real schema.</div>
+    <table><tr><th>Assets</th><th>Shift</th></tr>`;
+  let shutdownRows = SHUTDOWN_ROWS.filter(r=>{
+    if(from && r.date_col && r.date_col < from) return false;
+    if(to && r.date_col && r.date_col > to) return false;
+    if(shift && r.shift && r.shift.toUpperCase() !== shift.toUpperCase()) return false;
+    if(section && r.section && r.section !== section) return false;
+    if(extruder && r.department && r.department !== extruder) return false;
+    return true;
+  });
+  shutdownRows.forEach(r=>{
+    html += `<tr><td>${r.assets||""}</td><td>${r.reason||r.shift||""}</td></tr>`;
+  });
+  html += `</table>`;
+
+  // ================= RECOMMENDATION REPORT =================
+  // NOTE: original ignores the Shift filter entirely for recommendations
+  // (its own query hard-codes that condition to always pass) — preserved.
+  html += `<h2 class="section-title">RECOMMENDATION REPORT</h2><table><tr><th>Date</th><th>Recommendation</th></tr>`;
+  let recRows = REC_ROWS.filter(r=>{
+    if(from && r.date_col < from) return false;
+    if(to && r.date_col > to) return false;
+    if(section && r.section !== section) return false;
+    return true;
+  }).sort((a,b)=>(a.date_col||"").localeCompare(b.date_col||""));
+
+  let recSection = "";
+  recRows.forEach(r=>{
+    if(r.section !== recSection){
+      recSection = r.section;
+      html += `<tr class="unit-header"><td colspan="2">${recSection||""}</td></tr>`;
+    }
+    html += `<tr><td>${r.date_col||""}</td><td>${r.recommendation||""}</td></tr>`;
+  });
+  html += `</table>`;
+
+  document.getElementById("reportArea").innerHTML = html;
+  btn.disabled = false; btn.innerText = "GENERATE REPORT";
+}
+
+init();
+</script>
+<script src="../../assets/letterhead.js"></script>
+</body>
+</html>

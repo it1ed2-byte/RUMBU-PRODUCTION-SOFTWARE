@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>PM Report</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="../../assets/letterhead.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1120px;margin:0 auto;}
+  #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);}
+
+  .toolbar{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;}
+  .toolbar .f{flex:1;min-width:200px;}
+  .toolbar .f.min{flex:0 0 auto;}
+  .pol-box{border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:10px;max-height:200px;overflow-y:auto;background:var(--bg);margin-top:6px;}
+  .pchk{display:flex;align-items:center;gap:8px;font-size:13px;padding:5px 4px;margin:0;cursor:pointer;}
+  .pchk input{width:auto;margin:0;}
+  .pchk.master{font-weight:700;color:var(--heading);border-bottom:1px solid var(--line);margin-bottom:4px;padding-bottom:8px;}
+
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:4px 0 10px;}
+  .kpi{background:var(--bg);border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:14px 16px;}
+  .kpi .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);font-weight:700;}
+  .kpi .v{font-size:26px;font-weight:800;color:var(--heading);margin-top:4px;line-height:1;}
+  .kpi .s{font-size:12px;color:var(--muted);margin-top:4px;}
+  .kpi.good .v{color:var(--ok);} .kpi.bad .v{color:var(--bad);} .kpi.warn .v{color:var(--warn);}
+
+  .conclusion{border-radius:var(--radius);padding:15px 18px;font-size:14px;line-height:1.6;margin:6px 0 4px;border:1px solid var(--line-2);}
+  .conclusion.ok{background:rgba(30,125,52,.10);border-color:var(--ok);}
+  .conclusion.warn{background:rgba(154,107,0,.10);border-color:var(--warn);}
+  .conclusion.bad{background:rgba(176,42,55,.10);border-color:var(--bad);}
+  .conclusion .verdict{font-weight:800;font-size:15px;display:block;margin-bottom:4px;}
+  .conclusion.ok .verdict{color:var(--ok);} .conclusion.warn .verdict{color:var(--warn);} .conclusion.bad .verdict{color:var(--bad);}
+
+  .sec-label{margin:22px 0 8px;font-size:13px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;color:var(--muted);}
+  table.rep{width:100%;border-collapse:collapse;font-size:13px;}
+  table.rep th,table.rep td{padding:9px 10px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;}
+  table.rep th{font-size:11px;text-transform:uppercase;letter-spacing:.3px;color:var(--muted);}
+  table.rep td.num,table.rep th.num{text-align:center;white-space:nowrap;}
+  .bar{height:8px;border-radius:6px;background:rgba(176,42,55,.20);overflow:hidden;min-width:70px;}
+  .bar > i{display:block;height:100%;background:var(--ok);}
+  .res-good{color:var(--ok);font-weight:700;} .res-bad{color:var(--bad);font-weight:700;}
+  .flag{display:inline-block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;padding:2px 8px;border-radius:20px;background:rgba(176,42,55,.14);color:var(--bad);margin-left:6px;}
+
+  .job{border:1px solid var(--line);border-radius:var(--radius);margin-bottom:10px;overflow:hidden;background:var(--card);}
+  .job-head{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;padding:11px 14px;background:var(--bg);border-bottom:1px solid var(--line);cursor:pointer;font-size:13px;}
+  .job-head .jt{font-weight:700;color:var(--heading);}
+  .job-head .meta{color:var(--muted);}
+  .job-head .spacer{flex:1;}
+  .job-body{padding:4px 14px 12px;display:none;}
+  .job.open .job-body{display:block;}
+
+  .btn-link{background:transparent;border:1px solid var(--line-2);color:var(--heading);border-radius:7px;padding:8px 14px;font-size:13px;font-weight:700;cursor:pointer;}
+  .btn-link:hover{border-color:var(--accent);}
+  .btn-primary{background:var(--accent);color:var(--logo-fg);border:0;border-radius:7px;padding:9px 16px;font-size:13px;font-weight:700;cursor:pointer;}
+  .empty{padding:24px;text-align:center;color:var(--muted);}
+  #report{display:none;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<button class="no-print" onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:240px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back to Dashboard</button>
+<div id="connStatus">Loading...</div>
+
+<!-- ===== SELECTOR ===== -->
+<div class="card-panel no-print" id="selectorCard">
+  <h3>PM Report</h3>
+  <p class="sub">Pick an asset, then one policy, all policies, or a selection, to analyse its preventive-maintenance checklists.</p>
+
+  <div class="toolbar">
+    <div class="f"><label>Asset</label><input id="fAsset" list="assetList" onchange="onAssetChange()" placeholder="Type your asset, or pick from the list..." autocomplete="off"><datalist id="assetList"></datalist></div>
+    <div class="f min"><label>Specialist</label><select id="fSpecialist"><option value="">All specialists</option></select></div>
+    <div class="f min"><label>From (optional)</label><input type="date" id="fFrom"></div>
+    <div class="f min"><label>To (optional)</label><input type="date" id="fTo"></div>
+  </div>
+
+  <div class="f" style="margin-top:12px;">
+    <label>Policies on this asset</label>
+    <input id="polSearch" oninput="filterPolicies()" placeholder="Search policies by number or name..." autocomplete="off" style="margin-bottom:6px;">
+    <div class="pol-box" id="polBox"><span class="empty" style="padding:8px;">Type or pick an asset first.</span></div>
+  </div>
+
+  <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap;">
+    <button class="btn-primary" onclick="runReport()">Run Report</button>
+  </div>
+  <div class="status" id="selStatus" style="display:none;margin-top:10px;"></div>
+</div>
+
+<!-- ===== REPORT ===== -->
+<div class="card-panel" id="report">
+  <div class="no-print" style="display:flex;gap:10px;justify-content:flex-end;margin-bottom:6px;">
+    <button class="btn-link" onclick="window.print()">Print / Save PDF</button>
+  </div>
+  <div id="reportBody"></div>
+</div>
+
+</div>
+
+<script>
+let ME = null;
+let ASSETS = [];
+let POLICIES_FOR_ASSET = [];
+
+function esc(s){ return (s==null?"":String(s)).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c])); }
+function fmtDate(s){ if(!s) return "—"; try{ return new Date(s).toLocaleDateString(); }catch(e){ return s; } }
+function pct(n){ return Math.round(n*100) + "%"; }
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    // Distinct assets that have at least one initiation.
+    const { data, error } = await sb.from("pm_initiations").select("asset").order("asset");
+    if(error) throw error;
+    ASSETS = Array.from(new Set((data||[]).map(r => r.asset).filter(Boolean))).sort((a,b)=>a.localeCompare(b));
+    document.getElementById("assetList").innerHTML = ASSETS.map(a => `<option value="${esc(a)}"></option>`).join("");
+    status.style.color = "var(--ok)"; status.textContent = "Connected.";
+  }catch(e){
+    status.style.color = "var(--bad)"; status.textContent = "Could not load: " + e.message;
+  }
+}
+
+async function onAssetChange(){
+  const asset = document.getElementById("fAsset").value.trim();
+  const box = document.getElementById("polBox");
+  const specSel = document.getElementById("fSpecialist");
+  POLICIES_FOR_ASSET = [];
+  specSel.innerHTML = "<option value=''>All specialists</option>";
+  const ps = document.getElementById("polSearch"); if(ps) ps.value = "";
+  if(!asset){ box.innerHTML = "<span class='empty' style='padding:8px;'>Type or pick an asset first.</span>"; return; }
+  box.innerHTML = "<span class='empty' style='padding:8px;'>Loading…</span>";
+  const { data, error } = await sb.from("pm_initiations")
+    .select("policy_id, policy_number, policy_name, specialist_emp_pk, specialist_employee_id, specialist_name").eq("asset", asset);
+  if(error){ box.innerHTML = "<span class='empty' style='padding:8px;'>Error: " + esc(error.message) + "</span>"; return; }
+  const rows = data || [];
+
+  const seen = new Set();
+  rows.forEach(r => {
+    const k = String(r.policy_id);
+    if(seen.has(k)) return; seen.add(k);
+    POLICIES_FOR_ASSET.push({ policy_id: r.policy_id, policy_number: r.policy_number, policy_name: r.policy_name });
+  });
+  POLICIES_FOR_ASSET.sort((a,b)=>String(a.policy_number).localeCompare(String(b.policy_number)));
+
+  // Specialists who have worked this asset (for the filter).
+  const sseen = new Set();
+  rows.forEach(r => {
+    if(!r.specialist_emp_pk) return;
+    const k = String(r.specialist_emp_pk);
+    if(sseen.has(k)) return; sseen.add(k);
+    const o = document.createElement("option");
+    o.value = k; o.textContent = (r.specialist_name || "—") + (r.specialist_employee_id ? " (ID " + r.specialist_employee_id + ")" : "");
+    specSel.appendChild(o);
+  });
+
+  if(!POLICIES_FOR_ASSET.length){ box.innerHTML = "<span class='empty' style='padding:8px;'>No policies initiated on this asset.</span>"; return; }
+  box.innerHTML =
+    "<label class='pchk master'><input type='checkbox' id='pAll' checked onchange='toggleAllPolicies()'> All policies (" + POLICIES_FOR_ASSET.length + ")</label>" +
+    POLICIES_FOR_ASSET.map(p =>
+      "<label class='pchk pol-row' data-text='" + esc((p.policy_number + " " + p.policy_name).toLowerCase()) + "'>" +
+      "<input type='checkbox' class='pol' value='" + esc(p.policy_id) + "' checked onchange='syncMaster()'> " +
+      esc(p.policy_number) + " — " + esc(p.policy_name) + "</label>"
+    ).join("");
+}
+
+function filterPolicies(){
+  const q = (document.getElementById("polSearch").value || "").trim().toLowerCase();
+  document.querySelectorAll("#polBox .pol-row").forEach(l => {
+    const t = l.getAttribute("data-text") || "";
+    l.style.display = (!q || t.indexOf(q) !== -1) ? "flex" : "none";
+  });
+}
+function toggleAllPolicies(){
+  const on = document.getElementById("pAll").checked;
+  document.querySelectorAll("#polBox .pol").forEach(c => c.checked = on);
+}
+function syncMaster(){
+  const boxes = Array.from(document.querySelectorAll("#polBox .pol"));
+  const all = boxes.length && boxes.every(c => c.checked);
+  const pAll = document.getElementById("pAll"); if(pAll) pAll.checked = all;
+}
+function selectedPolicyIds(){
+  return Array.from(document.querySelectorAll("#polBox .pol:checked")).map(c => c.value);
+}
+
+async function runReport(){
+  const st = document.getElementById("selStatus");
+  const show = (cls, msg) => { st.style.display = "block"; st.className = "status " + cls; st.textContent = msg; };
+  const asset = document.getElementById("fAsset").value.trim();
+  const polIds = selectedPolicyIds();
+  const from = document.getElementById("fFrom").value;
+  const to = document.getElementById("fTo").value;
+  const specSel = document.getElementById("fSpecialist");
+  const specPk = specSel.value;
+  const specLabel = specPk ? (specSel.options[specSel.selectedIndex] ? specSel.options[specSel.selectedIndex].textContent : "") : "";
+
+  if(!asset){ return show("bad", "Type or pick an asset."); }
+  if(!polIds.length){ return show("bad", "Select at least one policy."); }
+
+  show("warn", "Building report…");
+  try{
+    let q = sb.from("pm_initiations").select("*").eq("asset", asset).in("policy_id", polIds).order("initiated_at", { ascending: false });
+    const { data: jobsRaw, error: jErr } = await q;
+    if(jErr) throw jErr;
+    let jobs = jobsRaw || [];
+    // Optional date window on the initiation date.
+    if(from) jobs = jobs.filter(j => String(j.initiated_at||"").slice(0,10) >= from);
+    if(to) jobs = jobs.filter(j => String(j.initiated_at||"").slice(0,10) <= to);
+    // Optional specialist filter.
+    if(specPk) jobs = jobs.filter(j => String(j.specialist_emp_pk) === specPk);
+
+    const completed = jobs.filter(j => j.status === "Completed");
+    const pending = jobs.filter(j => j.status !== "Completed");
+
+    let items = [];
+    if(completed.length){
+      const ids = completed.map(j => j.id);
+      const { data: it, error: iErr } = await sb.from("pm_initiation_items")
+        .select("initiation_id, item_no, checklist_item, result, remark").in("initiation_id", ids).order("item_no");
+      if(iErr) throw iErr;
+      items = it || [];
+    }
+    st.style.display = "none";
+    renderReport({ asset, jobs, completed, pending, items, from, to, specLabel });
+  }catch(e){
+    show("bad", "Could not build report: " + (e.message || e));
+  }
+}
+
+function renderReport(ctx){
+  const { asset, jobs, completed, pending, items } = ctx;
+  const jobById = {}; completed.forEach(j => jobById[j.id] = j);
+
+  // Flatten results with their job's date + specialist.
+  const results = items.filter(it => it.result === "Good" || it.result === "Bad").map(it => {
+    const j = jobById[it.initiation_id] || {};
+    return { q: it.checklist_item, result: it.result, remark: it.remark, item_no: it.item_no,
+             date: j.completed_at || j.initiated_at, specialist: j.specialist_name, policy: j.policy_number };
+  });
+
+  const good = results.filter(r => r.result === "Good").length;
+  const bad = results.filter(r => r.result === "Bad").length;
+  const evaluated = good + bad;
+  const passRate = evaluated ? good / evaluated : 0;
+
+  // Per-question summary (grouped by checklist item text).
+  const byQ = {};
+  results.forEach(r => {
+    const g = byQ[r.q] || (byQ[r.q] = { q: r.q, checks: 0, good: 0, bad: 0, last: null, lastBadRemark: null });
+    g.checks++; if(r.result === "Good") g.good++; else g.bad++;
+    if(!g.last || (r.date && r.date > g.last.date)) g.last = { date: r.date, result: r.result, remark: r.remark };
+    if(r.result === "Bad" && r.remark) g.lastBadRemark = r.remark;
+  });
+  const questions = Object.values(byQ).map(g => ({ ...g, rate: g.checks ? g.good/g.checks : 0 }))
+    .sort((a,b) => (b.bad - a.bad) || (a.rate - b.rate) || a.q.localeCompare(b.q));
+
+  // Verdict.
+  let cls, verdict;
+  if(!evaluated){ cls = "warn"; verdict = "No completed checklists yet"; }
+  else if(bad === 0){ cls = "ok"; verdict = "Healthy — all checks passing"; }
+  else if(passRate >= 0.9){ cls = "warn"; verdict = "Good — minor issues"; }
+  else if(passRate >= 0.7){ cls = "warn"; verdict = "Attention needed"; }
+  else { cls = "bad"; verdict = "Critical — many failed checks"; }
+
+  const worst = questions.filter(q => q.bad > 0).slice(0, 3);
+  let concl;
+  if(!evaluated){
+    concl = "No PM checklist has been completed for this asset in the selected policies" + (pending.length ? ", though " + pending.length + " job(s) are still pending." : ".");
+  } else {
+    concl = "Across " + completed.length + " completed PM check" + (completed.length===1?"":"s") + " on " + esc(asset) + ", " +
+      evaluated + " checkpoint result" + (evaluated===1?"":"s") + " were recorded: " + good + " Good and " + bad + " Bad (" + pct(passRate) + " pass rate). ";
+    if(bad === 0) concl += "No failures were found; the asset is in good condition for these policies.";
+    else concl += "The most frequent problem" + (worst.length===1?"":"s") + ": " + worst.map(w => "“" + esc(w.q) + "” (" + w.bad + " Bad)").join(", ") + ". These should be prioritised for repair or closer monitoring.";
+    if(pending.length) concl += " " + pending.length + " job(s) are still pending and not included in this analysis.";
+  }
+
+  const polList = selectedPolicyIds().length === POLICIES_FOR_ASSET.length ? "All policies" :
+    POLICIES_FOR_ASSET.filter(p => selectedPolicyIds().includes(String(p.policy_id))).map(p => p.policy_number).join(", ");
+  const specialists = Array.from(new Set(completed.map(j => j.specialist_name).filter(Boolean)));
+
+  let html =
+    "<h2 style='margin:0 0 2px;color:var(--heading);font-size:22px;font-weight:800;'>" + esc(asset) +
+      "<small style='display:block;font-size:13px;font-weight:600;color:var(--muted);margin-top:3px;'>PM Report · " + esc(polList) +
+      (ctx.specLabel ? " · " + esc(ctx.specLabel) : "") +
+      (ctx.from||ctx.to ? " · " + (ctx.from?fmtDate(ctx.from):"start") + " to " + (ctx.to?fmtDate(ctx.to):"today") : "") + "</small></h2>";
+
+  html += "<div class='cards'>" +
+    kpi("Health Score", evaluated ? pct(passRate) : "—", "Good checks / all checks", cls==="ok"?"good":(cls==="bad"?"bad":"warn")) +
+    kpi("PM Jobs (done)", completed.length, pending.length ? pending.length + " pending" : "all completed", "") +
+    kpi("Good", good, "checkpoints passed", "good") +
+    kpi("Bad", bad, "checkpoints failed", bad?"bad":"") +
+    kpi("Specialists", specialists.length, specialists.slice(0,2).join(", ") + (specialists.length>2?"…":""), "") +
+  "</div>";
+
+  html += "<div class='conclusion " + cls + "'><span class='verdict'>" + esc(verdict) + "</span>" + concl + "</div>";
+
+  // Specialists who attended this asset, with the Good/Bad conditions they recorded.
+  const itemsByJobPerf = {}; items.forEach(it => { (itemsByJobPerf[it.initiation_id] = itemsByJobPerf[it.initiation_id] || []).push(it); });
+  const bySpec = {};
+  completed.forEach(j => {
+    const key = (j.specialist_name || "—") + "||" + (j.specialist_employee_id || "");
+    const g = bySpec[key] || (bySpec[key] = { name: j.specialist_name || "—", id: j.specialist_employee_id || "", jobs: 0, good: 0, bad: 0 });
+    g.jobs++;
+    (itemsByJobPerf[j.id] || []).forEach(it => { if(it.result === "Good") g.good++; else if(it.result === "Bad") g.bad++; });
+  });
+  const specs = Object.values(bySpec).sort((a,b) => (b.jobs - a.jobs) || a.name.localeCompare(b.name));
+
+  html += "<div class='sec-label'>Specialists who attended this asset</div>";
+  if(!specs.length){
+    html += "<div class='empty'>No specialist has recorded a checklist for this asset yet.</div>";
+  } else {
+    html += "<div class='table-wrap'><div class='table-scroll'><table class='rep'><thead><tr>" +
+      "<th>Specialist</th><th class='num'>Jobs done</th><th class='num'>Good recorded</th><th class='num'>Bad recorded</th>" +
+      "</tr></thead><tbody>";
+    specs.forEach(s => {
+      html += "<tr>" +
+        "<td>" + esc(s.name) + (s.id ? " <span style='color:var(--muted);font-size:12px;'>ID " + esc(s.id) + "</span>" : "") + "</td>" +
+        "<td class='num'>" + s.jobs + "</td>" +
+        "<td class='num res-good'>" + s.good + "</td>" +
+        "<td class='num " + (s.bad?"res-bad":"") + "'>" + s.bad + "</td>" +
+        "</tr>";
+    });
+    html += "</tbody></table></div></div>";
+  }
+
+  // Per-question summary.
+  html += "<div class='sec-label'>Summary by question</div>";
+  if(!questions.length){
+    html += "<div class='empty'>No checklist results to summarise.</div>";
+  } else {
+    html += "<div class='table-wrap'><div class='table-scroll'><table class='rep'><thead><tr>" +
+      "<th>Checklist question</th><th class='num'>Checks</th><th class='num'>Good</th><th class='num'>Bad</th><th class='num'>Pass rate</th><th>Last result</th><th>Last bad remark</th>" +
+      "</tr></thead><tbody>";
+    questions.forEach(g => {
+      const flag = g.bad > 0 && g.rate < 0.7 ? "<span class='flag'>recurring</span>" : "";
+      html += "<tr>" +
+        "<td>" + esc(g.q) + flag + "</td>" +
+        "<td class='num'>" + g.checks + "</td>" +
+        "<td class='num res-good'>" + g.good + "</td>" +
+        "<td class='num " + (g.bad?"res-bad":"") + "'>" + g.bad + "</td>" +
+        "<td class='num'><div class='bar'><i style='width:" + Math.round(g.rate*100) + "%;'></i></div><span style='font-size:11px;color:var(--muted);'>" + pct(g.rate) + "</span></td>" +
+        "<td>" + (g.last ? (g.last.result==="Good"?"<span class='res-good'>Good</span>":"<span class='res-bad'>Bad</span>") + " <span style='color:var(--muted);font-size:12px;'>" + fmtDate(g.last.date) + "</span>" : "—") + "</td>" +
+        "<td style='color:var(--muted);'>" + esc(g.lastBadRemark || "") + "</td>" +
+        "</tr>";
+    });
+    html += "</tbody></table></div></div>";
+  }
+
+  // Per-job checklist values.
+  html += "<div class='sec-label'>Checklist values by PM job</div>";
+  if(!completed.length){
+    html += "<div class='empty'>No completed PM jobs in this selection.</div>";
+  } else {
+    const itemsByJob = {}; items.forEach(it => { (itemsByJob[it.initiation_id] = itemsByJob[it.initiation_id] || []).push(it); });
+    html += completed.map(j => {
+      const its = (itemsByJob[j.id] || []).slice().sort((a,b)=>a.item_no-b.item_no);
+      const jb = its.filter(i=>i.result==="Bad").length;
+      return "<div class='job' id='rjob_" + j.id + "'>" +
+        "<div class='job-head' onclick='rtoggle(" + j.id + ")'>" +
+          "<span class='jt'>" + esc(j.policy_number) + " — " + esc(j.policy_name) + "</span>" +
+          "<span class='meta'>" + fmtDate(j.completed_at || j.initiated_at) + "</span>" +
+          "<span class='meta'>" + esc(j.specialist_name || "—") + "</span>" +
+          "<span class='spacer'></span>" +
+          "<span class='meta'>" + (jb ? "<span class='res-bad'>" + jb + " Bad</span>" : "<span class='res-good'>All Good</span>") + "</span>" +
+        "</div>" +
+        "<div class='job-body'><table class='rep'><thead><tr><th class='num'>#</th><th>Checklist Item</th><th>Result</th><th>Remark</th></tr></thead><tbody>" +
+          its.map(i => "<tr><td class='num'>" + i.item_no + "</td><td>" + esc(i.checklist_item) + "</td>" +
+            "<td>" + (i.result==="Good"?"<span class='res-good'>Good</span>":(i.result==="Bad"?"<span class='res-bad'>Bad</span>":"—")) + "</td>" +
+            "<td style='color:var(--muted);'>" + esc(i.remark||"") + "</td></tr>").join("") +
+        "</tbody></table></div></div>";
+    }).join("");
+  }
+
+  document.getElementById("reportBody").innerHTML = html;
+  document.getElementById("report").style.display = "block";
+  document.getElementById("report").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function kpi(k, v, s, cls){
+  return "<div class='kpi " + (cls||"") + "'><div class='k'>" + esc(k) + "</div><div class='v'>" + esc(v) + "</div><div class='s'>" + esc(s||"") + "</div></div>";
+}
+function rtoggle(id){ const el = document.getElementById("rjob_" + id); if(el) el.classList.toggle("open"); }
+
+init();
+</script>
+</body>
+</html>
