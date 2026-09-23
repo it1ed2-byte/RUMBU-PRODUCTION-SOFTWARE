@@ -40,6 +40,23 @@
   .meta-cell .v{font-size:15px;color:var(--heading);font-weight:600;margin-top:3px;}
   .desc-box{margin-top:14px;background:var(--bg);border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:13px 15px;color:var(--text);font-size:14px;}
   .sec-label{margin:22px 0 8px;font-size:13px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;color:var(--muted);}
+  .pill.ok{background:rgba(30,125,52,.12);color:var(--ok);}
+  .pill.bad{background:rgba(176,42,55,.12);color:var(--bad);}
+
+  /* Edit form (mirrors add-policy.html so the two stay visually consistent) */
+  .cl-head{display:flex;align-items:center;justify-content:space-between;margin:22px 0 8px;}
+  .cl-head h4{margin:0;color:var(--heading);font-size:14px;}
+  table.cl{width:100%;border-collapse:collapse;}
+  table.cl th,table.cl td{padding:8px;border-bottom:1px solid var(--line);vertical-align:middle;}
+  table.cl th{background:var(--th-bg);color:var(--th-fg);font-size:11px;text-transform:uppercase;letter-spacing:.4px;text-align:left;}
+  table.cl th:first-child,table.cl td:first-child{width:52px;text-align:center;}
+  table.cl th:last-child,table.cl td:last-child{width:60px;text-align:center;}
+  table.cl td input{margin:0;width:100%;}
+  .row-no{font-weight:700;color:var(--muted);font-variant-numeric:tabular-nums;}
+  .btn-rm{background:var(--bad);color:#fff;border:0;border-radius:7px;padding:6px 10px;font-size:13px;cursor:pointer;line-height:1;}
+  .btn-add-row{background:var(--bg);color:var(--heading);border:1px solid var(--line-2);border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;}
+  .actions{display:flex;gap:10px;align-items:center;margin-top:20px;}
+  .actions .btn-primary{background:var(--accent);color:var(--logo-fg);}
 </style>
 </head>
 <body>
@@ -55,6 +72,11 @@
   <div class="toolbar no-print">
     <div class="f"><label>Search (number, name, unit)</label><input type="text" id="q" oninput="render()" placeholder="Type to filter..."></div>
     <div class="f min"><label>Branch</label><select id="fSection" onchange="render()"><option value="">All</option></select></div>
+    <div class="f min"><label>Status</label><select id="fStatus" onchange="render()">
+      <option value="active" selected>Active</option>
+      <option value="archived">Archived only</option>
+      <option value="all">All (incl. archived)</option>
+    </select></div>
     <span class="count" id="count"></span>
   </div>
 
@@ -64,7 +86,7 @@
         <thead>
           <tr>
             <th>Policy No.</th><th>Policy Name</th><th>Unit</th><th>Branch</th>
-            <th>PM Next (days)</th><th>Items</th><th>Created By</th><th>Created</th><th class="no-print"></th>
+            <th>PM Next (days)</th><th>Items</th><th>Status</th><th>Created By</th><th>Created</th><th class="no-print"></th>
           </tr>
         </thead>
         <tbody id="tbody"></tbody>
@@ -79,6 +101,8 @@
   <div class="detail-bar no-print">
     <button class="btn-link" onclick="backToList()">&larr; Back to list</button>
     <span class="spacer"></span>
+    <button class="btn-link" id="detailEdit" style="display:none;" onclick="enterEditMode()">Edit</button>
+    <button class="btn-link" id="detailArchive" style="display:none;" onclick="toggleArchive()">Archive</button>
     <button class="btn-link" onclick="window.print()">Print / Save PDF</button>
     <button class="btn-del" id="detailDelete" style="display:none;" onclick="delFromDetail()">Delete</button>
   </div>
@@ -92,8 +116,15 @@ let ME = null;
 let POLICIES = [];
 let ITEMS_BY_POLICY = {};
 let CURRENT_ID = null;
+let UNITS = []; // [{id,name,department_id,section}] — loaded lazily, only when Edit is opened
 
 function canDelete(){ return ME && (ME.role === "admin" || ME.role === "super_admin"); }
+// Archive/Unarchive uses the same bar as Delete — it's the reversible
+// sibling of that action, so the same people who can delete can archive.
+function canArchive(){ return canDelete(); }
+// Edit is deliberately narrower than Delete/Archive, per spec: only a
+// Super Admin may change a policy's own fields or checklist items.
+function canEdit(){ return ME && ME.role === "super_admin"; }
 
 async function logActivity(actionType, description){
   try{
@@ -138,8 +169,11 @@ function fmtDate(s){ if(!s) return "—"; try{ return new Date(s).toLocaleDateSt
 function filtered(){
   const q = document.getElementById("q").value.trim().toLowerCase();
   const sec = document.getElementById("fSection").value;
+  const st = document.getElementById("fStatus").value;
   return POLICIES.filter(p => {
     if(sec && p.section !== sec) return false;
+    if(st === "active" && p.archived) return false;
+    if(st === "archived" && !p.archived) return false;
     if(!q) return true;
     return [p.policy_number, p.policy_name, p.unit_name].some(v => (v || "").toLowerCase().includes(q));
   });
@@ -160,6 +194,7 @@ function render(){
       "<td>" + esc(p.section || "—") + "</td>" +
       "<td style='text-align:center;'>" + esc(p.pm_next_days) + "</td>" +
       "<td><span class='pill'>" + items.length + "</span></td>" +
+      "<td>" + (p.archived ? "<span class='pill bad'>Archived</span>" : "<span class='pill ok'>Active</span>") + "</td>" +
       "<td>" + esc(p.created_by || "—") + "</td>" +
       "<td>" + fmtDate(p.created_at) + "</td>" +
       "<td class='no-print' onclick='event.stopPropagation();'>" +
@@ -187,9 +222,11 @@ function openDetail(id){
       metaCell("Branch", p.section || "—") +
       metaCell("PM Next (days)", p.pm_next_days) +
       metaCell("Checklist Items", items.length) +
+      metaCell("Status", p.archived ? "Archived" : "Active") +
       metaCell("Created By", p.created_by || "—") +
       metaCell("Created", fmtDate(p.created_at)) +
     "</div>" +
+    (p.archived ? "<div class='desc-box' style='border-color:var(--bad);'><b>Archived" + (p.archived_by?" by "+esc(p.archived_by):"") + (p.archived_at?" on "+fmtDate(p.archived_at):"") + ".</b> Hidden from the active policy list and no longer selectable in Initiate Policy. Existing PM jobs against it are unaffected.</div>" : "") +
     (p.description ? "<div class='desc-box'><b>Description:</b> " + esc(p.description) + "</div>" : "") +
     "<div class='sec-label'>Checklist</div>" +
     (items.length
@@ -199,6 +236,10 @@ function openDetail(id){
       : "<div class='empty'>No checklist items recorded for this policy.</div>");
 
   document.getElementById("detailDelete").style.display = canDelete() ? "" : "none";
+  document.getElementById("detailEdit").style.display = canEdit() ? "" : "none";
+  const archBtn = document.getElementById("detailArchive");
+  archBtn.style.display = canArchive() ? "" : "none";
+  archBtn.textContent = p.archived ? "Unarchive" : "Archive";
   document.getElementById("listView").style.display = "none";
   document.getElementById("detailView").style.display = "block";
   document.getElementById("topBack").textContent = "← Back to Dashboard";
@@ -239,6 +280,177 @@ async function delFromDetail(){
   if(!p) return;
   await del(p.id, p.policy_number);
   backToList();
+}
+
+// ---- Archive / Unarchive (reversible; does not touch checklist items or past PM jobs) ----
+async function toggleArchive(){
+  if(!canArchive()) return;
+  const p = POLICIES.find(x => String(x.id) === String(CURRENT_ID));
+  if(!p) return;
+  const next = !p.archived;
+  const verb = next ? "Archive" : "Unarchive";
+  const warn = next
+    ? "It will be hidden from the active policy list and can no longer be selected in Initiate Policy. Existing PM jobs already using it are unaffected, and this can be undone at any time."
+    : "It will reappear in the active policy list and become selectable again in Initiate Policy.";
+  if(!confirm(verb + " policy " + p.policy_number + "? " + warn)) return;
+  try{
+    const { error } = await sb.from("pm_policies").update({
+      archived: next,
+      archived_at: next ? new Date().toISOString() : null,
+      archived_by: next ? ME.username : null
+    }).eq("id", p.id);
+    if(error) throw error;
+    await logActivity("pm_policy_" + verb.toLowerCase(), verb + "d PM policy " + p.policy_number + ".");
+    await load();
+    openDetail(p.id);
+  }catch(e){
+    alert("Could not " + verb.toLowerCase() + ": " + (e.message || e));
+  }
+}
+
+// ---- Edit (Super Admin only) ----
+// Units come from the same "Technical department" lookup add-policy.html
+// uses, loaded only when Edit is actually opened — no need to pay for it
+// on every page view.
+async function loadUnitsForEdit(){
+  const { data: depts, error: dErr } = await sb.from("departments").select("id, name, section");
+  if(dErr) throw dErr;
+  const techDepts = (depts || []).filter(d => (d.name || "").trim().toLowerCase() === "technical");
+  const deptSection = {}; techDepts.forEach(d => deptSection[d.id] = d.section);
+  const ids = techDepts.map(d => d.id);
+  UNITS = [];
+  if(ids.length){
+    const { data: units, error: uErr } = await sb.from("units").select("id, name, department_id").in("department_id", ids).order("name");
+    if(uErr) throw uErr;
+    UNITS = (units || []).map(u => ({ id: u.id, name: u.name, department_id: u.department_id, section: deptSection[u.department_id] || "" }));
+  }
+}
+
+async function enterEditMode(){
+  if(!canEdit()) return;
+  const p = POLICIES.find(x => String(x.id) === String(CURRENT_ID));
+  if(!p) return;
+  try{ await loadUnitsForEdit(); }
+  catch(e){ alert("Could not load units: " + (e.message || e)); return; }
+
+  document.getElementById("detailBody").innerHTML = editFormHtml(p);
+  const sel = document.getElementById("e_unit");
+  sel.innerHTML = '<option value="">Select...</option>' + UNITS.map(u =>
+    `<option value="${u.id}"${String(u.id)===String(p.unit_id)?" selected":""}>${esc(u.name)}${u.section?" — "+esc(u.section):""}</option>`
+  ).join("");
+
+  document.getElementById("eClBody").innerHTML = "";
+  const items = ITEMS_BY_POLICY[p.id] || [];
+  if(items.length) items.forEach(it => addEditRow(it.checklist_item));
+  else addEditRow();
+
+  // Hide the view-mode action bar while editing; Cancel/Save replace it.
+  document.getElementById("detailEdit").style.display = "none";
+  document.getElementById("detailArchive").style.display = "none";
+  document.getElementById("detailDelete").style.display = "none";
+}
+
+function editFormHtml(p){
+  return "<div class='detail-bar' style='border:0;margin-bottom:6px;'>" +
+      "<h2 class='detail-title'>Edit Policy — " + esc(p.policy_number) + "</h2></div>" +
+    "<div class='form-row'>" +
+      "<div class='field'><label>Policy Number</label><input type='text' id='e_number' value=\"" + esc(p.policy_number).replace(/"/g,"&quot;") + "\"></div>" +
+      "<div class='field'><label>Policy Name</label><input type='text' id='e_name' value=\"" + esc(p.policy_name).replace(/"/g,"&quot;") + "\"></div>" +
+    "</div>" +
+    "<div class='form-row'>" +
+      "<div class='field'><label>Unit (Technical department)</label><select id='e_unit'><option value=''>Select...</option></select></div>" +
+      "<div class='field'><label>PM Next Day (number of days)</label><input type='number' id='e_days' min='1' step='1' value=\"" + esc(p.pm_next_days) + "\"></div>" +
+    "</div>" +
+    "<div class='field'><label>Description</label><textarea id='e_desc'>" + esc(p.description || "") + "</textarea></div>" +
+    "<div class='cl-head'>" +
+      "<h4>Checklist Items</h4>" +
+      "<button type='button' class='btn-add-row' onclick='addEditRow()'>+ Add checklist item</button>" +
+    "</div>" +
+    "<table class='cl'><thead><tr><th>#</th><th>Checklist Item</th><th></th></tr></thead><tbody id='eClBody'></tbody></table>" +
+    "<div class='actions'>" +
+      "<button class='btn-primary' onclick='saveEdit()'>Save Changes</button>" +
+      "<button class='btn-link' onclick='cancelEdit()'>Cancel</button>" +
+    "</div>" +
+    "<div class='status' id='editStatus' style='display:none;'></div>";
+}
+
+function addEditRow(value){
+  const body = document.getElementById("eClBody");
+  const tr = document.createElement("tr");
+  tr.innerHTML =
+    '<td><span class="row-no"></span></td>' +
+    '<td><input type="text" class="cl-item" placeholder="Describe the checklist step" value="' + (value ? esc(value).replace(/"/g,"&quot;") : "") + '"></td>' +
+    '<td><button type="button" class="btn-rm" title="Remove" onclick="removeEditRow(this)">&times;</button></td>';
+  body.appendChild(tr);
+  renumberEdit();
+}
+function removeEditRow(btn){ const tr = btn.closest("tr"); if(tr) tr.remove(); renumberEdit(); }
+function renumberEdit(){
+  document.querySelectorAll("#eClBody tr").forEach((tr, i) => {
+    const n = tr.querySelector(".row-no"); if(n) n.textContent = (i + 1);
+  });
+}
+
+function cancelEdit(){ openDetail(CURRENT_ID); }
+
+async function saveEdit(){
+  if(!canEdit()) return;
+  const p = POLICIES.find(x => String(x.id) === String(CURRENT_ID));
+  if(!p) return;
+
+  const status = document.getElementById("editStatus");
+  const show = (cls, msg) => { status.style.display = "block"; status.className = "status " + cls; status.textContent = msg; };
+
+  const number = document.getElementById("e_number").value.trim();
+  const name = document.getElementById("e_name").value.trim();
+  const unitId = document.getElementById("e_unit").value;
+  const days = parseInt(document.getElementById("e_days").value, 10);
+  const desc = document.getElementById("e_desc").value.trim();
+  const items = Array.from(document.querySelectorAll("#eClBody .cl-item")).map(i => i.value.trim()).filter(Boolean);
+
+  if(!number) return show("bad", "Enter a Policy Number.");
+  if(!name) return show("bad", "Enter a Policy Name.");
+  if(!unitId) return show("bad", "Select a Unit.");
+  if(!days || days < 1) return show("bad", "Enter PM Next Day as a whole number of days (1 or more).");
+  if(!items.length) return show("bad", "Add at least one checklist item.");
+
+  const unit = UNITS.find(u => String(u.id) === String(unitId));
+
+  show("warn", "Saving...");
+  try{
+    if(number !== p.policy_number){
+      const { data: dup } = await sb.from("pm_policies").select("id").eq("policy_number", number).neq("id", p.id).maybeSingle();
+      if(dup){ return show("bad", "Policy Number \"" + number + "\" already exists. Use a different one."); }
+    }
+
+    const { error: uErr } = await sb.from("pm_policies").update({
+      policy_number: number,
+      policy_name: name,
+      unit_id: unit ? unit.id : null,
+      unit_name: unit ? unit.name : null,
+      department_id: unit ? unit.department_id : null,
+      section: unit ? unit.section : null,
+      pm_next_days: days,
+      description: desc || null,
+      updated_at: new Date().toISOString(),
+      updated_by: ME.username
+    }).eq("id", p.id);
+    if(uErr) throw uErr;
+
+    // Simplest robust way to reconcile the checklist: replace it wholesale,
+    // same approach the app already uses when a policy is deleted (see
+    // del() above) — no need to diff added/removed/reordered rows by hand.
+    await sb.from("pm_policy_items").delete().eq("policy_id", p.id);
+    const rows = items.map((text, idx) => ({ policy_id: p.id, item_no: idx + 1, checklist_item: text }));
+    const { error: iErr } = await sb.from("pm_policy_items").insert(rows);
+    if(iErr) throw iErr;
+
+    await logActivity("pm_policy_edit", "Edited PM policy " + number + " (" + name + ").");
+    await load();
+    openDetail(p.id);
+  }catch(e){
+    show("bad", "Could not save: " + (e.message || e));
+  }
 }
 
 init();
