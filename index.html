@@ -712,6 +712,10 @@
           const { data: approverScopes } = await sb.from("overtime_step_approvers").select("section, step").eq("employee_id", emp.id);
           (approverScopes||[]).forEach(s=>{
             if(s.step === 3) MY_ALLOWED_PATHS.add("overtime/overtime-step3-approval");
+            // Step 4 was previously only ever granted via initiator status
+            // (see above) — an explicit Step 4 assignment made in Approver
+            // Setup was silently never checked here, so it had no effect.
+            if(s.step === 4) MY_ALLOWED_PATHS.add("overtime/overtime-step4-review");
             if(s.step === 5) MY_ALLOWED_PATHS.add("overtime/overtime-step5-disbursement");
             if(s.step === 6) MY_ALLOWED_PATHS.add("overtime/overtime-step6-ed1");
           });
@@ -751,24 +755,28 @@
   }
 
   // ---- Dashboard landing ----
-  // Dashboards are Admin/Super Admin only — a plain "user" account never
-  // gets the Branch/Dashboard toolbar or any dashboard content, no matter
-  // what's ticked in assigned_pages or page_sections. This is a role
-  // check, not a page-assignment one, so it can't be worked around by
-  // ticking a dashboard for a User in Manage Role.
+  // UPDATED: Dashboards used to be Admin/Super Admin only, regardless of
+  // what Manage Role had ticked for a "user" account — a deliberate role
+  // check, separate from page assignment. That's been removed: a "user"
+  // now sees exactly the dashboards actually assigned to them via
+  // assigned_pages, the same as every other role, using the exact same
+  // Branch/Dashboard toolbar. Someone with zero dashboards assigned still
+  // correctly falls through to the "no dashboards" empty state below —
+  // nothing changes for them.
+  //
+  // ROLLBACK: to restore the old "user accounts never see dashboards"
+  // behavior, reinstate this block at the top of the function:
+  //   if(ME.role === "user"){
+  //     document.querySelector("#dashLanding .dash-toolbar").style.display = "none";
+  //     document.getElementById("dashFrame").style.display = "none";
+  //     const empty = document.getElementById("dashEmpty");
+  //     empty.style.display = "block";
+  //     empty.querySelector("h2").textContent = "Welcome to the Rumbu Production Reporting System";
+  //     empty.querySelector("p").textContent = "Open a module from the sidebar to get started.";
+  //     applySidebarForBranch(null);
+  //     return;
+  //   }
   function initDashboardLanding(){
-    if(ME.role === "user"){
-      document.querySelector("#dashLanding .dash-toolbar").style.display = "none";
-      document.getElementById("dashFrame").style.display = "none";
-      const empty = document.getElementById("dashEmpty");
-      empty.style.display = "block";
-      empty.querySelector("h2").textContent = "Welcome to the Rumbu Production Reporting System";
-      empty.querySelector("p").textContent = "Open a module from the sidebar to get started.";
-      // Still filter the sidebar itself by MY_ALLOWED_PATHS — skipping the
-      // Dashboard toolbar above must not skip sidebar filtering too.
-      applySidebarForBranch(null);
-      return;
-    }
     const branchSel = document.getElementById("dashBranch");
     branchSel.innerHTML = MY_BRANCHES.map(b=>`<option value="${b.name}">${b.name}</option>`).join("");
     if(!MY_BRANCHES.length){
@@ -817,8 +825,12 @@
   // below (or rename the calls), and branch-gated Dashboards return exactly
   // as they were. BRANCH_PATHS/page_sections are still computed above,
   // untouched, so the legacy path keeps working immediately.
+  // UPDATED: no longer excludes "user" role — see initDashboardLanding()
+  // above for the full explanation. Dashboard visibility is purely
+  // MY_ALLOWED_PATHS now, for every role including "user".
+  // ROLLBACK: reinstate `if(ME.role === "user") return [];` as the first
+  // line of this function to restore the old behavior.
   function dashboardsForBranch(branchName){
-    if(ME.role === "user") return []; // Dashboards are Admin/Super Admin only
     return ALL_DASHBOARDS.filter(d => MY_ALLOWED_PATHS.has(d.module_path));
   }
 
