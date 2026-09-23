@@ -50,7 +50,7 @@
 
 <div class="card-panel">
   <h3>My PM Checklists</h3>
-  <p class="sub" id="whoSub">Preventive-maintenance jobs assigned to you. Mark each item Good or Bad, add a remark if needed, then submit.</p>
+  <p class="sub" id="whoSub">Preventive-maintenance jobs assigned to you. Mark each item Good or Bad, add a quantity if needed, then submit — there's also a single Remarks box for the PM visit as a whole.</p>
   <div id="pendingWrap"></div>
   <div class="empty" id="emptyMsg" style="display:none;">You have no PM checklists to fill right now.</div>
 </div>
@@ -65,7 +65,7 @@
 <script>
 let ME = null;
 let MY_EMP = null;      // { id, full_name } of the logged-in specialist
-let IS_ADMIN = false;   // Admin/Super Admin oversight (sees and can fill every specialist's jobs); a plain User only ever sees and fills their own
+let IS_ADMIN = false;   // super_admin oversight (sees all)
 let JOBS = [];          // pm_initiations rows in scope
 let ITEMS = {};         // { initiation_id: [ {id,item_no,checklist_item,result,remark} ] }
 let OPEN = new Set();
@@ -84,17 +84,17 @@ async function init(){
   try{
     ME = await requireAuth("../../login.html");
     if(!ME) return;
-    IS_ADMIN = (ME.role === "admin" || ME.role === "super_admin");
+    IS_ADMIN = (ME.role === "super_admin");
 
     // Which employee is this login? Needed to show only their jobs.
     const { data: emp } = await sb.from("employees").select("id, full_name").eq("linked_profile_id", ME.id).maybeSingle();
     MY_EMP = emp || null;
 
     if(IS_ADMIN){
-      document.getElementById("whoSub").textContent = "Admin: you can view and fill any specialist's PM checklist.";
+      document.getElementById("whoSub").textContent = "Super Admin: you can view and fill any specialist's PM checklist.";
     }else if(!MY_EMP){
       document.getElementById("connStatus").style.color = "var(--warn)";
-      status.textContent = "Your login is not linked to an employee record yet, so no PM jobs can be shown. Ask your Admin or Super Admin to link your account in Manage Accounts.";
+      status.textContent = "Your login is not linked to an employee record yet, so no PM jobs can be shown. Ask a Super Admin to link your account in Manage Accounts.";
     }
 
     await load();
@@ -150,10 +150,10 @@ function render(){
   pw.innerHTML = pend.map(j => {
     const items = ITEMS[j.id] || [];
     const open = OPEN.has(j.id);
-    const editable = true; // the assigned specialist fills their own; an Admin or Super Admin can fill any
+    const editable = true; // the assigned specialist fills their own; a Super Admin can fill any
     let body = "";
     if(editable){
-      body = "<table class='cl'><thead><tr><th>#</th><th>Checklist Item</th><th>Result</th><th>Remark</th></tr></thead><tbody>" +
+      body = "<table class='cl'><thead><tr><th>#</th><th>Checklist Item</th><th>Result</th><th>Quantity</th></tr></thead><tbody>" +
         items.map(it =>
           "<tr>" +
           "<td>" + it.item_no + "</td>" +
@@ -162,10 +162,12 @@ function render(){
             "<label class='good' data-for='" + it.id + "'><input type='radio' name='r_" + it.id + "' value='Good' onchange='markSel(this)'> Good</label>" +
             "<label class='bad' data-for='" + it.id + "'><input type='radio' name='r_" + it.id + "' value='Bad' onchange='markSel(this)'> Bad</label>" +
           "</span></td>" +
-          "<td><input type='text' class='rmk' id='rmk_" + it.id + "' placeholder='Optional note'></td>" +
+          "<td><input type='text' class='rmk' id='rmk_" + it.id + "' placeholder='Optional quantity'></td>" +
           "</tr>"
         ).join("") +
         "</tbody></table>" +
+        "<div class='field' style='margin-top:14px;'><label>Remarks for this PM (optional)</label>" +
+        "<textarea id='jobRmk_" + j.id + "' placeholder='General notes about this PM visit as a whole...'></textarea></div>" +
         "<div class='job-actions'><button class='btn-primary' onclick='submitJob(" + j.id + ")'>Submit Checklist</button>" +
         "<span class='status' id='st_" + j.id + "' style='display:none;'></span></div>";
     }else{
@@ -181,12 +183,13 @@ function render(){
     const open = OPEN.has(j.id);
     return "<div class='job" + (open ? " open" : "") + "' id='job_" + j.id + "'>" + jobHeadHtml(j) +
       "<div class='job-body'>" + readonlyItems(ITEMS[j.id] || []) +
+      (j.overall_remark ? "<div class='ro' style='margin-top:8px;'><b>Remarks:</b> " + esc(j.overall_remark) + "</div>" : "") +
       "<div class='ro' style='margin-top:8px;color:var(--muted);'>Filled by <b>" + esc(j.filled_by || "—") + "</b> on " + fmtDate(j.completed_at) + "</div></div></div>";
   }).join("");
 }
 
 function readonlyItems(items){
-  return "<table class='cl'><thead><tr><th>#</th><th>Checklist Item</th><th>Result</th><th>Remark</th></tr></thead><tbody>" +
+  return "<table class='cl'><thead><tr><th>#</th><th>Checklist Item</th><th>Result</th><th>Quantity</th></tr></thead><tbody>" +
     items.map(it =>
       "<tr><td>" + it.item_no + "</td><td>" + esc(it.checklist_item) + "</td>" +
       "<td class='ro'>" + (it.result === "Good" ? "<span class='res-good'>Good</span>" : (it.result === "Bad" ? "<span class='res-bad'>Bad</span>" : "—")) + "</td>" +
@@ -223,7 +226,13 @@ async function submitJob(jobId){
       const { error } = await sb.from("pm_initiation_items").update({ result: u.result, remark: u.remark }).eq("id", u.id);
       if(error) throw error;
     }
-    const { error: jErr } = await sb.from("pm_initiations").update({ status: "Completed", completed_at: new Date().toISOString(), filled_by: ME.username }).eq("id", jobId);
+    const overallRemark = (document.getElementById("jobRmk_" + jobId) || {}).value || "";
+    const { error: jErr } = await sb.from("pm_initiations").update({
+      status: "Completed",
+      completed_at: new Date().toISOString(),
+      filled_by: ME.username,
+      overall_remark: overallRemark.trim() || null
+    }).eq("id", jobId);
     if(jErr) throw jErr;
 
     const job = JOBS.find(j => j.id === jobId);
