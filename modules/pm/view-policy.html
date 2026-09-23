@@ -153,7 +153,7 @@ async function load(){
   POLICIES = pols || [];
 
   ITEMS_BY_POLICY = {};
-  const { data: items, error: iErr } = await sb.from("pm_policy_items").select("policy_id, item_no, checklist_item").order("item_no");
+  const { data: items, error: iErr } = await sb.from("pm_policy_items").select("policy_id, item_no, item_name, checklist_item").order("item_no");
   if(iErr) throw iErr;
   (items || []).forEach(it => { (ITEMS_BY_POLICY[it.policy_id] = ITEMS_BY_POLICY[it.policy_id] || []).push(it); });
 
@@ -230,8 +230,8 @@ function openDetail(id){
     (p.description ? "<div class='desc-box'><b>Description:</b> " + esc(p.description) + "</div>" : "") +
     "<div class='sec-label'>Checklist</div>" +
     (items.length
-      ? "<div class='table-wrap'><div class='table-scroll'><table><thead><tr><th style='width:60px;'>#</th><th>Checklist Item</th></tr></thead><tbody>" +
-        items.map(it => "<tr><td style='text-align:center;'><b>" + esc(it.item_no) + "</b></td><td>" + esc(it.checklist_item) + "</td></tr>").join("") +
+      ? "<div class='table-wrap'><div class='table-scroll'><table><thead><tr><th style='width:60px;'>#</th><th style='width:180px;'>Item</th><th>Description</th></tr></thead><tbody>" +
+        items.map(it => "<tr><td style='text-align:center;'><b>" + esc(it.item_no) + "</b></td><td>" + esc(it.item_name || "—") + "</td><td>" + esc(it.checklist_item) + "</td></tr>").join("") +
         "</tbody></table></div></div>"
       : "<div class='empty'>No checklist items recorded for this policy.</div>");
 
@@ -341,7 +341,7 @@ async function enterEditMode(){
 
   document.getElementById("eClBody").innerHTML = "";
   const items = ITEMS_BY_POLICY[p.id] || [];
-  if(items.length) items.forEach(it => addEditRow(it.checklist_item));
+  if(items.length) items.forEach(it => addEditRow(it.item_name, it.checklist_item));
   else addEditRow();
 
   // Hide the view-mode action bar while editing; Cancel/Save replace it.
@@ -366,7 +366,7 @@ function editFormHtml(p){
       "<h4>Checklist Items</h4>" +
       "<button type='button' class='btn-add-row' onclick='addEditRow()'>+ Add checklist item</button>" +
     "</div>" +
-    "<table class='cl'><thead><tr><th>#</th><th>Checklist Item</th><th></th></tr></thead><tbody id='eClBody'></tbody></table>" +
+    "<table class='cl'><thead><tr><th>#</th><th style='width:180px;'>Item</th><th>Description</th><th></th></tr></thead><tbody id='eClBody'></tbody></table>" +
     "<div class='actions'>" +
       "<button class='btn-primary' onclick='saveEdit()'>Save Changes</button>" +
       "<button class='btn-link' onclick='cancelEdit()'>Cancel</button>" +
@@ -374,12 +374,13 @@ function editFormHtml(p){
     "<div class='status' id='editStatus' style='display:none;'></div>";
 }
 
-function addEditRow(value){
+function addEditRow(itemVal, descVal){
   const body = document.getElementById("eClBody");
   const tr = document.createElement("tr");
   tr.innerHTML =
     '<td><span class="row-no"></span></td>' +
-    '<td><input type="text" class="cl-item" placeholder="Describe the checklist step" value="' + (value ? esc(value).replace(/"/g,"&quot;") : "") + '"></td>' +
+    '<td><input type="text" class="cl-itemname" placeholder="e.g. Belt tension" value="' + (itemVal ? esc(itemVal).replace(/"/g,"&quot;") : "") + '"></td>' +
+    '<td><input type="text" class="cl-item" placeholder="Describe the checklist step" value="' + (descVal ? esc(descVal).replace(/"/g,"&quot;") : "") + '"></td>' +
     '<td><button type="button" class="btn-rm" title="Remove" onclick="removeEditRow(this)">&times;</button></td>';
   body.appendChild(tr);
   renumberEdit();
@@ -406,7 +407,10 @@ async function saveEdit(){
   const unitId = document.getElementById("e_unit").value;
   const days = parseInt(document.getElementById("e_days").value, 10);
   const desc = document.getElementById("e_desc").value.trim();
-  const items = Array.from(document.querySelectorAll("#eClBody .cl-item")).map(i => i.value.trim()).filter(Boolean);
+  const items = Array.from(document.querySelectorAll("#eClBody tr")).map(tr => ({
+    item_name: (tr.querySelector(".cl-itemname") || {}).value ? tr.querySelector(".cl-itemname").value.trim() : "",
+    checklist_item: (tr.querySelector(".cl-item") || {}).value ? tr.querySelector(".cl-item").value.trim() : ""
+  })).filter(it => it.checklist_item);
 
   if(!number) return show("bad", "Enter a Policy Number.");
   if(!name) return show("bad", "Enter a Policy Name.");
@@ -441,7 +445,7 @@ async function saveEdit(){
     // same approach the app already uses when a policy is deleted (see
     // del() above) — no need to diff added/removed/reordered rows by hand.
     await sb.from("pm_policy_items").delete().eq("policy_id", p.id);
-    const rows = items.map((text, idx) => ({ policy_id: p.id, item_no: idx + 1, checklist_item: text }));
+    const rows = items.map((it, idx) => ({ policy_id: p.id, item_no: idx + 1, item_name: it.item_name || null, checklist_item: it.checklist_item }));
     const { error: iErr } = await sb.from("pm_policy_items").insert(rows);
     if(iErr) throw iErr;
 
