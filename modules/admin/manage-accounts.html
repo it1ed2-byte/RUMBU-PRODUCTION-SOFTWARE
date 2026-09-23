@@ -65,6 +65,10 @@
   .page-group .checks{padding:8px 10px;margin-top:0;}
   button{margin-top:14px;}
   button.danger{background:var(--bad);} button.ghost{background:var(--bg);color:var(--heading);border:1px solid var(--line-2);}
+  .pw-wrap{position:relative;}
+  .pw-wrap input{padding-right:58px;}
+  .pw-toggle{position:absolute;right:5px;top:50%;transform:translateY(-50%);width:auto;margin:0;padding:6px 8px;background:none;color:var(--accent-2);border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;}
+  .pw-toggle:hover{background:var(--bg);}
   table{margin-top:12px;}
   .badge{display:inline-block;background:var(--accent);color:var(--logo-fg);padding:3px 8px;border-radius:5px;font-size:11px;font-weight:700;}
   .search-result-row{padding:8px 10px;border:1px solid var(--line);border-radius:6px;margin-top:4px;cursor:pointer;background:var(--card);}
@@ -160,7 +164,7 @@
       <div class="status" id="new_emp_dup_warn" style="display:none;color:var(--warn);font-size:12.5px;margin:-6px 0 8px;"></div>
       <div class="form-row">
         <div class="field"><label>Email</label><input id="new_emp_email" type="email" placeholder="name@example.com"></div>
-        <div class="field"><label>Phone Number *</label><input id="new_emp_phone" type="tel" placeholder="e.g. 08012345678"></div>
+        <div class="field"><label>Phone Number</label><input id="new_emp_phone" type="tel" placeholder="e.g. 08012345678"></div>
       </div>
       <div class="form-row">
         <div class="field"><label>Branch *</label>
@@ -330,7 +334,7 @@
     <div class="status" id="admin_new_emp_dup_warn" style="display:none;color:var(--warn);font-size:12.5px;margin:-6px 0 8px;"></div>
     <div class="form-row">
       <div class="field"><label>Email</label><input id="admin_new_emp_email" type="email" placeholder="name@example.com"></div>
-      <div class="field"><label>Phone Number *</label><input id="admin_new_emp_phone" type="tel" placeholder="e.g. 08012345678"></div>
+      <div class="field"><label>Phone Number</label><input id="admin_new_emp_phone" type="tel" placeholder="e.g. 08012345678"></div>
     </div>
     <div class="form-row">
       <div class="field"><label>Branch *</label>
@@ -427,11 +431,11 @@
 <div class="details-body">
   <p class="sub">For your security, enter your current password before setting a new one.</p>
   <div class="form-row">
-    <div class="field"><label>Current Password</label><input id="current_password" type="password" autocomplete="current-password" placeholder="Your current password"></div>
+    <div class="field"><label>Current Password</label><div class="pw-wrap"><input id="current_password" type="password" autocomplete="current-password" placeholder="Your current password"><button type="button" class="pw-toggle" onclick="togglePasswordField('current_password', this)">Show</button></div></div>
   </div>
   <div class="form-row">
-    <div class="field"><label>New Password</label><input id="new_password" type="password" autocomplete="new-password" placeholder="New password (at least 6 characters)"></div>
-    <div class="field"><label>Confirm New Password</label><input id="confirm_password" type="password" autocomplete="new-password" placeholder="Repeat new password"></div>
+    <div class="field"><label>New Password</label><div class="pw-wrap"><input id="new_password" type="password" autocomplete="new-password" placeholder="New password (at least 6 characters)"><button type="button" class="pw-toggle" onclick="togglePasswordField('new_password', this)">Show</button></div></div>
+    <div class="field"><label>Confirm New Password</label><div class="pw-wrap"><input id="confirm_password" type="password" autocomplete="new-password" placeholder="Repeat new password"><button type="button" class="pw-toggle" onclick="togglePasswordField('confirm_password', this)">Show</button></div></div>
   </div>
   <button onclick="changeMyPassword()">UPDATE PASSWORD</button>
   <div class="status" id="pw_status"></div>
@@ -1887,7 +1891,6 @@ async function addEmployee(){
 
   if(!employeeId){ status.className="status err"; status.textContent="Employee ID is required."; return; }
   if(!fullName){ status.className="status err"; status.textContent="Full Name is required."; return; }
-  if(!phone){ status.className="status err"; status.textContent="Phone Number is required."; return; }
   if(email && !/^\S+@\S+\.\S+$/.test(email)){ status.className="status err"; status.textContent="Enter a valid email address, or leave it blank."; return; }
   if(!branch){ status.className="status err"; status.textContent="Select a Branch."; return; }
   if(!deptName){ status.className="status err"; status.textContent="Select a Department."; return; }
@@ -1905,21 +1908,8 @@ async function addEmployee(){
       if(salErr) throw new Error("Employee was created, but salary could not be saved: " + salErr.message);
     }
 
+    status.className = "status ok"; status.textContent = "✅ Employee added.";
     await logActivity("employee_added", ME.username + " added employee \"" + fullName + "\" (" + employeeId + ")");
-
-    // New employees get a working login immediately — same credentials
-    // (username = Employee ID, temporary password = TEMP_ACCESS_PASSWORD)
-    // as the manual "Grant Access" flow, just without the separate step.
-    let accessNote = "";
-    try{
-      await _doGrantAccess({ id: inserted.id, employee_id: employeeId, full_name: fullName });
-      await logActivity("access_granted", ME.username + " (auto) granted access to \"" + fullName + "\" (" + employeeId + ") - username " + employeeId);
-      accessNote = " Username " + employeeId + ", temporary password " + TEMP_ACCESS_PASSWORD + " (they must change it on first login).";
-    }catch(grantErr){
-      accessNote = " ⚠️ Employee record saved, but automatic access grant failed (" + (grantErr.message||grantErr) + ") — grant access manually from their profile.";
-    }
-
-    status.className = "status ok"; status.textContent = "✅ Employee added." + accessNote;
 
     document.getElementById("new_emp_dup_warn").style.display = "none";
     ["new_emp_employee_id","new_emp_full_name","new_emp_rank","new_emp_salary","new_emp_email","new_emp_phone","new_emp_bank_name","new_emp_bank_account_number","new_emp_sort_code"].forEach(id=>document.getElementById(id).value="");
@@ -1963,7 +1953,6 @@ async function addEmployeeAsAdmin(){
 
   if(!employeeId){ status.className="status err"; status.textContent="Employee ID is required."; return; }
   if(!fullName){ status.className="status err"; status.textContent="Full Name is required."; return; }
-  if(!phone){ status.className="status err"; status.textContent="Phone Number is required."; return; }
   if(email && !/^\S+@\S+\.\S+$/.test(email)){ status.className="status err"; status.textContent="Enter a valid email address, or leave it blank."; return; }
   if(!branch || !(ME.sectionNames||[]).includes(branch)){
     status.className="status err"; status.textContent="Select one of your assigned Branch(es).";
@@ -1973,24 +1962,14 @@ async function addEmployeeAsAdmin(){
 
   status.className = "status"; status.textContent = "Adding...";
   try{
-    const { data: inserted, error } = await sb.from("employees").insert({
+    const { error } = await sb.from("employees").insert({
       employee_id: employeeId, full_name: fullName, branch, department: deptName, unit: unitName, rank,
       email, phone, bank_name: bankName, bank_account_number: bankAccountNumber, sort_code: sortCode
-    }).select("id").single();
+    });
     if(error) throw error;
 
+    status.className = "status ok"; status.textContent = "✅ Employee added.";
     await logActivity("employee_added", ME.username + " added employee \"" + fullName + "\" (" + employeeId + ")");
-
-    let accessNote = "";
-    try{
-      await _doGrantAccess({ id: inserted.id, employee_id: employeeId, full_name: fullName });
-      await logActivity("access_granted", ME.username + " (auto) granted access to \"" + fullName + "\" (" + employeeId + ") - username " + employeeId);
-      accessNote = " Username " + employeeId + ", temporary password " + TEMP_ACCESS_PASSWORD + " (they must change it on first login).";
-    }catch(grantErr){
-      accessNote = " ⚠️ Employee record saved, but automatic access grant failed (" + (grantErr.message||grantErr) + ") — grant access manually from their profile.";
-    }
-
-    status.className = "status ok"; status.textContent = "✅ Employee added." + accessNote;
 
     document.getElementById("admin_new_emp_dup_warn").style.display = "none";
     ["admin_new_emp_employee_id","admin_new_emp_full_name","admin_new_emp_rank","admin_new_emp_email","admin_new_emp_phone","admin_new_emp_bank_name","admin_new_emp_bank_account_number","admin_new_emp_sort_code"].forEach(id=>document.getElementById(id).value="");
@@ -2024,19 +2003,16 @@ function renderEmployeeDirectory(){
   const rows = getSuperFilteredRows();
 
   let html = "<p class='sub' style='margin:0 0 8px;'>Click a row to open the full staff profile.</p>";
-  html += "<table><tr><th>ID</th><th>Name</th><th>Email</th><th>Access</th><th style='width:120px;'>Actions</th></tr>";
+  html += "<table><tr><th>ID</th><th>Name</th><th>Email</th><th>Access</th></tr>";
   rows.forEach(e=>{
     const accessCell = e.has_system_access
       ? "<span class=\"badge\">" + esc(e.linked_role || "access") + "</span>"
       : "<span style=\"color:var(--muted);\">No access</span>";
-    const editBtn = "<button class=\"ghost\" style=\"padding:3px 9px;font-size:11px;margin-right:4px;\" onclick=\"event.stopPropagation();enterEmployeeEditMode(" + e.id + ")\">Edit</button>";
-    const delBtn  = "<button class=\"ghost\" style=\"padding:3px 9px;font-size:11px;color:var(--bad,#c0392b);border-color:var(--bad,#c0392b);\" onclick=\"event.stopPropagation();deleteEmployeeRecord(" + e.id + ")\">Delete</button>";
     html += "<tr style=\"cursor:pointer;\" onclick=\"openEmployeeDetail(" + e.id + ")\">" +
       "<td>" + esc(e.employee_id) + "</td>" +
       "<td>" + esc(e.full_name) + "</td>" +
       "<td>" + (e.email ? esc(e.email) : "<span style=\"color:var(--muted);\">—</span>") + "</td>" +
-      "<td>" + accessCell + "</td>" +
-      "<td style=\"white-space:nowrap;\">" + editBtn + delBtn + "</td></tr>";
+      "<td>" + accessCell + "</td></tr>";
   });
   html += "</table>";
   wrap.innerHTML = rows.length ? html : "<p class='sub'>No employees match.</p>";
@@ -2056,19 +2032,16 @@ function renderAdminEmployeeDirectory(){
   const rows = getAdminFilteredRows();
 
   let html = "<p class='sub' style='margin:0 0 8px;'>Click a row to open the full staff profile.</p>";
-  html += "<table><tr><th>ID</th><th>Name</th><th>Email</th><th>Access</th><th style='width:120px;'>Actions</th></tr>";
+  html += "<table><tr><th>ID</th><th>Name</th><th>Email</th><th>Access</th></tr>";
   rows.forEach(e=>{
     const accessCell = e.has_system_access
       ? "<span class=\"badge\">" + esc(e.linked_role || "access") + "</span>"
       : "<span style=\"color:var(--muted);\">No access</span>";
-    const editBtn = ME_IS_HR ? "<button class=\"ghost\" style=\"padding:3px 9px;font-size:11px;margin-right:4px;\" onclick=\"event.stopPropagation();enterEmployeeEditMode(" + e.id + ")\">Edit</button>" : "";
-    const delBtn  = ME_IS_HR ? "<button class=\"ghost\" style=\"padding:3px 9px;font-size:11px;color:var(--bad,#c0392b);border-color:var(--bad,#c0392b);\" onclick=\"event.stopPropagation();deleteEmployeeRecord(" + e.id + ")\">Delete</button>" : "";
     html += "<tr style=\"cursor:pointer;\" onclick=\"openEmployeeDetail(" + e.id + ")\">" +
       "<td>" + esc(e.employee_id) + "</td>" +
       "<td>" + esc(e.full_name) + "</td>" +
       "<td>" + (e.email ? esc(e.email) : "<span style=\"color:var(--muted);\">—</span>") + "</td>" +
-      "<td>" + accessCell + "</td>" +
-      "<td style=\"white-space:nowrap;\">" + editBtn + delBtn + "</td></tr>";
+      "<td>" + accessCell + "</td></tr>";
   });
   html += "</table>";
   wrap.innerHTML = rows.length ? html : "<p class='sub'>No employees match in your Branch(es).</p>";
@@ -2088,6 +2061,16 @@ function esc(s){
   return String(s)
     .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
     .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+}
+
+// Shared show/hide toggle for any password-type field: swaps the input's
+// type between password and text and updates the button's own label.
+function togglePasswordField(inputId, btn){
+  const input = document.getElementById(inputId);
+  if(!input) return;
+  const showing = input.type === "text";
+  input.type = showing ? "password" : "text";
+  btn.textContent = showing ? "Show" : "Hide";
 }
 
 // The directory the current role actually uses.
@@ -2408,35 +2391,6 @@ window.closeEmployeeDetail = closeEmployeeDetail;
 window.enterEmployeeEditMode = enterEmployeeEditMode;
 window.saveEmployeeDetails = saveEmployeeDetails;
 window.onEditBranchChange = onEditBranchChange;
-
-// =========================================================
-// DELETE EMPLOYEE — gated on canManageStaff (Super Admin, or Admin who
-// is HR Admin for the employee's Branch). Requires confirmation.
-// Removes the record from the employees table permanently.
-// =========================================================
-async function deleteEmployeeRecord(empId){
-  const e = EMPLOYEES.find(x=>x.id === empId);
-  if(!e) return;
-  const isSuperAdmin = ME.role === "super_admin";
-  const isAdminHR    = ME.role === "admin" && ME_IS_HR;
-  if(!isSuperAdmin && !isAdminHR){
-    alert("Deleting employee records is limited to Super Admin or HR Admin for this Branch.");
-    return;
-  }
-  const confirmed = confirm("Delete employee \"" + e.full_name + "\" (" + e.employee_id + ")?\n\nThis cannot be undone.");
-  if(!confirmed) return;
-  try{
-    const { error } = await sb.from("employees").delete().eq("id", empId);
-    if(error) throw error;
-    await logActivity("employee_deleted", ME.username + " deleted employee \"" + e.full_name + "\" (" + e.employee_id + ") via Manage Accounts");
-    EMPLOYEES = EMPLOYEES.filter(x=>x.id !== empId);
-    if(ME.role === "admin") renderAdminEmployeeDirectory();
-    else renderEmployeeDirectory();
-  }catch(err){
-    alert("❌ Could not delete: " + (err.message || err));
-  }
-}
-window.deleteEmployeeRecord = deleteEmployeeRecord;
 window.onEditDeptChange = onEditDeptChange;
 
 // =========================================================
@@ -3105,32 +3059,12 @@ async function processBulkUpload(prefix, isAdmin){
 
   statusEl.className = "status"; statusEl.textContent = "Uploading " + valid.length + " staff…";
   try{
-    const { data: insertedRows, error } = await sb.from("employees").insert(valid).select("id, employee_id, full_name");
+    const { error } = await sb.from("employees").insert(valid);
     if(error) throw error;
-
-    statusEl.textContent = "Granting system access to " + insertedRows.length + " staff…";
-    let grantedCount = 0;
-    const grantFailures = [];
-    for(const row of insertedRows){
-      try{
-        await _doGrantAccess({ id: row.id, employee_id: row.employee_id, full_name: row.full_name });
-        grantedCount++;
-      }catch(grantErr){
-        grantFailures.push({ id: row.employee_id, reason: grantErr.message || String(grantErr) });
-      }
-    }
-    if(grantedCount) await logActivity("access_granted", ME.username + " (auto, bulk) granted access to " + grantedCount + " staff in " + branch + " / " + department);
-
     statusEl.className = "status ok";
     statusEl.textContent = "✅ Added " + valid.length + " staff to " + branch + " / " + department + (unit ? " / " + unit : "") +
-      ". Access granted to " + grantedCount + " of " + insertedRows.length + " (temporary password " + TEMP_ACCESS_PASSWORD + ", must change on first login)." +
-      (errors.length ? (" " + errors.length + " row(s) were skipped — see below.") : "");
+      (errors.length ? (". " + errors.length + " row(s) were skipped — see below.") : ".");
     renderReport(valid.length);
-    if(grantFailures.length && resultsEl){
-      resultsEl.innerHTML += "<p class=\"sub\" style=\"color:var(--bad);margin:10px 0 4px;\">⚠ These staff were added but automatic access grant failed — grant manually from their profile:</p>" +
-        "<table><tr><th>Employee ID</th><th>Problem</th></tr>" +
-        grantFailures.map(f=>"<tr><td>" + esc(f.id) + "</td><td>" + esc(f.reason) + "</td></tr>").join("") + "</table>";
-    }
     await logActivity("staff_bulk_uploaded", ME.username + " bulk-added " + valid.length + " staff to " + branch + " / " + department + (errors.length ? (" (" + errors.length + " skipped)") : ""));
     document.getElementById(prefix + "_text").value = "";
     const fileInput = document.getElementById(prefix + "_file"); if(fileInput) fileInput.value = "";
@@ -3161,22 +3095,6 @@ const TEMP_ACCESS_PASSWORD = "12345678";
 // login), and links it back to the employee row. Everyone starts as a User;
 // elevate later with Change Role. Works for both Super Admin and Admin - the
 // edge function enforces who may do it server-side.
-// Core access-granting logic, shared by the manual "Grant Access" button
-// (grantAccessToEmployee, below — asks for confirmation first) and the
-// automatic grant that now runs the moment a new employee is created
-// (see addEmployee / addEmployeeAsAdmin) — new hires get a working login
-// immediately, with the standard temporary password, no separate manual
-// step required.
-async function _doGrantAccess(emp){
-  const res = await callEdgeFunction({ action: "create_user", username: emp.employee_id, password: TEMP_ACCESS_PASSWORD });
-  try{
-    const { error: rpcErr } = await sb.rpc("kwp_mark_password_reset", { target_profile_id: res.id });
-    if(rpcErr) console.warn("Could not set must-change-password (account still created):", rpcErr.message);
-  }catch(rpcE){ console.warn("must-change-password RPC failed (non-fatal):", rpcE.message||rpcE); }
-  await callEdgeFunction({ action: "link_employee", employee_id: emp.id, profile_id: res.id });
-  return res;
-}
-
 async function grantAccessToEmployee(empId){
   const emp = EMPLOYEES.find(e=>e.id === empId);
   if(!emp) return;
@@ -3196,7 +3114,14 @@ async function grantAccessToEmployee(empId){
 
   if(status){ status.className = "status"; status.textContent = "Granting access..."; }
   try{
-    await _doGrantAccess(emp);
+    const res = await callEdgeFunction({ action: "create_user", username: emp.employee_id, password: TEMP_ACCESS_PASSWORD });
+    // Force a password change on first login. Same RPC the KWP flow uses.
+    try{
+      const { error: rpcErr } = await sb.rpc("kwp_mark_password_reset", { target_profile_id: res.id });
+      if(rpcErr) console.warn("Could not set must-change-password (account still created):", rpcErr.message);
+    }catch(rpcE){ console.warn("must-change-password RPC failed (non-fatal):", rpcE.message||rpcE); }
+    // Link the account to the employee row (sets linked_profile_id / has_system_access).
+    await callEdgeFunction({ action: "link_employee", employee_id: emp.id, profile_id: res.id });
     await logActivity("access_granted", ME.username + " granted access to \"" + emp.full_name + "\" (" + emp.employee_id + ") - username " + emp.employee_id);
     await loadEmployeeDirectory();
     await loadRoleDropdown(); // refresh MANAGEABLE_IDS — otherwise Manage Role wrongly says this brand-new account "cannot be managed" until a full page reload
