@@ -145,6 +145,9 @@
             <label>Dashboard</label>
             <select id="dashPick" onchange="onDashPickChange()"></select>
           </div>
+          <div class="dash-filter" style="align-self:flex-end;">
+            <button onclick="refreshDashboard()" title="Reload this dashboard's data from the database">⟳ Refresh</button>
+          </div>
         </div>
         <div id="dashEmpty" class="card-panel" style="display:none;">
           <h2>Welcome to the Rumbu Production Reporting System</h2>
@@ -172,6 +175,7 @@
       <div class="m-bar">
         <button class="m-back" onclick="closeModule()" id="moduleBackBtn">&larr; Back to Dashboards</button>
         <span class="m-title" id="moduleName"></span>
+        <button class="m-back" style="margin-left:auto;" onclick="refreshModule()" title="Reload this page's data from the database">⟳ Refresh</button>
       </div>
       <!-- Quick links: every page in the current module, for jumping
            between sibling pages without returning to the sidebar. -->
@@ -511,6 +515,18 @@
     try{
       localStorage.setItem("rumbu_open_module", JSON.stringify({ dept, module, label: label||"", query: query||"" }));
     }catch(e){}
+    // Also persist it to the person's own profile row — localStorage is
+    // scoped to this one browser, which means on a shared/kiosk device a
+    // different person logging in afterward could see whatever the last
+    // person had open. Saving it against the account instead means each
+    // person is always restored to their OWN last page, regardless of
+    // which device they log in from, and never sees someone else's.
+    // Fire-and-forget: this must never block or fail navigation.
+    if(ME && ME.id){
+      sb.from("profiles").update({
+        last_open_module: { dept, module, label: label||"", query: query||"" }
+      }).eq("id", ME.id).then(()=>{}, ()=>{});
+    }
     renderQuickLinks();
     document.getElementById("pickerView").classList.remove("show");
     view.classList.add("show");
@@ -532,17 +548,43 @@
     document.getElementById("appShell").classList.remove("module-open");
     hideFlyout();
     try{ localStorage.removeItem("rumbu_open_module"); }catch(e){}
+    if(ME && ME.id){
+      sb.from("profiles").update({ last_open_module: null }).eq("id", ME.id).then(()=>{}, ()=>{});
+    }
+  }
+
+  // Re-fetch fresh data for whatever is currently on screen, without a
+  // full logout/login round trip. Reloading the iframe re-runs the
+  // page's own init() from scratch, which re-queries the database —
+  // simplest possible "get current data" that works identically across
+  // every module page with zero per-page changes needed.
+  function refreshModule(){
+    const frame = document.getElementById("moduleFrame");
+    try{ frame.contentWindow.location.reload(); }
+    catch(e){ frame.src = frame.src; }
+  }
+  function refreshDashboard(){
+    const frame = document.getElementById("dashFrame");
+    try{ frame.contentWindow.location.reload(); }
+    catch(e){ frame.src = frame.src; }
   }
 
   // Called once, after a successful initAuth(), to reopen whatever module
-  // was on screen before a browser refresh. Restores the SAME PAGE — it
-  // cannot restore unsaved, half-typed form values inside that page (a
-  // refresh always destroys the iframe's in-memory state; that part is
-  // normal browser behavior, same as any website). The module page itself
-  // still re-checks access via requireAuth() on load, so a saved entry for
-  // a module the person no longer has access to just fails there safely,
+  // was on screen before a browser refresh — or, now, whatever this
+  // PERSON last had open, on any device, since their own account (not
+  // just this browser) is where it's actually remembered. The account's
+  // own value (ME.lastOpenModule, loaded by requireAuth()) is always
+  // preferred; localStorage is kept only as a fallback for accounts that
+  // predate this column ever being set. The module page itself still
+  // re-checks access via requireAuth() on load, so a saved entry for a
+  // module the person no longer has access to just fails there safely,
   // same as clicking a stale sidebar link would.
   function restoreOpenModule(){
+    const fromAccount = ME && ME.lastOpenModule;
+    if(fromAccount && fromAccount.dept && fromAccount.module){
+      openModule(null, fromAccount.dept, fromAccount.module, fromAccount.label, fromAccount.query);
+      return;
+    }
     let saved = null;
     try{ saved = JSON.parse(localStorage.getItem("rumbu_open_module") || "null"); }catch(e){}
     if(!saved || !saved.dept || !saved.module) return;

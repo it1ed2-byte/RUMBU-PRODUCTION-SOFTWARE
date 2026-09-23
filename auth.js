@@ -53,7 +53,7 @@ async function requireAuth(loginPath) {
 
   const { data: profile, error: profErr } = await sb
     .from("profiles")
-    .select("id, username, role, super_admin_type, section_id, can_self_manage_todos, must_change_password")
+    .select("id, username, role, super_admin_type, section_id, can_self_manage_todos, must_change_password, last_open_module")
     .eq("id", session.user.id)
     .single();
 
@@ -127,7 +127,8 @@ async function requireAuth(loginPath) {
     sectionNames: sectionNames,
     departmentIds: departmentIds,
     departmentNames: departmentNames,
-    canSelfManageTodos: !!profile.can_self_manage_todos
+    canSelfManageTodos: !!profile.can_self_manage_todos,
+    lastOpenModule: profile.last_open_module || null
   };
 }
 
