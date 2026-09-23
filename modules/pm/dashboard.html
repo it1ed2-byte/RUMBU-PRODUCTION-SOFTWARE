@@ -68,11 +68,19 @@
 <div id="appArea" style="display:none;">
   <div class="toolbar">
     <div class="f min" id="branchWrap" style="display:none;"><label>Branch</label><select id="fBranch" onchange="renderDash()"><option value="">All allowed</option></select></div>
-    <div class="f min"><label>Due-soon window</label><select id="fWindow" onchange="renderDash()">
+    <div class="f min"><label>Due-soon window</label><select id="fWindow" onchange="onWindowChange()">
       <option value="7">Next 7 days</option>
       <option value="14">Next 14 days</option>
       <option value="30" selected>Next 30 days</option>
+      <option value="custom">Custom range...</option>
     </select></div>
+    <div class="f min" id="customRangeWrap" style="display:none;">
+      <label>Due between</label>
+      <div style="display:flex;gap:6px;">
+        <input type="date" id="fFrom" onchange="renderDash()" style="width:132px;">
+        <input type="date" id="fTo" onchange="renderDash()" style="width:132px;">
+      </div>
+    </div>
     <div class="muted" id="asOf" style="margin-left:auto;align-self:center;"></div>
   </div>
 
@@ -140,11 +148,15 @@ async function init(){
 
     const [{ data: jobs, error: jErr }, { data: pols, error: pErr }] = await Promise.all([
       sb.from("pm_initiations").select("*").order("initiated_at", { ascending: false }),
-      sb.from("pm_policies").select("id, policy_number, section, unit_name")
+      sb.from("pm_policies").select("id, policy_number, section, unit_name, archived")
     ]);
     if(jErr) throw jErr; if(pErr) throw pErr;
     ALL_JOBS = (jobs||[]).filter(j => IS_SUPER || ALLOWED.indexOf(j.section) !== -1);
-    ALL_POLS = (pols||[]).filter(p => IS_SUPER || ALLOWED.indexOf(p.section) !== -1);
+    // Archived policies are excluded here — this dashboard reflects the
+    // active PM library, not the historical one. They still show up in
+    // View Policies (with a Show archived filter) and in past pm_report
+    // history, since jobs already initiated against them are untouched.
+    ALL_POLS = (pols||[]).filter(p => !p.archived && (IS_SUPER || ALLOWED.indexOf(p.section) !== -1));
 
     // Items for the most recent completed jobs (for health + issue flags).
     const recentCompleted = ALL_JOBS.filter(j => j.status === "Completed")
@@ -177,16 +189,42 @@ function scopedPols(){
   return b ? ALL_POLS.filter(p => p.section === b) : ALL_POLS;
 }
 
+// Toggles the custom From/To date inputs on and off, and defaults them
+// the first time "Custom range..." is picked so the fields aren't empty.
+function onWindowChange(){
+  const v = document.getElementById("fWindow").value;
+  const isCustom = v === "custom";
+  document.getElementById("customRangeWrap").style.display = isCustom ? "" : "none";
+  if(isCustom){
+    const f = document.getElementById("fFrom"), tt = document.getElementById("fTo");
+    if(!f.value) f.value = todayStr();
+    if(!tt.value) tt.value = addDaysStr(30);
+  }
+  renderDash();
+}
+
 function renderDash(){
   const jobs = scopedJobs();
   const pols = scopedPols();
   const t = todayStr();
-  const win = parseInt(document.getElementById("fWindow").value, 10) || 30;
-  const limit = addDaysStr(win);
+  const winVal = document.getElementById("fWindow").value;
+  const isCustom = winVal === "custom";
+  let win = null, limit, rangeFrom;
+  if(isCustom){
+    // Custom range: "due soon" becomes "due within this explicit window"
+    // instead of "due within N days from today". Overdue stays relative
+    // to today either way — that's a today-relative fact, not a window.
+    rangeFrom = document.getElementById("fFrom").value || t;
+    limit = document.getElementById("fTo").value || addDaysStr(30);
+  } else {
+    win = parseInt(winVal, 10) || 30;
+    rangeFrom = t;
+    limit = addDaysStr(win);
+  }
 
   const pending = jobs.filter(j => j.status !== "Completed");
   const overdue = pending.filter(j => j.due_date && j.due_date < t);
-  const dueSoon = pending.filter(j => j.due_date && j.due_date >= t && j.due_date <= limit);
+  const dueSoon = pending.filter(j => j.due_date && j.due_date >= rangeFrom && j.due_date <= limit);
   const completed = jobs.filter(j => j.status === "Completed");
   const assets = new Set(jobs.map(j => j.asset).filter(Boolean)).size;
 
@@ -197,10 +235,11 @@ function renderDash(){
   const health = evald ? Math.round(good/evald*100) + "%" : "—";
   const healthCls = !evald ? "" : (bad===0 ? "good" : (good/evald >= 0.7 ? "warn" : "bad"));
 
+  const dueLabel = isCustom ? ("Due (" + fmtDate(rangeFrom) + "–" + fmtDate(limit) + ")") : ("Due (≤" + win + "d)");
   document.getElementById("kpis").innerHTML =
     kpi("Policies", pols.length, "defined", "", null) +
     kpi("Active jobs", pending.length, "not completed", "", null) +
-    kpi("Due (≤" + win + "d)", dueSoon.length, "coming due", dueSoon.length?"warn":"", "attnWrap") +
+    kpi(dueLabel, dueSoon.length, "coming due", dueSoon.length?"warn":"", "attnWrap") +
     kpi("Overdue", overdue.length, "past due", overdue.length?"bad":"", "attnWrap") +
     kpi("Completed", completed.length, "checklists done", "good", null) +
     kpi("Assets", assets, "under PM", "", null) +
@@ -258,7 +297,7 @@ function renderDash(){
     if(j.status === "Completed") g.completed++; else {
       g.active++;
       if(j.due_date && j.due_date < t) g.overdue++;
-      else if(j.due_date && j.due_date <= limit) g.due++;
+      else if(j.due_date && j.due_date >= rangeFrom && j.due_date <= limit) g.due++;
     }
     if(j.asset) g.assets.add(j.asset);
   });
@@ -266,7 +305,7 @@ function renderDash(){
   const bw = document.getElementById("branchWrapTbl");
   bw.innerHTML = !brows.length ? "<div class='empty'>No PM jobs yet.</div>" :
     "<div class='table-wrap'><div class='table-scroll'><table class='rep'><thead><tr>" +
-    "<th>Branch</th><th class='num'>Assets</th><th class='num'>Active</th><th class='num'>Due (≤" + win + "d)</th><th class='num'>Overdue</th><th class='num'>Completed</th>" +
+    "<th>Branch</th><th class='num'>Assets</th><th class='num'>Active</th><th class='num'>" + esc(dueLabel) + "</th><th class='num'>Overdue</th><th class='num'>Completed</th>" +
     "</tr></thead><tbody>" +
     brows.map(g => "<tr>" +
       "<td><b>" + esc(g.branch) + "</b></td>" +

@@ -62,7 +62,7 @@
     <button type="button" class="btn-add-row" onclick="addRow()">+ Add checklist item</button>
   </div>
   <table class="cl">
-    <thead><tr><th>#</th><th>Checklist Item</th><th></th></tr></thead>
+    <thead><tr><th>#</th><th style="width:180px;">Item</th><th>Description</th><th></th></tr></thead>
     <tbody id="clBody"></tbody>
   </table>
 
@@ -130,16 +130,20 @@ async function loadTechnicalUnits(){
 }
 
 // ---- Dynamic checklist rows ----
-function addRow(value){
+// Each row now holds two fields: Item (short label, e.g. an equipment
+// part or code — optional) and Description (the actual checklist step,
+// required — same "must have text" rule as before).
+function addRow(itemVal, descVal){
   const body = document.getElementById("clBody");
   const tr = document.createElement("tr");
   tr.innerHTML =
     '<td><span class="row-no"></span></td>' +
-    '<td><input type="text" class="cl-item" placeholder="Describe the checklist step" value="' + (value ? String(value).replace(/"/g,"&quot;") : "") + '"></td>' +
+    '<td><input type="text" class="cl-itemname" placeholder="e.g. Belt tension" value="' + (itemVal ? String(itemVal).replace(/"/g,"&quot;") : "") + '"></td>' +
+    '<td><input type="text" class="cl-item" placeholder="Describe the checklist step" value="' + (descVal ? String(descVal).replace(/"/g,"&quot;") : "") + '"></td>' +
     '<td><button type="button" class="btn-rm" title="Remove" onclick="removeRow(this)">&times;</button></td>';
   body.appendChild(tr);
   renumber();
-  const inp = tr.querySelector(".cl-item"); if(inp) inp.focus();
+  const inp = tr.querySelector(".cl-itemname"); if(inp) inp.focus();
 }
 function removeRow(btn){
   const tr = btn.closest("tr");
@@ -162,8 +166,13 @@ async function submitPolicy(){
   const days = parseInt(document.getElementById("f_days").value, 10);
   const desc = document.getElementById("f_desc").value.trim();
 
-  const items = Array.from(document.querySelectorAll("#clBody .cl-item"))
-    .map(i => i.value.trim()).filter(Boolean);
+  // Description is required per row (same rule as before); Item is an
+  // optional short label. A row only counts if it has a Description —
+  // an Item typed with no Description is dropped, same as a blank row.
+  const items = Array.from(document.querySelectorAll("#clBody tr")).map(tr => ({
+    item_name: (tr.querySelector(".cl-itemname") || {}).value ? tr.querySelector(".cl-itemname").value.trim() : "",
+    checklist_item: (tr.querySelector(".cl-item") || {}).value ? tr.querySelector(".cl-item").value.trim() : ""
+  })).filter(it => it.checklist_item);
 
   if(!number){ return show("bad", "Enter a Policy Number."); }
   if(!name){ return show("bad", "Enter a Policy Name."); }
@@ -192,7 +201,7 @@ async function submitPolicy(){
     }).select("id").single();
     if(pErr) throw pErr;
 
-    const rows = items.map((text, idx) => ({ policy_id: policy.id, item_no: idx + 1, checklist_item: text }));
+    const rows = items.map((it, idx) => ({ policy_id: policy.id, item_no: idx + 1, item_name: it.item_name || null, checklist_item: it.checklist_item }));
     const { error: iErr } = await sb.from("pm_policy_items").insert(rows);
     if(iErr) throw iErr;
 
