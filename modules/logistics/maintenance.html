@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Vehicle Maintenance — Logistics</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme")||"navy"); }catch(e){} })();
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) document.documentElement.setAttribute("data-theme",e.data.rumbuTheme); });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body{padding:18px;}
+  .wrap{max-width:1150px;margin:0 auto;}
+  label{font-size:12px;font-weight:700;display:block;margin:10px 0 4px;color:var(--muted);}
+  input,select,textarea{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);}
+  .form-row-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;}
+  .form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  .form-row-4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;}
+  @media(max-width:760px){ .form-row-3,.form-row,.form-row-4{grid-template-columns:1fr;} }
+  .sec-title{font-weight:700;color:var(--heading);margin:18px 0 8px;padding-bottom:4px;border-bottom:2px solid var(--line);font-size:13px;}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;}
+  th{text-align:left;padding:7px 8px;border-bottom:2px solid var(--line);color:var(--heading);white-space:nowrap;}
+  td{padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top;}
+  .btn-ghost{background:var(--bg);color:var(--heading);border:1px solid var(--line);}
+  .hidden{display:none;}
+  .badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10.5px;font-weight:700;}
+  .b-prev{background:#dbeafe;color:#1e40af;}
+  .b-cur{background:#fee2e2;color:#991b1b;}
+  .b-open{background:#fef3c7;color:#92400e;}
+  .b-done{background:#dcfce7;color:#166534;}
+  .summary-box{background:var(--bg);border-radius:8px;padding:12px 16px;font-size:13px;margin-top:14px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back</button>
+  <div id="connStatus" style="font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);">Loading...</div>
+
+  <div class="card-panel">
+    <h3 style="color:var(--heading);margin:0 0 4px;">Vehicle Maintenance</h3>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 16px;">Log a maintenance job for any vehicle. Logging a new job automatically marks that vehicle "Under Maintenance"; marking a job complete reverts it to "Active" once no other jobs are still open for it.</p>
+
+    <button onclick="toggleForm()" id="toggleFormBtn">+ Log Maintenance</button>
+
+    <div class="hidden" id="formPanel" style="border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin:14px 0;">
+      <h4 style="margin-top:0;">Log Maintenance</h4>
+
+      <div class="form-row">
+        <div><label>Vehicle Category</label>
+          <select id="m_category_filter" onchange="filterVehicleOptions()"><option value="">All Categories</option></select>
+        </div>
+        <div><label>Vehicle *</label>
+          <select id="m_vehicle"><option value="">— Select Vehicle —</option></select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div><label>Maintenance Type *</label>
+          <select id="m_type"><option value="">— Select —</option><option>Preventive</option><option>Curative</option></select>
+        </div>
+        <div><label>Service Date *</label><input type="date" id="m_date"></div>
+      </div>
+      <div><label>Description *</label><textarea id="m_description" rows="3" placeholder="What was done / what needs doing"></textarea></div>
+      <div class="form-row">
+        <div><label>Cost (NGN)</label><input type="number" step="0.01" id="m_cost"></div>
+        <div><label>Receipt Attachment</label><input type="file" id="m_receipt_file"></div>
+      </div>
+
+      <button onclick="saveMaintenance()" style="margin-top:14px;">Log Maintenance</button>
+      <button class="btn-ghost" onclick="toggleForm()">Cancel</button>
+      <div class="status" id="formStatus"></div>
+    </div>
+  </div>
+
+  <div class="card-panel" style="margin-top:16px;">
+    <h3 style="color:var(--heading);margin:0 0 4px;">Open Jobs</h3>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 14px;">Vehicles currently under maintenance — mark a job complete once finished.</p>
+    <div id="openWrap" style="overflow-x:auto;"></div>
+  </div>
+
+  <div class="card-panel" style="margin-top:16px;">
+    <h3 style="color:var(--heading);margin:0 0 14px;">Maintenance Report</h3>
+    <div class="form-row-4">
+      <div><label>Category</label><select id="r_category" onchange="renderReport()"><option value="">All</option></select></div>
+      <div><label>Vehicle</label><select id="r_vehicle" onchange="renderReport()"><option value="">All</option></select></div>
+      <div><label>Type</label><select id="r_type" onchange="renderReport()"><option value="">All</option><option>Preventive</option><option>Curative</option></select></div>
+      <div><label>Status</label><select id="r_status" onchange="renderReport()"><option value="">All</option><option value="open">Open</option><option value="completed">Completed</option></select></div>
+    </div>
+    <div class="form-row" style="margin-top:0;">
+      <div><label>From Date</label><input type="date" id="r_from" onchange="renderReport()"></div>
+      <div><label>To Date</label><input type="date" id="r_to" onchange="renderReport()"></div>
+    </div>
+    <div id="reportWrap" style="overflow-x:auto;margin-top:14px;"></div>
+    <div class="summary-box" id="reportSummary"></div>
+  </div>
+</div>
+
+<script>
+let ME = null;
+let VEHICLES = [];
+let CATEGORIES = [];
+let RECORDS = [];
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+
+    const [{ data: cats }, { data: veh }] = await Promise.all([
+      sb.from("logistics_vehicle_categories").select("*").order("name"),
+      sb.from("logistics_vehicles").select("id,registration_number,category_id,operational_status").order("registration_number")
+    ]);
+    CATEGORIES = cats || [];
+    VEHICLES = veh || [];
+
+    const catOptions = CATEGORIES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("");
+    document.getElementById("m_category_filter").innerHTML = '<option value="">All Categories</option>' + catOptions;
+    document.getElementById("r_category").innerHTML = '<option value="">All</option>' + catOptions;
+    document.getElementById("r_vehicle").innerHTML = '<option value="">All</option>' +
+      VEHICLES.map(v=>`<option value="${v.id}">${v.registration_number}</option>`).join("");
+    filterVehicleOptions();
+
+    await loadRecords();
+    status.style.color="var(--ok)"; status.textContent="Connected.";
+  }catch(e){
+    status.style.color="var(--bad)"; status.textContent="Error: "+e.message;
+  }
+}
+
+function filterVehicleOptions(){
+  const catId = document.getElementById("m_category_filter").value;
+  const matching = catId ? VEHICLES.filter(v=>String(v.category_id)===catId) : VEHICLES;
+  document.getElementById("m_vehicle").innerHTML = '<option value="">— Select Vehicle —</option>' +
+    matching.map(v=>`<option value="${v.id}">${v.registration_number}</option>`).join("");
+}
+
+async function loadRecords(){
+  const { data, error } = await sb.from("logistics_maintenance_records")
+    .select("*, logistics_vehicles(registration_number,category_id)")
+    .order("service_date", { ascending: false });
+  if(error) throw error;
+  RECORDS = data || [];
+  renderOpen();
+  renderReport();
+}
+
+function categoryName(id){
+  const c = CATEGORIES.find(x=>x.id===id);
+  return c ? c.name : "—";
+}
+
+function toggleForm(){
+  const panel = document.getElementById("formPanel");
+  panel.classList.toggle("hidden");
+  if(!panel.classList.contains("hidden")) clearForm();
+}
+
+function clearForm(){
+  document.getElementById("m_category_filter").value = "";
+  filterVehicleOptions();
+  document.getElementById("m_type").value = "";
+  document.getElementById("m_date").value = new Date().toISOString().slice(0,10);
+  document.getElementById("m_description").value = "";
+  document.getElementById("m_cost").value = "";
+  document.getElementById("m_receipt_file").value = "";
+  document.getElementById("formStatus").textContent = "";
+}
+
+async function saveMaintenance(){
+  const status = document.getElementById("formStatus");
+  const vehicleId = document.getElementById("m_vehicle").value;
+  const type = document.getElementById("m_type").value;
+  const date = document.getElementById("m_date").value;
+  const description = document.getElementById("m_description").value.trim();
+
+  if(!vehicleId){ status.className="status err"; status.textContent="Select a vehicle."; return; }
+  if(!type){ status.className="status err"; status.textContent="Select a Maintenance Type."; return; }
+  if(!date){ status.className="status err"; status.textContent="Service Date is required."; return; }
+  if(!description){ status.className="status err"; status.textContent="Description is required."; return; }
+
+  status.className="status"; status.textContent="Saving...";
+  try{
+    let receiptUrl = null;
+    const file = document.getElementById("m_receipt_file").files[0];
+    if(file){
+      const path = "maintenance-receipts/" + Date.now() + "_" + file.name.replace(/[^a-zA-Z0-9._-]/g,"_");
+      const { error: upErr } = await sb.storage.from("logistics-attachments").upload(path, file);
+      if(upErr) throw new Error("Receipt upload failed: " + upErr.message);
+      const { data: urlData } = sb.storage.from("logistics-attachments").getPublicUrl(path);
+      receiptUrl = urlData.publicUrl;
+    }
+
+    const cost = document.getElementById("m_cost").value;
+    const { error } = await sb.from("logistics_maintenance_records").insert({
+      vehicle_id: Number(vehicleId),
+      maintenance_type: type,
+      description,
+      cost: cost ? Number(cost) : null,
+      receipt_attachment: receiptUrl,
+      service_date: date,
+      logged_by: ME.id
+    });
+    if(error) throw error;
+
+    // Logging a new job puts the vehicle under maintenance automatically
+    await sb.from("logistics_vehicles").update({ operational_status: "Under Maintenance" }).eq("id", vehicleId);
+    await sb.from("logistics_activity_log").insert({
+      entity_type:"vehicle", entity_id:vehicleId, action:"maintenance_logged",
+      actor_profile_id: ME.id, actor_username: ME.username,
+      description: ME.username + " logged " + type.toLowerCase() + " maintenance"
+    });
+
+    status.className="status ok"; status.textContent="✅ Maintenance logged. Vehicle marked Under Maintenance.";
+    const [{ data: veh }] = await Promise.all([
+      sb.from("logistics_vehicles").select("id,registration_number,category_id,operational_status").order("registration_number")
+    ]);
+    VEHICLES = veh || [];
+    await loadRecords();
+    setTimeout(()=>{ document.getElementById("formPanel").classList.add("hidden"); }, 900);
+  }catch(e){
+    status.className="status err"; status.textContent = "❌ " + e.message;
+  }
+}
+
+function renderOpen(){
+  const open = RECORDS.filter(r=>!r.completed_at);
+  const wrap = document.getElementById("openWrap");
+  if(!open.length){ wrap.innerHTML = "<p style='color:var(--muted);font-size:13px;'>No open maintenance jobs.</p>"; return; }
+  wrap.innerHTML = `<table>
+    <thead><tr><th>Vehicle</th><th>Category</th><th>Type</th><th>Service Date</th><th>Description</th><th>Cost</th><th></th></tr></thead>
+    <tbody>${open.map(r=>{
+      const v = r.logistics_vehicles||{};
+      return `<tr>
+        <td><b>${v.registration_number||"—"}</b></td>
+        <td>${categoryName(v.category_id)}</td>
+        <td><span class="badge ${r.maintenance_type==='Preventive'?'b-prev':'b-cur'}">${r.maintenance_type}</span></td>
+        <td>${r.service_date}</td>
+        <td>${r.description}</td>
+        <td>${r.cost!=null?"NGN "+Number(r.cost).toLocaleString():"—"}</td>
+        <td><button class="btn-ghost btn-sm" onclick="markComplete(${r.id})">Mark Complete</button></td>
+      </tr>`;
+    }).join("")}</tbody>
+  </table>`;
+}
+
+async function markComplete(id){
+  if(!confirm("Mark this maintenance job as complete?")) return;
+  const rec = RECORDS.find(r=>r.id===id);
+  if(!rec) return;
+  try{
+    const { error } = await sb.from("logistics_maintenance_records").update({ completed_at: new Date().toISOString() }).eq("id", id);
+    if(error) throw error;
+
+    // Revert the vehicle to Active only if no other jobs for it are still open
+    const stillOpen = RECORDS.some(r=>r.id!==id && r.vehicle_id===rec.vehicle_id && !r.completed_at);
+    if(!stillOpen){
+      await sb.from("logistics_vehicles").update({ operational_status: "Active" }).eq("id", rec.vehicle_id);
+    }
+    await sb.from("logistics_activity_log").insert({
+      entity_type:"vehicle", entity_id:rec.vehicle_id, action:"maintenance_completed",
+      actor_profile_id: ME.id, actor_username: ME.username,
+      description: ME.username + " marked a maintenance job complete"
+    });
+
+    const { data: veh } = await sb.from("logistics_vehicles").select("id,registration_number,category_id,operational_status").order("registration_number");
+    VEHICLES = veh || [];
+    await loadRecords();
+  }catch(e){
+    alert("Error: " + e.message);
+  }
+}
+
+function renderReport(){
+  const catF = document.getElementById("r_category").value;
+  const vehF = document.getElementById("r_vehicle").value;
+  const typeF = document.getElementById("r_type").value;
+  const statusF = document.getElementById("r_status").value;
+  const fromF = document.getElementById("r_from").value;
+  const toF = document.getElementById("r_to").value;
+
+  let rows = RECORDS.filter(r=>{
+    const v = r.logistics_vehicles||{};
+    if(catF && String(v.category_id) !== catF) return false;
+    if(vehF && String(r.vehicle_id) !== vehF) return false;
+    if(typeF && r.maintenance_type !== typeF) return false;
+    if(statusF === "open" && r.completed_at) return false;
+    if(statusF === "completed" && !r.completed_at) return false;
+    if(fromF && r.service_date < fromF) return false;
+    if(toF && r.service_date > toF) return false;
+    return true;
+  });
+
+  const wrap = document.getElementById("reportWrap");
+  if(!rows.length){
+    wrap.innerHTML = "<p style='color:var(--muted);font-size:13px;'>No maintenance records match.</p>";
+    document.getElementById("reportSummary").textContent = "";
+    return;
+  }
+
+  wrap.innerHTML = `<table>
+    <thead><tr><th>Vehicle</th><th>Category</th><th>Type</th><th>Service Date</th><th>Description</th><th>Cost</th><th>Status</th><th>Receipt</th></tr></thead>
+    <tbody>${rows.map(r=>{
+      const v = r.logistics_vehicles||{};
+      return `<tr>
+        <td><b>${v.registration_number||"—"}</b></td>
+        <td>${categoryName(v.category_id)}</td>
+        <td><span class="badge ${r.maintenance_type==='Preventive'?'b-prev':'b-cur'}">${r.maintenance_type}</span></td>
+        <td>${r.service_date}</td>
+        <td>${r.description}</td>
+        <td>${r.cost!=null?"NGN "+Number(r.cost).toLocaleString():"—"}</td>
+        <td><span class="badge ${r.completed_at?'b-done':'b-open'}">${r.completed_at?'Completed':'Open'}</span></td>
+        <td>${r.receipt_attachment?`<a href="${r.receipt_attachment}" target="_blank">View</a>`:"—"}</td>
+      </tr>`;
+    }).join("")}</tbody>
+  </table>`;
+
+  const totalCost = rows.reduce((sum,r)=>sum + (Number(r.cost)||0), 0);
+  document.getElementById("reportSummary").innerHTML =
+    `<b>${rows.length}</b> record(s) matching filters — total cost: <b>NGN ${totalCost.toLocaleString()}</b>`;
+}
+
+init();
+</script>
+</body>
+</html>

@@ -62,10 +62,16 @@
 
       <div class="sec-title">Assignment &amp; Experience</div>
       <div class="form-row">
+        <div><label>Vehicle Category *</label>
+          <select id="d_category" onchange="onCategoryChange()"><option value="">— Select Category —</option></select>
+        </div>
         <div><label>Assigned Vehicle</label>
           <select id="d_vehicle"><option value="">— None —</option></select>
         </div>
+      </div>
+      <div class="form-row">
         <div><label>Years of Driving Experience</label><input type="number" step="0.5" id="d_experience"></div>
+        <div></div>
       </div>
       <div><label>Training Notes</label><textarea id="d_training"></textarea></div>
 
@@ -74,7 +80,10 @@
       <div class="status" id="formStatus"></div>
     </div>
 
-    <div style="margin-top:16px;"><label>Search Drivers</label><input id="search" placeholder="Name, code, or licence number" oninput="render()"></div>
+    <div class="form-row" style="margin-top:16px;">
+      <div><label>Search Drivers</label><input id="search" placeholder="Name, code, or licence number" oninput="render()"></div>
+      <div><label>Category</label><select id="categoryFilter" onchange="render()"><option value="">All</option></select></div>
+    </div>
     <div id="wrap" style="margin-top:14px;overflow-x:auto;"></div>
   </div>
 </div>
@@ -85,6 +94,7 @@ let DRIVERS = [];
 let VEHICLES = [];
 let ALL_STAFF = [];
 let PICKED_EMPLOYEE = null;
+let CATEGORIES = [];
 
 async function init(){
   const status = document.getElementById("connStatus");
@@ -94,6 +104,12 @@ async function init(){
 
     const { data: staff } = await sb.from("employees").select("id,employee_id,full_name").order("full_name");
     ALL_STAFF = staff || [];
+
+    const { data: cats } = await sb.from("logistics_vehicle_categories").select("*").order("name");
+    CATEGORIES = cats || [];
+    const catOptions = CATEGORIES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("");
+    document.getElementById("d_category").innerHTML = '<option value="">— Select Category —</option>' + catOptions;
+    document.getElementById("categoryFilter").innerHTML = '<option value="">All</option>' + catOptions;
 
     await loadAll();
     status.style.color="var(--ok)"; status.textContent="Connected.";
@@ -105,14 +121,26 @@ async function init(){
 async function loadAll(){
   const [{ data: dData, error: dErr }, { data: vData }] = await Promise.all([
     sb.from("logistics_drivers").select("*, employees(employee_id,full_name)").order("id"),
-    sb.from("logistics_vehicles").select("id,registration_number").order("registration_number")
+    sb.from("logistics_vehicles").select("id,registration_number,category_id").order("registration_number")
   ]);
   if(dErr) throw dErr;
   DRIVERS = dData || [];
   VEHICLES = vData || [];
-  document.getElementById("d_vehicle").innerHTML = '<option value="">— None —</option>' +
-    VEHICLES.map(v=>`<option value="${v.id}">${v.registration_number}</option>`).join("");
+  onCategoryChange(); // populate the Assigned Vehicle dropdown for whatever category is currently selected
   render();
+}
+
+// Assigned Vehicle must belong to the same category the driver is
+// registered under, so this dropdown is rebuilt every time the category
+// changes rather than listing every vehicle in the company.
+function onCategoryChange(){
+  const catId = document.getElementById("d_category").value;
+  const currentVehicle = document.getElementById("d_vehicle").value;
+  const matching = catId ? VEHICLES.filter(v=>String(v.category_id)===catId) : VEHICLES;
+  document.getElementById("d_vehicle").innerHTML = '<option value="">— None —</option>' +
+    matching.map(v=>`<option value="${v.id}">${v.registration_number}</option>`).join("");
+  // keep the previous selection only if it's still valid for the new category
+  if(matching.some(v=>String(v.id)===currentVehicle)) document.getElementById("d_vehicle").value = currentVehicle;
 }
 
 function vehicleReg(vehicleId){
@@ -131,22 +159,30 @@ function expiryCell(dateStr){
   return `<span class="${cls}">${dateStr}${d!=null && d<=30 ? " ("+(d<0?"expired":d+"d left")+")" : ""}</span>`;
 }
 
+function categoryName(id){
+  const c = CATEGORIES.find(x=>x.id===id);
+  return c ? c.name : "—";
+}
+
 function render(){
   const q = document.getElementById("search").value.trim().toLowerCase();
+  const catF = document.getElementById("categoryFilter").value;
   let rows = DRIVERS.filter(d=>{
     const e = d.employees||{};
+    if(catF && String(d.category_id) !== catF) return false;
     if(q && !((e.full_name||"")+(e.employee_id||"")+(d.licence_number||"")).toLowerCase().includes(q)) return false;
     return true;
   });
   const wrap = document.getElementById("wrap");
   if(!rows.length){ wrap.innerHTML = "<p style='color:var(--muted);font-size:13px;'>No drivers match.</p>"; return; }
   wrap.innerHTML = `<table>
-    <thead><tr><th>Name</th><th>Employee Code</th><th>Licence No.</th><th>Class</th><th>Licence Expiry</th><th>Assigned Vehicle</th><th>Experience (yrs)</th><th></th></tr></thead>
+    <thead><tr><th>Name</th><th>Employee Code</th><th>Category</th><th>Licence No.</th><th>Class</th><th>Licence Expiry</th><th>Assigned Vehicle</th><th>Experience (yrs)</th><th></th></tr></thead>
     <tbody>${rows.map(d=>{
       const e = d.employees||{};
       return `<tr>
         <td><b>${e.full_name||"—"}</b></td>
         <td>${e.employee_id||"—"}</td>
+        <td>${categoryName(d.category_id)}</td>
         <td>${d.licence_number||"—"}</td>
         <td>${d.licence_class||"—"}</td>
         <td>${expiryCell(d.licence_expiry)}</td>
@@ -170,7 +206,8 @@ function clearForm(){
   clearEmployeePick();
   document.getElementById("employeePickBlock").classList.remove("hidden");
   ["d_licence_no","d_licence_class","d_licence_expiry","d_experience","d_training"].forEach(id=>document.getElementById(id).value="");
-  document.getElementById("d_vehicle").value = "";
+  document.getElementById("d_category").value = "";
+  onCategoryChange();
   document.getElementById("formStatus").textContent = "";
 }
 
@@ -225,6 +262,8 @@ function editDriver(id){
   document.getElementById("d_licence_no").value = d.licence_number||"";
   document.getElementById("d_licence_class").value = d.licence_class||"";
   document.getElementById("d_licence_expiry").value = d.licence_expiry||"";
+  document.getElementById("d_category").value = d.category_id||"";
+  onCategoryChange();
   document.getElementById("d_vehicle").value = d.assigned_vehicle_id||"";
   document.getElementById("d_experience").value = d.years_experience??"";
   document.getElementById("d_training").value = d.training_notes||"";
@@ -237,10 +276,12 @@ async function saveDriver(){
   const employeeId = document.getElementById("d_employee_id").value;
   const licenceNo = document.getElementById("d_licence_no").value.trim();
   const licenceExpiry = document.getElementById("d_licence_expiry").value;
+  const category = document.getElementById("d_category").value;
 
   if(!employeeId){ status.className="status err"; status.textContent="Select an employee first."; return; }
   if(!licenceNo){ status.className="status err"; status.textContent="Licence Number is required."; return; }
   if(!licenceExpiry){ status.className="status err"; status.textContent="Licence Expiry is required."; return; }
+  if(!category){ status.className="status err"; status.textContent="Vehicle Category is required."; return; }
 
   status.className="status"; status.textContent="Saving...";
   try{
@@ -249,6 +290,7 @@ async function saveDriver(){
       licence_number: licenceNo,
       licence_class: document.getElementById("d_licence_class").value.trim() || null,
       licence_expiry: licenceExpiry,
+      category_id: Number(category),
       assigned_vehicle_id: document.getElementById("d_vehicle").value || null,
       years_experience: document.getElementById("d_experience").value ? Number(document.getElementById("d_experience").value) : null,
       training_notes: document.getElementById("d_training").value.trim() || null,

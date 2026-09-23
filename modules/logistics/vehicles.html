@@ -57,6 +57,7 @@
         <div><label>Make *</label><input id="v_make"></div>
         <div><label>Model *</label><input id="v_model"></div>
       </div>
+      <div><label>Vehicle Category *</label><select id="v_category"><option value="">— Select Category —</option></select></div>
 
       <div class="sec-title">Assignment &amp; Status</div>
       <div class="form-row-3">
@@ -94,12 +95,15 @@
       <div class="status" id="formStatus"></div>
     </div>
 
-    <div class="form-row" style="margin-top:16px;">
+    <div class="form-row-3" style="margin-top:16px;">
       <div><label>Search</label><input id="search" placeholder="Registration, chassis, make/model" oninput="render()"></div>
       <div><label>Status</label>
         <select id="statusFilter" onchange="render()">
           <option value="">All</option><option>Active</option><option>Under Maintenance</option><option>Unavailable</option><option>Disposed</option>
         </select>
+      </div>
+      <div><label>Category</label>
+        <select id="categoryFilter" onchange="render()"><option value="">All</option></select>
       </div>
     </div>
 
@@ -111,12 +115,18 @@
 let ME = null;
 let VEHICLES = [];
 let DRIVERS = [];
+let CATEGORIES = [];
 
 async function init(){
   const status = document.getElementById("connStatus");
   try{
     ME = await requireAuth("../../login.html");
     if(!ME) return;
+    const { data: cats } = await sb.from("logistics_vehicle_categories").select("*").order("name");
+    CATEGORIES = cats || [];
+    const catOptions = CATEGORIES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("");
+    document.getElementById("v_category").innerHTML = '<option value="">— Select Category —</option>' + catOptions;
+    document.getElementById("categoryFilter").innerHTML = '<option value="">All</option>' + catOptions;
     await loadAll();
     status.style.color="var(--ok)"; status.textContent="Connected.";
   }catch(e){
@@ -158,22 +168,30 @@ function statusBadgeClass(s){
   return { "Active":"b-active", "Under Maintenance":"b-maint", "Unavailable":"b-unavail", "Disposed":"b-disposed" }[s] || "b-disposed";
 }
 
+function categoryName(id){
+  const c = CATEGORIES.find(x=>x.id===id);
+  return c ? c.name : "—";
+}
+
 function render(){
   const q = document.getElementById("search").value.trim().toLowerCase();
   const statusF = document.getElementById("statusFilter").value;
+  const catF = document.getElementById("categoryFilter").value;
   let rows = VEHICLES.filter(v=>{
     if(statusF && v.operational_status !== statusF) return false;
+    if(catF && String(v.category_id) !== catF) return false;
     if(q && !((v.registration_number||"")+(v.chassis_number||"")+(v.make||"")+(v.model||"")).toLowerCase().includes(q)) return false;
     return true;
   });
   const wrap = document.getElementById("wrap");
   if(!rows.length){ wrap.innerHTML = "<p style='color:var(--muted);font-size:13px;'>No vehicles match.</p>"; return; }
   wrap.innerHTML = `<table>
-    <thead><tr><th>Reg. Number</th><th>Make/Model/Year</th><th>Status</th><th>Assigned Driver</th><th>Mileage</th>
+    <thead><tr><th>Reg. Number</th><th>Make/Model/Year</th><th>Category</th><th>Status</th><th>Assigned Driver</th><th>Mileage</th>
       <th>Insurance Exp.</th><th>Roadworthy Exp.</th><th>Licence Exp.</th><th></th></tr></thead>
     <tbody>${rows.map(v=>`<tr>
       <td><b>${v.registration_number}</b></td>
       <td>${v.make} ${v.model} (${v.year})</td>
+      <td>${categoryName(v.category_id)}</td>
       <td><span class="badge ${statusBadgeClass(v.operational_status)}">${v.operational_status}</span></td>
       <td>${driverFor(v.id) || "—"}</td>
       <td>${v.current_mileage!=null?v.current_mileage:"—"}</td>
@@ -197,6 +215,7 @@ function clearForm(){
   ["v_reg","v_chassis","v_year","v_make","v_model","v_dept","v_mileage","v_expected_consumption","v_ins_provider","v_ins_policy","v_ins_expiry",
    "v_road_no","v_road_expiry","v_lic_no","v_lic_expiry","v_purchase_date","v_purchase_value"].forEach(id=>document.getElementById(id).value="");
   document.getElementById("v_status").value = "Active";
+  document.getElementById("v_category").value = "";
   ["v_ins_url","v_road_url","v_lic_url","v_purchase_url"].forEach(id=>{ document.getElementById(id).textContent=""; document.getElementById(id).classList.add("hidden"); });
   document.getElementById("formStatus").textContent = "";
 }
@@ -216,6 +235,7 @@ function editVehicle(id){
   document.getElementById("v_mileage").value = v.current_mileage??"";
   document.getElementById("v_expected_consumption").value = v.expected_consumption_km_per_litre??"";
   document.getElementById("v_status").value = v.operational_status||"Active";
+  document.getElementById("v_category").value = v.category_id||"";
   document.getElementById("v_ins_provider").value = v.insurance_provider||"";
   document.getElementById("v_ins_policy").value = v.insurance_policy_no||"";
   document.getElementById("v_ins_expiry").value = v.insurance_expiry||"";
@@ -262,8 +282,9 @@ async function saveVehicle(){
   const make = document.getElementById("v_make").value.trim();
   const model = document.getElementById("v_model").value.trim();
   const year = document.getElementById("v_year").value;
-  if(!reg || !chassis || !make || !model || !year){
-    status.className="status err"; status.textContent="Registration Number, Chassis/VIN, Make, Model, and Year are all required.";
+  const category = document.getElementById("v_category").value;
+  if(!reg || !chassis || !make || !model || !year || !category){
+    status.className="status err"; status.textContent="Registration Number, Chassis/VIN, Make, Model, Year, and Category are all required.";
     return;
   }
 
@@ -274,6 +295,7 @@ async function saveVehicle(){
       registration_number: reg,
       chassis_number: chassis,
       make, model, year: Number(year),
+      category_id: Number(category),
       department_location: document.getElementById("v_dept").value.trim() || null,
       current_mileage: document.getElementById("v_mileage").value ? Number(document.getElementById("v_mileage").value) : null,
       expected_consumption_km_per_litre: document.getElementById("v_expected_consumption").value ? Number(document.getElementById("v_expected_consumption").value) : null,
