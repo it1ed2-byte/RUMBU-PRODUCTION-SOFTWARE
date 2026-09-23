@@ -10,6 +10,7 @@
   window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme){ document.documentElement.setAttribute("data-theme", e.data.rumbuTheme); } });
 </script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="../../auth.js"></script>
 <style>
   body{padding:20px;}
@@ -59,7 +60,20 @@
 
   <div class="cl-head">
     <h4>Checklist Items</h4>
-    <button type="button" class="btn-add-row" onclick="addRow()">+ Add checklist item</button>
+    <div style="display:flex;gap:10px;">
+      <button type="button" class="btn-add-row" onclick="toggleBulkImport()">&uarr; Bulk import from Excel</button>
+      <button type="button" class="btn-add-row" onclick="addRow()">+ Add checklist item</button>
+    </div>
+  </div>
+  <div id="bulkImportPanel" style="display:none;background:var(--bg);border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:14px;margin-bottom:14px;">
+    <p class="sub" style="margin-top:0;">Upload an Excel or CSV file with <b>Item</b> and <b>Description</b> columns — any other columns in the sheet (Condition, Estimated Qty, S/N, etc.) are ignored. Matching rows are added to the checklist below; nothing is saved until you click <b>Save Policy</b>, so you can review or remove any row first.</p>
+    <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;">
+      <div class="field" style="margin:0;"><label>Upload Excel or CSV file</label>
+        <input type="file" id="bulk_file" accept=".xlsx,.xls,.xlsm,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onchange="loadBulkChecklistFile()">
+      </div>
+      <button type="button" class="btn-add-row" onclick="downloadChecklistTemplate()">&darr; Download template</button>
+    </div>
+    <div class="status" id="bulk_status" style="display:none;"></div>
   </div>
   <table class="cl">
     <thead><tr><th>#</th><th style="width:180px;">Item</th><th>Description</th><th></th></tr></thead>
@@ -154,6 +168,139 @@ function renumber(){
   document.querySelectorAll("#clBody tr").forEach((tr, i) => {
     const n = tr.querySelector(".row-no"); if(n) n.textContent = (i + 1);
   });
+}
+
+// ---- Bulk import from Excel/CSV ----
+// Reads Item + Description out of an uploaded sheet and appends them as
+// checklist rows in the same editable table above — nothing is written
+// to the database here. The existing Save Policy button (and its usual
+// "must have a Description" check) is what actually commits everything,
+// so imported rows can be reviewed or removed just like typed ones.
+function toggleBulkImport(){
+  const p = document.getElementById("bulkImportPanel");
+  const opening = p.style.display === "none" || !p.style.display;
+  p.style.display = opening ? "block" : "none";
+}
+
+function loadBulkChecklistFile(){
+  const fileInput = document.getElementById("bulk_file");
+  const st = document.getElementById("bulk_status");
+  const file = fileInput && fileInput.files && fileInput.files[0];
+  if(!file) return;
+  const show = (cls, msg) => { st.style.display = "block"; st.className = "status " + cls; st.textContent = msg; };
+  const name = (file.name || "").toLowerCase();
+  const isExcel = /\.(xlsx|xls|xlsm)$/.test(name);
+  const reader = new FileReader();
+  reader.onerror = function(){ show("bad", "Could not read that file."); };
+
+  function applyRows(aoa){
+    // Find the header row by looking for a "Description" column — this
+    // is what lets us skip past a decorative title row (like
+    // "(POLICY 219) INSPECTION OF ...") sitting above the real headers,
+    // without caring exactly which row number it's on.
+    const DESC_ALIASES = ["description", "checklist item", "item description", "desc"];
+    const ITEM_ALIASES = ["item", "item no", "item code", "item #", "item name"];
+    let headerRow = -1, descCol = -1, itemCol = -1;
+    for(let r = 0; r < aoa.length; r++){
+      const norm = (aoa[r] || []).map(c => String(c || "").trim().toLowerCase());
+      const dCol = norm.findIndex(h => DESC_ALIASES.indexOf(h) !== -1);
+      if(dCol !== -1){
+        headerRow = r; descCol = dCol;
+        itemCol = norm.findIndex(h => ITEM_ALIASES.indexOf(h) !== -1);
+        break;
+      }
+    }
+    if(headerRow === -1){
+      show("bad", "Could not find a \"Description\" column in that file. Make sure the sheet has a header row with an Item column and a Description column.");
+      return;
+    }
+
+    const rows = [];
+    for(let r = headerRow + 1; r < aoa.length; r++){
+      const line = aoa[r] || [];
+      const desc = String(line[descCol] || "").trim();
+      if(!desc) continue; // same rule as typing rows by hand: Description required, Item optional
+      const item = itemCol !== -1 ? String(line[itemCol] || "").trim() : "";
+      rows.push({ item_name: item, checklist_item: desc });
+    }
+    if(!rows.length){
+      show("bad", "Found the header row but no data rows with a Description underneath it.");
+      return;
+    }
+
+    // Drop any rows already in the table that are still fully blank
+    // (e.g. the 3 empty starter rows), so imports land cleanly rather
+    // than sitting below empty leftovers.
+    Array.from(document.querySelectorAll("#clBody tr")).forEach(tr => {
+      const iv = (tr.querySelector(".cl-itemname") || {}).value || "";
+      const dv = (tr.querySelector(".cl-item") || {}).value || "";
+      if(!iv.trim() && !dv.trim()) tr.remove();
+    });
+    rows.forEach(r => addRow(r.item_name, r.checklist_item));
+    show("ok", "Imported " + rows.length + " checklist item(s) from \"" + file.name + "\". Review them below, then click Save Policy.");
+  }
+
+  if(isExcel){
+    if(typeof XLSX === "undefined"){
+      show("bad", "The spreadsheet reader did not load — check your connection and reopen this page, or save the file as CSV instead.");
+      return;
+    }
+    reader.onload = function(ev){
+      try{
+        const wb = XLSX.read(new Uint8Array(ev.target.result), { type: "array" });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: "" });
+        applyRows(aoa);
+      }catch(err){
+        show("bad", "Could not read that Excel file: " + (err.message || err));
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  } else {
+    reader.onload = function(ev){
+      try{ applyRows(parseCsvRows(ev.target.result || "")); }
+      catch(err){ show("bad", "Could not read that CSV file: " + (err.message || err)); }
+    };
+    reader.readAsText(file);
+  }
+}
+
+function parseCsvRows(text){
+  const rows = []; let row = []; let field = ""; let inQuotes = false;
+  for(let i = 0; i < text.length; i++){
+    const c = text[i];
+    if(inQuotes){
+      if(c === '"'){ if(text[i+1] === '"'){ field += '"'; i++; } else inQuotes = false; }
+      else field += c;
+    } else {
+      if(c === '"') inQuotes = true;
+      else if(c === ','){ row.push(field); field = ""; }
+      else if(c === '\n'){ row.push(field); rows.push(row); row = []; field = ""; }
+      else if(c === '\r'){ /* line end handled by \n */ }
+      else field += c;
+    }
+  }
+  if(field.length > 0 || row.length > 0){ row.push(field); rows.push(row); }
+  return rows;
+}
+
+function downloadChecklistTemplate(){
+  const HEADERS = ["Item", "Description"];
+  const SAMPLE = ["164023", "Check the oiling ring."];
+  if(typeof XLSX === "undefined"){
+    const csv = "\ufeff" + HEADERS.join(",") + "\r\n" + SAMPLE.join(",") + "\r\n";
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = "PM_Checklist_Template.csv";
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+    return;
+  }
+  const ws = XLSX.utils.aoa_to_sheet([HEADERS, SAMPLE]);
+  ws["!cols"] = HEADERS.map(h => ({ wch: Math.max(24, h.length + 2) }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Checklist");
+  XLSX.writeFile(wb, "PM_Checklist_Template.xlsx");
 }
 
 async function submitPolicy(){
