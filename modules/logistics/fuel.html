@@ -56,18 +56,22 @@
       <h4 style="margin-top:0;">Log Fuel Purchase</h4>
       <div class="form-row-3">
         <div><label>Date &amp; Time *</label><input type="datetime-local" id="f_datetime"></div>
+        <div><label>Vehicle Category</label><select id="f_category" onchange="filterFuelVehicleOptions()"><option value="">All Categories</option></select></div>
         <div><label>Vehicle *</label><select id="f_vehicle" onchange="onVehiclePick()"><option value="">— Select —</option></select></div>
-        <div><label>Driver Responsible *</label><select id="f_driver"><option value="">— Select —</option></select></div>
       </div>
       <div class="form-row-3">
+        <div><label>Driver Responsible *</label><select id="f_driver"><option value="">— Select —</option></select></div>
         <div><label>Fuel Quantity Purchased (litres) *</label><input type="number" step="0.01" id="f_quantity" oninput="computeTotal()"></div>
         <div><label>Price per Litre (NGN) *</label><input type="number" step="0.01" id="f_price" oninput="computeTotal()"></div>
-        <div><label>Total Fuel Cost (NGN)</label><input type="number" id="f_total" readonly></div>
       </div>
       <div class="form-row-3">
+        <div><label>Total Fuel Cost (NGN)</label><input type="number" id="f_total" readonly></div>
         <div><label>Odometer Reading at Fuelling (km) *</label><input type="number" step="0.1" id="f_odometer"></div>
         <div><label>Fuel Station / Vendor *</label><input id="f_vendor"></div>
+      </div>
+      <div class="form-row">
         <div><label>Approved Fuel Quantity (litres)</label><input type="number" step="0.01" id="f_approved_qty" placeholder="Optional — pre-authorized cap"></div>
+        <div></div>
       </div>
       <p style="font-size:12px;color:var(--muted);margin:4px 0 0;" id="consumptionPreview"></p>
 
@@ -82,7 +86,11 @@
     <div class="form-row-3">
       <div><label>From Date</label><input type="date" id="rFrom" onchange="loadReport()"></div>
       <div><label>To Date</label><input type="date" id="rTo" onchange="loadReport()"></div>
+      <div><label>Category</label><select id="rCategory" onchange="onReportCategoryChange()"><option value="">All</option></select></div>
+    </div>
+    <div class="form-row" style="margin-top:0;">
       <div><label>Vehicle</label><select id="rVehicle" onchange="loadReport()"><option value="">All</option></select></div>
+      <div></div>
     </div>
     <div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap;">
       <button class="btn-ghost" onclick="clearReportFilters()">Clear Filters</button>
@@ -97,6 +105,7 @@
 let ME = null;
 let VEHICLES = [];
 let DRIVERS = [];
+let CATEGORIES = [];
 let REPORT_ROWS = [];
 let CURRENT_PRICE = null;
 
@@ -128,15 +137,20 @@ async function init(){
     ME = await requireAuth("../../login.html");
     if(!ME) return;
 
-    const [{ data: vData },{ data: dData }] = await Promise.all([
-      sb.from("logistics_vehicles").select("id,registration_number,current_mileage,expected_consumption_km_per_litre").order("registration_number"),
-      sb.from("logistics_drivers").select("id,employees(full_name,employee_id)").order("id")
+    const [{ data: vData },{ data: dData },{ data: cData }] = await Promise.all([
+      sb.from("logistics_vehicles").select("id,registration_number,current_mileage,expected_consumption_km_per_litre,category_id").order("registration_number"),
+      sb.from("logistics_drivers").select("id,employees(full_name,employee_id)").order("id"),
+      sb.from("logistics_vehicle_categories").select("*").order("name")
     ]);
     VEHICLES = vData || [];
     DRIVERS = dData || [];
-    document.getElementById("f_vehicle").innerHTML = '<option value="">— Select —</option>' + VEHICLES.map(v=>`<option value="${v.id}">${v.registration_number}</option>`).join("");
+    CATEGORIES = cData || [];
+    const catOptions = CATEGORIES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("");
+    document.getElementById("f_category").innerHTML = '<option value="">All Categories</option>' + catOptions;
+    document.getElementById("rCategory").innerHTML = '<option value="">All</option>' + catOptions;
     document.getElementById("f_driver").innerHTML = '<option value="">— Select —</option>' + DRIVERS.map(d=>{ const e=d.employees||{}; return `<option value="${d.id}">${e.full_name||"—"} (${e.employee_id||"—"})</option>`; }).join("");
-    document.getElementById("rVehicle").innerHTML = '<option value="">All</option>' + VEHICLES.map(v=>`<option value="${v.id}">${v.registration_number}</option>`).join("");
+    filterFuelVehicleOptions();
+    filterReportVehicleOptions();
 
     const today = new Date().toISOString().slice(0,10);
     const monthAgo = new Date(Date.now() - 30*86400000).toISOString().slice(0,10);
@@ -162,6 +176,30 @@ function computeTotal(){
   const qty = parseFloat(document.getElementById("f_quantity").value)||0;
   const price = parseFloat(document.getElementById("f_price").value)||0;
   document.getElementById("f_total").value = (qty*price).toFixed(2);
+}
+
+function categoryName(id){
+  const c = CATEGORIES.find(x=>x.id===id);
+  return c ? c.name : "—";
+}
+
+function filterFuelVehicleOptions(){
+  const catId = document.getElementById("f_category").value;
+  const matching = catId ? VEHICLES.filter(v=>String(v.category_id)===catId) : VEHICLES;
+  document.getElementById("f_vehicle").innerHTML = '<option value="">— Select —</option>' +
+    matching.map(v=>`<option value="${v.id}">${v.registration_number}</option>`).join("");
+}
+
+function filterReportVehicleOptions(){
+  const catId = document.getElementById("rCategory").value;
+  const matching = catId ? VEHICLES.filter(v=>String(v.category_id)===catId) : VEHICLES;
+  document.getElementById("rVehicle").innerHTML = '<option value="">All</option>' +
+    matching.map(v=>`<option value="${v.id}">${v.registration_number}</option>`).join("");
+}
+
+function onReportCategoryChange(){
+  filterReportVehicleOptions();
+  loadReport();
 }
 
 async function onVehiclePick(){
@@ -276,6 +314,8 @@ async function proceedWithFuelSubmit(){
 function clearReportFilters(){
   document.getElementById("rFrom").value = "";
   document.getElementById("rTo").value = "";
+  document.getElementById("rCategory").value = "";
+  filterReportVehicleOptions();
   document.getElementById("rVehicle").value = "";
   loadReport();
 }
@@ -290,11 +330,12 @@ async function loadReport(){
   const from = document.getElementById("rFrom").value;
   const to = document.getElementById("rTo").value;
   const vehicleId = document.getElementById("rVehicle").value;
+  const catId = document.getElementById("rCategory").value;
   const wrap = document.getElementById("reportWrap");
   const status = document.getElementById("reportStatus");
 
   let q = sb.from("logistics_fuel_records")
-    .select("*, logistics_vehicles(registration_number), logistics_drivers(employees(full_name))")
+    .select("*, logistics_vehicles(registration_number,category_id), logistics_drivers(employees(full_name))")
     .order("fuelled_at",{ascending:false});
   if(from) q = q.gte("fuelled_at", from+"T00:00:00");
   if(to) q = q.lte("fuelled_at", to+"T23:59:59");
@@ -303,18 +344,20 @@ async function loadReport(){
   const { data, error } = await q;
   if(error){ wrap.innerHTML = "Error: " + error.message; return; }
   REPORT_ROWS = data||[];
+  if(catId) REPORT_ROWS = REPORT_ROWS.filter(r=>String((r.logistics_vehicles||{}).category_id)===catId);
   status.className=""; status.textContent = REPORT_ROWS.length + " record(s) match these filters.";
 
   if(!REPORT_ROWS.length){ wrap.innerHTML = "<p style='color:var(--muted);font-size:13px;'>No fuel records match.</p>"; return; }
   wrap.innerHTML = `<table>
-    <thead><tr><th>Date</th><th>Vehicle</th><th>Driver</th><th>Quantity (L)</th><th>Price/L</th><th>Total Cost</th>
+    <thead><tr><th>Date</th><th>Vehicle</th><th>Category</th><th>Driver</th><th>Quantity (L)</th><th>Price/L</th><th>Total Cost</th>
       <th>Odometer</th><th>Vendor</th><th>Distance Since Last</th><th>Consumption (km/L)</th><th>Status</th></tr></thead>
     <tbody>${REPORT_ROWS.map(r=>{
-      const veh = r.logistics_vehicles ? r.logistics_vehicles.registration_number : "—";
+      const v = r.logistics_vehicles || {};
+      const veh = v.registration_number || "—";
       const drv = (r.logistics_drivers && r.logistics_drivers.employees) ? r.logistics_drivers.employees.full_name : "—";
       return `<tr>
         <td>${new Date(r.fuelled_at).toLocaleString("en-GB")}</td>
-        <td>${veh}</td><td>${drv}</td>
+        <td>${veh}</td><td>${categoryName(v.category_id)}</td><td>${drv}</td>
         <td>${r.quantity_purchased}</td><td>${r.price_per_litre}</td><td>${r.total_cost}</td>
         <td>${r.odometer_reading}</td><td>${r.vendor}</td>
         <td>${r.distance_since_last!=null?r.distance_since_last:"—"}</td>
@@ -344,14 +387,17 @@ function downloadPdf(){
   const from = document.getElementById("rFrom").value || "—";
   const to = document.getElementById("rTo").value || "—";
   const vehSel = document.getElementById("rVehicle");
+  const catSel = document.getElementById("rCategory");
   const veh = vehSel.value ? vehSel.options[vehSel.selectedIndex].text : "All";
-  doc.text(`Date range: ${from} to ${to}   |   Vehicle: ${veh}   |   ${REPORT_ROWS.length} records`, 30, 72);
+  const cat = catSel.value ? catSel.options[catSel.selectedIndex].text : "All";
+  doc.text(`Date range: ${from} to ${to}   |   Category: ${cat}   |   Vehicle: ${veh}   |   ${REPORT_ROWS.length} records`, 30, 72);
 
   const body = REPORT_ROWS.map(r=>{
-    const veh2 = r.logistics_vehicles ? r.logistics_vehicles.registration_number : "—";
+    const v = r.logistics_vehicles || {};
+    const veh2 = v.registration_number || "—";
     const drv = (r.logistics_drivers && r.logistics_drivers.employees) ? r.logistics_drivers.employees.full_name : "—";
     return [
-      new Date(r.fuelled_at).toLocaleString("en-GB"), veh2, drv,
+      new Date(r.fuelled_at).toLocaleString("en-GB"), veh2, categoryName(v.category_id), drv,
       r.quantity_purchased, r.price_per_litre, r.total_cost, r.odometer_reading, r.vendor,
       r.distance_since_last!=null?r.distance_since_last:"—",
       r.consumption_km_per_litre!=null?r.consumption_km_per_litre.toFixed(2):"—",
@@ -361,7 +407,7 @@ function downloadPdf(){
 
   doc.autoTable({
     startY: 84,
-    head: [["Date","Vehicle","Driver","Qty (L)","Price/L","Total Cost","Odometer","Vendor","Dist. Since Last","Consumption (km/L)","Status"]],
+    head: [["Date","Vehicle","Category","Driver","Qty (L)","Price/L","Total Cost","Odometer","Vendor","Dist. Since Last","Consumption (km/L)","Status"]],
     body,
     styles: { fontSize: 7.5, cellPadding: 4 },
     headStyles: { fillColor: navy, textColor: 255, fontStyle: "bold" },

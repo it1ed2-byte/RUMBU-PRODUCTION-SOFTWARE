@@ -11,6 +11,8 @@
 </script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="../../auth.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <style>
   body{padding:18px;}
   .wrap{max-width:1150px;margin:0 auto;}
@@ -91,6 +93,10 @@
     <div class="form-row" style="margin-top:0;">
       <div><label>From Date</label><input type="date" id="r_from" onchange="renderReport()"></div>
       <div><label>To Date</label><input type="date" id="r_to" onchange="renderReport()"></div>
+    </div>
+    <div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap;">
+      <button class="btn-ghost" onclick="clearReportFilters()">Clear Filters</button>
+      <button onclick="downloadMaintenancePdf()">⬇ Download PDF</button>
     </div>
     <div id="reportWrap" style="overflow-x:auto;margin-top:14px;"></div>
     <div class="summary-box" id="reportSummary"></div>
@@ -320,6 +326,93 @@ function renderReport(){
   const totalCost = rows.reduce((sum,r)=>sum + (Number(r.cost)||0), 0);
   document.getElementById("reportSummary").innerHTML =
     `<b>${rows.length}</b> record(s) matching filters — total cost: <b>NGN ${totalCost.toLocaleString()}</b>`;
+}
+
+function clearReportFilters(){
+  document.getElementById("r_category").value = "";
+  document.getElementById("r_vehicle").value = "";
+  document.getElementById("r_type").value = "";
+  document.getElementById("r_status").value = "";
+  document.getElementById("r_from").value = "";
+  document.getElementById("r_to").value = "";
+  renderReport();
+}
+
+function downloadMaintenancePdf(){
+  const catF = document.getElementById("r_category").value;
+  const vehF = document.getElementById("r_vehicle").value;
+  const typeF = document.getElementById("r_type").value;
+  const statusF = document.getElementById("r_status").value;
+  const fromF = document.getElementById("r_from").value;
+  const toF = document.getElementById("r_to").value;
+
+  let rows = RECORDS.filter(r=>{
+    const v = r.logistics_vehicles||{};
+    if(catF && String(v.category_id) !== catF) return false;
+    if(vehF && String(r.vehicle_id) !== vehF) return false;
+    if(typeF && r.maintenance_type !== typeF) return false;
+    if(statusF === "open" && r.completed_at) return false;
+    if(statusF === "completed" && !r.completed_at) return false;
+    if(fromF && r.service_date < fromF) return false;
+    if(toF && r.service_date > toF) return false;
+    return true;
+  });
+
+  if(!rows.length){ alert("Nothing to export — no records match the current filters."); return; }
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
+  const navy = [31, 56, 100];
+
+  doc.setFillColor(navy[0], navy[1], navy[2]);
+  doc.rect(0, 0, doc.internal.pageSize.getWidth(), 56, "F");
+  doc.setTextColor(255,255,255);
+  doc.setFont("helvetica","bold"); doc.setFontSize(13);
+  doc.text("RUMBU INDUSTRIES GROUP", 30, 24);
+  doc.setFont("helvetica","normal"); doc.setFontSize(10);
+  doc.text("Logistics — Vehicle Maintenance Report", 30, 40);
+  doc.text("Printed " + new Date().toLocaleString("en-GB"), doc.internal.pageSize.getWidth()-30, 24, { align: "right" });
+
+  doc.setTextColor(60,60,60); doc.setFontSize(9);
+  const catSel = document.getElementById("r_category");
+  const vehSel = document.getElementById("r_vehicle");
+  const catText = catSel.value ? catSel.options[catSel.selectedIndex].text : "All";
+  const vehText = vehSel.value ? vehSel.options[vehSel.selectedIndex].text : "All";
+  const from = fromF || "—";
+  const to = toF || "—";
+  doc.text(`Category: ${catText}   |   Vehicle: ${vehText}   |   Type: ${typeF||"All"}   |   Status: ${statusF||"All"}   |   Date range: ${from} to ${to}   |   ${rows.length} records`, 30, 72);
+
+  const body = rows.map(r=>{
+    const v = r.logistics_vehicles||{};
+    return [
+      v.registration_number||"—", categoryName(v.category_id), r.maintenance_type, r.service_date,
+      r.description, r.cost!=null?Number(r.cost).toLocaleString():"—", r.completed_at?"Completed":"Open"
+    ];
+  });
+
+  doc.autoTable({
+    startY: 84,
+    head: [["Vehicle","Category","Type","Service Date","Description","Cost (NGN)","Status"]],
+    body,
+    styles: { fontSize: 8, cellPadding: 4 },
+    headStyles: { fillColor: navy, textColor: 255, fontStyle: "bold" },
+    alternateRowStyles: { fillColor: [240, 244, 249] },
+    margin: { left: 30, right: 30 },
+    didDrawPage: function(){
+      const pageCount = doc.internal.getNumberOfPages();
+      doc.setFontSize(8); doc.setTextColor(120,120,120);
+      doc.text("CONFIDENTIAL", 30, doc.internal.pageSize.getHeight()-16);
+      doc.text("Page " + doc.internal.getCurrentPageInfo().pageNumber + " of " + pageCount,
+        doc.internal.pageSize.getWidth()-30, doc.internal.pageSize.getHeight()-16, { align: "right" });
+    }
+  });
+
+  const totalCost = rows.reduce((sum,r)=>sum + (Number(r.cost)||0), 0);
+  const finalY = doc.lastAutoTable.finalY + 20;
+  doc.setTextColor(30,30,30); doc.setFontSize(10); doc.setFont("helvetica","bold");
+  doc.text(`Total cost across ${rows.length} record(s): NGN ${totalCost.toLocaleString()}`, 30, finalY);
+
+  doc.save("Logistics_Maintenance_Report_" + new Date().toISOString().slice(0,10) + ".pdf");
 }
 
 init();
