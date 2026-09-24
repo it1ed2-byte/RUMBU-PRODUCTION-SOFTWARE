@@ -180,6 +180,24 @@
           <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">
             Production data is saved. Enter how many bags this batch produced, then generate a unique reference number and QR code for each — print and paste one on every bag.
           </p>
+
+          <!-- Step A: Flake Scan must be uploaded before QR generation is possible -->
+          <div id="flakeScanPrompt" style="background:#fefce8;border:1px solid #ca8a04;border-radius:10px;padding:14px 16px;margin-bottom:16px;">
+            <div style="font-size:13px;font-weight:800;color:#854d0e;margin-bottom:6px;">⚠️ Step Required Before Generating Labels</div>
+            <p style="font-size:12.5px;color:#713f12;margin:0 0 10px;">
+              Upload the Flake Scan quality result for this production run first.
+              QR label generation is blocked until a result is on file.
+            </p>
+            <a href="flake-scan-upload.html" target="_blank"
+               style="display:inline-block;padding:8px 16px;background:#854d0e;color:#fff;border-radius:7px;font-size:12.5px;font-weight:700;text-decoration:none;">
+              Upload Flake Scan Result →
+            </a>
+            <div id="flakeScanStatus" style="margin-top:10px;font-size:12px;color:var(--muted);"></div>
+            <button onclick="recheckFlakeScan()" style="margin-top:8px;padding:5px 12px;font-size:11.5px;background:none;border:1px solid #854d0e;color:#854d0e;border-radius:6px;cursor:pointer;">
+              ↻ I've uploaded it — check again
+            </button>
+          </div>
+
           <div class="grid2">
             <div>
               <label>Number of Bags Produced *</label>
@@ -595,8 +613,30 @@ async function saveAndContinue(){
     document.getElementById("prodSaveRow").style.display="none";
     document.getElementById("bagTrackingCard").style.display="block";
     document.getElementById("bagTrackingCard").scrollIntoView({behavior:"smooth"});
+    recheckFlakeScan(); // auto-check — hides the prompt if already uploaded
   }catch(e){ st.style.color="var(--bad)"; st.textContent="Error: "+e.message; }
 }
+
+// Check whether a Flake Scan result already exists for this run and
+// update the prompt box accordingly. Called automatically when the bag
+// tracking card opens, and again when the user clicks "I've uploaded it".
+async function recheckFlakeScan(){
+  const prompt = document.getElementById("flakeScanPrompt");
+  const statusEl = document.getElementById("flakeScanStatus");
+  if(!CURRENT_PROD_ID){ return; }
+  statusEl.textContent = "Checking...";
+  const { data, error } = await sb.from("pet_flake_scan_results").select("id").eq("production_id", CURRENT_PROD_ID).maybeSingle();
+  if(error){ statusEl.textContent = "Could not check: " + error.message; return; }
+  if(data){
+    // Result found — hide the warning, clear any previous gate error
+    prompt.style.display = "none";
+    document.getElementById("bagGenStatus").textContent = "";
+  } else {
+    prompt.style.display = "block";
+    statusEl.textContent = "No result on file yet.";
+  }
+}
+window.recheckFlakeScan = recheckFlakeScan;
 
 async function generateBagReferences(){
   const st=document.getElementById("bagGenStatus");
@@ -612,7 +652,7 @@ async function generateBagReferences(){
   if(checkErr){ st.style.color="var(--bad)"; st.textContent="Could not check for a quality result: " + checkErr.message; return; }
   if(!existingResult){
     st.style.color="var(--bad)";
-    st.textContent="❌ No Flake Scan quality result has been uploaded for this production run yet. Upload it in Flake Scan Quality Results before generating bag labels.";
+    st.innerHTML="❌ No Flake Scan quality result has been uploaded for this production run yet. &nbsp;<a href='flake-scan-upload.html' target='_blank' style='color:var(--bad);font-weight:700;text-decoration:underline;'>Upload it in Flake Scan Quality Results</a> before generating bag labels.";
     return;
   }
 

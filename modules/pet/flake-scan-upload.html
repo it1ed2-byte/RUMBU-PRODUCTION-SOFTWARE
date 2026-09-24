@@ -76,20 +76,24 @@ async function init(){
 }
 
 async function loadProductions(){
+  // Single nested join: pet_collections → pet_stage4_production → pet_flake_scan_results.
+  // The previous query joined pet_stage4_production twice (once directly, once aliased),
+  // which PostgREST rejects. One join is enough — the scan result nests inside it.
   const { data, error } = await sb.from("pet_collections")
-    .select("id,form_number,agent_name,section,pet_stage4_production(id),pet_flake_scan_results:pet_stage4_production(pet_flake_scan_results(id))")
+    .select("id,form_number,agent_name,section,pet_stage4_production(id,pet_flake_scan_results(id))")
     .not("pet_stage4_production", "is", null)
     .order("updated_at", { ascending: false })
     .limit(200);
   if(error){ document.getElementById("prodList").innerHTML = "Error: " + error.message; return; }
   PRODUCTIONS = (data||[]).map(c=>{
     const prod = Array.isArray(c.pet_stage4_production) ? c.pet_stage4_production[0] : c.pet_stage4_production;
-    const nested = Array.isArray(c.pet_flake_scan_results) ? c.pet_flake_scan_results[0] : c.pet_flake_scan_results;
-    const existingResult = nested && nested.pet_flake_scan_results && (Array.isArray(nested.pet_flake_scan_results) ? nested.pet_flake_scan_results[0] : nested.pet_flake_scan_results);
+    const scanResult = prod && prod.pet_flake_scan_results
+      ? (Array.isArray(prod.pet_flake_scan_results) ? prod.pet_flake_scan_results[0] : prod.pet_flake_scan_results)
+      : null;
     return {
       collection_id: c.id, form_number: c.form_number, agent_name: c.agent_name, section: c.section,
       production_id: prod ? prod.id : null,
-      has_result: !!existingResult
+      has_result: !!scanResult
     };
   }).filter(p=>p.production_id);
   renderProdList();
