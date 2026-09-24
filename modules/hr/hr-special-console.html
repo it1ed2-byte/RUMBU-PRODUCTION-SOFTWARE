@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>HR Special Console — RumbuApp</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+  :root{
+    --hr-navy:#1F3864; --hr-gold:#c8a34e; --hr-teal:#0f766e; --hr-blue:#2E75B6;
+    --hr-red:#c0392b; --hr-green:#1e7d34; --hr-muted:#6b7280;
+  }
+  *{box-sizing:border-box;}
+  body{padding:0;margin:0;background:var(--bg);}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;padding:14px;}
+
+  .console-header{
+    background:linear-gradient(120deg,#1F3864 0%,#2E75B6 55%,#0f766e 100%);
+    color:#fff;padding:18px 26px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;
+  }
+  .console-header h1{margin:0;font-size:22px;letter-spacing:1px;font-weight:800;}
+  .console-header .sub{font-size:12px;opacity:.85;margin-top:3px;}
+  .console-header .who{text-align:right;font-size:12.5px;}
+  .console-header .who b{font-size:14px;}
+  .console-header .actions{display:flex;gap:8px;margin-top:6px;}
+  .console-header button{background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.35);padding:6px 12px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;}
+  .console-header button:hover{background:rgba(255,255,255,.25);}
+
+  .tabs{display:flex;gap:0;background:var(--card);border-bottom:1px solid var(--line);padding:0 22px;overflow-x:auto;}
+  .tab-btn{padding:13px 18px;border:none;background:none;color:var(--muted);font-weight:700;font-size:13px;cursor:pointer;border-bottom:3px solid transparent;white-space:nowrap;}
+  .tab-btn.active{color:var(--heading);border-bottom-color:var(--hr-navy);}
+
+  .wrap{max-width:1200px;margin:0 auto;padding:20px;}
+  .panel{display:none;}
+  .panel.active{display:block;}
+
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:18px;}
+  .kpi{background:var(--card);border:1px solid var(--line);border-top:4px solid var(--kc,#94a3b8);border-radius:12px;padding:16px;text-align:center;}
+  .kpi .n{font-size:26px;font-weight:800;color:var(--heading);}
+  .kpi .l{font-size:11px;color:var(--hr-muted);margin-top:4px;font-weight:bold;text-transform:uppercase;letter-spacing:.4px;}
+
+  .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:16px;}
+  .bar-row{display:flex;align-items:center;gap:10px;margin:7px 0;font-size:13px;}
+  .bar-row .lbl{width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .bar-row .track{flex:1;background:var(--bg);border-radius:6px;height:16px;overflow:hidden;}
+  .bar-row .fill{height:100%;}
+  .bar-row .val{width:44px;text-align:right;font-weight:bold;color:var(--heading);font-size:12px;}
+
+  label{font-size:12px;font-weight:700;display:block;margin:10px 0 4px;color:var(--muted);}
+  input,select,textarea{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);}
+  .form-row-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;}
+  .form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  @media(max-width:760px){ .form-row-3,.form-row{grid-template-columns:1fr;} }
+  .locked-branch{background:var(--bg);border-radius:8px;padding:10px 12px;font-size:13px;font-weight:700;color:var(--heading);}
+
+  table{width:100%;border-collapse:collapse;font-size:12.5px;}
+  th{background:var(--th-bg);color:var(--th-fg);text-align:left;padding:8px;white-space:nowrap;}
+  td{padding:8px;border-bottom:1px solid var(--line);vertical-align:top;}
+  .act-btn{padding:4px 10px;border:none;border-radius:6px;font-size:11.5px;font-weight:700;cursor:pointer;margin-right:4px;}
+  .act-edit{background:#dbeafe;color:#1e40af;}
+  .act-deactivate{background:#fee2e2;color:#991b1b;}
+  .act-activate{background:#dcfce7;color:#166534;}
+  .badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10.5px;font-weight:700;}
+  .b-active{background:#dcfce7;color:#166534;}
+  .b-inactive{background:#fee2e2;color:#991b1b;}
+
+  .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;justify-content:center;align-items:flex-start;padding:40px 16px;overflow-y:auto;}
+  .modal-overlay.open{display:flex;}
+  .modal{background:var(--card);border-radius:14px;padding:26px;width:100%;max-width:600px;}
+</style>
+</head>
+<body>
+<div id="connStatus">Loading...</div>
+
+<div id="app" style="display:none;">
+  <div class="console-header">
+    <div>
+      <h1>HR SPECIAL CONSOLE</h1>
+      <div class="sub" id="branchLabel">—</div>
+    </div>
+    <div>
+      <div class="who"><b id="whoName">—</b><br>HR Console Access</div>
+      <div class="actions">
+        <button onclick="goToOtherModules()" title="Switch to the normal dashboard for anything else assigned to your account">↗ Other Modules</button>
+        <button onclick="location.reload()">⟳ Refresh</button>
+        <button onclick="doLogout()">Log Out</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="dashboard" onclick="setTab('dashboard',this)">Dashboard</button>
+    <button class="tab-btn" data-tab="add" onclick="setTab('add',this)">Add Employee</button>
+    <button class="tab-btn" data-tab="bulk" onclick="setTab('bulk',this)">Bulk Upload</button>
+    <button class="tab-btn" data-tab="directory" onclick="setTab('directory',this)">Employee Directory</button>
+    <button class="tab-btn" data-tab="log" onclick="setTab('log',this)">Activity Log</button>
+  </div>
+
+  <div class="wrap">
+
+    <!-- DASHBOARD -->
+    <div class="panel active" id="panel-dashboard">
+      <div class="kpis" id="dashKpis"></div>
+      <div class="grid2">
+        <div class="card-panel"><h3>Employees by Department</h3><div id="chartByDept"></div></div>
+        <div class="card-panel"><h3>Employees by Unit</h3><div id="chartByUnit"></div></div>
+      </div>
+    </div>
+
+    <!-- ADD EMPLOYEE -->
+    <div class="panel" id="panel-add">
+      <div class="card-panel">
+        <h3 style="margin-top:0;">Add Employee</h3>
+        <label>Branch</label>
+        <div class="locked-branch" id="addBranchLabel">—</div>
+        <div class="form-row-3">
+          <div><label>Employee ID *</label><input id="a_employee_id"></div>
+          <div><label>Full Name *</label><input id="a_full_name"></div>
+          <div><label>Rank</label><input id="a_rank"></div>
+        </div>
+        <div class="form-row-3">
+          <div><label>Department *</label><select id="a_department" onchange="onAddDeptChange()"><option value="">— select —</option></select></div>
+          <div><label>Unit</label><select id="a_unit" disabled><option value="">— none —</option></select></div>
+          <div><label>Monthly Salary (NGN)</label><input type="number" step="0.01" id="a_salary"></div>
+        </div>
+        <div class="form-row-3">
+          <div><label>Email</label><input type="email" id="a_email"></div>
+          <div><label>Phone</label><input id="a_phone"></div>
+          <div><label>Bank Name</label><input id="a_bank_name"></div>
+        </div>
+        <div class="form-row">
+          <div><label>Bank Account Number</label><input id="a_bank_account_number"></div>
+          <div><label>Sort Code</label><input id="a_sort_code"></div>
+        </div>
+        <button onclick="saveNewEmployee()" style="margin-top:16px;">Add Employee</button>
+        <div class="status" id="addStatus"></div>
+      </div>
+    </div>
+
+    <!-- BULK UPLOAD -->
+    <div class="panel" id="panel-bulk">
+      <div class="card-panel">
+        <h3 style="margin-top:0;">Bulk Upload</h3>
+        <p style="font-size:12.5px;color:var(--muted);">All rows in one upload share the same Branch, Department, and Unit, chosen below. Download the sample file to see the exact column headers expected.</p>
+        <button class="btn-ghost" onclick="downloadSampleTemplate()" style="margin-bottom:14px;">⬇ Download Sample Excel Template</button>
+
+        <label>Branch</label>
+        <div class="locked-branch" id="bulkBranchLabel">—</div>
+        <div class="form-row">
+          <div><label>Department *</label><select id="b_department" onchange="onBulkDeptChange()"><option value="">— select —</option></select></div>
+          <div><label>Unit</label><select id="b_unit" disabled><option value="">— none —</option></select></div>
+        </div>
+        <label>Upload Excel or CSV file</label>
+        <input type="file" id="b_file" accept=".xlsx,.xls,.csv" onchange="loadBulkFile()">
+        <label>Or paste rows directly</label>
+        <textarea id="b_text" rows="8" style="font-family:monospace;font-size:12px;" placeholder="Employee ID,Full Name,Rank,Salary,Email,Phone,Bank Name,Bank Account Number,Sort Code"></textarea>
+        <button onclick="processBulkUpload()" style="margin-top:12px;">Upload Employees</button>
+        <div class="status" id="bulkStatus"></div>
+        <div id="bulkResults" style="margin-top:10px;font-size:12.5px;"></div>
+      </div>
+    </div>
+
+    <!-- DIRECTORY -->
+    <div class="panel" id="panel-directory">
+      <div class="card-panel">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+          <h3 style="margin:0;">Employee Directory</h3>
+          <input type="text" id="dirSearch" placeholder="Search name, ID, department..." style="width:260px;" oninput="renderDirectory()">
+        </div>
+        <div style="overflow-x:auto;margin-top:12px;"><table id="dirTable">
+          <thead><tr><th>Employee ID</th><th>Name</th><th>Department</th><th>Unit</th><th>Rank</th><th>Salary</th><th>Status</th><th></th></tr></thead>
+          <tbody id="dirBody"></tbody>
+        </table></div>
+      </div>
+    </div>
+
+    <!-- ACTIVITY LOG -->
+    <div class="panel" id="panel-log">
+      <div class="card-panel">
+        <h3 style="margin-top:0;">Activity Log</h3>
+        <div id="logWrap" style="font-size:12.5px;"></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- EDIT MODAL -->
+<div class="modal-overlay" id="editModal">
+  <div class="modal">
+    <h3 style="margin-top:0;">Edit Employee</h3>
+    <input type="hidden" id="e_id">
+    <div class="form-row-3">
+      <div><label>Employee ID</label><input id="e_employee_id" readonly style="background:var(--bg);"></div>
+      <div><label>Full Name *</label><input id="e_full_name"></div>
+      <div><label>Rank</label><input id="e_rank"></div>
+    </div>
+    <div class="form-row-3">
+      <div><label>Department *</label><select id="e_department" onchange="onEditDeptChange()"><option value="">— select —</option></select></div>
+      <div><label>Unit</label><select id="e_unit" disabled><option value="">— none —</option></select></div>
+      <div><label>Monthly Salary (NGN)</label><input type="number" step="0.01" id="e_salary"></div>
+    </div>
+    <div class="form-row-3">
+      <div><label>Email</label><input type="email" id="e_email"></div>
+      <div><label>Phone</label><input id="e_phone"></div>
+      <div><label>Bank Name</label><input id="e_bank_name"></div>
+    </div>
+    <div class="form-row">
+      <div><label>Bank Account Number</label><input id="e_bank_account_number"></div>
+      <div><label>Sort Code</label><input id="e_sort_code"></div>
+    </div>
+    <div style="margin-top:16px;display:flex;gap:10px;">
+      <button onclick="saveEditEmployee()">Save Changes</button>
+      <button class="btn-ghost" onclick="closeEditModal()">Cancel</button>
+    </div>
+    <div class="status" id="editStatus"></div>
+  </div>
+</div>
+
+<script>
+let ME = null;
+let MY_BRANCH = null;
+let MY_SECTION_ID = null;
+let DEPARTMENTS = [];
+let UNITS = [];
+let EMPLOYEES = [];
+let SALARIES = {}; // employee_id (numeric pk) -> salary
+
+const BULK_FIELDS = ["employee_id","full_name","rank","salary","email","phone","bank_name","bank_account_number","sort_code"];
+
+function setTab(tab, btn){
+  document.querySelectorAll(".tab-btn").forEach(b=>b.classList.remove("active"));
+  document.querySelectorAll(".panel").forEach(p=>p.classList.remove("active"));
+  btn.classList.add("active");
+  document.getElementById("panel-"+tab).classList.add("active");
+}
+window.setTab = setTab;
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+
+    // Defensive: this console is only for the hr_console role. Anyone
+    // else who somehow lands here (a stale link, a bookmark) is sent
+    // back to the normal app shell rather than seeing HR data.
+    if(ME.role !== "hr_console"){
+      window.location.href = "../../index.html";
+      return;
+    }
+
+    MY_BRANCH = (ME.sectionNames && ME.sectionNames.length) ? ME.sectionNames[0] : null;
+    if(!MY_BRANCH){
+      status.style.display = "block";
+      status.style.color = "var(--hr-red)";
+      status.textContent = "No branch is assigned to this account yet. Ask your Super Admin to assign one in Manage Role.";
+      return;
+    }
+
+    document.getElementById("whoName").textContent = ME.username;
+    document.getElementById("branchLabel").textContent = MY_BRANCH + " — HR Special Console";
+    document.getElementById("addBranchLabel").textContent = MY_BRANCH;
+    document.getElementById("bulkBranchLabel").textContent = MY_BRANCH;
+
+    const { data: sectionRow } = await sb.from("app_sections").select("id").eq("name", MY_BRANCH).maybeSingle();
+    MY_SECTION_ID = sectionRow ? sectionRow.id : null;
+
+    status.style.display = "none";
+    document.getElementById("app").style.display = "block";
+
+    await loadReferenceData();
+    await loadEmployees();
+    renderDashboard();
+    renderDirectory();
+    await loadActivityLog();
+  }catch(e){
+    status.style.display = "block";
+    status.style.color = "var(--hr-red)";
+    status.textContent = "Error: " + e.message;
+  }
+}
+
+function doLogout(){ logout("../../login.html"); }
+window.doLogout = doLogout;
+
+// Sets a one-time flag that index.html checks and immediately consumes —
+// this is the only way to reach anything assigned via Manage Role beyond
+// the console itself. It never persists past that one navigation, so a
+// fresh login always lands back on the console, as intended.
+function goToOtherModules(){
+  try{ sessionStorage.setItem("hr_console_bypass_redirect", "1"); }catch(e){}
+  window.location.href = "../../index.html";
+}
+window.goToOtherModules = goToOtherModules;
+
+async function loadReferenceData(){
+  const { data: depts } = await sb.from("departments").select("id,name").eq("section", MY_BRANCH).order("name");
+  DEPARTMENTS = depts || [];
+  const deptIds = DEPARTMENTS.map(d=>d.id);
+  const { data: units } = deptIds.length
+    ? await sb.from("units").select("id,name,department_id").in("department_id", deptIds).order("name")
+    : { data: [] };
+  UNITS = units || [];
+
+  const deptOptions = '<option value="">— select —</option>' + DEPARTMENTS.map(d=>`<option value="${d.id}">${d.name}</option>`).join("");
+  document.getElementById("a_department").innerHTML = deptOptions;
+  document.getElementById("b_department").innerHTML = deptOptions;
+  document.getElementById("e_department").innerHTML = deptOptions;
+}
+
+function populateUnitSelect(selectId, deptId){
+  const sel = document.getElementById(selectId);
+  const matching = UNITS.filter(u=>String(u.department_id)===String(deptId));
+  sel.innerHTML = '<option value="">— none —</option>' + matching.map(u=>`<option value="${u.id}">${u.name}</option>`).join("");
+  sel.disabled = matching.length === 0;
+}
+function onAddDeptChange(){ populateUnitSelect("a_unit", document.getElementById("a_department").value); }
+function onBulkDeptChange(){ populateUnitSelect("b_unit", document.getElementById("b_department").value); }
+function onEditDeptChange(){ populateUnitSelect("e_unit", document.getElementById("e_department").value); }
+window.onAddDeptChange = onAddDeptChange;
+window.onBulkDeptChange = onBulkDeptChange;
+window.onEditDeptChange = onEditDeptChange;
+
+async function loadEmployees(){
+  const { data, error } = await sb.from("employees").select("*").eq("branch", MY_BRANCH).order("full_name");
+  if(error) throw error;
+  EMPLOYEES = data || [];
+
+  const ids = EMPLOYEES.map(e=>e.id);
+  SALARIES = {};
+  if(ids.length){
+    const { data: sal } = await sb.from("employee_salaries").select("employee_id,salary").in("employee_id", ids);
+    (sal||[]).forEach(s=>{ SALARIES[s.employee_id] = s.salary; });
+  }
+}
+
+function deptName(id){ const d = DEPARTMENTS.find(x=>x.id===id); return d ? d.name : (id||"—"); }
+function unitName(id){ const u = UNITS.find(x=>x.id===id); return u ? u.name : "—"; }
+
+// ---------------- DASHBOARD ----------------
+function renderDashboard(){
+  const active = EMPLOYEES.filter(e=>!e.deactivated_by);
+  document.getElementById("dashKpis").innerHTML = `
+    <div class="kpi" style="--kc:var(--hr-navy);"><div class="n">${EMPLOYEES.length}</div><div class="l">Total Employees</div></div>
+    <div class="kpi" style="--kc:var(--hr-green);"><div class="n">${active.length}</div><div class="l">Active</div></div>
+    <div class="kpi" style="--kc:var(--hr-red);"><div class="n">${EMPLOYEES.length-active.length}</div><div class="l">Deactivated</div></div>
+    <div class="kpi" style="--kc:var(--hr-gold);"><div class="n">${DEPARTMENTS.length}</div><div class="l">Departments</div></div>
+    <div class="kpi" style="--kc:var(--hr-blue);"><div class="n">${UNITS.length}</div><div class="l">Units</div></div>
+  `;
+
+  const deptMap = {};
+  EMPLOYEES.forEach(e=>{ const n = e.department || "Unassigned"; deptMap[n]=(deptMap[n]||0)+1; });
+  hbars("chartByDept", Object.entries(deptMap).sort((a,b)=>b[1]-a[1]), "#1F3864");
+
+  const unitMap = {};
+  EMPLOYEES.forEach(e=>{ const n = e.unit || "Unassigned"; unitMap[n]=(unitMap[n]||0)+1; });
+  hbars("chartByUnit", Object.entries(unitMap).sort((a,b)=>b[1]-a[1]), "#2E75B6");
+}
+
+function hbars(containerId, entries, color){
+  const wrap = document.getElementById(containerId);
+  if(!entries.length){ wrap.innerHTML = "<p style='color:var(--hr-muted);font-size:13px;'>No data.</p>"; return; }
+  const max = Math.max.apply(null, entries.map(e=>e[1])) || 1;
+  wrap.innerHTML = entries.map(([label,val])=>{
+    const p = Math.round((val/max)*100);
+    return `<div class="bar-row"><div class="lbl" title="${label}">${label}</div>`+
+           `<div class="track"><div class="fill" style="width:${p}%;background:${color};"></div></div>`+
+           `<div class="val">${val}</div></div>`;
+  }).join("");
+}
+
+// ---------------- ADD EMPLOYEE ----------------
+async function saveNewEmployee(){
+  const status = document.getElementById("addStatus");
+  const employeeId = document.getElementById("a_employee_id").value.trim();
+  const fullName = document.getElementById("a_full_name").value.trim();
+  const deptId = document.getElementById("a_department").value;
+
+  if(!employeeId){ status.className="status err"; status.textContent="Employee ID is required."; return; }
+  if(!fullName){ status.className="status err"; status.textContent="Full Name is required."; return; }
+  if(!deptId){ status.className="status err"; status.textContent="Select a Department."; return; }
+
+  const deptObj = DEPARTMENTS.find(d=>String(d.id)===deptId);
+  const unitId = document.getElementById("a_unit").value;
+  const unitObj = unitId ? UNITS.find(u=>String(u.id)===unitId) : null;
+  const salaryVal = document.getElementById("a_salary").value;
+
+  status.className="status"; status.textContent="Saving...";
+  try{
+    const { data: inserted, error } = await sb.from("employees").insert({
+      employee_id: employeeId, full_name: fullName, branch: MY_BRANCH,
+      department: deptObj ? deptObj.name : null, unit: unitObj ? unitObj.name : null,
+      rank: document.getElementById("a_rank").value.trim() || null,
+      email: document.getElementById("a_email").value.trim() || null,
+      phone: document.getElementById("a_phone").value.trim() || null,
+      bank_name: document.getElementById("a_bank_name").value.trim() || null,
+      bank_account_number: document.getElementById("a_bank_account_number").value.trim() || null,
+      sort_code: document.getElementById("a_sort_code").value.trim() || null
+    }).select("id").single();
+    if(error) throw error;
+
+    if(salaryVal){
+      const { error: salErr } = await sb.from("employee_salaries").insert({ employee_id: inserted.id, salary: Number(salaryVal) });
+      if(salErr) throw new Error("Employee was created, but salary could not be saved: " + salErr.message);
+    }
+
+    await logActivity("hr_console_employee_added", ME.username + " added employee \"" + fullName + "\" (" + employeeId + ") in " + MY_BRANCH);
+
+    status.className="status ok"; status.textContent="✅ Employee added.";
+    ["a_employee_id","a_full_name","a_rank","a_salary","a_email","a_phone","a_bank_name","a_bank_account_number","a_sort_code"].forEach(id=>document.getElementById(id).value="");
+    document.getElementById("a_department").value = "";
+    document.getElementById("a_unit").innerHTML = '<option value="">— none —</option>';
+    document.getElementById("a_unit").disabled = true;
+
+    await loadEmployees();
+    renderDashboard();
+    renderDirectory();
+  }catch(e){
+    status.className="status err";
+    status.textContent = (e.message && e.message.toLowerCase().indexOf("duplicate") !== -1)
+      ? "❌ That Employee ID is already in use."
+      : "❌ " + (e.message||e);
+  }
+}
+window.saveNewEmployee = saveNewEmployee;
+
+// ---------------- BULK UPLOAD ----------------
+function downloadSampleTemplate(){
+  const sample = [
+    BULK_FIELDS.map(f=>f.replace(/_/g," ").replace(/\b\w/g,c=>c.toUpperCase())),
+    ["RIG-0301","Amina Yusuf","Officer","150000","amina@rumbuindustries.com","08030000000","GTBank","0123456789","058-152-036"],
+    ["RIG-0302","Chuka Obi","Supervisor","220000","chuka@rumbuindustries.com","08030000001","Access Bank","0987654321","044-150-149"]
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(sample);
+  ws["!cols"] = BULK_FIELDS.map(()=>({wch:20}));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Employees");
+  XLSX.writeFile(wb, "HR_Console_Bulk_Upload_Template.xlsx");
+}
+window.downloadSampleTemplate = downloadSampleTemplate;
+
+function loadBulkFile(){
+  const file = document.getElementById("b_file").files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = function(evt){
+    try{
+      const wb = XLSX.read(evt.target.result, { type: "binary" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { header:1, raw:false, defval:"" });
+      const csv = rows.map(r=>r.map(c=>String(c).replace(/,/g,";")).join(",")).join("\n");
+      document.getElementById("b_text").value = csv;
+    }catch(e){
+      document.getElementById("bulkStatus").className = "status err";
+      document.getElementById("bulkStatus").textContent = "Could not read that file: " + e.message;
+    }
+  };
+  reader.readAsBinaryString(file);
+}
+window.loadBulkFile = loadBulkFile;
+
+function parseCsvRows(text){
+  return text.split(/\r?\n/).map(l=>l.trim()).filter(l=>l.length).map(l=>l.split(",").map(c=>c.trim()));
+}
+
+async function processBulkUpload(){
+  const status = document.getElementById("bulkStatus");
+  const results = document.getElementById("bulkResults");
+  results.innerHTML = "";
+  const deptId = document.getElementById("b_department").value;
+  const text = document.getElementById("b_text").value || "";
+
+  if(!deptId){ status.className="status err"; status.textContent="Choose the Department all these employees belong to."; return; }
+  if(!text.trim()){ status.className="status err"; status.textContent="Paste rows or upload a file first."; return; }
+
+  const deptObj = DEPARTMENTS.find(d=>String(d.id)===deptId);
+  const unitId = document.getElementById("b_unit").value;
+  const unitObj = unitId ? UNITS.find(u=>String(u.id)===unitId) : null;
+
+  const rows = parseCsvRows(text);
+  if(!rows.length){ status.className="status err"; status.textContent="No rows found."; return; }
+
+  const firstRowLower = rows[0].map(c=>c.toLowerCase());
+  const looksLikeHeader = firstRowLower.some(c=>c.includes("employee") || c.includes("name"));
+  const dataRows = looksLikeHeader ? rows.slice(1) : rows;
+  if(!dataRows.length){ status.className="status err"; status.textContent="Only a header row was found — no employees to add."; return; }
+
+  status.className="status"; status.textContent="Uploading...";
+  const valid = [];
+  const errors = [];
+  dataRows.forEach((r, idx)=>{
+    const [employee_id, full_name, rank, salary, email, phone, bank_name, bank_account_number, sort_code] = r;
+    if(!employee_id || !full_name){ errors.push("Row " + (idx+1) + ": missing Employee ID or Full Name."); return; }
+    valid.push({
+      employee_id, full_name, rank: rank||null, email: email||null, phone: phone||null,
+      bank_name: bank_name||null, bank_account_number: bank_account_number||null, sort_code: sort_code||null,
+      _salary: salary || null
+    });
+  });
+
+  if(!valid.length){ status.className="status err"; status.textContent="No valid rows to upload."; results.innerHTML = errors.map(e=>`<div style="color:var(--hr-red);">${e}</div>`).join(""); return; }
+
+  const payload = valid.map(v=>({
+    employee_id: v.employee_id, full_name: v.full_name, branch: MY_BRANCH,
+    department: deptObj ? deptObj.name : null, unit: unitObj ? unitObj.name : null,
+    rank: v.rank, email: v.email, phone: v.phone, bank_name: v.bank_name,
+    bank_account_number: v.bank_account_number, sort_code: v.sort_code
+  }));
+
+  const { data: inserted, error } = await sb.from("employees").insert(payload).select("id,employee_id");
+  if(error){ status.className="status err"; status.textContent="❌ " + error.message; return; }
+
+  // Attach salaries where provided, matched back up by employee_id
+  const salaryRows = [];
+  (inserted||[]).forEach(row=>{
+    const src = valid.find(v=>v.employee_id === row.employee_id);
+    if(src && src._salary) salaryRows.push({ employee_id: row.id, salary: Number(src._salary) });
+  });
+  if(salaryRows.length){
+    await sb.from("employee_salaries").insert(salaryRows);
+  }
+
+  await logActivity("hr_console_bulk_uploaded", ME.username + " bulk-added " + valid.length + " employees to " + MY_BRANCH + " / " + (deptObj?deptObj.name:"") + (errors.length ? (" (" + errors.length + " skipped)") : ""));
+
+  status.className="status ok"; status.textContent = "✅ " + valid.length + " employee(s) added" + (errors.length ? (", " + errors.length + " skipped") : "") + ".";
+  results.innerHTML = errors.map(e=>`<div style="color:var(--hr-red);">${e}</div>`).join("");
+  document.getElementById("b_text").value = "";
+  document.getElementById("b_file").value = "";
+
+  await loadEmployees();
+  renderDashboard();
+  renderDirectory();
+}
+window.processBulkUpload = processBulkUpload;
+
+// ---------------- DIRECTORY / CRUD ----------------
+function renderDirectory(){
+  const q = document.getElementById("dirSearch").value.trim().toLowerCase();
+  const rows = EMPLOYEES.filter(e=>{
+    if(!q) return true;
+    return ((e.employee_id||"")+(e.full_name||"")+(e.department||"")+(e.unit||"")).toLowerCase().includes(q);
+  });
+  const body = document.getElementById("dirBody");
+  if(!rows.length){ body.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--hr-muted);">No employees found.</td></tr>`; return; }
+  body.innerHTML = rows.map(e=>{
+    const salary = SALARIES[e.id];
+    const active = !e.deactivated_by;
+    return `<tr>
+      <td><b>${e.employee_id}</b></td>
+      <td>${e.full_name}</td>
+      <td>${e.department||"—"}</td>
+      <td>${e.unit||"—"}</td>
+      <td>${e.rank||"—"}</td>
+      <td>${salary!=null ? "NGN "+Number(salary).toLocaleString() : "—"}</td>
+      <td><span class="badge ${active?'b-active':'b-inactive'}">${active?'Active':'Deactivated'}</span></td>
+      <td>
+        <button class="act-btn act-edit" onclick="openEditModal(${e.id})">Edit</button>
+        ${active
+          ? `<button class="act-btn act-deactivate" onclick="toggleActive(${e.id}, true)">Deactivate</button>`
+          : `<button class="act-btn act-activate" onclick="toggleActive(${e.id}, false)">Reactivate</button>`}
+      </td>
+    </tr>`;
+  }).join("");
+}
+window.renderDirectory = renderDirectory;
+
+async function toggleActive(empId, deactivate){
+  if(!confirm(deactivate ? "Deactivate this employee?" : "Reactivate this employee?")) return;
+  const payload = deactivate ? { deactivated_by: ME.id } : { deactivated_by: null };
+  const { error } = await sb.from("employees").update(payload).eq("id", empId);
+  if(error){ alert("Error: " + error.message); return; }
+  const emp = EMPLOYEES.find(e=>e.id===empId);
+  await logActivity(deactivate ? "hr_console_employee_deactivated" : "hr_console_employee_reactivated",
+    ME.username + (deactivate ? " deactivated " : " reactivated ") + (emp?emp.full_name:empId));
+  await loadEmployees();
+  renderDashboard();
+  renderDirectory();
+}
+window.toggleActive = toggleActive;
+
+function openEditModal(empId){
+  const e = EMPLOYEES.find(x=>x.id===empId);
+  if(!e) return;
+  document.getElementById("e_id").value = e.id;
+  document.getElementById("e_employee_id").value = e.employee_id;
+  document.getElementById("e_full_name").value = e.full_name||"";
+  document.getElementById("e_rank").value = e.rank||"";
+  document.getElementById("e_email").value = e.email||"";
+  document.getElementById("e_phone").value = e.phone||"";
+  document.getElementById("e_bank_name").value = e.bank_name||"";
+  document.getElementById("e_bank_account_number").value = e.bank_account_number||"";
+  document.getElementById("e_sort_code").value = e.sort_code||"";
+  document.getElementById("e_salary").value = SALARIES[e.id] ?? "";
+
+  const deptObj = DEPARTMENTS.find(d=>d.name===e.department);
+  document.getElementById("e_department").value = deptObj ? deptObj.id : "";
+  if(deptObj) populateUnitSelect("e_unit", deptObj.id);
+  const unitObj = UNITS.find(u=>u.name===e.unit);
+  document.getElementById("e_unit").value = unitObj ? unitObj.id : "";
+
+  document.getElementById("editStatus").textContent = "";
+  document.getElementById("editModal").classList.add("open");
+}
+window.openEditModal = openEditModal;
+
+function closeEditModal(){ document.getElementById("editModal").classList.remove("open"); }
+window.closeEditModal = closeEditModal;
+
+async function saveEditEmployee(){
+  const status = document.getElementById("editStatus");
+  const empId = Number(document.getElementById("e_id").value);
+  const fullName = document.getElementById("e_full_name").value.trim();
+  const deptId = document.getElementById("e_department").value;
+  if(!fullName){ status.className="status err"; status.textContent="Full Name is required."; return; }
+  if(!deptId){ status.className="status err"; status.textContent="Select a Department."; return; }
+
+  const deptObj = DEPARTMENTS.find(d=>String(d.id)===deptId);
+  const unitId = document.getElementById("e_unit").value;
+  const unitObj = unitId ? UNITS.find(u=>String(u.id)===unitId) : null;
+  const salaryVal = document.getElementById("e_salary").value;
+
+  status.className="status"; status.textContent="Saving...";
+  try{
+    const { error } = await sb.from("employees").update({
+      full_name: fullName,
+      department: deptObj ? deptObj.name : null,
+      unit: unitObj ? unitObj.name : null,
+      rank: document.getElementById("e_rank").value.trim() || null,
+      email: document.getElementById("e_email").value.trim() || null,
+      phone: document.getElementById("e_phone").value.trim() || null,
+      bank_name: document.getElementById("e_bank_name").value.trim() || null,
+      bank_account_number: document.getElementById("e_bank_account_number").value.trim() || null,
+      sort_code: document.getElementById("e_sort_code").value.trim() || null
+    }).eq("id", empId);
+    if(error) throw error;
+
+    if(salaryVal){
+      await sb.from("employee_salaries").upsert({ employee_id: empId, salary: Number(salaryVal) }, { onConflict: "employee_id" });
+    }
+
+    await logActivity("hr_console_employee_edited", ME.username + " edited employee \"" + fullName + "\"");
+    status.className="status ok"; status.textContent="✅ Saved.";
+    await loadEmployees();
+    renderDashboard();
+    renderDirectory();
+    setTimeout(closeEditModal, 700);
+  }catch(e){
+    status.className="status err"; status.textContent="❌ " + (e.message||e);
+  }
+}
+window.saveEditEmployee = saveEditEmployee;
+
+document.getElementById("editModal").addEventListener("click", function(e){ if(e.target===this) closeEditModal(); });
+
+// ---------------- ACTIVITY LOG ----------------
+async function loadActivityLog(){
+  const { data, error } = await sb.from("activity_log")
+    .select("*").eq("actor_id", ME.id).order("created_at",{ascending:false}).limit(100);
+  const wrap = document.getElementById("logWrap");
+  if(error){ wrap.innerHTML = "Error: " + error.message; return; }
+  if(!data || !data.length){ wrap.innerHTML = "<p style='color:var(--hr-muted);'>No activity logged yet.</p>"; return; }
+  wrap.innerHTML = `<table><thead><tr><th>When</th><th>Action</th><th>Description</th></tr></thead><tbody>` +
+    data.map(r=>`<tr><td>${new Date(r.created_at).toLocaleString("en-GB")}</td><td>${r.action}</td><td>${r.description||""}</td></tr>`).join("") +
+    `</tbody></table>`;
+}
+
+async function logActivity(action, description){
+  try{
+    await sb.from("activity_log").insert({ actor_id: ME.id, action, description, section_id: MY_SECTION_ID });
+  }catch(e){ console.warn("Activity log failed:", e.message||e); }
+}
+
+init();
+</script>
+</body>
+</html>
