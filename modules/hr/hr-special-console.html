@@ -921,18 +921,38 @@ async function logActivity(action, description){
 
 function renderRefDataLists(){
   document.getElementById("rdBranchList").innerHTML = BRANCHES.length
-    ? "<b>Existing branches:</b> " + BRANCHES.map(b=>b.name).join(", ")
+    ? `<table><thead><tr><th>Branch</th><th></th></tr></thead><tbody>` +
+      BRANCHES.map(b=>`<tr>
+        <td><input id="rd_branch_head_${b.id}" value="${b.name}" style="margin:0;"></td>
+        <td style="white-space:nowrap;">
+          <button class="act-btn act-edit" onclick="renameBranchRd(${b.id})">Save</button>
+          <button class="act-btn act-deactivate" onclick="deleteBranchRd(${b.id},'${b.name.replace(/'/g,"\\'")}')">Delete</button>
+        </td>
+      </tr>`).join("") + `</tbody></table>`
     : "<span style='color:var(--hr-muted);'>No branches yet.</span>";
 
   document.getElementById("rdDeptList").innerHTML = DEPARTMENTS.length
-    ? "<b>Existing departments:</b><br>" + DEPARTMENTS.map(d=>`${d.name} <span style='color:var(--hr-muted);'>(${d.section})</span>`).join("<br>")
+    ? `<table><thead><tr><th>Department</th><th>Branch</th><th></th></tr></thead><tbody>` +
+      DEPARTMENTS.map(d=>`<tr>
+        <td><input id="rd_dept_head_${d.id}" value="${d.name}" style="margin:0;"></td>
+        <td>${d.section}</td>
+        <td style="white-space:nowrap;">
+          <button class="act-btn act-edit" onclick="renameDepartmentRd(${d.id})">Save</button>
+          <button class="act-btn act-deactivate" onclick="deleteDepartmentRd(${d.id},'${d.name.replace(/'/g,"\\'")}')">Delete</button>
+        </td>
+      </tr>`).join("") + `</tbody></table>`
     : "<span style='color:var(--hr-muted);'>No departments yet.</span>";
 
   document.getElementById("rdUnitList").innerHTML = UNITS.length
-    ? "<b>Existing units:</b><br>" + UNITS.map(u=>{
+    ? `<table><thead><tr><th>Unit</th><th>Department</th><th></th></tr></thead><tbody>` +
+      UNITS.map(u=>{
         const dept = DEPARTMENTS.find(d=>d.id===u.department_id);
-        return `${u.name} <span style='color:var(--hr-muted);'>(${dept?dept.name+" — "+dept.section:"—"})</span>`;
-      }).join("<br>")
+        return `<tr>
+          <td>${u.name}</td>
+          <td>${dept?dept.name+" — "+dept.section:"—"}</td>
+          <td><button class="act-btn act-deactivate" onclick="deleteUnitRd(${u.id},'${u.name.replace(/'/g,"\\'")}')">Delete</button></td>
+        </tr>`;
+      }).join("") + `</tbody></table>`
     : "<span style='color:var(--hr-muted);'>No units yet.</span>";
 }
 
@@ -1012,6 +1032,88 @@ async function addUnit(){
   document.getElementById("rd_unit_dept").value = deptId;
 }
 window.addUnit = addUnit;
+
+// ---- Branch: rename / delete ----
+async function renameBranchRd(id){
+  const status = document.getElementById("rdBranchStatus");
+  const newName = document.getElementById("rd_branch_head_" + id).value.trim();
+  if(!newName){ status.className="status err"; status.textContent="Branch name cannot be empty."; return; }
+
+  status.className="status"; status.textContent="Saving...";
+  // .select() after update lets us tell "genuinely saved" apart from
+  // "silently blocked by a missing UPDATE policy" — Postgres/PostgREST
+  // does not treat 0-rows-affected as an error by default.
+  const { data: updated, error } = await sb.from("app_sections").update({ name: newName }).eq("id", id).select();
+  if(error){ status.className="status err"; status.textContent="❌ " + error.message; return; }
+  if(!updated || !updated.length){ status.className="status err"; status.textContent="❌ No rows updated — likely a missing UPDATE permission on app_sections."; return; }
+
+  await logActivity("hr_console_branch_renamed", ME.username + " renamed a branch to \"" + newName + "\"");
+  status.className="status ok"; status.textContent="✅ Branch renamed.";
+  await loadReferenceData();
+}
+window.renameBranchRd = renameBranchRd;
+
+async function deleteBranchRd(id, name){
+  if(!confirm("Delete Branch \"" + name + "\"?\n\nThis will fail if any account or employee is still assigned to it.")) return;
+  const status = document.getElementById("rdBranchStatus");
+  try{
+    const { error } = await sb.from("app_sections").delete().eq("id", id);
+    if(error) throw error;
+    await logActivity("hr_console_branch_deleted", ME.username + " deleted branch \"" + name + "\"");
+    status.className="status ok"; status.textContent="✅ Branch deleted.";
+    await loadReferenceData();
+  }catch(e){
+    status.className="status err"; status.textContent="❌ " + e.message + " — this Branch is likely still in use somewhere.";
+  }
+}
+window.deleteBranchRd = deleteBranchRd;
+
+// ---- Department: rename / delete ----
+async function renameDepartmentRd(id){
+  const status = document.getElementById("rdDeptStatus");
+  const newName = document.getElementById("rd_dept_head_" + id).value.trim();
+  if(!newName){ status.className="status err"; status.textContent="Department name cannot be empty."; return; }
+
+  status.className="status"; status.textContent="Saving...";
+  const { error } = await sb.from("departments").update({ name: newName }).eq("id", id);
+  if(error){ status.className="status err"; status.textContent="❌ " + error.message; return; }
+
+  await logActivity("hr_console_department_renamed", ME.username + " renamed a department to \"" + newName + "\"");
+  status.className="status ok"; status.textContent="✅ Department renamed.";
+  await loadReferenceData();
+}
+window.renameDepartmentRd = renameDepartmentRd;
+
+async function deleteDepartmentRd(id, name){
+  if(!confirm("Delete Department \"" + name + "\"?\n\nThis also removes every Unit under it. This cannot be undone.")) return;
+  const status = document.getElementById("rdDeptStatus");
+  try{
+    const { error } = await sb.from("departments").delete().eq("id", id);
+    if(error) throw error;
+    await logActivity("hr_console_department_deleted", ME.username + " deleted department \"" + name + "\"");
+    status.className="status ok"; status.textContent="✅ Department deleted.";
+    await loadReferenceData();
+  }catch(e){
+    status.className="status err"; status.textContent="❌ " + e.message;
+  }
+}
+window.deleteDepartmentRd = deleteDepartmentRd;
+
+// ---- Unit: delete only (no rename, matching Manage Accounts' own convention) ----
+async function deleteUnitRd(id, name){
+  if(!confirm("Delete Unit \"" + (name||"") + "\"?\n\nThis cannot be undone.")) return;
+  const status = document.getElementById("rdUnitStatus");
+  try{
+    const { error } = await sb.from("units").delete().eq("id", id);
+    if(error) throw error;
+    await logActivity("hr_console_unit_deleted", ME.username + " deleted unit \"" + (name||"") + "\"");
+    status.className="status ok"; status.textContent="✅ Unit deleted.";
+    await loadReferenceData();
+  }catch(e){
+    status.className="status err"; status.textContent="❌ " + e.message;
+  }
+}
+window.deleteUnitRd = deleteUnitRd;
 
 init();
 </script>
