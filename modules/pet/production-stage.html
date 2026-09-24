@@ -604,6 +604,18 @@ async function generateBagReferences(){
   const count=parseInt(countEl.value);
   if(!count||count<1||!/^\d+$/.test(countEl.value)){ st.style.color="var(--bad)"; st.textContent="Enter a whole number of bags (at least 1)."; return; }
 
+  // QR generation is gated on a Flake Scan quality result already
+  // existing for this production run — upload it via Flake Scan Quality
+  // Results first if this blocks you.
+  st.style.color="var(--muted)"; st.textContent="Checking for a Flake Scan quality result...";
+  const { data: existingResult, error: checkErr } = await sb.from("pet_flake_scan_results").select("id").eq("production_id", CURRENT_PROD_ID).maybeSingle();
+  if(checkErr){ st.style.color="var(--bad)"; st.textContent="Could not check for a quality result: " + checkErr.message; return; }
+  if(!existingResult){
+    st.style.color="var(--bad)";
+    st.textContent="❌ No Flake Scan quality result has been uploaded for this production run yet. Upload it in Flake Scan Quality Results before generating bag labels.";
+    return;
+  }
+
   st.style.color="var(--muted)"; st.textContent="Generating reference numbers...";
   try{
     const { data, error } = await sb.rpc("generate_bag_references", {

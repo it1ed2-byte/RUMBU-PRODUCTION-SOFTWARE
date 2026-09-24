@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Flake Scan Quality Results — PET Collection</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme")||"navy"); }catch(e){} })();
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) document.documentElement.setAttribute("data-theme",e.data.rumbuTheme); });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1000px;margin:0 auto;}
+  label{font-size:12px;font-weight:700;display:block;margin:10px 0 4px;color:var(--muted);}
+  input,select,textarea{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);}
+  .card-panel{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;}
+  .prod-row{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;cursor:pointer;}
+  .prod-row:hover{background:var(--bg);}
+  .prod-row.selected{border-color:var(--accent);background:var(--bg);}
+  .prod-row .sub{font-size:11.5px;color:var(--muted);}
+  .already-badge{display:inline-block;padding:2px 8px;border-radius:20px;font-size:10.5px;font-weight:700;background:#dcfce7;color:#166534;margin-left:8px;}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:10px;}
+  th{background:var(--th-bg);color:var(--th-fg);text-align:left;padding:7px;}
+  td{padding:6px 7px;border-bottom:1px solid var(--line);}
+  .pass-yes{color:#166534;font-weight:700;}
+  .pass-no{color:#991b1b;font-weight:700;}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin:12px 0;}
+  .kpi{background:var(--bg);border-radius:8px;padding:12px;text-align:center;}
+  .kpi .n{font-size:18px;font-weight:800;color:var(--heading);}
+  .kpi .l{font-size:10.5px;color:var(--muted);font-weight:700;text-transform:uppercase;}
+</style>
+</head>
+<body>
+<div id="authGate" style="text-align:center;padding:40px;font-size:13px;color:var(--muted);">Loading...</div>
+
+<div class="wrap" id="app" style="display:none;">
+  <h2 style="color:var(--heading);">Flake Scan Quality Results</h2>
+  <p style="font-size:12.5px;color:var(--muted);">Upload a production run's Flake Scan analysis export here before generating its bag labels — QR generation is blocked until a result exists for that run. Each run holds one result; uploading again for the same run replaces it.</p>
+
+  <div class="card-panel">
+    <h3 style="margin-top:0;">1. Select the Production Run</h3>
+    <label>Search by Form Number</label>
+    <input type="text" id="searchProd" placeholder="Type a Form Number..." oninput="renderProdList()">
+    <div id="prodList" style="margin-top:10px;max-height:280px;overflow-y:auto;"></div>
+  </div>
+
+  <div class="card-panel" id="uploadCard" style="display:none;">
+    <h3 style="margin-top:0;">2. Upload the CSV Export</h3>
+    <p style="font-size:12.5px;color:var(--muted);">Upload the "_full.csv" export from the Flake Scan software for <b id="selectedFormLabel"></b>.</p>
+    <input type="file" id="csvFile" accept=".csv,text/csv" onchange="onFileChosen()">
+    <div class="status" id="parseStatus"></div>
+    <div id="previewWrap"></div>
+  </div>
+</div>
+
+<script>
+let ME = null;
+let PRODUCTIONS = [];
+let SELECTED_PROD = null;
+let PARSED_RESULT = null;
+
+async function init(){
+  const gate = document.getElementById("authGate");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    gate.style.display = "none";
+    document.getElementById("app").style.display = "block";
+    await loadProductions();
+  }catch(e){
+    gate.textContent = "❌ " + e.message;
+  }
+}
+
+async function loadProductions(){
+  const { data, error } = await sb.from("pet_collections")
+    .select("id,form_number,agent_name,section,pet_stage4_production(id),pet_flake_scan_results:pet_stage4_production(pet_flake_scan_results(id))")
+    .not("pet_stage4_production", "is", null)
+    .order("updated_at", { ascending: false })
+    .limit(200);
+  if(error){ document.getElementById("prodList").innerHTML = "Error: " + error.message; return; }
+  PRODUCTIONS = (data||[]).map(c=>{
+    const prod = Array.isArray(c.pet_stage4_production) ? c.pet_stage4_production[0] : c.pet_stage4_production;
+    const nested = Array.isArray(c.pet_flake_scan_results) ? c.pet_flake_scan_results[0] : c.pet_flake_scan_results;
+    const existingResult = nested && nested.pet_flake_scan_results && (Array.isArray(nested.pet_flake_scan_results) ? nested.pet_flake_scan_results[0] : nested.pet_flake_scan_results);
+    return {
+      collection_id: c.id, form_number: c.form_number, agent_name: c.agent_name, section: c.section,
+      production_id: prod ? prod.id : null,
+      has_result: !!existingResult
+    };
+  }).filter(p=>p.production_id);
+  renderProdList();
+}
+
+function renderProdList(){
+  const q = (document.getElementById("searchProd").value||"").toLowerCase().trim();
+  const wrap = document.getElementById("prodList");
+  const rows = PRODUCTIONS.filter(p=> !q || (p.form_number||"").toLowerCase().includes(q));
+  if(!rows.length){ wrap.innerHTML = "<p style='color:var(--muted);font-size:12.5px;'>No matching production runs.</p>"; return; }
+  wrap.innerHTML = rows.map(p=>`
+    <div class="prod-row ${SELECTED_PROD && SELECTED_PROD.production_id===p.production_id ? 'selected':''}" onclick="selectProduction(${p.production_id})">
+      <div><b>${p.form_number}</b> ${p.has_result ? '<span class="already-badge">Result on file</span>' : ''}<div class="sub">${p.agent_name||""} — ${p.section||""}</div></div>
+    </div>
+  `).join("");
+}
+window.renderProdList = renderProdList;
+
+function selectProduction(productionId){
+  SELECTED_PROD = PRODUCTIONS.find(p=>p.production_id===productionId);
+  renderProdList();
+  document.getElementById("uploadCard").style.display = "block";
+  document.getElementById("selectedFormLabel").textContent = SELECTED_PROD.form_number;
+  document.getElementById("previewWrap").innerHTML = "";
+  document.getElementById("parseStatus").textContent = "";
+  PARSED_RESULT = null;
+}
+window.selectProduction = selectProduction;
+
+// ---------------- CSV PARSING ----------------
+// The Flake Scan export is a wide, fixed-slot CSV: one header row, one
+// data row, semicolon-delimited, European decimal commas. Header-level
+// fields are named directly; the four category breakdowns (Color A,
+// Color B, Material A, Material B) each reserve a fixed run of numbered
+// slots (Name0..Name30 etc.) whether or not all of them are actually
+// used — blank slots are skipped when building each category array.
+function parseCsvSemicolon(text){
+  const lines = text.replace(/\r\n/g,"\n").replace(/\r/g,"\n").split("\n").filter(l=>l.length);
+  return lines.map(line=>{
+    // Simple split is safe here — this export never quotes fields.
+    return line.split(";");
+  });
+}
+
+function toNumber(v){
+  if(v === undefined || v === null || v === "") return null;
+  const n = parseFloat(String(v).replace(",", "."));
+  return isNaN(n) ? null : n;
+}
+function toBool(v){
+  if(v === undefined || v === null || v === "") return null;
+  const s = String(v).trim().toLowerCase();
+  return s === "1" || s === "true";
+}
+function toTimestamp(v){
+  // "2026-08-27 10-06-47" -> "2026-08-27T10:06:47"
+  if(!v) return null;
+  const m = String(v).trim().match(/^(\d{4}-\d{2}-\d{2}) (\d{2})-(\d{2})-(\d{2})$/);
+  if(!m) return null;
+  return m[1] + "T" + m[2] + ":" + m[3] + ":" + m[4];
+}
+
+function parseFlakeScanCsv(text){
+  const rows = parseCsvSemicolon(text);
+  if(rows.length < 2) throw new Error("This file doesn't look like a Flake Scan export — expected a header row and a data row.");
+  const header = rows[0];
+  const data = rows[1];
+  const field = {};
+  header.forEach((h,i)=>{ field[h.trim()] = (data[i]!==undefined ? data[i].trim() : ""); });
+  const g = (name) => field[name] !== undefined ? field[name] : "";
+
+  function readCategories(prefix){
+    const list = [];
+    for(let i=0; i<=30; i++){
+      const name = g(prefix + "MaterialListName" + i);
+      if(!name) continue;
+      list.push({
+        name: name,
+        percent: toNumber(g(prefix + "MaterialListPercent" + i)),
+        ppm: toNumber(g(prefix + "MaterialListPPM" + i)),
+        limit: toNumber(g(prefix + "MaterialListLimit" + i)),
+        good: toBool(g(prefix + "MaterialListGood" + i)),
+        passed: toBool(g(prefix + "MaterialListPassed" + i))
+      });
+    }
+    return list;
+  }
+
+  function readSection(prefix){
+    return {
+      enabled: toBool(g(prefix + "Enabled")),
+      passed: toBool(g(prefix + "Passed")),
+      passed_individual_purity: toBool(g(prefix + "PassedIndividualPurity")),
+      passed_total_purity: toBool(g(prefix + "PassedTotalPurity")),
+      total_purity: toNumber(g(prefix + "TotalPurity")),
+      limit_total_purity: toNumber(g(prefix + "LimitTotalPurity")),
+      categories: readCategories(prefix)
+    };
+  }
+
+  if(!g("Id") || !g("Filename")){
+    throw new Error("Missing Id/Filename columns — this doesn't look like a genuine Flake Scan export.");
+  }
+
+  const colorA = readSection("ColorDataA");
+  const colorB = readSection("ColorDataB");
+  const materialA = readSection("MaterialDataA");
+  const materialB = readSection("MaterialDataB");
+
+  return {
+    scan_id: g("Id"),
+    description: g("Description") || null,
+    filename: g("Filename") || null,
+    sample_weight: toNumber(g("SampleWeight")),
+    execution_start: toTimestamp(g("ExecutionStartLocal") || g("ExecutionStartUTC")),
+    execution_stop: toTimestamp(g("ExecutionStopLocal") || g("ExecutionStopUTC")),
+    execution_duration: g("ExecutionDuration") || null,
+    product_name: g("ProductName") || null,
+    product_description: g("ProductDescription") || null,
+    product_ref_id: g("ProductId") || null,
+    product_hash: g("ProductHash") || null,
+    passed: toBool(g("Passed")),
+    metal_evaluation_enabled: toBool(g("MetalEvaluationEnabled")),
+    metal_passed: toBool(g("MetalPassed")),
+    metal_pieces: toNumber(g("MetalPieces")),
+    metal_limit: toNumber(g("MetalPassedLimit")),
+    color_a: colorA, color_b: colorB, material_a: materialA, material_b: materialB
+  };
+}
+
+function onFileChosen(){
+  const fileInput = document.getElementById("csvFile");
+  const file = fileInput.files[0];
+  const status = document.getElementById("parseStatus");
+  if(!file) return;
+  status.className = "status"; status.textContent = "Reading...";
+  const reader = new FileReader();
+  reader.onload = function(ev){
+    try{
+      const parsed = parseFlakeScanCsv(ev.target.result);
+      PARSED_RESULT = parsed;
+      status.className = "status ok"; status.textContent = "✅ Parsed successfully. Review below, then submit.";
+      renderPreview(parsed);
+    }catch(e){
+      PARSED_RESULT = null;
+      status.className = "status err"; status.textContent = "❌ " + e.message;
+      document.getElementById("previewWrap").innerHTML = "";
+    }
+  };
+  reader.onerror = function(){ status.className = "status err"; status.textContent = "Could not read that file."; };
+  reader.readAsText(file);
+}
+window.onFileChosen = onFileChosen;
+
+function sectionTable(title, section){
+  if(!section.enabled) return `<h4>${title}</h4><p style="color:var(--muted);font-size:12.5px;">Not enabled for this scan.</p>`;
+  const rows = section.categories.map(c=>`
+    <tr>
+      <td>${c.name}</td>
+      <td>${c.percent!=null ? c.percent.toFixed(3) : "—"}%</td>
+      <td>${c.ppm!=null ? c.ppm : "—"}</td>
+      <td>${c.limit!=null ? c.limit : "—"}</td>
+      <td class="${c.passed===false ? 'pass-no' : 'pass-yes'}">${c.good ? "—" : (c.passed===false ? "No" : "Yes")}</td>
+    </tr>`).join("");
+  return `
+    <h4 style="margin-bottom:2px;">${title} — <span class="${section.passed===false?'pass-no':'pass-yes'}">${section.passed===false?"Failed":"Passed"}</span></h4>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 6px;">Total Purity: ${section.total_purity!=null?section.total_purity.toFixed(3):"—"}% (limit ${section.limit_total_purity ?? 0}%)</p>
+    <table><thead><tr><th>Category</th><th>Percent</th><th>ppm</th><th>Limit</th><th>Passed</th></tr></thead><tbody>${rows}</tbody></table>
+  `;
+}
+
+function renderPreview(p){
+  const wrap = document.getElementById("previewWrap");
+  wrap.innerHTML = `
+    <div class="kpis">
+      <div class="kpi"><div class="n">${p.passed ? "PASS" : "FAIL"}</div><div class="l">Overall Result</div></div>
+      <div class="kpi"><div class="n">${p.sample_weight ?? "—"} g</div><div class="l">Sample Weight</div></div>
+      <div class="kpi"><div class="n">${p.metal_pieces ?? "—"}</div><div class="l">Metal Pieces</div></div>
+      <div class="kpi"><div class="n">${p.description || "—"}</div><div class="l">Scan Reference</div></div>
+    </div>
+    ${sectionTable("Color A", p.color_a)}
+    ${sectionTable("Color B", p.color_b)}
+    ${sectionTable("Material A", p.material_a)}
+    ${sectionTable("Material B", p.material_b)}
+    <button onclick="submitResult()" style="margin-top:14px;">Save Quality Result for ${SELECTED_PROD.form_number}</button>
+    <div class="status" id="submitStatus"></div>
+  `;
+}
+
+async function submitResult(){
+  const status = document.getElementById("submitStatus");
+  if(!PARSED_RESULT || !SELECTED_PROD){ return; }
+  status.className = "status"; status.textContent = "Saving...";
+  const p = PARSED_RESULT;
+  const payload = {
+    production_id: SELECTED_PROD.production_id,
+    scan_id: p.scan_id, description: p.description, filename: p.filename,
+    sample_weight: p.sample_weight, execution_start: p.execution_start, execution_stop: p.execution_stop,
+    execution_duration: p.execution_duration, product_name: p.product_name, product_description: p.product_description,
+    product_ref_id: p.product_ref_id, product_hash: p.product_hash, passed: p.passed,
+    metal_evaluation_enabled: p.metal_evaluation_enabled, metal_passed: p.metal_passed,
+    metal_pieces: p.metal_pieces, metal_limit: p.metal_limit,
+    color_a_enabled: p.color_a.enabled, color_a_passed: p.color_a.passed,
+    color_a_passed_individual_purity: p.color_a.passed_individual_purity, color_a_passed_total_purity: p.color_a.passed_total_purity,
+    color_a_total_purity: p.color_a.total_purity, color_a_limit_total_purity: p.color_a.limit_total_purity,
+    color_a_categories: p.color_a.categories,
+    color_b_enabled: p.color_b.enabled, color_b_passed: p.color_b.passed,
+    color_b_passed_individual_purity: p.color_b.passed_individual_purity, color_b_passed_total_purity: p.color_b.passed_total_purity,
+    color_b_total_purity: p.color_b.total_purity, color_b_limit_total_purity: p.color_b.limit_total_purity,
+    color_b_categories: p.color_b.categories,
+    material_a_enabled: p.material_a.enabled, material_a_passed: p.material_a.passed,
+    material_a_passed_individual_purity: p.material_a.passed_individual_purity, material_a_passed_total_purity: p.material_a.passed_total_purity,
+    material_a_total_purity: p.material_a.total_purity, material_a_limit_total_purity: p.material_a.limit_total_purity,
+    material_a_categories: p.material_a.categories,
+    material_b_enabled: p.material_b.enabled, material_b_passed: p.material_b.passed,
+    material_b_passed_individual_purity: p.material_b.passed_individual_purity, material_b_passed_total_purity: p.material_b.passed_total_purity,
+    material_b_total_purity: p.material_b.total_purity, material_b_limit_total_purity: p.material_b.limit_total_purity,
+    material_b_categories: p.material_b.categories,
+    uploaded_by: ME.id, updated_at: new Date().toISOString()
+  };
+
+  try{
+    const { error } = await sb.from("pet_flake_scan_results").upsert(payload, { onConflict: "production_id" });
+    if(error) throw error;
+
+    await sb.from("pet_activity_log").insert({
+      collection_id: SELECTED_PROD.collection_id, action: "flake_scan_uploaded", stage: "stage4",
+      actor_profile_id: ME.id, actor_username: ME.username,
+      old_status: null, new_status: null,
+      note: "Flake Scan result uploaded for " + SELECTED_PROD.form_number + (SELECTED_PROD.has_result ? " (replaced existing result)" : "")
+    });
+
+    status.className = "status ok"; status.textContent = "✅ Saved. QR generation is now unlocked for this production run.";
+    SELECTED_PROD.has_result = true;
+    renderProdList();
+  }catch(e){
+    status.className = "status err"; status.textContent = "❌ " + e.message;
+  }
+}
+window.submitResult = submitResult;
+
+init();
+</script>
+</body>
+</html>
