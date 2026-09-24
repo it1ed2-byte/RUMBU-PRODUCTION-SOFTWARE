@@ -14,6 +14,8 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="../../auth.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <style>
   :root{
     --hr-navy:#1F3864; --hr-gold:#c8a34e; --hr-teal:#0f766e; --hr-blue:#2E75B6;
@@ -175,7 +177,20 @@
           <h3 style="margin:0;">Employee Directory</h3>
           <input type="text" id="dirSearch" placeholder="Search name, ID, branch, department..." style="width:260px;" oninput="renderDirectory()">
         </div>
-        <div style="overflow-x:auto;margin-top:12px;"><table id="dirTable">
+        <div class="form-row-3" style="margin-top:14px;">
+          <div><label>Branch</label><select id="dirBranchFilter" onchange="onDirDeptFilterBranchChange()"><option value="">All Branches</option></select></div>
+          <div><label>Department</label><select id="dirDeptFilter" onchange="renderDirectory()"><option value="">All Departments</option></select></div>
+          <div><label>Status</label><select id="dirStatusFilter" onchange="renderDirectory()"><option value="">All</option><option value="active">Active</option><option value="inactive">Deactivated</option></select></div>
+        </div>
+        <div class="form-row" id="dirDateFilterRow" style="display:none;">
+          <div><label>Added From</label><input type="date" id="dirDateFrom" onchange="renderDirectory()"></div>
+          <div><label>Added To</label><input type="date" id="dirDateTo" onchange="renderDirectory()"></div>
+        </div>
+        <div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap;">
+          <button class="btn-ghost" onclick="clearDirFilters()">Clear Filters</button>
+          <button onclick="downloadEmployeesExcel()">⬇ Download Excel</button>
+        </div>
+        <div style="overflow-x:auto;margin-top:14px;"><table id="dirTable">
           <thead><tr><th>Employee ID</th><th>Name</th><th>Branch</th><th>Department</th><th>Unit</th><th>Rank</th><th>Salary</th><th>Status</th><th></th></tr></thead>
           <tbody id="dirBody"></tbody>
         </table></div>
@@ -186,6 +201,14 @@
     <div class="panel" id="panel-log">
       <div class="card-panel">
         <h3 style="margin-top:0;">Activity Log</h3>
+        <div class="form-row">
+          <div><label>From</label><input type="date" id="logDateFrom" onchange="loadActivityLog()"></div>
+          <div><label>To</label><input type="date" id="logDateTo" onchange="loadActivityLog()"></div>
+        </div>
+        <div style="margin:10px 0;display:flex;gap:10px;flex-wrap:wrap;">
+          <button class="btn-ghost" onclick="clearLogFilters()">Clear Filters</button>
+          <button onclick="downloadActivityLogPdf()">⬇ Download PDF</button>
+        </div>
         <div id="logWrap" style="font-size:12.5px;"></div>
       </div>
     </div>
@@ -354,6 +377,65 @@ async function loadEmployees(){
     const { data: sal } = await sb.from("employee_salaries").select("employee_id,salary").in("employee_id", ids);
     (sal||[]).forEach(s=>{ SALARIES[s.employee_id] = s.salary; });
   }
+
+  // Date-added filtering only makes sense if the employees table
+  // actually has a created_at column — checked at runtime rather than
+  // assumed, since it's never referenced anywhere else in the app.
+  const hasCreatedAt = EMPLOYEES.length > 0 && EMPLOYEES[0].created_at !== undefined;
+  document.getElementById("dirDateFilterRow").style.display = hasCreatedAt ? "grid" : "none";
+
+  const branchOpts = '<option value="">All Branches</option>' + BRANCHES.map(b=>`<option value="${b.name}">${b.name}</option>`).join("");
+  document.getElementById("dirBranchFilter").innerHTML = branchOpts;
+  populateDirDeptFilter("");
+}
+
+function populateDirDeptFilter(branchName){
+  const sel = document.getElementById("dirDeptFilter");
+  const matching = branchName ? DEPARTMENTS.filter(d=>d.section===branchName) : DEPARTMENTS;
+  const seen = new Set();
+  const opts = matching.filter(d=>{ if(seen.has(d.name)) return false; seen.add(d.name); return true; });
+  sel.innerHTML = '<option value="">All Departments</option>' + opts.map(d=>`<option value="${d.name}">${d.name}</option>`).join("");
+}
+function onDirDeptFilterBranchChange(){
+  populateDirDeptFilter(document.getElementById("dirBranchFilter").value);
+  renderDirectory();
+}
+window.onDirDeptFilterBranchChange = onDirDeptFilterBranchChange;
+
+function clearDirFilters(){
+  document.getElementById("dirSearch").value = "";
+  document.getElementById("dirBranchFilter").value = "";
+  populateDirDeptFilter("");
+  document.getElementById("dirStatusFilter").value = "";
+  document.getElementById("dirDateFrom").value = "";
+  document.getElementById("dirDateTo").value = "";
+  renderDirectory();
+}
+window.clearDirFilters = clearDirFilters;
+
+// Shared by both the on-screen table and the Excel export, so what you
+// download always matches exactly what you're looking at.
+function filteredEmployees(){
+  const q = document.getElementById("dirSearch").value.trim().toLowerCase();
+  const branchF = document.getElementById("dirBranchFilter").value;
+  const deptF = document.getElementById("dirDeptFilter").value;
+  const statusF = document.getElementById("dirStatusFilter").value;
+  const fromF = document.getElementById("dirDateFrom").value;
+  const toF = document.getElementById("dirDateTo").value;
+
+  return EMPLOYEES.filter(e=>{
+    if(branchF && e.branch !== branchF) return false;
+    if(deptF && e.department !== deptF) return false;
+    if(statusF === "active" && e.deactivated_by) return false;
+    if(statusF === "inactive" && !e.deactivated_by) return false;
+    if(e.created_at){
+      const d = e.created_at.slice(0,10);
+      if(fromF && d < fromF) return false;
+      if(toF && d > toF) return false;
+    }
+    if(q && !((e.employee_id||"")+(e.full_name||"")+(e.branch||"")+(e.department||"")+(e.unit||"")).toLowerCase().includes(q)) return false;
+    return true;
+  });
 }
 
 function deptName(id){ const d = DEPARTMENTS.find(x=>x.id===id); return d ? d.name : (id||"—"); }
@@ -568,11 +650,7 @@ window.processBulkUpload = processBulkUpload;
 
 // ---------------- DIRECTORY / CRUD ----------------
 function renderDirectory(){
-  const q = document.getElementById("dirSearch").value.trim().toLowerCase();
-  const rows = EMPLOYEES.filter(e=>{
-    if(!q) return true;
-    return ((e.employee_id||"")+(e.full_name||"")+(e.branch||"")+(e.department||"")+(e.unit||"")).toLowerCase().includes(q);
-  });
+  const rows = filteredEmployees();
   const body = document.getElementById("dirBody");
   if(!rows.length){ body.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--hr-muted);">No employees found.</td></tr>`; return; }
   body.innerHTML = rows.map(e=>{
@@ -597,6 +675,28 @@ function renderDirectory(){
   }).join("");
 }
 window.renderDirectory = renderDirectory;
+
+function downloadEmployeesExcel(){
+  const rows = filteredEmployees();
+  if(!rows.length){ alert("No employees match the current filters — nothing to export."); return; }
+
+  const header = ["Employee ID","Full Name","Branch","Department","Unit","Rank","Salary (NGN)","Email","Phone","Bank Name","Bank Account Number","Sort Code","Status"];
+  const body = rows.map(e=>[
+    e.employee_id, e.full_name, e.branch||"", e.department||"", e.unit||"", e.rank||"",
+    SALARIES[e.id]!=null ? SALARIES[e.id] : "",
+    e.email||"", e.phone||"", e.bank_name||"", e.bank_account_number||"", e.sort_code||"",
+    e.deactivated_by ? "Deactivated" : "Active"
+  ]);
+
+  const ws = XLSX.utils.aoa_to_sheet([header, ...body]);
+  ws["!cols"] = header.map(()=>({wch:18}));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Employees");
+  XLSX.writeFile(wb, "HR_Console_Employees_" + new Date().toISOString().slice(0,10) + ".xlsx");
+
+  logActivity("hr_console_employees_exported", ME.username + " exported " + rows.length + " employee record(s) to Excel");
+}
+window.downloadEmployeesExcel = downloadEmployeesExcel;
 
 async function toggleActive(empId, deactivate){
   if(!confirm(deactivate ? "Deactivate this employee?" : "Reactivate this employee?")) return;
@@ -692,16 +792,74 @@ window.saveEditEmployee = saveEditEmployee;
 document.getElementById("editModal").addEventListener("click", function(e){ if(e.target===this) closeEditModal(); });
 
 // ---------------- ACTIVITY LOG ----------------
+let CURRENT_LOG_ROWS = []; // kept in sync with the last successful load, so the PDF export always matches what's on screen
+
 async function loadActivityLog(){
-  const { data, error } = await sb.from("activity_log")
-    .select("*").eq("actor_id", ME.id).order("created_at",{ascending:false}).limit(100);
+  const from = document.getElementById("logDateFrom").value;
+  const to = document.getElementById("logDateTo").value;
+  let q = sb.from("activity_log").select("*").eq("actor_id", ME.id).order("created_at",{ascending:false}).limit(500);
+  if(from) q = q.gte("created_at", from + "T00:00:00");
+  if(to) q = q.lte("created_at", to + "T23:59:59");
+
+  const { data, error } = await q;
   const wrap = document.getElementById("logWrap");
   if(error){ wrap.innerHTML = "Error: " + error.message; return; }
-  if(!data || !data.length){ wrap.innerHTML = "<p style='color:var(--hr-muted);'>No activity logged yet.</p>"; return; }
+  CURRENT_LOG_ROWS = data || [];
+  if(!CURRENT_LOG_ROWS.length){ wrap.innerHTML = "<p style='color:var(--hr-muted);'>No activity matches these filters.</p>"; return; }
   wrap.innerHTML = `<table><thead><tr><th>When</th><th>Action</th><th>Description</th></tr></thead><tbody>` +
-    data.map(r=>`<tr><td>${new Date(r.created_at).toLocaleString("en-GB")}</td><td>${r.action}</td><td>${r.description||""}</td></tr>`).join("") +
+    CURRENT_LOG_ROWS.map(r=>`<tr><td>${new Date(r.created_at).toLocaleString("en-GB")}</td><td>${r.action}</td><td>${r.description||""}</td></tr>`).join("") +
     `</tbody></table>`;
 }
+window.loadActivityLog = loadActivityLog;
+
+function clearLogFilters(){
+  document.getElementById("logDateFrom").value = "";
+  document.getElementById("logDateTo").value = "";
+  loadActivityLog();
+}
+window.clearLogFilters = clearLogFilters;
+
+function downloadActivityLogPdf(){
+  if(!CURRENT_LOG_ROWS.length){ alert("No activity matches the current filters — nothing to export."); return; }
+
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
+  const navy = [31, 56, 100];
+
+  doc.setFillColor(navy[0], navy[1], navy[2]);
+  doc.rect(0, 0, doc.internal.pageSize.getWidth(), 56, "F");
+  doc.setTextColor(255,255,255);
+  doc.setFont("helvetica","bold"); doc.setFontSize(13);
+  doc.text("RUMBU INDUSTRIES GROUP", 30, 24);
+  doc.setFont("helvetica","normal"); doc.setFontSize(10);
+  doc.text("HR Special Console — Activity Log", 30, 40);
+  doc.text("Printed " + new Date().toLocaleString("en-GB"), doc.internal.pageSize.getWidth()-30, 24, { align: "right" });
+
+  doc.setTextColor(60,60,60); doc.setFontSize(9);
+  const from = document.getElementById("logDateFrom").value || "—";
+  const to = document.getElementById("logDateTo").value || "—";
+  doc.text(`Account: ${ME.username}   |   Date range: ${from} to ${to}   |   ${CURRENT_LOG_ROWS.length} entries`, 30, 72);
+
+  doc.autoTable({
+    startY: 84,
+    head: [["When","Action","Description"]],
+    body: CURRENT_LOG_ROWS.map(r=>[new Date(r.created_at).toLocaleString("en-GB"), r.action, r.description||""]),
+    styles: { fontSize: 8, cellPadding: 4 },
+    headStyles: { fillColor: navy, textColor: 255, fontStyle: "bold" },
+    alternateRowStyles: { fillColor: [240, 244, 249] },
+    margin: { left: 30, right: 30 },
+    didDrawPage: function(){
+      const pageCount = doc.internal.getNumberOfPages();
+      doc.setFontSize(8); doc.setTextColor(120,120,120);
+      doc.text("CONFIDENTIAL", 30, doc.internal.pageSize.getHeight()-16);
+      doc.text("Page " + doc.internal.getCurrentPageInfo().pageNumber + " of " + pageCount,
+        doc.internal.pageSize.getWidth()-30, doc.internal.pageSize.getHeight()-16, { align: "right" });
+    }
+  });
+
+  doc.save("HR_Console_Activity_Log_" + new Date().toISOString().slice(0,10) + ".pdf");
+}
+window.downloadActivityLogPdf = downloadActivityLogPdf;
 
 async function logActivity(action, description){
   try{
