@@ -3,7 +3,7 @@
    Auto-fills Branch, Title, date range and filters from the page's own
    fields at print time — no per-page wiring required. */
 (function(){
-  var BRANCH = { "Rumbu":"Rumbu Main Mat", "MamaSannu":"Mama Sannu", "Mama Sannu":"Mama Sannu",
+  var BRANCH = { "Rumbu Mainmat":"Rumbu Mainmat", "MamaSannu":"Mama Sannu", "Mama Sannu":"Mama Sannu",
                  "All":"All Branches", "":"All Branches" };
 
   function el(tag, cls, html){ var e=document.createElement(tag); if(cls) e.className=cls; if(html!=null) e.innerHTML=html; return e; }
