@@ -105,6 +105,7 @@
     <button class="tab-btn" data-tab="bulk" onclick="setTab('bulk',this)">Bulk Upload</button>
     <button class="tab-btn" data-tab="directory" onclick="setTab('directory',this)">Employee Directory</button>
     <button class="tab-btn" data-tab="log" onclick="setTab('log',this)">Activity Log</button>
+    <button class="tab-btn" data-tab="refdata" onclick="setTab('refdata',this)">Branches / Departments / Units</button>
   </div>
 
   <div class="wrap">
@@ -210,6 +211,45 @@
           <button onclick="downloadActivityLogPdf()">⬇ Download PDF</button>
         </div>
         <div id="logWrap" style="font-size:12.5px;"></div>
+      </div>
+    </div>
+
+    <!-- REFERENCE DATA -->
+    <div class="panel" id="panel-refdata">
+      <p style="font-size:12.5px;color:var(--muted);margin:0 0 14px;">These are the same Branches, Departments, and Units used across the whole app — anything added here is immediately available everywhere else too, not just in this console.</p>
+      <div class="grid2">
+        <div class="card-panel">
+          <h3 style="margin-top:0;">Add Branch</h3>
+          <label>Branch Name *</label>
+          <input id="rd_branch_name" placeholder="e.g. New Site Name">
+          <button onclick="addBranch()" style="margin-top:12px;">Add Branch</button>
+          <div class="status" id="rdBranchStatus"></div>
+          <div style="margin-top:16px;font-size:12.5px;" id="rdBranchList"></div>
+        </div>
+
+        <div class="card-panel">
+          <h3 style="margin-top:0;">Add Department</h3>
+          <label>Branch *</label>
+          <select id="rd_dept_branch"><option value="">— select —</option></select>
+          <label>Department Name *</label>
+          <input id="rd_dept_name" placeholder="e.g. Quality Control">
+          <button onclick="addDepartment()" style="margin-top:12px;">Add Department</button>
+          <div class="status" id="rdDeptStatus"></div>
+          <div style="margin-top:16px;font-size:12.5px;" id="rdDeptList"></div>
+        </div>
+
+        <div class="card-panel">
+          <h3 style="margin-top:0;">Add Unit</h3>
+          <label>Branch *</label>
+          <select id="rd_unit_branch" onchange="onRdUnitBranchChange()"><option value="">— select —</option></select>
+          <label>Department *</label>
+          <select id="rd_unit_dept" disabled><option value="">— select a Branch first —</option></select>
+          <label>Unit Name *</label>
+          <input id="rd_unit_name" placeholder="e.g. Night Shift">
+          <button onclick="addUnit()" style="margin-top:12px;">Add Unit</button>
+          <div class="status" id="rdUnitStatus"></div>
+          <div style="margin-top:16px;font-size:12.5px;" id="rdUnitList"></div>
+        </div>
       </div>
     </div>
 
@@ -321,6 +361,8 @@ async function loadReferenceData(){
   document.getElementById("a_branch").innerHTML = branchOptions;
   document.getElementById("b_branch").innerHTML = branchOptions;
   document.getElementById("e_branch").innerHTML = branchOptions;
+  document.getElementById("rd_dept_branch").innerHTML = branchOptions;
+  document.getElementById("rd_unit_branch").innerHTML = branchOptions;
 
   // Departments/Units loaded for every branch up front — filtered down
   // to just the selected branch client-side when a Branch is chosen in
@@ -333,6 +375,8 @@ async function loadReferenceData(){
     ? await sb.from("units").select("id,name,department_id").in("department_id", deptIds).order("name")
     : { data: [] };
   UNITS = units || [];
+
+  renderRefDataLists();
 }
 
 function populateDeptSelect(selectId, branchName, unitSelectId){
@@ -868,6 +912,106 @@ async function logActivity(action, description){
     await sb.from("activity_log").insert({ actor_id: ME.id, action, description, section_id: null });
   }catch(e){ console.warn("Activity log failed:", e.message||e); }
 }
+
+// ---------------- REFERENCE DATA (Branches / Departments / Units) ----------------
+// These write to app_sections/departments/units directly — the exact same
+// tables every other module in the app reads from — so anything added
+// here is real, shared reference data immediately, not something local
+// to this console.
+
+function renderRefDataLists(){
+  document.getElementById("rdBranchList").innerHTML = BRANCHES.length
+    ? "<b>Existing branches:</b> " + BRANCHES.map(b=>b.name).join(", ")
+    : "<span style='color:var(--hr-muted);'>No branches yet.</span>";
+
+  document.getElementById("rdDeptList").innerHTML = DEPARTMENTS.length
+    ? "<b>Existing departments:</b><br>" + DEPARTMENTS.map(d=>`${d.name} <span style='color:var(--hr-muted);'>(${d.section})</span>`).join("<br>")
+    : "<span style='color:var(--hr-muted);'>No departments yet.</span>";
+
+  document.getElementById("rdUnitList").innerHTML = UNITS.length
+    ? "<b>Existing units:</b><br>" + UNITS.map(u=>{
+        const dept = DEPARTMENTS.find(d=>d.id===u.department_id);
+        return `${u.name} <span style='color:var(--hr-muted);'>(${dept?dept.name+" — "+dept.section:"—"})</span>`;
+      }).join("<br>")
+    : "<span style='color:var(--hr-muted);'>No units yet.</span>";
+}
+
+async function addBranch(){
+  const status = document.getElementById("rdBranchStatus");
+  const name = document.getElementById("rd_branch_name").value.trim();
+  if(!name){ status.className="status err"; status.textContent="Branch name is required."; return; }
+  if(BRANCHES.some(b=>b.name.toLowerCase()===name.toLowerCase())){ status.className="status err"; status.textContent="That branch already exists."; return; }
+
+  status.className="status"; status.textContent="Adding...";
+  const { error } = await sb.from("app_sections").insert({ name });
+  if(error){ status.className="status err"; status.textContent="❌ " + error.message; return; }
+
+  await logActivity("hr_console_branch_added", ME.username + " added branch \"" + name + "\"");
+  status.className="status ok"; status.textContent="✅ Branch added.";
+  document.getElementById("rd_branch_name").value = "";
+  await loadReferenceData();
+}
+window.addBranch = addBranch;
+
+async function addDepartment(){
+  const status = document.getElementById("rdDeptStatus");
+  const branch = document.getElementById("rd_dept_branch").value;
+  const name = document.getElementById("rd_dept_name").value.trim();
+  if(!branch){ status.className="status err"; status.textContent="Select a Branch."; return; }
+  if(!name){ status.className="status err"; status.textContent="Department name is required."; return; }
+  if(DEPARTMENTS.some(d=>d.section===branch && d.name.toLowerCase()===name.toLowerCase())){ status.className="status err"; status.textContent="That department already exists for this branch."; return; }
+
+  status.className="status"; status.textContent="Adding...";
+  const { error } = await sb.from("departments").insert({ section: branch, name });
+  if(error){ status.className="status err"; status.textContent="❌ " + error.message; return; }
+
+  await logActivity("hr_console_department_added", ME.username + " added department \"" + name + "\" to " + branch);
+  status.className="status ok"; status.textContent="✅ Department added.";
+  document.getElementById("rd_dept_name").value = "";
+  await loadReferenceData();
+  document.getElementById("rd_dept_branch").value = branch; // restore — loadReferenceData() rebuilds this select's options
+}
+window.addDepartment = addDepartment;
+
+function onRdUnitBranchChange(){
+  const branch = document.getElementById("rd_unit_branch").value;
+  const sel = document.getElementById("rd_unit_dept");
+  const matching = DEPARTMENTS.filter(d=>d.section===branch);
+  sel.innerHTML = matching.length
+    ? '<option value="">— select —</option>' + matching.map(d=>`<option value="${d.id}">${d.name}</option>`).join("")
+    : '<option value="">— no departments in this branch yet —</option>';
+  sel.disabled = matching.length === 0;
+}
+window.onRdUnitBranchChange = onRdUnitBranchChange;
+
+async function addUnit(){
+  const status = document.getElementById("rdUnitStatus");
+  const branch = document.getElementById("rd_unit_branch").value;
+  const deptId = document.getElementById("rd_unit_dept").value;
+  const name = document.getElementById("rd_unit_name").value.trim();
+  if(!deptId){ status.className="status err"; status.textContent="Select a Department (add one first if the branch has none)."; return; }
+  if(!name){ status.className="status err"; status.textContent="Unit name is required."; return; }
+  if(UNITS.some(u=>String(u.department_id)===deptId && u.name.toLowerCase()===name.toLowerCase())){ status.className="status err"; status.textContent="That unit already exists for this department."; return; }
+
+  status.className="status"; status.textContent="Adding...";
+  const { error } = await sb.from("units").insert({ department_id: Number(deptId), name });
+  if(error){ status.className="status err"; status.textContent="❌ " + error.message; return; }
+
+  const deptObj = DEPARTMENTS.find(d=>String(d.id)===deptId);
+  await logActivity("hr_console_unit_added", ME.username + " added unit \"" + name + "\" to " + (deptObj?deptObj.name:deptId));
+  status.className="status ok"; status.textContent="✅ Unit added.";
+  document.getElementById("rd_unit_name").value = "";
+
+  // loadReferenceData() rebuilds the branch <select>'s options from
+  // scratch, which clears whatever was selected — restore it and
+  // re-derive the department list for it, rather than leaving the form
+  // looking reset right after a successful add.
+  await loadReferenceData();
+  document.getElementById("rd_unit_branch").value = branch;
+  onRdUnitBranchChange();
+  document.getElementById("rd_unit_dept").value = deptId;
+}
+window.addUnit = addUnit;
 
 init();
 </script>
