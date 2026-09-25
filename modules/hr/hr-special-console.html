@@ -103,6 +103,7 @@
     <button class="tab-btn active" data-tab="dashboard" onclick="setTab('dashboard',this)">Dashboard</button>
     <button class="tab-btn" data-tab="add" onclick="setTab('add',this)">Add Employee</button>
     <button class="tab-btn" data-tab="bulk" onclick="setTab('bulk',this)">Bulk Upload</button>
+    <button class="tab-btn" data-tab="salary" onclick="setTab('salary',this)">Bulk Salary Upload</button>
     <button class="tab-btn" data-tab="directory" onclick="setTab('directory',this)">Employee Directory</button>
     <button class="tab-btn" data-tab="log" onclick="setTab('log',this)">Activity Log</button>
     <button class="tab-btn" data-tab="refdata" onclick="setTab('refdata',this)">Branches / Departments / Units</button>
@@ -172,6 +173,23 @@
         <button onclick="processBulkUpload()" style="margin-top:12px;">Upload Employees</button>
         <div class="status" id="bulkStatus"></div>
         <div id="bulkResults" style="margin-top:10px;font-size:12.5px;"></div>
+      </div>
+    </div>
+
+    <!-- BULK SALARY UPLOAD -->
+    <div class="panel" id="panel-salary">
+      <div class="card-panel">
+        <h3 style="margin-top:0;">Bulk Salary Upload</h3>
+        <p style="font-size:12.5px;color:var(--muted);">Updates the salary of employees who already exist — this never creates a new employee. Just two columns: Employee ID and Salary. Rows for an Employee ID that isn't found are skipped and listed.</p>
+        <button class="btn-ghost" onclick="downloadSalaryTemplate()" style="margin-bottom:14px;">⬇ Download Sample Excel Template</button>
+
+        <label>Upload Excel or CSV file</label>
+        <input type="file" id="sal_file" accept=".xlsx,.xls,.csv" onchange="loadSalaryFile()">
+        <label>Or paste rows directly</label>
+        <textarea id="sal_text" rows="8" style="font-family:monospace;font-size:12px;" placeholder="Employee Id,Salary&#10;RIG-0142,180000&#10;RIG-0143,220000"></textarea>
+        <button onclick="processSalaryUpload()" style="margin-top:12px;">Upload Salaries</button>
+        <div class="status" id="salaryStatus"></div>
+        <div id="salaryResults" style="margin-top:10px;font-size:12.5px;"></div>
       </div>
     </div>
 
@@ -660,6 +678,98 @@ window.loadBulkFile = loadBulkFile;
 function parseCsvRows(text){
   return text.split(/\r?\n/).map(l=>l.trim()).filter(l=>l.length).map(l=>l.split(",").map(c=>c.trim()));
 }
+
+// ---------------- BULK SALARY UPLOAD ----------------
+// Updates salary for employees who already exist — matched by their
+// human-readable Employee ID against the EMPLOYEES already loaded into
+// this console. Never creates a new employee; a row whose Employee ID
+// isn't found is skipped and listed, not silently ignored.
+function downloadSalaryTemplate(){
+  const sample = [
+    ["Employee Id","Salary"],
+    ["RIG-0142","180000"],
+    ["RIG-0143","220000"]
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(sample);
+  ws["!cols"] = [{wch:20},{wch:14}];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Salaries");
+  XLSX.writeFile(wb, "HR_Console_Bulk_Salary_Template.xlsx");
+}
+window.downloadSalaryTemplate = downloadSalaryTemplate;
+
+function loadSalaryFile(){
+  const file = document.getElementById("sal_file").files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = function(evt){
+    try{
+      const wb = XLSX.read(evt.target.result, { type: "binary" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { header:1, raw:false, defval:"" });
+      const csv = rows.map(r=>r.map(c=>String(c).replace(/,/g,";")).join(",")).join("\n");
+      document.getElementById("sal_text").value = csv;
+    }catch(e){
+      document.getElementById("salaryStatus").className = "status err";
+      document.getElementById("salaryStatus").textContent = "Could not read that file: " + e.message;
+    }
+  };
+  reader.readAsBinaryString(file);
+}
+window.loadSalaryFile = loadSalaryFile;
+
+async function processSalaryUpload(){
+  const status = document.getElementById("salaryStatus");
+  const results = document.getElementById("salaryResults");
+  results.innerHTML = "";
+  const text = document.getElementById("sal_text").value || "";
+  if(!text.trim()){ status.className="status err"; status.textContent="Paste rows or upload a file first."; return; }
+
+  const rows = parseCsvRows(text);
+  if(!rows.length){ status.className="status err"; status.textContent="No rows found."; return; }
+
+  const firstRowLower = rows[0].map(c=>c.toLowerCase());
+  const looksLikeHeader = firstRowLower.some(c=>c.includes("employee") || c.includes("salary"));
+  const dataRows = looksLikeHeader ? rows.slice(1) : rows;
+  if(!dataRows.length){ status.className="status err"; status.textContent="Only a header row was found — no salaries to update."; return; }
+
+  status.className="status"; status.textContent="Uploading...";
+  const updates = []; const errors = [];
+  dataRows.forEach((r, idx)=>{
+    const lineNo = idx + (looksLikeHeader ? 2 : 1);
+    const employeeIdText = (r[0]||"").trim();
+    const salaryText = (r[1]||"").trim();
+    if(!employeeIdText){ errors.push("Row " + lineNo + ": missing Employee ID."); return; }
+    if(!salaryText){ errors.push("Row " + lineNo + " (" + employeeIdText + "): missing Salary."); return; }
+    const salaryNum = Number(salaryText.replace(/,/g,""));
+    if(isNaN(salaryNum)){ errors.push("Row " + lineNo + " (" + employeeIdText + "): \"" + salaryText + "\" isn't a valid number."); return; }
+    const emp = EMPLOYEES.find(e=>(e.employee_id||"").toLowerCase() === employeeIdText.toLowerCase());
+    if(!emp){ errors.push("Row " + lineNo + ": Employee ID \"" + employeeIdText + "\" not found."); return; }
+    updates.push({ employee_id: emp.id, salary: salaryNum, _label: employeeIdText });
+  });
+
+  if(!updates.length){
+    status.className = "status err"; status.textContent = "Nothing updated — every row had a problem.";
+    results.innerHTML = errors.map(e=>`<div style="color:var(--hr-red);">${e}</div>`).join("");
+    return;
+  }
+
+  const payload = updates.map(u=>({ employee_id: u.employee_id, salary: u.salary }));
+  const { error } = await sb.from("employee_salaries").upsert(payload, { onConflict: "employee_id" });
+  if(error){ status.className="status err"; status.textContent="❌ " + error.message; return; }
+
+  await logActivity("hr_console_bulk_salary_uploaded", ME.username + " bulk-updated salary for " + updates.length + " employee(s)" + (errors.length ? (" (" + errors.length + " skipped)") : ""));
+
+  status.className="status ok"; status.textContent = "✅ Updated salary for " + updates.length + " employee(s)" + (errors.length ? (", " + errors.length + " skipped") : "") + ".";
+  results.innerHTML = errors.map(e=>`<div style="color:var(--hr-red);">${e}</div>`).join("");
+  document.getElementById("sal_text").value = "";
+  document.getElementById("sal_file").value = "";
+
+  await loadEmployees();
+  renderDashboard();
+  renderDirectory();
+}
+window.processSalaryUpload = processSalaryUpload;
 
 async function processBulkUpload(){
   const status = document.getElementById("bulkStatus");
