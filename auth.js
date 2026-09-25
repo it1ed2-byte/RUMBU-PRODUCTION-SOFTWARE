@@ -136,3 +136,11 @@ async function logout(loginPath) {
   await sb.auth.signOut();
   window.location.href = loginPath || "login.html";
 }
+
+// Blur any focused number input when the user scrolls — prevents the
+// browser's default behaviour of changing the field's value on scroll.
+document.addEventListener("wheel", function(){
+  if(document.activeElement && document.activeElement.type === "number"){
+    document.activeElement.blur();
+  }
+}, { passive: true });

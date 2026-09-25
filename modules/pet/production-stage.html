@@ -193,10 +193,10 @@
               Upload the Flake Scan quality result for this production run first.
               QR label generation is blocked until a result is on file.
             </p>
-            <a href="flake-scan-upload.html" target="_blank"
-               style="display:inline-block;padding:8px 16px;background:#854d0e;color:#fff;border-radius:7px;font-size:12.5px;font-weight:700;text-decoration:none;">
-              Upload Flake Scan Result →
-            </a>
+            <button onclick="openFlakeScanModal()"
+               style="padding:8px 16px;background:#854d0e;color:#fff;border-radius:7px;font-size:12.5px;font-weight:700;border:none;cursor:pointer;">
+              📂 Upload Flake Scan Result
+            </button>
             <div id="flakeScanStatus" style="margin-top:10px;font-size:12px;color:var(--muted);"></div>
             <button onclick="recheckFlakeScan()" style="margin-top:8px;padding:5px 12px;font-size:11.5px;background:none;border:1px solid #854d0e;color:#854d0e;border-radius:6px;cursor:pointer;">
               ↻ I've uploaded it — check again
@@ -657,7 +657,7 @@ async function generateBagReferences(){
   if(checkErr){ st.style.color="var(--bad)"; st.textContent="Could not check for a quality result: " + checkErr.message; return; }
   if(!existingResult){
     st.style.color="var(--bad)";
-    st.innerHTML="❌ No Flake Scan quality result has been uploaded for this production run yet. &nbsp;<a href='flake-scan-upload.html' target='_blank' style='color:var(--bad);font-weight:700;text-decoration:underline;'>Upload it in Flake Scan Quality Results</a> before generating bag labels.";
+    st.innerHTML="❌ No Flake Scan quality result has been uploaded for this production run yet. &nbsp;<button onclick='openFlakeScanModal()' style='background:none;border:none;color:var(--bad);font-weight:700;text-decoration:underline;cursor:pointer;font-size:inherit;padding:0;'>Upload it now</button> before generating bag labels.";
     return;
   }
 
@@ -833,6 +833,250 @@ async function checkAllApproved(collectionId,stage,cycle,section){
 }
 
 init();
+</script>
+
+<!-- ── Flake Scan Upload Modal ──────────────────────────────────────────────
+     Opens inline on this page so the result is always saved against the
+     currently-open production run — no risk of uploading to the wrong batch.
+     flake-scan-upload.html is now the management / audit page where a
+     supervisor can later confirm or query any uploaded result.
+──────────────────────────────────────────────────────────────────────────── -->
+<div id="flakeScanModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9000;overflow-y:auto;padding:24px 12px;">
+  <div style="background:var(--card);border-radius:14px;max-width:700px;margin:0 auto;padding:24px;">
+
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+      <div>
+        <div style="font-size:16px;font-weight:800;color:var(--heading);">📂 Upload Flake Scan Result</div>
+        <div id="fsModalSubtitle" style="font-size:12px;color:var(--muted);margin-top:2px;"></div>
+      </div>
+      <button onclick="closeFlakeScanModal()" style="background:none;border:1px solid var(--line);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:13px;color:var(--muted);">✕ Close</button>
+    </div>
+
+    <p style="font-size:12.5px;color:var(--muted);margin:0 0 14px;">
+      Upload the <b>_full.csv</b> export from the Flake Scan machine.
+      The result will be saved against this production run automatically.
+      Drag the file onto the zone below, or click to browse.
+    </p>
+
+    <!-- Drop zone -->
+    <div id="fsDropZone"
+         style="border:2px dashed var(--line);border-radius:10px;padding:28px 20px;text-align:center;cursor:pointer;margin:0 0 12px;transition:background .15s,border-color .15s;"
+         onclick="document.getElementById('fsCsvFile').click()"
+         ondragover="fsDragOver(event)" ondragleave="fsDragLeave(event)" ondrop="fsDrop(event)">
+      <div style="font-size:28px;margin-bottom:6px;">📂</div>
+      <div style="font-size:13px;font-weight:700;color:var(--heading);">Drop CSV file here</div>
+      <div style="font-size:11.5px;color:var(--muted);margin-top:4px;">or click to browse — .csv files only</div>
+      <div id="fsDropFileName" style="margin-top:10px;font-size:12px;font-weight:700;color:var(--accent);"></div>
+    </div>
+    <input type="file" id="fsCsvFile" accept=".csv,text/csv" style="display:none;" onchange="fsFileChosen()">
+
+    <div id="fsParseStatus" style="font-size:13px;font-weight:700;min-height:18px;margin-bottom:8px;"></div>
+    <div id="fsPreviewWrap"></div>
+    <div id="fsSubmitStatus" style="font-size:13px;font-weight:700;min-height:18px;margin-top:8px;"></div>
+  </div>
+</div>
+
+<script>
+// ── Flake Scan Modal — all functions prefixed fs_ to avoid name collisions ──
+
+let FS_PARSED = null;
+
+function openFlakeScanModal(){
+  if(!CURRENT_PROD_ID){
+    alert("Save the production data first before uploading the Flake Scan result.");
+    return;
+  }
+  FS_PARSED = null;
+  document.getElementById("fsDropFileName").textContent = "";
+  document.getElementById("fsParseStatus").textContent = "";
+  document.getElementById("fsPreviewWrap").innerHTML = "";
+  document.getElementById("fsSubmitStatus").textContent = "";
+  document.getElementById("fsCsvFile").value = "";
+  document.getElementById("fsModalSubtitle").textContent =
+    "Production run: " + (CURRENT_PROD ? CURRENT_PROD.form_number : "—");
+  document.getElementById("flakeScanModal").style.display = "block";
+  document.body.style.overflow = "hidden";
+}
+window.openFlakeScanModal = openFlakeScanModal;
+
+function closeFlakeScanModal(){
+  document.getElementById("flakeScanModal").style.display = "none";
+  document.body.style.overflow = "";
+}
+window.closeFlakeScanModal = closeFlakeScanModal;
+
+// Close modal on backdrop click
+document.getElementById("flakeScanModal").addEventListener("click", function(e){
+  if(e.target === this) closeFlakeScanModal();
+});
+
+// Drag-and-drop
+function fsDragOver(e){
+  e.preventDefault();
+  const z = document.getElementById("fsDropZone");
+  z.style.borderColor = "var(--accent)"; z.style.background = "var(--bg)";
+}
+function fsDragLeave(e){
+  const z = document.getElementById("fsDropZone");
+  z.style.borderColor = "var(--line)"; z.style.background = "";
+}
+function fsDrop(e){
+  e.preventDefault();
+  fsDragLeave(e);
+  const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if(!file) return;
+  document.getElementById("fsDropFileName").textContent = "📄 " + file.name;
+  fsProcessFile(file);
+}
+window.fsDragOver = fsDragOver;
+window.fsDragLeave = fsDragLeave;
+window.fsDrop = fsDrop;
+
+function fsFileChosen(){
+  const f = document.getElementById("fsCsvFile").files[0];
+  if(!f) return;
+  document.getElementById("fsDropFileName").textContent = "📄 " + f.name;
+  fsProcessFile(f);
+}
+window.fsFileChosen = fsFileChosen;
+
+function fsProcessFile(file){
+  const st = document.getElementById("fsParseStatus");
+  st.style.color = ""; st.textContent = "Reading...";
+  const reader = new FileReader();
+  reader.onload = function(ev){
+    try{
+      FS_PARSED = fsParseFlakeScanCsv(ev.target.result);
+      st.style.color = "var(--ok)";
+      st.textContent = "✅ Parsed. Review the result below, then save.";
+      fsRenderPreview(FS_PARSED);
+    }catch(err){
+      FS_PARSED = null;
+      st.style.color = "var(--bad)"; st.textContent = "❌ " + err.message;
+      document.getElementById("fsPreviewWrap").innerHTML = "";
+    }
+  };
+  reader.onerror = function(){ st.style.color="var(--bad)"; st.textContent="Could not read that file."; };
+  reader.readAsText(file);
+}
+
+// ── CSV parsing (exact same logic as flake-scan-upload.html) ──
+function fsParseCsvSemicolon(text){
+  const lines = text.replace(/
+/g,"
+").replace(//g,"
+").split("
+").filter(l=>l.length);
+  return lines.map(line => line.split(";"));
+}
+function fsToNumber(v){ if(v===undefined||v===null||v==="") return null; const n=parseFloat(String(v).replace(",",".")); return isNaN(n)?null:n; }
+function fsToBool(v){ if(v===undefined||v===null||v==="") return null; const s=String(v).trim().toLowerCase(); return s==="1"||s==="true"; }
+function fsToTimestamp(v){ if(!v) return null; const m=String(v).trim().match(/^(\d{4}-\d{2}-\d{2}) (\d{2})-(\d{2})-(\d{2})$/); if(!m) return null; return m[1]+"T"+m[2]+":"+m[3]+":"+m[4]; }
+
+function fsParseFlakeScanCsv(text){
+  const rows = fsParseCsvSemicolon(text);
+  if(rows.length < 2) throw new Error("Expected a header row and a data row — is this a Flake Scan _full.csv export?");
+  const header = rows[0], data = rows[1];
+  const field = {};
+  header.forEach((h,i)=>{ field[h.trim()] = (data[i]!==undefined ? data[i].trim() : ""); });
+  const g = name => field[name] !== undefined ? field[name] : "";
+
+  if(!g("Id") || !g("Filename")) throw new Error("Missing Id/Filename columns — this doesn't look like a genuine Flake Scan export.");
+
+  function readCategories(prefix){
+    const list = [];
+    for(let i=0;i<=30;i++){
+      const name = g(prefix+"MaterialListName"+i);
+      if(!name) continue;
+      list.push({ name, percent:fsToNumber(g(prefix+"MaterialListPercent"+i)), ppm:fsToNumber(g(prefix+"MaterialListPPM"+i)), limit:fsToNumber(g(prefix+"MaterialListLimit"+i)), good:fsToBool(g(prefix+"MaterialListGood"+i)), passed:fsToBool(g(prefix+"MaterialListPassed"+i)) });
+    }
+    return list;
+  }
+  function readSection(prefix){
+    return { enabled:fsToBool(g(prefix+"Enabled")), passed:fsToBool(g(prefix+"Passed")), passed_individual_purity:fsToBool(g(prefix+"PassedIndividualPurity")), passed_total_purity:fsToBool(g(prefix+"PassedTotalPurity")), total_purity:fsToNumber(g(prefix+"TotalPurity")), limit_total_purity:fsToNumber(g(prefix+"LimitTotalPurity")), categories:readCategories(prefix) };
+  }
+  return { scan_id:g("Id"), description:g("Description")||null, filename:g("Filename")||null, sample_weight:fsToNumber(g("SampleWeight")), execution_start:fsToTimestamp(g("ExecutionStartLocal")||g("ExecutionStartUTC")), execution_stop:fsToTimestamp(g("ExecutionStopLocal")||g("ExecutionStopUTC")), execution_duration:g("ExecutionDuration")||null, product_name:g("ProductName")||null, product_description:g("ProductDescription")||null, product_ref_id:g("ProductId")||null, product_hash:g("ProductHash")||null, passed:fsToBool(g("Passed")), metal_evaluation_enabled:fsToBool(g("MetalEvaluationEnabled")), metal_passed:fsToBool(g("MetalPassed")), metal_pieces:fsToNumber(g("MetalPieces")), metal_limit:fsToNumber(g("MetalPassedLimit")), color_a:readSection("ColorDataA"), color_b:readSection("ColorDataB"), material_a:readSection("MaterialDataA"), material_b:readSection("MaterialDataB") };
+}
+
+// ── Preview rendering ──
+function fsSectionTable(title, s){
+  if(!s.enabled) return `<p style="font-size:12.5px;color:var(--muted);"><b>${title}:</b> Not enabled.</p>`;
+  const pass = s.passed !== false;
+  const rows = s.categories.map(c=>`<tr><td style="padding:4px 6px;">${c.name}</td><td style="padding:4px 6px;">${c.percent!=null?c.percent.toFixed(3):"-"}%</td><td style="padding:4px 6px;font-weight:700;color:${c.passed===false?"var(--bad)":"var(--ok)"};">${c.good?"—":(c.passed===false?"No":"Yes")}</td></tr>`).join("");
+  return `<h4 style="margin:12px 0 2px;color:var(--heading);">${title} — <span style="color:${pass?"var(--ok)":"var(--bad)"};">${pass?"Passed":"Failed"}</span></h4>
+  <p style="font-size:11.5px;color:var(--muted);margin:0 0 6px;">Purity: ${s.total_purity!=null?s.total_purity.toFixed(3):"—"}% (limit ${s.limit_total_purity??0}%)</p>
+  <table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:10px;"><thead><tr style="background:var(--heading);color:#fff;"><th style="padding:4px 6px;text-align:left;">Category</th><th style="padding:4px 6px;">Percent</th><th style="padding:4px 6px;">Passed</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function fsRenderPreview(p){
+  const wrap = document.getElementById("fsPreviewWrap");
+  const badge = p.passed
+    ? `<span style="display:inline-block;padding:6px 18px;border-radius:20px;background:#dcfce7;color:#166534;font-weight:800;font-size:14px;">✅ PASSED</span>`
+    : `<span style="display:inline-block;padding:6px 18px;border-radius:20px;background:#fee2e2;color:#991b1b;font-weight:800;font-size:14px;">❌ FAILED</span>`;
+  wrap.innerHTML = `
+    <div style="text-align:center;margin-bottom:12px;">${badge}</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;">
+      <div style="background:var(--bg);border-radius:8px;padding:10px;text-align:center;"><div style="font-size:15px;font-weight:800;color:var(--heading);">${p.sample_weight??"-"} g</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase;font-weight:700;">Sample Weight</div></div>
+      <div style="background:var(--bg);border-radius:8px;padding:10px;text-align:center;"><div style="font-size:15px;font-weight:800;color:var(--heading);">${p.metal_pieces??0}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase;font-weight:700;">Metal Pieces</div></div>
+    </div>
+    ${fsSectionTable("Color A", p.color_a)}
+    ${fsSectionTable("Color B", p.color_b)}
+    ${fsSectionTable("Material A", p.material_a)}
+    ${fsSectionTable("Material B", p.material_b)}
+    <button onclick="fsSubmitResult()" style="width:100%;margin-top:12px;padding:12px;background:var(--heading);color:#fff;border:none;border-radius:8px;font-weight:800;font-size:14px;cursor:pointer;">
+      Save Quality Result
+    </button>`;
+}
+
+// ── Submit — locked to CURRENT_PROD_ID ──
+async function fsSubmitResult(){
+  const st = document.getElementById("fsSubmitStatus");
+  if(!FS_PARSED || !CURRENT_PROD_ID){ st.style.color="var(--bad)"; st.textContent="No parsed result or no production selected."; return; }
+  st.style.color=""; st.textContent="Saving...";
+  const p = FS_PARSED;
+  const payload = {
+    production_id: CURRENT_PROD_ID,
+    scan_id: p.scan_id, description: p.description, filename: p.filename,
+    sample_weight: p.sample_weight, execution_start: p.execution_start, execution_stop: p.execution_stop,
+    execution_duration: p.execution_duration, product_name: p.product_name, product_description: p.product_description,
+    product_ref_id: p.product_ref_id, product_hash: p.product_hash, passed: p.passed,
+    metal_evaluation_enabled: p.metal_evaluation_enabled, metal_passed: p.metal_passed,
+    metal_pieces: p.metal_pieces, metal_limit: p.metal_limit,
+    color_a_enabled: p.color_a.enabled, color_a_passed: p.color_a.passed,
+    color_a_passed_individual_purity: p.color_a.passed_individual_purity, color_a_passed_total_purity: p.color_a.passed_total_purity,
+    color_a_total_purity: p.color_a.total_purity, color_a_limit_total_purity: p.color_a.limit_total_purity,
+    color_a_categories: p.color_a.categories,
+    color_b_enabled: p.color_b.enabled, color_b_passed: p.color_b.passed,
+    color_b_passed_individual_purity: p.color_b.passed_individual_purity, color_b_passed_total_purity: p.color_b.passed_total_purity,
+    color_b_total_purity: p.color_b.total_purity, color_b_limit_total_purity: p.color_b.limit_total_purity,
+    color_b_categories: p.color_b.categories,
+    material_a_enabled: p.material_a.enabled, material_a_passed: p.material_a.passed,
+    material_a_passed_individual_purity: p.material_a.passed_individual_purity, material_a_passed_total_purity: p.material_a.passed_total_purity,
+    material_a_total_purity: p.material_a.total_purity, material_a_limit_total_purity: p.material_a.limit_total_purity,
+    material_a_categories: p.material_a.categories,
+    material_b_enabled: p.material_b.enabled, material_b_passed: p.material_b.passed,
+    material_b_passed_individual_purity: p.material_b.passed_individual_purity, material_b_passed_total_purity: p.material_b.passed_total_purity,
+    material_b_total_purity: p.material_b.total_purity, material_b_limit_total_purity: p.material_b.limit_total_purity,
+    material_b_categories: p.material_b.categories,
+    uploaded_by: ME.id, updated_at: new Date().toISOString()
+  };
+  try{
+    const { error } = await sb.from("pet_flake_scan_results").upsert(payload, { onConflict: "production_id" });
+    if(error) throw error;
+    await sb.from("pet_activity_log").insert({
+      collection_id: CURRENT_PROD ? CURRENT_PROD.id : null,
+      action: "flake_scan_uploaded", stage: "stage4",
+      actor_profile_id: ME.id, actor_username: ME.username,
+      old_status: null, new_status: null,
+      note: "Flake Scan result uploaded for " + (CURRENT_PROD ? CURRENT_PROD.form_number : CURRENT_PROD_ID)
+    });
+    st.style.color="var(--ok)"; st.textContent="✅ Saved. QR generation is now unlocked.";
+    setTimeout(()=>{ closeFlakeScanModal(); recheckFlakeScan(); }, 1200);
+  }catch(e){
+    st.style.color="var(--bad)"; st.textContent="❌ " + e.message;
+  }
+}
+window.fsSubmitResult = fsSubmitResult;
 </script>
 </body>
 </html>
