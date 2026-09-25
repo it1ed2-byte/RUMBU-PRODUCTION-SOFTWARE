@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Gatepass — Approver Setup</title>
+<title>Gatepass — Approver & Initiator Setup</title>
 <link rel="stylesheet" href="../../styles.css">
 <script>
   (function(){
@@ -71,14 +71,14 @@
 <div id="connStatus">Loading…</div>
 <div class="form-head">
   <div class="co">RUMBU INDUSTRIES GROUP</div>
-  <div class="ti">Gatepass — Approver Setup</div>
+  <div class="ti">Gatepass — Approver & Initiator Setup</div>
 </div>
 
 <div id="appArea" style="display:none;">
   <div id="homeView">
     <div class="card">
       <h3>Gatepass Approver Setup</h3>
-      <p class="sub">Choose a branch, then set who may approve each gatepass type. Any one approver in a type's set is enough to approve a gatepass of that type.</p>
+      <p class="sub">Choose a branch, then set who may approve and who may initiate each gatepass type. Approvers and initiators are separate roles — the same person cannot hold both for the same type. Super Admins and Admins can always initiate any type.</p>
       <label>Branch</label>
       <select id="branch" onchange="onBranchChanged()"></select>
     </div>
@@ -111,8 +111,23 @@
       <div class="btnbar"><button class="green" onclick="saveAppr()">Save Approvers</button></div>
       <div class="status" id="appr_status"></div>
 
-      <h4>Currently assigned to this type</h4>
+      <h4>Currently assigned approvers</h4>
       <div id="appr_list"></div>
+    </div>
+
+    <div class="card" style="margin-top:0;">
+      <h3 id="initTitle">Initiators</h3>
+      <p class="sub" id="initSub">These users can submit a gatepass of this type. Super Admins and Admins can always initiate any type and do not need to be listed here. A person cannot be both an approver and an initiator for the same type.</p>
+
+      <label style="margin-top:6px;">Add initiators (search by name or ID)</label>
+      <input type="text" id="init_search" placeholder="Type a name or employee ID" oninput="renderInitPicker()">
+      <div class="picker" id="init_picker"></div>
+      <div class="selwrap" id="init_sel"></div>
+      <div class="btnbar"><button class="green" onclick="saveInit()">Save Initiators</button></div>
+      <div class="status" id="init_status"></div>
+
+      <h4>Currently assigned initiators</h4>
+      <div id="init_list"></div>
 
       <div class="btnbar" style="margin-top:20px;border-top:1px solid var(--line);padding-top:16px;">
         <button class="rm" style="padding:8px 12px;font-size:12px;" onclick="deleteType()">Delete this gatepass type</button>
@@ -130,6 +145,7 @@ let ME = null, EMPLOYEES = [];
 let CURRENT_BRANCH = "";
 let CURRENT_TYPE_ID = null, CURRENT_TYPE_NAME = "";
 const SEL = new Set();
+const INIT_SEL = new Set();
 
 function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 function showView(id){ ["homeView","apprView"].forEach(v=>{ const el=document.getElementById(v); if(el) el.style.display=(v===id)?"block":"none"; }); try{ window.scrollTo(0,0); }catch(e){} }
@@ -193,22 +209,25 @@ async function loadTypes(){
       .select("id, type_name").eq("branch", CURRENT_BRANCH).order("type_name");
     if(error) throw error;
     const list = types || [];
-    let counts = {};
+    let counts = {}, icounts = {};
     if(list.length){
       const ids = list.map(t=>t.id);
       const { data: links } = await sb.from("hr_gatepass_type_approvers").select("gatepass_type_id").in("gatepass_type_id", ids);
       (links||[]).forEach(l => { counts[l.gatepass_type_id] = (counts[l.gatepass_type_id]||0) + 1; });
+      const { data: ilinks } = await sb.from("hr_gatepass_type_initiators").select("gatepass_type_id").in("gatepass_type_id", ids);
+      (ilinks||[]).forEach(l => { icounts[l.gatepass_type_id] = (icounts[l.gatepass_type_id]||0) + 1; });
     }
     if(!list.length){
       wrap.innerHTML = "<p class='empty'>No gatepass types for this branch yet. Add one below.</p>";
       return;
     }
     wrap.innerHTML = list.map(t=>{
-      const n = counts[t.id] || 0;
+      const na = counts[t.id] || 0;
+      const ni = icounts[t.id] || 0;
       return "<button class=\"tile\" onclick=\"openType('" + esc(t.id) + "','" + esc(t.type_name).replace(/'/g,"\\'") + "')\">" +
         "<div class=\"name\">" + esc(t.type_name) + "</div>" +
-        "<div class=\"desc\">Manage who can approve this type.</div>" +
-        "<span class=\"count\">" + n + " approver" + (n===1?"":"s") + "</span></button>";
+        "<div class=\"desc\">Manage who can approve and initiate this type.</div>" +
+        "<span class=\"count\">" + na + " approver" + (na===1?"":"s") + " · " + ni + " initiator" + (ni===1?"":"s") + "</span></button>";
     }).join("");
   }catch(e){ wrap.innerHTML = "<p class='status err' style='color:var(--red)'>❌ " + esc(e.message) + "</p>"; }
 }
@@ -233,15 +252,21 @@ async function addType(){
 
 function openType(id, name){
   CURRENT_TYPE_ID = id; CURRENT_TYPE_NAME = name;
-  SEL.clear();
+  SEL.clear(); INIT_SEL.clear();
   document.getElementById("appr_search").value = "";
   document.getElementById("appr_status").textContent = "";
   document.getElementById("del_status").textContent = "";
+  document.getElementById("init_search").value = "";
+  document.getElementById("init_status").textContent = "";
   document.getElementById("apprTitle").textContent = name + " — Approvers";
   document.getElementById("apprSub").textContent = "Any one of these approvers can approve a gatepass of type \"" + name + "\" in " + CURRENT_BRANCH + ".";
+  document.getElementById("initTitle").textContent = name + " — Initiators";
+  document.getElementById("initSub").textContent = "These users can submit a gatepass of type \"" + name + "\" in " + CURRENT_BRANCH + ". Admins and Super Admins can always initiate any type without being listed here.";
   renderPicker(); renderSel();
+  renderInitPicker(); renderInitSel();
   showView("apprView");
   loadApprList();
+  loadInitList();
 }
 window.openType = openType;
 
@@ -312,6 +337,85 @@ async function removeAppr(linkId){
 }
 window.removeAppr = removeAppr;
 
+// ── INITIATOR FUNCTIONS ────────────────────────────────────────────────────
+
+function renderInitPicker(){
+  const wrap = document.getElementById("init_picker");
+  const q = (document.getElementById("init_search").value || "").trim().toLowerCase();
+  if(!q){ wrap.innerHTML = "<p class='empty' style='padding:6px;'>Type a name or ID above to find employees.</p>"; return; }
+  const rows = EMPLOYEES.filter(e => (e.full_name + " " + (e.employee_id||"")).toLowerCase().indexOf(q) !== -1).slice(0, 60);
+  if(!rows.length){ wrap.innerHTML = "<p class='empty' style='padding:6px;'>No employees match.</p>"; return; }
+  wrap.innerHTML = rows.map(e=>{
+    const checked = INIT_SEL.has(e.id) ? "checked" : "";
+    return "<label><input type=\"checkbox\" value=\"" + esc(e.id) + "\" " + checked + " onchange=\"toggleInitSel('" + esc(e.id) + "', this.checked)\">" +
+      esc(e.full_name) + " <span class='pill'>" + esc(e.employee_id || e.id) + (e.department ? " · " + esc(e.department) : "") + "</span></label>";
+  }).join("");
+}
+window.renderInitPicker = renderInitPicker;
+
+function toggleInitSel(id, on){ if(on) INIT_SEL.add(id); else INIT_SEL.delete(id); renderInitSel(); }
+window.toggleInitSel = toggleInitSel;
+
+function renderInitSel(){
+  const wrap = document.getElementById("init_sel");
+  if(!INIT_SEL.size){ wrap.innerHTML = ""; return; }
+  wrap.innerHTML = "<label>Selected</label>" + Array.from(INIT_SEL).map(id=>{
+    const e = EMPLOYEES.find(x=>x.id===id); const label = e ? (e.full_name + " (" + (e.employee_id||id) + ")") : ("#" + id);
+    return "<span class='chip'>" + esc(label) + "<button onclick=\"toggleInitSel('" + esc(id) + "',false); syncInitCheckbox('" + esc(id) + "')\" title='Remove'>&times;</button></span>";
+  }).join("");
+}
+function syncInitCheckbox(id){ const b = document.querySelector("#init_picker input[value=\"" + id + "\"]"); if(b) b.checked = false; }
+window.syncInitCheckbox = syncInitCheckbox;
+
+async function saveInit(){
+  const st = document.getElementById("init_status");
+  if(!CURRENT_TYPE_ID){ st.className="status err"; st.textContent="Open a type first."; return; }
+  if(!INIT_SEL.size){ st.className="status err"; st.textContent="Select at least one initiator."; return; }
+  st.className="status"; st.textContent="Saving…";
+  try{
+    // Block anyone already assigned as an approver for this type
+    const { data: apprRows } = await sb.from("hr_gatepass_type_approvers").select("employee_id").eq("gatepass_type_id", CURRENT_TYPE_ID);
+    const approverIds = new Set((apprRows||[]).map(x=>String(x.employee_id)));
+    const blocked = Array.from(INIT_SEL).filter(id => approverIds.has(String(id)));
+    if(blocked.length){
+      const names = blocked.map(id=>{ const e=EMPLOYEES.find(x=>x.id===id); return e?e.full_name:"#"+id; }).join(", ");
+      st.className="status err"; st.textContent="❌ These people are already approvers for this type and cannot also be initiators: " + names; return;
+    }
+    // Skip anyone already assigned as initiator
+    const { data: existing } = await sb.from("hr_gatepass_type_initiators").select("employee_id").eq("gatepass_type_id", CURRENT_TYPE_ID);
+    const have = new Set((existing||[]).map(x=>String(x.employee_id)));
+    const toAdd = Array.from(INIT_SEL).filter(id => !have.has(String(id)));
+    if(!toAdd.length){ st.className="status ok"; st.textContent="Those initiators are already assigned."; INIT_SEL.clear(); renderInitSel(); renderInitPicker(); return; }
+    const rows = toAdd.map(id => ({ gatepass_type_id: CURRENT_TYPE_ID, employee_id: id }));
+    const { error } = await sb.from("hr_gatepass_type_initiators").insert(rows);
+    if(error) throw error;
+    st.className="status ok"; st.textContent="\u2705 Saved " + toAdd.length + " initiator(s).";
+    INIT_SEL.clear(); renderInitSel(); renderInitPicker();
+    await loadInitList();
+  }catch(e){ st.className="status err"; st.textContent = "\u274C " + e.message; }
+}
+window.saveInit = saveInit;
+
+async function loadInitList(){
+  const wrap = document.getElementById("init_list");
+  if(!CURRENT_TYPE_ID){ wrap.innerHTML=""; return; }
+  wrap.innerHTML = "<p class='loading'>Loading\u2026</p>";
+  const { data, error } = await sb.from("hr_gatepass_type_initiators").select("id, employee_id").eq("gatepass_type_id", CURRENT_TYPE_ID);
+  if(error){ wrap.innerHTML = "<p class='status err' style='color:var(--red)'>\u274C " + esc(error.message) + "</p>"; return; }
+  const rows = data || [];
+  if(!rows.length){ wrap.innerHTML = "<p class='empty'>No initiators assigned yet. Only Admins and Super Admins can initiate this type until you assign someone.</p>"; return; }
+  let html = "<table><thead><tr><th>Name</th><th>ID</th><th></th></tr></thead><tbody>";
+  rows.forEach(r=>{ html += "<tr><td>" + esc(nameFor(r.employee_id)) + "</td><td>" + esc(codeFor(r.employee_id)) + "</td>" +
+    "<td><button class='rm' onclick=\"removeInit('" + r.id + "')\">Remove</button></td></tr>"; });
+  html += "</tbody></table>"; wrap.innerHTML = html;
+}
+async function removeInit(linkId){
+  if(!confirm("Remove this initiator from the type?")) return;
+  try{ const { error } = await sb.from("hr_gatepass_type_initiators").delete().eq("id", linkId); if(error) throw error; await loadInitList(); }
+  catch(e){ alert("Could not remove: " + e.message); }
+}
+window.removeInit = removeInit;
+
 async function deleteType(){
   const st = document.getElementById("del_status");
   if(!CURRENT_TYPE_ID) return;
@@ -319,6 +423,7 @@ async function deleteType(){
   st.className="status"; st.textContent="Deleting…";
   try{
     await sb.from("hr_gatepass_type_approvers").delete().eq("gatepass_type_id", CURRENT_TYPE_ID);
+    await sb.from("hr_gatepass_type_initiators").delete().eq("gatepass_type_id", CURRENT_TYPE_ID);
     const { error } = await sb.from("hr_gatepass_types").delete().eq("id", CURRENT_TYPE_ID);
     if(error) throw error;
     home();

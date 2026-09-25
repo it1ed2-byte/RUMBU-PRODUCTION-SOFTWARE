@@ -193,9 +193,36 @@ async function onBranchChanged(){
   try{
     const { data, error } = await sb.from("hr_gatepass_types").select("id, type_name").eq("branch", branch).order("type_name");
     if(error) throw error;
-    GATEPASS_TYPES = data || [];
-    if(!GATEPASS_TYPES.length){ typeSel.innerHTML = "<option value=\"\">No gatepass types configured for this branch</option>"; typeSel.disabled = true; }
-    else { typeSel.innerHTML = "<option value=\"\">-- Select Gatepass Type --</option>" + GATEPASS_TYPES.map(t => "<option value=\"" + t.id + "\">" + esc(t.type_name) + "</option>").join(""); typeSel.disabled = false; }
+    let types = data || [];
+
+    // Plain Users: only show gatepass types they are assigned to initiate.
+    // Super Admin and Admin see all types.
+    if(ME.role !== "super_admin" && ME.role !== "admin"){
+      // Look up this user's employee record via linked_profile_id
+      const { data: empRows } = await sb.from("employees").select("id").eq("linked_profile_id", ME.id).maybeSingle();
+      if(!empRows){
+        // No employee record — show no types
+        typeSel.innerHTML = "<option value=\"\">No gatepass types available for you</option>"; typeSel.disabled = true; return;
+      }
+      const myEmpId = empRows.id;
+      if(types.length){
+        const typeIds = types.map(t => t.id);
+        const { data: initLinks } = await sb.from("hr_gatepass_type_initiators")
+          .select("gatepass_type_id")
+          .eq("employee_id", myEmpId)
+          .in("gatepass_type_id", typeIds);
+        const allowed = new Set((initLinks||[]).map(l => l.gatepass_type_id));
+        types = types.filter(t => allowed.has(t.id));
+      }
+    }
+
+    GATEPASS_TYPES = types;
+    if(!GATEPASS_TYPES.length){
+      typeSel.innerHTML = "<option value=\"\">No gatepass types available for you in this branch</option>"; typeSel.disabled = true;
+    } else {
+      typeSel.innerHTML = "<option value=\"\">-- Select Gatepass Type --</option>" + GATEPASS_TYPES.map(t => "<option value=\"" + t.id + "\">" + esc(t.type_name) + "</option>").join("");
+      typeSel.disabled = false;
+    }
   }catch(e){ typeSel.innerHTML = "<option value=\"\">Could not load types</option>"; console.warn("Could not load gatepass types:", e.message); }
 }
 window.onBranchChanged = onBranchChanged;
