@@ -215,11 +215,14 @@
 
     <div class="hidden" id="bulkUploadPanel" style="border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin-bottom:16px;">
       <h4 style="margin-top:0;">Bulk Upload Staff</h4>
-      <p class="sub">Every row carries its own Department, Designation, and Employee Type, exactly like the real HR export. Choose the Branch first (Unit is optional and applies to everyone in this upload), then download the Excel template, fill it in, and upload it. Required columns: <b>Employee ID</b> and <b>Full Name</b>. Rows with a duplicate Employee ID (already in the system, or repeated in the file) are skipped and listed.</p>
+      <p class="sub">Every row still carries its own Department, Designation, and Employee Type, exactly like the real HR export — the Department picker below is just a filter to help you find the right Unit faster when uploading a whole unit's roster at once; it doesn't override what's in your file. Choose the Branch first, then download the Excel template, fill it in, and upload it. Required columns: <b>Employee ID</b> and <b>Full Name</b>. Rows with a duplicate Employee ID (already in the system, or repeated in the file) are skipped and listed.</p>
     <p class="sub" style="color:var(--warn);margin-top:-8px;">⚠ Use the Excel template: its Bank Account Number column is pre-formatted as <b>Text</b>, so leading zeros (e.g. 00023) are kept. A plain CSV also works, but Excel or Google Sheets will strip leading zeros from a CSV unless you format that column as Text first. Account numbers that look altered are flagged after upload.</p>
       <div class="form-row">
         <div class="field"><label>Branch *</label>
           <select id="bulk_branch" onchange="onBulkBranchChange('bulk')"><option value="">— select —</option></select>
+        </div>
+        <div class="field"><label>Department (optional — narrows Unit below)</label>
+          <select id="bulk_dept_filter" onchange="onBulkDeptFilterChange('bulk')" disabled><option value="">All Departments</option></select>
         </div>
         <div class="field"><label>Unit (optional, applies to the whole batch)</label>
           <select id="bulk_unit" disabled><option value="">— none —</option></select>
@@ -401,11 +404,14 @@
 
   <div class="hidden" id="adminBulkUploadPanel" style="border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin-bottom:16px;">
     <h4 style="margin-top:0;">Bulk Upload Staff</h4>
-    <p class="sub">Every row carries its own Department, Designation, and Employee Type, exactly like the real HR export. Choose the Branch first (Unit is optional and applies to everyone in this upload), then upload a CSV file or paste rows below. Required columns: <b>Employee ID</b> and <b>Full Name</b>. Rows with a duplicate Employee ID (already in the system, or repeated in the file) are skipped and listed.</p>
+    <p class="sub">Every row still carries its own Department, Designation, and Employee Type, exactly like the real HR export — the Department picker below is just a filter to help you find the right Unit faster when uploading a whole unit's roster at once; it doesn't override what's in your file. Choose the Branch first, then upload a CSV file or paste rows below. Required columns: <b>Employee ID</b> and <b>Full Name</b>. Rows with a duplicate Employee ID (already in the system, or repeated in the file) are skipped and listed.</p>
     <p class="sub" style="color:var(--warn);margin-top:-8px;">⚠ Bank Account Number is stored as text so leading zeros (e.g. 0012345678) are kept. If you edit the file in Excel or Google Sheets, format that column as <b>Text</b> before typing, otherwise the spreadsheet will drop leading zeros or turn long numbers into 1.2E+09. Uploaded account numbers that look altered are flagged below.</p>
     <div class="form-row">
       <div class="field"><label>Branch *</label>
         <select id="admin_bulk_branch" onchange="onBulkBranchChange('admin_bulk')"><option value="">— select —</option></select>
+      </div>
+      <div class="field"><label>Department (optional — narrows Unit below)</label>
+        <select id="admin_bulk_dept_filter" onchange="onBulkDeptFilterChange('admin_bulk')" disabled><option value="">All Departments</option></select>
       </div>
       <div class="field"><label>Unit (optional, applies to the whole batch)</label>
         <select id="admin_bulk_unit" disabled><option value="">— none —</option></select>
@@ -2976,19 +2982,39 @@ async function processSalaryUpload(prefix){
 window.processSalaryUpload = processSalaryUpload;
 
 // Bulk Upload is different from Add/Edit: Department now comes from the
-// pasted data itself, per row, to match the real HR export exactly — so
-// there's no Department dropdown here to cascade Unit from. Unit stays a
-// single per-batch choice (it isn't one of the real export's columns),
-// populated directly from every unit across every department in the
-// chosen Branch, flattened, rather than filtered to one department.
+// pasted data itself, per row, to match the real HR export exactly.
+// Unit stays a single per-batch choice (it isn't one of the real
+// export's columns) — the Department dropdown here is purely a filter
+// to narrow that Unit list faster; it plays no part in what's uploaded.
 function onBulkBranchChange(prefix){
   const branch = document.getElementById(prefix + "_branch").value;
+  const deptSel = document.getElementById(prefix + "_dept_filter");
   const unitSel = document.getElementById(prefix + "_unit");
   if(!branch){
-    unitSel.innerHTML = "<option value=\"\">— none —</option>"; unitSel.disabled = true; return;
+    deptSel.innerHTML = "<option value=\"\">All Departments</option>"; deptSel.disabled = true;
+    unitSel.innerHTML = "<option value=\"\">— none —</option>"; unitSel.disabled = true;
+    return;
   }
-  const deptIdsInBranch = ALL_DEPARTMENTS.filter(d => d.section === branch).map(d => d.id);
+  const deptsInBranch = ALL_DEPARTMENTS.filter(d => d.section === branch);
+  deptSel.innerHTML = "<option value=\"\">All Departments</option>" +
+    deptsInBranch.map(d=>"<option value=\"" + d.id + "\">" + esc(d.name) + "</option>").join("");
+  deptSel.disabled = deptsInBranch.length === 0;
+  populateBulkUnitOptions(prefix);
+}
+
+function onBulkDeptFilterChange(prefix){
+  populateBulkUnitOptions(prefix);
+}
+window.onBulkDeptFilterChange = onBulkDeptFilterChange;
+
+function populateBulkUnitOptions(prefix){
+  const branch = document.getElementById(prefix + "_branch").value;
+  const deptFilterId = document.getElementById(prefix + "_dept_filter").value;
+  const deptIdsInBranch = deptFilterId
+    ? [Number(deptFilterId)]
+    : ALL_DEPARTMENTS.filter(d => d.section === branch).map(d => d.id);
   const units = ALL_UNITS.filter(u => deptIdsInBranch.includes(u.department_id));
+  const unitSel = document.getElementById(prefix + "_unit");
   unitSel.innerHTML = "<option value=\"\">— none —</option>" +
     units.map(u=>"<option value=\"" + esc(u.name) + "\">" + esc(u.name) + "</option>").join("");
   unitSel.disabled = units.length === 0;
