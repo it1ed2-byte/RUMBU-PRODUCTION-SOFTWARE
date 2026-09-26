@@ -183,8 +183,28 @@ function populateBranches(){
   if(mine.length === 1){ sel.value = mine[0]; onBranchChanged(); }
 }
 
+// Supabase caps how many rows a single request can return (1000 by
+// default) — a plain .select("*") on a table past that size silently
+// drops everything beyond the cutoff, with no error at all. This loops
+// in pages until every row has genuinely been fetched, regardless of
+// how large the company grows — same fix applied to Manage Accounts
+// and the HR Console for this exact reason.
+async function fetchAllRows(query){
+  const PAGE_SIZE = 1000;
+  let all = [];
+  let from = 0;
+  while(true){
+    const { data, error } = await query.range(from, from + PAGE_SIZE - 1);
+    if(error) throw error;
+    all = all.concat(data || []);
+    if(!data || data.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+  return all;
+}
+
 async function loadEmployees(){
-  const { data } = await sb.from("employees").select("id, employee_id, full_name, department").order("full_name");
+  const data = await fetchAllRows(sb.from("employees").select("id, employee_id, full_name, department").order("full_name"));
   EMPLOYEES = (data||[]).map(e=>({ ...e, id: String(e.id) }));
 }
 function nameFor(id){ const e = EMPLOYEES.find(x=>x.id===String(id)); return e ? e.full_name : ("#" + id); }
