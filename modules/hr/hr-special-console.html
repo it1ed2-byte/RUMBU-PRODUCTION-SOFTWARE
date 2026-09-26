@@ -369,7 +369,7 @@ async function init(){
     await loadReferenceData();
     await loadEmployees();
     renderDashboard();
-    renderDirectory();
+    showDirectoryPlaceholder();
     await loadActivityLog();
   }catch(e){
     status.style.display = "block";
@@ -479,15 +479,32 @@ function onEditDeptChange(){ populateUnitSelect("e_unit", document.getElementByI
 window.onAddDeptChange = onAddDeptChange;
 window.onEditDeptChange = onEditDeptChange;
 
+// Supabase caps how many rows a single request can return (1000 by
+// default) — a plain .select("*") on a table past that size silently
+// drops everything beyond the cutoff, with no error at all. This loops
+// in pages until every row has genuinely been fetched, regardless of
+// how large the company grows.
+async function fetchAllRows(query){
+  const PAGE_SIZE = 1000;
+  let all = [];
+  let from = 0;
+  while(true){
+    const { data, error } = await query.range(from, from + PAGE_SIZE - 1);
+    if(error) throw error;
+    all = all.concat(data || []);
+    if(!data || data.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+  return all;
+}
+
 async function loadEmployees(){
-  const { data, error } = await sb.from("employees").select("*").order("full_name");
-  if(error) throw error;
-  EMPLOYEES = data || [];
+  EMPLOYEES = await fetchAllRows(sb.from("employees").select("*").order("full_name"));
 
   const ids = EMPLOYEES.map(e=>e.id);
   SALARIES = {};
   if(ids.length){
-    const { data: sal } = await sb.from("employee_salaries").select("employee_id,salary").in("employee_id", ids);
+    const sal = await fetchAllRows(sb.from("employee_salaries").select("employee_id,salary").in("employee_id", ids));
     (sal||[]).forEach(s=>{ SALARIES[s.employee_id] = s.salary; });
   }
 
@@ -876,7 +893,17 @@ async function processBulkUpload(){
 window.processBulkUpload = processBulkUpload;
 
 // ---------------- DIRECTORY / CRUD ----------------
+// The Directory table isn't built until the person actually searches or
+// filters — with 1000+ employees, rendering the full table on every tab
+// open is wasted work almost every time, even though loadEmployees()
+// itself still has to run eagerly (Dashboard's KPI tiles need the count).
+let DIRECTORY_INTERACTED = false;
+function showDirectoryPlaceholder(){
+  const body = document.getElementById("dirBody");
+  if(body) body.innerHTML = `<tr><td colspan="16" style="text-align:center;color:var(--hr-muted);">Search by name, ID, badge no., branch, or department above, or pick a filter, to load staff.</td></tr>`;
+}
 function renderDirectory(){
+  DIRECTORY_INTERACTED = true;
   const rows = filteredEmployees();
   const body = document.getElementById("dirBody");
   if(!rows.length){ body.innerHTML = `<tr><td colspan="16" style="text-align:center;color:var(--hr-muted);">No employees found.</td></tr>`; return; }
