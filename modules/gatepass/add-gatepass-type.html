@@ -322,6 +322,17 @@ async function saveAppr(){
   if(!SEL.size){ st.className="status err"; st.textContent="Select at least one approver."; return; }
   st.className="status"; st.textContent="Saving…";
   try{
+    // Block anyone already assigned as an initiator for this type — the
+    // same rule saveInit() already enforces in the other direction, so
+    // it can't be silently broken depending on which order you assign
+    // people in.
+    const { data: initRows } = await sb.from("hr_gatepass_type_initiators").select("employee_id").eq("gatepass_type_id", CURRENT_TYPE_ID);
+    const initiatorIds = new Set((initRows||[]).map(x=>String(x.employee_id)));
+    const blocked = Array.from(SEL).filter(id => initiatorIds.has(String(id)));
+    if(blocked.length){
+      const names = blocked.map(id=>{ const e=EMPLOYEES.find(x=>x.id===id); return e?e.full_name:"#"+id; }).join(", ");
+      st.className="status err"; st.textContent="❌ These people are already initiators for this type and cannot also be approvers: " + names; return;
+    }
     // Skip anyone already assigned, then insert the rest.
     const { data: existing } = await sb.from("hr_gatepass_type_approvers").select("employee_id").eq("gatepass_type_id", CURRENT_TYPE_ID);
     const have = new Set((existing||[]).map(x=>String(x.employee_id)));
