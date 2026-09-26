@@ -560,6 +560,18 @@ let ME_IS_HR = false;
 // status lives in its own table now, to avoid a self-referencing RLS
 // policy on employees; see HR_Fix_Recursion.sql for why).
 let HR_ADMIN_BY_PROFILE = {};
+
+// AgriWatt is a separate, smaller company under the same Chairman as
+// Rumbu — not part of the Rumbu group itself, and it only ever uses a
+// handful of pages (approvals, mainly). It doesn't need Rumbu's more
+// formal HR-designation structure, so its Admins get full staff-add
+// access automatically, without needing to be listed as an HR Admin
+// first — matching the same "is this an AgriWatt branch" check already
+// used in Manage Staff (isAgriwattBranch there), so both places agree on
+// what counts as AgriWatt regardless of exact spelling/capitalization.
+function isAgriwattBranch(branchName){
+  return !!branchName && branchName.trim().toLowerCase().indexOf("agriwatt") === 0;
+}
 // The id of the "Manage Staff" page (hr/manage-staff) — resolved once in
 // init(). Ticking/unticking this page in Manage Role is now the ONE place
 // that grants or revokes HR Admin status, kept in sync automatically by
@@ -725,10 +737,13 @@ async function loadHrAdminMap(){
 
 // Resolves whether THIS Admin is HR Admin for their Branch — the only
 // Admins (besides Super Admin) allowed to add or edit employees. Reads
-// hr_branch_admins, not employees (see HR_Fix_Recursion.sql).
+// hr_branch_admins, not employees (see HR_Fix_Recursion.sql). AgriWatt
+// Admins are the one exception — see isAgriwattBranch() above — they
+// always pass regardless of hr_branch_admins, since AgriWatt doesn't use
+// Rumbu's HR-designation structure at all.
 async function loadMyHrStatus(){
   await loadHrAdminMap();
-  ME_IS_HR = HR_ADMIN_BY_PROFILE.hasOwnProperty(ME.id);
+  ME_IS_HR = HR_ADMIN_BY_PROFILE.hasOwnProperty(ME.id) || (ME.sectionNames||[]).some(isAgriwattBranch);
 }
 
 // Looks up the "Manage Staff" page's id once, so saveRoleDetails() can tell
@@ -2289,7 +2304,13 @@ function openEmployeeDetail(empId){
   html += "<div class=\"card\" style=\"max-width:760px;\"><h3 style=\"margin-top:0;\">Access</h3>";
   if(e.has_system_access){
     if(!isAdmin && e.linked_role !== "super_admin" && e.linked_profile_id){
-      const otherRoles = ["user","admin","super_admin","hr_console"].filter(r=>r !== e.linked_role);
+      // hr_console is a Rumbu-only role — AgriWatt is a separate company
+      // that doesn't use that structure at all, so it's never even offered
+      // as an option for someone whose Branch is AgriWatt, rather than
+      // relying on someone remembering not to pick it.
+      const otherRoles = ["user","admin","super_admin","hr_console"]
+        .filter(r=>r !== e.linked_role)
+        .filter(r=>r !== "hr_console" || !isAgriwattBranch(e.branch));
       html += "<label>Change role</label>" +
         "<select id=\"chg_role_" + e.id + "\" style=\"width:auto;display:inline-block;margin:0 8px 0 0;\">" +
         otherRoles.map(r=>"<option value=\"" + r + "\">" + r + "</option>").join("") +
