@@ -650,7 +650,7 @@ async function init(){
       populateDeptBranchSelect();
       await loadHrAdminMap();
       await loadManageStaffPageId();
-      await loadEmployeeDirectory();
+      await showEmployeeDirectoryPlaceholder();
       // super admin: all panels available
     } else if(ME.role === "admin"){
       // Employees tab restored for view — an Admin should always be able to
@@ -664,7 +664,7 @@ async function init(){
       await loadMyHrStatus();
       await loadManageStaffPageId();
       await loadRoleDropdown();
-      await loadEmployeeDirectory();
+      await showEmployeeDirectoryPlaceholder();
       // admin: no Settings panel
       document.getElementById("sec-settings").classList.add("role-unavailable");
     } else {
@@ -1763,17 +1763,76 @@ async function createUser(){
 // =========================================================
 let EMPLOYEES = [];
 let BRANCH_OPTIONS = [];
+// The Employee Directory no longer loads all employees the moment the
+// page opens — with 1000+ employees, fetching and rendering everyone
+// up front is wasted work almost every time. The full list is fetched
+// exactly once, lazily, the first time the person actually searches or
+// picks a filter; every entry point below shares this one gate rather
+// than each deciding independently.
+let EMPLOYEES_LOADED = false;
+async function ensureEmployeesLoaded(){
+  if(EMPLOYEES_LOADED) return true;   // already loaded — proceed as normal
+  EMPLOYEES_LOADED = true;
+  await loadEmployeeDirectory();       // fetches everyone, then renders both directories itself
+  return false;                        // signals "this call did the loading — nothing left to do"
+}
+
+// Lightweight startup for the Employee Directory: populate just the
+// Branch filter dropdown (a handful of rows) and show a prompt where
+// the results table would go — the full 1000+ employee fetch only
+// happens once the person actually searches or picks a filter, via
+// ensureEmployeesLoaded() above.
+async function showEmployeeDirectoryPlaceholder(){
+  if(!BRANCH_OPTIONS.length){
+    const { data: sections } = await sb.from("app_sections").select("name").order("name");
+    BRANCH_OPTIONS = (sections||[]).map(s=>s.name);
+  }
+  const branchFilter = document.getElementById("emp_branch_filter");
+  if(branchFilter && branchFilter.options.length <= 1){
+    branchFilter.innerHTML = '<option value="all">All</option>' +
+      BRANCH_OPTIONS.map(b=>`<option value="${b}">${b}</option>`).join("") +
+      '<option value="__unset__">— Not set —</option>';
+  }
+  const adminBranchFilter = document.getElementById("admin_emp_branch_filter");
+  if(adminBranchFilter && adminBranchFilter.options.length <= 1 && ME.role === "admin"){
+    adminBranchFilter.innerHTML = '<option value="all">All my Branches</option>' +
+      (ME.sectionNames||[]).map(b=>`<option value="${b}">${b}</option>`).join("");
+  }
+  const prompt = "<p class='sub'>Search by name, ID, or department above, or pick a filter, to load staff.</p>";
+  const wrap = document.getElementById("employeeDirectoryWrap");
+  if(wrap) wrap.innerHTML = prompt;
+  const adminWrap = document.getElementById("adminEmployeeDirectoryWrap");
+  if(adminWrap) adminWrap.innerHTML = prompt;
+}
 let ALL_DEPARTMENTS = []; // {id, name, section} — every real Department, all Branches, loaded once for the Employee Directory's inline Department/Unit editors
 let ALL_UNITS = [];       // {id, name, department_id}
 let PENDING_EMPLOYEE = null; // set by grantAccessFromEmployee, consumed after account creation succeeds
+
+// Supabase caps how many rows a single request can return (1000 by
+// default) — a plain .select("*") on a table past that size silently
+// drops everything beyond the cutoff, with no error at all. This loops
+// in pages until every row has genuinely been fetched, regardless of
+// how large either table grows.
+async function fetchAllRows(query){
+  const PAGE_SIZE = 1000;
+  let all = [];
+  let from = 0;
+  while(true){
+    const { data, error } = await query.range(from, from + PAGE_SIZE - 1);
+    if(error) throw error;
+    all = all.concat(data || []);
+    if(!data || data.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+  return all;
+}
 
 async function loadEmployeeDirectory(){
   const status = document.getElementById("emp_dir_status");
   if(status) status.textContent = "Loading…";
   try{
-    const { data: emps, error: empErr } = await sb.from("employees").select("*").order("full_name");
-    if(empErr) throw empErr;
-    const { data: sals } = await sb.from("employee_salaries").select("*");
+    const emps = await fetchAllRows(sb.from("employees").select("*").order("full_name"));
+    const sals = await fetchAllRows(sb.from("employee_salaries").select("*"));
     const salaryMap = {};
     (sals||[]).forEach(s=> salaryMap[s.employee_id] = s.salary);
 
@@ -1782,7 +1841,7 @@ async function loadEmployeeDirectory(){
     const linkedIds = (emps||[]).map(e=>e.linked_profile_id).filter(Boolean);
     let roleMap = {};
     if(linkedIds.length){
-      const { data: profs } = await sb.from("profiles").select("id, role").in("id", linkedIds);
+      const profs = await fetchAllRows(sb.from("profiles").select("id, role").in("id", linkedIds));
       (profs||[]).forEach(p=>{ roleMap[p.id] = p.role; });
     }
 
@@ -2048,7 +2107,8 @@ async function addEmployeeAsAdmin(){
 // already makes properly. Removed rather than left dangling, as part of
 // unifying staff management onto one gated path.
 
-function renderEmployeeDirectory(){
+async function renderEmployeeDirectory(){
+  if(!(await ensureEmployeesLoaded())) return;   // first call just triggered the load, which already rendered
   const wrap = document.getElementById("employeeDirectoryWrap");
   if(!wrap) return;
   // Any path that renders the list (load, search, filter, back from a detail
@@ -2079,7 +2139,8 @@ function renderEmployeeDirectory(){
 // createUserCard form — an Admin can never grant Admin or Super Admin
 // from here, matching the privilege boundary enforced everywhere else
 // in this file (see MANAGER_ALLOWED_PAGE_IDS, availableSectionIds).
-function renderAdminEmployeeDirectory(){
+async function renderAdminEmployeeDirectory(){
+  if(!(await ensureEmployeesLoaded())) return;   // first call just triggered the load, which already rendered
   const wrap = document.getElementById("adminEmployeeDirectoryWrap");
   if(!wrap || ME.role !== "admin") return;
   showEmployeeDirChrome(false);
@@ -2513,19 +2574,23 @@ function initDirectoryFilters(){
   }
 }
 
-function onEmpBranchFilterChange(){
+async function onEmpBranchFilterChange(){
+  if(!(await ensureEmployeesLoaded())) return;
   fillDeptUnitFilters("emp_branch_filter","emp_department_filter","emp_unit_filter", false);
   renderEmployeeDirectory();
 }
-function onEmpDeptFilterChange(){
+async function onEmpDeptFilterChange(){
+  if(!(await ensureEmployeesLoaded())) return;
   fillDeptUnitFilters("emp_branch_filter","emp_department_filter","emp_unit_filter", true);
   renderEmployeeDirectory();
 }
-function onAdminEmpBranchFilterChange(){
+async function onAdminEmpBranchFilterChange(){
+  if(!(await ensureEmployeesLoaded())) return;
   fillDeptUnitFilters("admin_emp_branch_filter","admin_emp_department_filter","admin_emp_unit_filter", false);
   renderAdminEmployeeDirectory();
 }
-function onAdminEmpDeptFilterChange(){
+async function onAdminEmpDeptFilterChange(){
+  if(!(await ensureEmployeesLoaded())) return;
   fillDeptUnitFilters("admin_emp_branch_filter","admin_emp_department_filter","admin_emp_unit_filter", true);
   renderAdminEmployeeDirectory();
 }
