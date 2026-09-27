@@ -220,13 +220,21 @@ function paperHTML(r, items){
     "</tr>";
   });
 
+  // Format: FULL NAME (ID) — fall back to ID alone if no full name found
+  function fmtPerson(fullName, username){
+    if(fullName) return esc(fullName) + " (" + esc(username || "") + ")";
+    return esc(username || "—");
+  }
+
   let stamp = "";
   if(st === "APPROVED"){
     stamp = "<div class='stamp'><b>✔ APPROVED ONLINE</b><br>This gate pass was approved on the system by <b>" +
-      esc(r.approved_by || "—") + "</b>" + (r.approved_at ? " on " + esc(new Date(r.approved_at).toLocaleString()) : "") +
+      fmtPerson(r._approved_by_full_name, r.approved_by) + "</b>" +
+      (r.approved_at ? " on " + esc(new Date(r.approved_at).toLocaleString()) : "") +
       ". It is valid without a physical signature.</div>";
   } else if(st === "REJECTED"){
-    stamp = "<div class='stamp rej'><b>✕ REJECTED</b><br>Rejected by <b>" + esc(r.approved_by || "—") + "</b>" +
+    stamp = "<div class='stamp rej'><b>✕ REJECTED</b><br>Rejected by <b>" +
+      fmtPerson(r._approved_by_full_name, r.approved_by) + "</b>" +
       (r.approved_at ? " on " + esc(new Date(r.approved_at).toLocaleString()) : "") +
       (r.reject_reason ? ".<br>Reason: " + esc(r.reject_reason) : ".") + "</div>";
   } else {
@@ -242,7 +250,9 @@ function paperHTML(r, items){
       row("Branch", r.branch) +
       row("Gatepass Type", r.gatepass_type_name || "—") +
       row("Person (carrying out)", r.person_name) +
-      row("Raised By", r.created_by_username || "") +
+      row("Raised By", r._created_by_full_name
+        ? r._created_by_full_name + " (" + (r.created_by_username || "") + ")"
+        : (r.created_by_username || "")) +
       row("Description", r.description || "") +
     "</table>" +
     "<div style='margin-top:14px;font-weight:bold;font-size:13px;'>Items (" + list.length + ")</div>" +
@@ -251,7 +261,10 @@ function paperHTML(r, items){
       itemsRows +
     "</table>" +
     stamp +
-    "<div class='sign'><div>Issued By (" + esc(r.created_by_username || "") + ")</div><div>Security / Gate Officer</div></div>" +
+    "<div class='sign'><div>Issued By<br>" +
+      esc(r._created_by_full_name || r.created_by_username || "") +
+      (r.created_by_username ? "<br>(" + esc(r.created_by_username) + ")" : "") +
+    "</div><div>Security / Gate Officer</div></div>" +
   "</div>";
 }
 function row(k, v){ return "<tr><td class='k'>" + esc(k) + "</td><td>" + esc(v == null ? "" : v) + "</td></tr>"; }
@@ -272,6 +285,19 @@ async function openDetail(id){
   document.getElementById("detailView").style.display = "block";
   try{ window.scrollTo(0,0); }catch(e){}
   CURRENT_ITEMS = await fetchItems(id);
+
+  // Resolve full names from employees table using the stored username (= employee_id code)
+  const usernamesToResolve = [r.created_by_username, r.approved_by].filter(Boolean);
+  if(usernamesToResolve.length){
+    const { data: empRows } = await sb.from("employees")
+      .select("employee_id, full_name")
+      .in("employee_id", usernamesToResolve);
+    const nameMap = {};
+    (empRows || []).forEach(e => { nameMap[e.employee_id] = e.full_name; });
+    r._created_by_full_name  = nameMap[r.created_by_username] || null;
+    r._approved_by_full_name = nameMap[r.approved_by]        || null;
+  }
+
   document.getElementById("paperWrap").innerHTML = paperHTML(r, CURRENT_ITEMS);
 }
 window.openDetail = openDetail;
