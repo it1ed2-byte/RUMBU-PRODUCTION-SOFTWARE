@@ -36,9 +36,17 @@
   input.no-spinner::-webkit-inner-spin-button{ -webkit-appearance:none; margin:0; }
   input.no-spinner{ -moz-appearance:textfield; }
 
-  /* Bag Tracking */
-  .bag-label{border:1px solid var(--line);border-radius:8px;padding:10px;text-align:center;background:var(--card);}
-  .bag-label .ref{font-size:11px;font-weight:700;color:var(--heading);margin-top:6px;word-break:break-all;}
+  /* Bag Tracking — GS1-style pack label card */
+  .bag-label{border:1px solid #cbd5e1;border-radius:8px;overflow:hidden;text-align:center;background:#fff;}
+  .bag-label .bl-header{background:#1F3864;color:#fff;padding:6px 6px 7px;}
+  .bag-label .bl-company{font-size:10px;font-weight:800;letter-spacing:.3px;}
+  .bag-label .bl-addr{font-size:7.5px;opacity:.9;margin-top:2px;}
+  .bag-label .bl-body{padding:10px 8px 6px;}
+  .bag-label .bl-pr-label{font-size:8.5px;font-weight:700;letter-spacing:.6px;color:#2E75B6;text-transform:uppercase;}
+  .bag-label .bl-ref{font-size:15px;font-weight:800;color:#1F3864;margin:2px 0 8px;word-break:break-all;}
+  .bag-label .bl-qrbox{display:flex;justify-content:center;}
+  .bag-label .bl-footer{border-top:1px solid #e2e8f0;padding:6px 8px;font-size:9px;color:#475569;}
+  .bag-label .bl-footer div{margin:1px 0;}
   @media print{
     body *{visibility:hidden;}
     #bagQrGrid, #bagQrGrid *{visibility:visible;}
@@ -692,16 +700,28 @@ function renderBagQrGrid(bags){
   GENERATED_CANVASES=[];
   const grid=document.getElementById("bagQrGrid");
   grid.innerHTML="";
+  // Net weight shown on the label is the batch's total production weight
+  // (bags aren't individually weighed), taken from the saved production entry.
+  const totalKg = document.getElementById("pfTotalProduction").value || "0";
   bags.forEach(b=>{
     const cell=document.createElement("div");
     cell.className="bag-label";
-    const qrBox=document.createElement("div");
-    cell.appendChild(qrBox);
-    const refText=document.createElement("div");
-    refText.className="ref";
-    refText.textContent=b.reference_number;
-    cell.appendChild(refText);
+    cell.innerHTML =
+      '<div class="bl-header">'+
+        '<div class="bl-company">RUMBU INDUSTRIES GROUP</div>'+
+        '<div class="bl-addr">KM4, Hadejia Road, Kano State, Nigeria</div>'+
+      '</div>'+
+      '<div class="bl-body">'+
+        '<div class="bl-pr-label">Pack Reference</div>'+
+        '<div class="bl-ref">'+b.reference_number+'</div>'+
+        '<div class="bl-qrbox"></div>'+
+      '</div>'+
+      '<div class="bl-footer">'+
+        '<div>Item: PET Flakes</div>'+
+        '<div>Net: '+totalKg+' KG</div>'+
+      '</div>';
     grid.appendChild(cell);
+    const qrBox = cell.querySelector(".bl-qrbox");
     new QRCode(qrBox, { text: QR_LOOKUP_BASE+"?ref="+encodeURIComponent(b.reference_number), width:120, height:120 });
     GENERATED_CANVASES.push(qrBox);
   });
@@ -710,26 +730,62 @@ function renderBagQrGrid(bags){
 async function archiveLabelsPdf(bags){
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ unit:"pt", format:"a4" });
-  const cols=3, cell=170, margin=30;
+  const cols=3, cellW=165, cellH=230, margin=30, gap=12;
   let x=margin, y=margin, col=0;
+  const totalKg = document.getElementById("pfTotalProduction").value || "0";
 
   doc.setFont("helvetica","bold"); doc.setFontSize(11);
+  doc.setTextColor(0,0,0);
   doc.text("PET Production — Bag Labels — "+(CURRENT_PROD?.form_number||""), margin, y);
-  y += 24;
+  y += 20;
 
   bags.forEach((b,i)=>{
     const qrBox = GENERATED_CANVASES[i];
     const canvas = qrBox ? qrBox.querySelector("canvas") : null;
+    const cx=x, cy=y;
+
+    // outer card border
+    doc.setDrawColor(203,213,225); doc.setLineWidth(0.75);
+    doc.rect(cx, cy, cellW, cellH);
+
+    // header banner
+    doc.setFillColor(31,56,100); // #1F3864
+    doc.rect(cx, cy, cellW, 30, "F");
+    doc.setTextColor(255,255,255);
+    doc.setFont("helvetica","bold"); doc.setFontSize(8.5);
+    doc.text("RUMBU INDUSTRIES GROUP", cx+cellW/2, cy+12, { align:"center" });
+    doc.setFont("helvetica","normal"); doc.setFontSize(6.5);
+    doc.text("KM4, Hadejia Road, Kano State, Nigeria", cx+cellW/2, cy+22, { align:"center" });
+
+    // pack reference
+    doc.setTextColor(46,117,182); // #2E75B6
+    doc.setFont("helvetica","bold"); doc.setFontSize(7.5);
+    doc.text("PACK REFERENCE", cx+cellW/2, cy+44, { align:"center" });
+    doc.setTextColor(31,56,100);
+    doc.setFontSize(13);
+    doc.text(b.reference_number, cx+cellW/2, cy+60, { align:"center" });
+
+    // QR code
+    let footerY = cy+68;
     if(canvas){
       const imgData = canvas.toDataURL("image/png");
-      doc.addImage(imgData, "PNG", x, y, 110, 110);
+      const qrSize=95;
+      doc.addImage(imgData, "PNG", cx+(cellW-qrSize)/2, footerY, qrSize, qrSize);
+      footerY += qrSize+8;
     }
-    doc.setFont("helvetica","normal"); doc.setFontSize(9);
-    doc.text(b.reference_number, x+55, y+124, { align:"center" });
 
-    col++; x += cell;
-    if(col>=cols){ col=0; x=margin; y+=150; }
-    if(y > 700){ doc.addPage(); y=margin; x=margin; col=0; }
+    // footer — Item / Net weight (batch total, not per bag)
+    doc.setDrawColor(226,232,240); doc.setLineWidth(0.5);
+    doc.line(cx+10, footerY, cx+cellW-10, footerY);
+    doc.setTextColor(71,85,105);
+    doc.setFont("helvetica","normal"); doc.setFontSize(7.5);
+    doc.text("Item: PET Flakes", cx+cellW/2, footerY+12, { align:"center" });
+    doc.text("Net: "+totalKg+" KG", cx+cellW/2, footerY+22, { align:"center" });
+    doc.setTextColor(0,0,0);
+
+    col++; x += cellW+gap;
+    if(col>=cols){ col=0; x=margin; y+=cellH+gap; }
+    if(y+cellH > 780){ doc.addPage(); y=margin; x=margin; col=0; }
   });
 
   const blob = doc.output("blob");
