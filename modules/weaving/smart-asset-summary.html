@@ -73,6 +73,22 @@ function parseDT(v){ const d=new Date(v); return isNaN(d)?null:d; }
 function minutesBetween(a,b){ return (!a||!b) ? 0 : Math.round((b-a)/60000); }
 function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
 
+// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
+async function fetchAllRows(table, select, query){
+  let all = [], offset = 0; const pageSize = 1000;
+  const q = query || "";
+  for(let guard=0; guard<500; guard++){
+    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=" + (select||"*") + q, { headers });
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
 
 function normalizeControlRow(r){
   if(r.date_col === undefined) r.date_col = r.date;
@@ -99,14 +115,12 @@ async function init(){
       document.getElementById("section").disabled = true;
     }
 
-    const [mwRes, ctrlRes] = await Promise.all([
-      fetch(SUPABASE_URL + "/rest/v1/" + MW_TABLE + "?select=*", { headers: authHeaders() }),
-      fetch(SUPABASE_URL + "/rest/v1/control?select=*", { headers: authHeaders() })
+    const [mwRows, ctrlRows] = await Promise.all([
+      fetchAllRows(MW_TABLE, "*"),
+      fetchAllRows("control", "*")
     ]);
-    if(!mwRes.ok) throw new Error(MW_TABLE + ": HTTP " + mwRes.status);
-    if(!ctrlRes.ok) throw new Error("control: HTTP " + ctrlRes.status);
-    MW_ROWS = await mwRes.json();
-    CTRL_ROWS = await ctrlRes.json(); CTRL_ROWS.forEach(normalizeControlRow);
+    MW_ROWS = mwRows;
+    CTRL_ROWS = ctrlRows; CTRL_ROWS.forEach(normalizeControlRow);
     status.style.color="#1d8a4e";
     status.textContent = "Connected. matweaving: " + MW_ROWS.length + " rows, control: " + CTRL_ROWS.length + " rows.";
   }catch(e){
