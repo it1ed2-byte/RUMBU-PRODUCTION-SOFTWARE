@@ -67,11 +67,28 @@
   #authGate.err{ color:var(--bad); }
   body.ready #authGate{ display:none; }
   body:not(.ready) > *:not(#authGate){ visibility:hidden !important; }
+  .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:2000;justify-content:center;align-items:center;padding:20px;}
+  .modal-overlay.open{display:flex;}
+  .modal-box{background:var(--card,#fff);border-radius:14px;padding:26px;max-width:400px;width:100%;box-shadow:0 20px 50px rgba(0,0,0,.3);}
 </style>
 </head>
 <body>
 
 <div id="authGate">Checking your session...</div>
+
+<div class="modal-overlay" id="emailPromptModal">
+  <div class="modal-box">
+    <h3 style="margin:0 0 4px;color:var(--navy,#1F3864);">Update Your Email</h3>
+    <p style="font-size:12.5px;color:#6b7280;margin:0 0 16px;">Keep your account email up to date so you don't miss anything important.</p>
+    <label style="font-size:12px;font-weight:700;display:block;margin-bottom:4px;">Email Address</label>
+    <input type="email" id="emailPromptInput" placeholder="name@example.com" style="width:100%;padding:9px 10px;border:1px solid #d8dee8;border-radius:8px;font-size:13px;box-sizing:border-box;">
+    <div style="display:flex;gap:10px;margin-top:16px;">
+      <button onclick="saveOwnEmail()" style="flex:1;">Save</button>
+      <button class="btn-ghost" onclick="dismissEmailPrompt()" style="flex:1;">Not Now</button>
+    </div>
+    <div class="status" id="emailPromptStatus" style="margin-top:10px;font-size:12.5px;font-weight:700;min-height:14px;"></div>
+  </div>
+</div>
 
 <div class="overlay" id="overlay" onclick="closeDrawer()"></div>
 
@@ -626,6 +643,7 @@
       restoreOpenModule();
 
       document.body.classList.add("ready");
+      checkOwnEmailPrompt(); // fire-and-forget — never blocks the app loading
     }catch(e){
       gate.classList.add("err");
       gate.textContent = "❌ " + e.message;
@@ -649,6 +667,58 @@
     // accountPageAllowed() when the picker card screen is rendered —
     // nothing to toggle here anymore.
   }
+
+  // ============================================================
+  // EMAIL UPDATE PROMPT — a dismissible reminder, not a hard block. Shown
+  // once per fresh login (tracked in sessionStorage so it doesn't nag
+  // repeatedly while someone is actively using the app), and comes back
+  // on the next login until an email is actually saved.
+  // ============================================================
+  let OWN_CURRENT_EMAIL = null;
+
+  async function checkOwnEmailPrompt(){
+    try{
+      let already = false;
+      try{ already = sessionStorage.getItem("rumbu_email_prompt_shown") === "1"; }catch(e){}
+      if(already) return;
+
+      const { data: email, error } = await sb.rpc("get_own_employee_email");
+      if(error){ console.warn("Could not check own email:", error.message); return; }
+      OWN_CURRENT_EMAIL = email || null;
+
+      document.getElementById("emailPromptInput").value = OWN_CURRENT_EMAIL || "";
+      document.getElementById("emailPromptModal").classList.add("open");
+      try{ sessionStorage.setItem("rumbu_email_prompt_shown", "1"); }catch(e){}
+    }catch(e){
+      console.warn("Email prompt check failed (non-fatal):", e);
+    }
+  }
+  window.checkOwnEmailPrompt = checkOwnEmailPrompt;
+
+  function dismissEmailPrompt(){
+    document.getElementById("emailPromptModal").classList.remove("open");
+  }
+  window.dismissEmailPrompt = dismissEmailPrompt;
+
+  async function saveOwnEmail(){
+    const input = document.getElementById("emailPromptInput");
+    const status = document.getElementById("emailPromptStatus");
+    const val = input.value.trim();
+    if(!val || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)){
+      status.style.color = "var(--bad,#c0392b)"; status.textContent = "Enter a valid email address.";
+      return;
+    }
+    status.style.color = "var(--muted,#6b7280)"; status.textContent = "Saving...";
+    try{
+      const { error } = await sb.rpc("update_own_email", { p_email: val });
+      if(error) throw error;
+      status.style.color = "#1d8a4e"; status.textContent = "✅ Saved.";
+      setTimeout(dismissEmailPrompt, 900);
+    }catch(e){
+      status.style.color = "var(--bad,#c0392b)"; status.textContent = "❌ " + e.message;
+    }
+  }
+  window.saveOwnEmail = saveOwnEmail;
 
   // ============================================================
   // ACCESS MODEL
