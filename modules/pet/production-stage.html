@@ -193,6 +193,22 @@
         </div>
         <div id="prodFormStatus" style="margin-top:10px;font-size:13px;font-weight:700;min-height:16px;"></div>
 
+        <!-- Kano Material Used — appears alongside Bag Tracking, right after
+             Save and Continue, since it needs a real saved production_id to
+             link to. Optional: not every Lagos production run uses Kano
+             material, so zero rows saved here is a normal, valid outcome. -->
+        <div id="kanoUsageCard" style="display:none;margin-top:10px;padding-top:20px;border-top:2px solid var(--line);">
+          <div class="sec-title">Kano Material Used (if any)</div>
+          <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">
+            If this production run used any Kano-sourced material, record how much and from which LOT. Leave blank if none was used.
+            Splits across more than one LOT are fine — add a row for each.
+          </p>
+          <div id="kanoUsageRows"></div>
+          <button class="btn-ghost" onclick="addKanoUsageRow()" style="margin-top:8px;">+ Add Another LOT</button>
+          <div style="margin-top:14px;"><button onclick="saveKanoUsage()">Save Kano Material Used</button></div>
+          <div class="status" id="kanoUsageStatus"></div>
+        </div>
+
         <!-- Bag Tracking — appears after Save and Continue, or immediately if
              reopening a collection where this step was already started. -->
         <div id="bagTrackingCard" style="display:none;margin-top:10px;padding-top:20px;border-top:2px solid var(--line);">
@@ -631,6 +647,8 @@ async function saveAndContinue(){
 
     st.style.color="var(--ok)"; st.textContent="Production data saved. Now enter bag tracking below.";
     document.getElementById("prodSaveRow").style.display="none";
+    document.getElementById("kanoUsageCard").style.display="block";
+    await loadKanoLotsForUsage();
     document.getElementById("bagTrackingCard").style.display="block";
     document.getElementById("bagTrackingCard").scrollIntoView({behavior:"smooth"});
     recheckFlakeScan(); // auto-check — hides the prompt if already uploaded
@@ -657,6 +675,83 @@ async function recheckFlakeScan(){
   }
 }
 window.recheckFlakeScan = recheckFlakeScan;
+
+// ---------------- KANO MATERIAL USED ----------------
+let KANO_LOTS = [];
+let KANO_USAGE_ROW_COUNT = 0;
+
+async function loadKanoLotsForUsage(){
+  const { data: lots } = await sb.from("pet_lots").select("id, lot_name").order("lot_name");
+  const { data: intake } = await sb.from("pet_kano_material_intake").select("lot_id, total_kg");
+  const { data: usage } = await sb.from("pet_kano_lot_usage").select("lot_id, quantity_used_kg");
+  const balances = {};
+  (intake||[]).forEach(r => { balances[r.lot_id] = (balances[r.lot_id]||0) + Number(r.total_kg); });
+  (usage||[]).forEach(r => { balances[r.lot_id] = (balances[r.lot_id]||0) - Number(r.quantity_used_kg); });
+  // Only LOTs that have ever held Kano material are worth offering here —
+  // an ordinary PET Collection lot with no Kano balance isn't relevant.
+  KANO_LOTS = (lots||[]).filter(l => balances[l.id] !== undefined).map(l => ({ id:l.id, name:l.lot_name, balance: balances[l.id] || 0 }));
+  KANO_USAGE_ROW_COUNT = 0;
+  document.getElementById("kanoUsageRows").innerHTML = "";
+  if(KANO_LOTS.length) addKanoUsageRow();
+}
+
+function addKanoUsageRow(){
+  const idx = KANO_USAGE_ROW_COUNT++;
+  const wrap = document.getElementById("kanoUsageRows");
+  const row = document.createElement("div");
+  row.className = "form-row"; row.id = "kanoRow" + idx;
+  row.style.marginTop = "8px";
+  const lotOptions = KANO_LOTS.length
+    ? KANO_LOTS.map(l=>`<option value="${l.id}">${esc(l.name)} (${l.balance.toLocaleString()} kg available)</option>`).join("")
+    : "";
+  row.innerHTML = `
+    <div><label>LOT</label>
+      ${KANO_LOTS.length
+        ? `<select id="kanoRow${idx}_lot"><option value="">— select —</option>${lotOptions}</select>`
+        : `<input value="No LOT currently holds Kano material" disabled>`}
+    </div>
+    <div><label>Quantity Used (kg)</label><input type="number" id="kanoRow${idx}_kg" min="0" step="0.01" inputmode="decimal"></div>
+    <div><button class="btn-ghost" onclick="document.getElementById('kanoRow${idx}').remove()">Remove</button></div>
+  `;
+  wrap.appendChild(row);
+}
+window.addKanoUsageRow = addKanoUsageRow;
+
+async function saveKanoUsage(){
+  const status = document.getElementById("kanoUsageStatus");
+  if(!CURRENT_PROD_ID){ status.style.color="var(--bad)"; status.textContent="No production record to attach this to yet."; return; }
+
+  const rows = Array.from(document.getElementById("kanoUsageRows").children);
+  const payload = [];
+  for(const row of rows){
+    const lotSel = row.querySelector("select[id$='_lot']");
+    const kgInput = row.querySelector("input[id$='_kg']");
+    if(!lotSel || !kgInput) continue; // the "no LOT available" disabled-row case
+    const lotId = lotSel.value;
+    const kg = parseFloat(kgInput.value);
+    if(!lotId && (isNaN(kg) || kg <= 0)) continue; // both blank — skip silently, this row just wasn't used
+    if(!lotId){ status.style.color="var(--bad)"; status.textContent="Select a LOT for every row with a quantity entered."; return; }
+    if(isNaN(kg) || kg <= 0){ status.style.color="var(--bad)"; status.textContent="Enter a valid quantity for every LOT selected."; return; }
+    const lot = KANO_LOTS.find(l=>String(l.id)===String(lotId));
+    if(lot && kg > lot.balance){ status.style.color="var(--bad)"; status.textContent = `Only ${lot.balance.toLocaleString()} kg is available in ${lot.name} — reduce the quantity or split across another LOT.`; return; }
+    payload.push({ production_id: CURRENT_PROD_ID, lot_id: Number(lotId), quantity_used_kg: kg, used_by: ME.id });
+  }
+
+  if(!payload.length){ status.style.color="var(--ok)"; status.textContent="No Kano material recorded for this run — that's fine if none was used."; return; }
+
+  status.style.color="var(--muted)"; status.textContent="Saving...";
+  try{
+    const { error } = await sb.from("pet_kano_lot_usage").insert(payload);
+    if(error) throw error;
+    status.style.color="var(--ok)"; status.textContent = "✅ Saved " + payload.length + " LOT usage record(s).";
+    await loadKanoLotsForUsage(); // refresh balances so re-opening this shows the updated figures
+  }catch(e){
+    status.style.color="var(--bad)"; status.textContent = "❌ " + e.message;
+  }
+}
+window.saveKanoUsage = saveKanoUsage;
+
+function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
 
 async function generateBagReferences(){
   const st=document.getElementById("bagGenStatus");
