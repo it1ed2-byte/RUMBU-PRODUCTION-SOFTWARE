@@ -25,6 +25,13 @@
   }
   input:focus,select:focus{outline:2px solid var(--blue);border-color:var(--blue);}
   input[readonly]{background:#f8fafc;color:var(--muted);cursor:default;}
+  /* Operator ID lookup row */
+  .op-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:0;}
+  .op-row input{margin-bottom:0;}
+  .op-lookup-note{font-size:11px;font-weight:700;margin-top:-10px;margin-bottom:14px;min-height:16px;}
+  .op-lookup-note.ok  {color:var(--green);}
+  .op-lookup-note.err {color:var(--red);}
+  .op-lookup-note.wait{color:#d97706;}
   button.main{
     width:100%;padding:12px;border:none;border-radius:8px;
     font-weight:bold;font-size:14px;cursor:pointer;
@@ -36,11 +43,10 @@
     margin-top:10px;font-weight:bold;font-size:13px;
     padding:10px 14px;border-radius:8px;display:none;
   }
-  .status.err{color:var(--red);background:#fef2f2;border:1px solid #fecaca;}
-  .status.ok{color:var(--green);background:#f0fdf4;border:1px solid #bbf7d0;}
-  .status.info{color:var(--navy);background:#eff6ff;border:1px solid #bfdbfe;}
+  .status.err {color:var(--red);  background:#fef2f2;border:1px solid #fecaca;}
+  .status.ok  {color:var(--green);background:#f0fdf4;border:1px solid #bbf7d0;}
+  .status.info{color:var(--navy); background:#eff6ff;border:1px solid #bfdbfe;}
   #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;}
-  .op-note{font-size:11px;color:var(--muted);margin-top:-10px;margin-bottom:12px;}
 </style>
 </head>
 <body>
@@ -79,11 +85,16 @@
       <label>KG Produced</label>
       <input type="number" id="kgProduced" min="0" step="0.1" placeholder="0.0">
 
-      <label>Operator</label>
-      <select id="operator">
-        <option value="">Loading operators...</option>
-      </select>
-      <div class="op-note" id="opNote"></div>
+      <!-- Operator: search by Employee ID, name auto-fills -->
+      <label>Operator — Employee ID</label>
+      <div class="op-row">
+        <input type="text" id="operatorId"
+               placeholder="Type Employee ID"
+               oninput="lookupOperator(this.value)">
+        <input type="text" id="operatorName" readonly
+               placeholder="Name auto-fills">
+      </div>
+      <div class="op-lookup-note" id="opNote"></div>
 
       <button class="main" id="submitBtn" onclick="submitEntry()">
         Save Production Entry
@@ -95,6 +106,7 @@
 
 <script>
 let ME = null, MY_SECTIONS = [], ASSETS = [];
+let OP_LOOKUP_TIMER = null; // debounce timer for ID lookup
 
 function authHeaders(){
   return {
@@ -127,9 +139,7 @@ async function init(){
     ).join("");
 
     document.getElementById("prodDate").value = today();
-
     await loadAssets();
-    await loadOperators();
 
     cs.style.color = "#1d8a4e";
     cs.textContent = "✔ Connected.";
@@ -158,49 +168,6 @@ async function loadAssets(){
     ).join("");
 }
 
-// ── Load recycling operators ───────────────────────────────
-async function loadOperators(){
-  const sel  = document.getElementById("operator");
-  const note = document.getElementById("opNote");
-  try{
-    const res = await fetch(
-      SUPABASE_URL + "/rest/v1/employees" +
-      "?select=employee_id,full_name" +
-      "&department=eq.Recycling&unit=eq.Recycling" +
-      "&order=full_name.asc",
-      { headers: authHeaders() }
-    );
-
-    if(!res.ok){
-      sel.innerHTML = '<option value="">— Select Operator —</option>';
-      note.textContent = "⚠️ Could not load operators (HTTP " + res.status + ").";
-      note.style.color = "#c0392b";
-      return;
-    }
-
-    const ops = await res.json();
-
-    if(!ops.length){
-      sel.innerHTML = '<option value="">— No operators registered —</option>';
-      note.textContent = "No Recycling operators found in the employees table.";
-      note.style.color = "#d97706";
-      return;
-    }
-
-    sel.innerHTML = '<option value="">— Select Operator —</option>' +
-      ops.map(o =>
-        `<option value="${o.employee_id}">${o.full_name} (${o.employee_id})</option>`
-      ).join("");
-    note.textContent = ops.length + " operator(s) loaded.";
-    note.style.color = "#1d8a4e";
-
-  }catch(e){
-    sel.innerHTML = '<option value="">— Select Operator —</option>';
-    note.textContent = "⚠️ Operator load error: " + e.message;
-    note.style.color = "#c0392b";
-  }
-}
-
 // ── Machine selection → auto-fill target ──────────────────
 function onAssetChange(){
   const sel = document.getElementById("asset");
@@ -211,26 +178,85 @@ function onAssetChange(){
     : "";
 }
 
-// ── Submit — direct REST INSERT ────────────────────────────
+// ── Operator lookup by Employee ID (debounced 400ms) ──────
+// Searches the full employees table — any employee can be added,
+// not restricted to a specific department or unit.
+function lookupOperator(raw){
+  const note    = document.getElementById("opNote");
+  const nameEl  = document.getElementById("operatorName");
+  const idVal   = raw.trim();
+
+  // Clear name whenever the ID field changes
+  nameEl.value   = "";
+  note.textContent = "";
+  note.className = "op-lookup-note";
+
+  if(!idVal){ return; }
+
+  note.textContent = "Searching...";
+  note.className   = "op-lookup-note wait";
+
+  // Debounce — wait 400ms after user stops typing before querying
+  clearTimeout(OP_LOOKUP_TIMER);
+  OP_LOOKUP_TIMER = setTimeout(async () => {
+    try{
+      const res = await fetch(
+        SUPABASE_URL + "/rest/v1/employees" +
+        "?select=employee_id,full_name" +
+        "&employee_id=eq." + encodeURIComponent(idVal) +
+        "&limit=1",
+        { headers: authHeaders() }
+      );
+
+      if(!res.ok){
+        note.textContent = "⚠️ Lookup error (HTTP " + res.status + ").";
+        note.className   = "op-lookup-note err";
+        return;
+      }
+
+      const rows = await res.json();
+
+      if(!rows.length){
+        note.textContent = "❌ No employee found with ID "" + idVal + "".";
+        note.className   = "op-lookup-note err";
+        nameEl.value     = "";
+        return;
+      }
+
+      nameEl.value     = rows[0].full_name;
+      note.textContent = "✅ " + rows[0].full_name;
+      note.className   = "op-lookup-note ok";
+
+    }catch(e){
+      note.textContent = "⚠️ " + e.message;
+      note.className   = "op-lookup-note err";
+    }
+  }, 400);
+}
+
+// ── Submit ─────────────────────────────────────────────────
 async function submitEntry(){
-  const btn  = document.getElementById("submitBtn");
-  const date = document.getElementById("prodDate").value;
-  const shift= document.getElementById("shift").value;
-  const branch=document.getElementById("branch").value;
+  const btn       = document.getElementById("submitBtn");
+  const date      = document.getElementById("prodDate").value;
+  const shift     = document.getElementById("shift").value;
+  const branch    = document.getElementById("branch").value;
   const assetSel  = document.getElementById("asset");
   const assetCode = assetSel.value;
-  const kg  = parseFloat(document.getElementById("kgProduced").value);
-  const opSel = document.getElementById("operator");
-  const operatorId   = opSel.value || null;
-  const operatorName = opSel.value
-    ? (opSel.options[opSel.selectedIndex].text || null)
-    : null;
+  const kg        = parseFloat(document.getElementById("kgProduced").value);
+  const operatorId   = document.getElementById("operatorId").value.trim() || null;
+  const operatorName = document.getElementById("operatorName").value.trim() || null;
 
   if(!date)                { showStatus("err","Select a production date."); return; }
   if(!shift)               { showStatus("err","Select a shift."); return; }
   if(!branch)              { showStatus("err","Select a branch."); return; }
   if(!assetCode)           { showStatus("err","Select a machine."); return; }
   if(isNaN(kg) || kg < 0) { showStatus("err","Enter a valid KG produced value."); return; }
+
+  // If an ID was typed but name didn't resolve, block submission
+  if(operatorId && !operatorName){
+    showStatus("err","Operator ID not found. Clear it or wait for the lookup to complete.");
+    return;
+  }
 
   btn.disabled = true;
   showStatus("info","Saving...");
@@ -266,10 +292,13 @@ async function submitEntry(){
     showStatus("ok","✅ Saved — " + machineName + " · " + shift + " · " + date);
 
     // Reset form — keep date, shift, branch for fast back-to-back entry
-    document.getElementById("asset").value      = "";
-    document.getElementById("targetKg").value   = "";
-    document.getElementById("kgProduced").value = "";
-    document.getElementById("operator").value   = "";
+    document.getElementById("asset").value        = "";
+    document.getElementById("targetKg").value     = "";
+    document.getElementById("kgProduced").value   = "";
+    document.getElementById("operatorId").value   = "";
+    document.getElementById("operatorName").value = "";
+    document.getElementById("opNote").textContent = "";
+    document.getElementById("opNote").className   = "op-lookup-note";
 
   }catch(e){
     showStatus("err","❌ " + e.message);
@@ -280,8 +309,8 @@ async function submitEntry(){
 
 function showStatus(type, msg){
   const el = document.getElementById("status");
-  el.className     = "status " + type;
-  el.textContent   = msg;
+  el.className   = "status " + type;
+  el.textContent = msg;
   el.style.display = msg ? "block" : "none";
 }
 
