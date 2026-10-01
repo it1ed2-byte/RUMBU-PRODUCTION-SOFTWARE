@@ -72,7 +72,7 @@ const SECTION_LABEL = { "Rumbu Mainmat": "Rumbu Mainmat", "MamaSannu": "Mama San
 function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
 function parseDT(v){ const d=new Date(v); return isNaN(d)?null:d; }
 function minutesBetween(a,b){ return (!a||!b)?0:Math.trunc((b-a)/60000); }
-function extractNumber(v){ if(v==null) return 0; const m=String(v).match(/\d+(\.\d+)?/); return m?Number(m[0]):0; }
+function extractNumber(v){ if(v==null) return 0; const n=parseFloat(String(v)); return isNaN(n)?0:n; }
 
 let CTRL_ROWS = [], EXCLUDED_JOB_CODES = new Set(); CTRL_ROWS.forEach(normalizeControlRow);
 
@@ -229,7 +229,10 @@ async function generate(){
   try{
     // FIX 2: Filter on date_col (operator-recorded date) — consistent with all other reports.
     // GAS uses DATE(MC_Stoppage_Time) BETWEEN which is equivalent to the stored date field.
-    CTRL_ROWS = await fetchAllRows("control","*", "&date=gte."+startDate+"&date=lte."+endDate);
+    // Use mc_stoppage_time for date filtering — matches AppScript DATE(MC_Stoppage_Time)
+    // The `date` column is operator-typed and differs for night shifts
+    CTRL_ROWS = await fetchAllRows("control","*",
+      "&mc_stoppage_time=gte."+startDate+"T00:00:00"+"&mc_stoppage_time=lte."+endDate+"T23:59:59");
     CTRL_ROWS.forEach(normalizeControlRow);
   }catch(e){
     status.style.color="#c0392b"; status.textContent = "Could not read data: " + (e.message||e); return;
@@ -243,9 +246,11 @@ async function generate(){
   // nurse records when any department other than "All" was selected.
   // Removed the jobSet/job_code department filter entirely.
   const rows = CTRL_ROWS.filter(r=>{
-    // FIX 2: Use date_col (operator-recorded date).
-    const recDate = r.date_col || null;
-    if(!recDate || recDate < startDate || recDate > endDate) return false;
+    // Use DATE from mc_stoppage_time — matches AppScript DATE(MC_Stoppage_Time)
+    const stopTs = r.mc_stoppage_time || r.stop_time || null;
+    if(!stopTs) return false;
+    const recDate = stopTs.slice(0, 10);
+    if(recDate < startDate || recDate > endDate) return false;
     // Exclude planned job codes (same LEFT JOIN logic as GAS).
     if(EXCLUDED_JOB_CODES.has(r.job_code)) return false;
     if(shift !== "All" && r.shift !== shift) return false;
