@@ -63,11 +63,12 @@
   </div>
 
   <div class="field">
-    <label>Search Operator (Production department)</label>
-    <input type="text" id="opSearch" placeholder="Select Date &amp; Shift first" oninput="searchOperators()" disabled>
-    <div id="opResults"></div>
+    <label>Operator (Production / Twine)</label>
+    <select id="operatorSel" onchange="pickOperatorFromSelect()" disabled>
+      <option value="">Select Date &amp; Shift first</option>
+    </select>
+    <div style="font-size:11px;font-weight:700;margin-top:4px;min-height:16px;" id="opNote"></div>
   </div>
-  <div class="picked-box empty" id="pickedOpBox">No operator selected yet.</div>
 
   <button onclick="submitEntry()">Submit &amp; Add Another</button>
   <div class="status" id="entryStatus" style="display:none;"></div>
@@ -84,6 +85,7 @@ let USED_ASSETS = new Set();
 let USED_OPERATOR_IDS = new Set();
 const OPERATOR_DEPARTMENT = "Production";
 const OPERATOR_UNIT = "Twine";
+let ALL_OPERATORS = []; // loaded once at startup
 
 async function logActivity(actionType, description){
   try{
@@ -109,6 +111,7 @@ async function init(){
     TYPES = data || [];
     document.getElementById("f_type").innerHTML = '<option value="">Select...</option>' + TYPES.map(t=>`<option value="${t.type_code}">${t.type_code}</option>`).join("");
 
+    await loadOperators();
     status.style.color = "var(--ok)"; status.textContent = "Connected.";
     await onDateShiftChange();
   }catch(e){
@@ -125,30 +128,33 @@ async function onDateShiftChange(){
   const date = document.getElementById("f_date").value;
   const shift = document.getElementById("f_shift").value;
   const assetInput = document.getElementById("assetSearch");
-  const opInput = document.getElementById("opSearch");
-
   if(!date || !shift){
     assetInput.disabled = true; assetInput.placeholder = "Select Date & Shift first";
-    opInput.disabled = true; opInput.placeholder = "Select Date & Shift first";
+    const opSelDis = document.getElementById("operatorSel");
+    opSelDis.disabled = true;
+    opSelDis.innerHTML = "<option value=''>Select Date &amp; Shift first</option>";
+    PICKED_OPERATOR = null;
     return;
   }
 
   assetInput.disabled = false; assetInput.placeholder = "Type an asset code, e.g. BM-01";
-  opInput.disabled = false; opInput.placeholder = "Type a name or Staff ID";
+  const opSel = document.getElementById("operatorSel");
+  opSel.disabled = false;
 
   const { data, error } = await sb.from("twine_production").select("asset_code, operator_id").eq("production_date", date).eq("shift", shift);
   if(error){ console.warn("Could not load used assets/operators:", error); return; }
   USED_ASSETS = new Set((data||[]).map(r=>r.asset_code));
   USED_OPERATOR_IDS = new Set((data||[]).filter(r=>r.operator_id).map(r=>r.operator_id));
 
+  renderOperatorDropdown();
+
   // Clear any stale picks so a previously-selected asset/operator that just
   // became "used" (by someone else) can't slip through.
   PICKED_ASSET = null; document.getElementById("pickedAssetBox").className = "picked-box empty";
   document.getElementById("pickedAssetBox").textContent = "No asset selected yet.";
   document.getElementById("assetSearch").value = ""; document.getElementById("assetResults").innerHTML = "";
-  PICKED_OPERATOR = null; document.getElementById("pickedOpBox").className = "picked-box empty";
-  document.getElementById("pickedOpBox").textContent = "No operator selected yet.";
-  document.getElementById("opSearch").value = ""; document.getElementById("opResults").innerHTML = "";
+  PICKED_OPERATOR = null;
+  document.getElementById("operatorSel").value = "";
 }
 
 let assetTimer = null;
@@ -176,31 +182,55 @@ function pickAsset(asset){
   document.getElementById("assetSearch").value = asset.asset_code;
 }
 
-let opTimer = null;
-function searchOperators(){ clearTimeout(opTimer); opTimer = setTimeout(runOperatorSearch, 250); }
-async function runOperatorSearch(){
-  const q = document.getElementById("opSearch").value.trim();
-  const resultsEl = document.getElementById("opResults");
-  if(q.length < 2){ resultsEl.innerHTML = ""; return; }
+// ── Load all Production/Twine employees once at startup ───
+async function loadOperators(){
   try{
-    const { data, error } = await sb.from("employees").select("employee_id, full_name, department, branch, rank")
-      .eq("department", OPERATOR_DEPARTMENT).eq("unit", OPERATOR_UNIT).or(`full_name.ilike.%${q}%,employee_id.ilike.%${q}%`).order("full_name").limit(12);
+    const { data, error } = await sb.from("employees")
+      .select("employee_id, full_name, rank")
+      .eq("department", OPERATOR_DEPARTMENT)
+      .eq("unit", OPERATOR_UNIT)
+      .order("full_name");
     if(error) throw error;
-    const available = (data||[]).filter(e=>!USED_OPERATOR_IDS.has(e.employee_id));
-    if(!available.length){ resultsEl.innerHTML = `<p class="sub">No available (not-yet-used) ${OPERATOR_DEPARTMENT} / ${OPERATOR_UNIT} employee matched.</p>`; return; }
-    resultsEl.innerHTML = available.map(e => `
-      <div class="result-row" onclick='pickOperator(${JSON.stringify(e).replace(/'/g,"&apos;")})'>
-        <div><div class="n">${e.full_name}</div><div class="m">${e.employee_id} · ${e.department}${e.branch ? " · " + e.branch : ""}</div></div>
-        <div class="m">${e.rank || "no rank on file"}</div>
-      </div>`).join("");
-  }catch(e){ resultsEl.innerHTML = `<p class="sub">Search error: ${e.message}</p>`; }
+    ALL_OPERATORS = data || [];
+  }catch(e){
+    console.warn("Could not load operators:", e.message);
+  }
 }
-function pickOperator(emp){
-  PICKED_OPERATOR = emp;
-  const box = document.getElementById("pickedOpBox");
-  box.className = "picked-box"; box.innerHTML = `Selected: <b>${emp.full_name}</b> (${emp.employee_id}) — ${emp.rank || "no rank on file"}`;
-  document.getElementById("opResults").innerHTML = "";
-  document.getElementById("opSearch").value = emp.full_name;
+
+// ── Render dropdown filtered by already-used operators ────
+function renderOperatorDropdown(){
+  const sel  = document.getElementById("operatorSel");
+  const note = document.getElementById("opNote");
+  const available = ALL_OPERATORS.filter(e => !USED_OPERATOR_IDS.has(e.employee_id));
+  if(!ALL_OPERATORS.length){
+    sel.innerHTML = "<option value=''>— No Production/Twine staff found —</option>";
+    note.textContent = "No employees found in Production / Twine.";
+    note.style.color = "var(--bad)";
+  } else if(!available.length){
+    sel.innerHTML = "<option value=''>— All operators already used this shift —</option>";
+    note.textContent = "All " + ALL_OPERATORS.length + " operators already recorded for this shift.";
+    note.style.color = "var(--warn, #d97706)";
+  } else {
+    sel.innerHTML = "<option value=''>— Select Operator —</option>" +
+      available.map(e =>
+        `<option value="${e.employee_id}" data-name="${e.full_name}" data-rank="${e.rank||""}">${e.full_name} (${e.employee_id})</option>`
+      ).join("");
+    note.textContent = available.length + " operator(s) available.";
+    note.style.color = "var(--ok)";
+  }
+  PICKED_OPERATOR = null;
+}
+
+// ── Pick operator from dropdown ───────────────────────────
+function pickOperatorFromSelect(){
+  const sel = document.getElementById("operatorSel");
+  const opt = sel.options[sel.selectedIndex];
+  if(!sel.value){ PICKED_OPERATOR = null; return; }
+  PICKED_OPERATOR = {
+    employee_id: sel.value,
+    full_name:   opt.dataset.name,
+    rank:        opt.dataset.rank || ""
+  };
 }
 
 async function submitEntry(){
