@@ -85,15 +85,11 @@
       <label>KG Produced</label>
       <input type="number" id="kgProduced" min="0" step="0.1" placeholder="0.0">
 
-      <!-- Operator: search by Employee ID, name auto-fills -->
-      <label>Operator — Employee ID</label>
-      <div class="op-row">
-        <input type="text" id="operatorId"
-               placeholder="Type Employee ID"
-               oninput="lookupOperator(this.value)">
-        <input type="text" id="operatorName" readonly
-               placeholder="Name auto-fills">
-      </div>
+      <!-- Operator: dropdown of all Recycling employees -->
+      <label>Operator</label>
+      <select id="operatorSel">
+        <option value="">Loading operators...</option>
+      </select>
       <div class="op-lookup-note" id="opNote"></div>
 
       <button class="main" id="submitBtn" onclick="submitEntry()">
@@ -106,7 +102,7 @@
 
 <script>
 let ME = null, MY_SECTIONS = [], ASSETS = [];
-let OP_LOOKUP_TIMER = null; // debounce timer for ID lookup
+let OP_MAP = {}; // kept for compatibility
 
 function authHeaders(){
   return {
@@ -140,6 +136,7 @@ async function init(){
 
     document.getElementById("prodDate").value = today();
     await loadAssets();
+    await loadOperators();
 
     cs.style.color = "#1d8a4e";
     cs.textContent = "✔ Connected.";
@@ -178,60 +175,37 @@ function onAssetChange(){
     : "";
 }
 
-// ── Operator lookup by Employee ID (debounced 400ms) ──────
-// Searches the full employees table — any employee can be added,
-// not restricted to a specific department or unit.
-function lookupOperator(raw){
-  const note    = document.getElementById("opNote");
-  const nameEl  = document.getElementById("operatorName");
-  const idVal   = raw.trim();
-
-  // Clear name whenever the ID field changes
-  nameEl.value   = "";
-  note.textContent = "";
-  note.className = "op-lookup-note";
-
-  if(!idVal){ return; }
-
-  note.textContent = "Searching...";
-  note.className   = "op-lookup-note wait";
-
-  // Debounce — wait 400ms after user stops typing before querying
-  clearTimeout(OP_LOOKUP_TIMER);
-  OP_LOOKUP_TIMER = setTimeout(async () => {
-    try{
-      const res = await fetch(
-        SUPABASE_URL + "/rest/v1/employees" +
-        "?select=employee_id,full_name" +
-        "&employee_id=eq." + encodeURIComponent(idVal) +
-        "&limit=1",
-        { headers: authHeaders() }
-      );
-
-      if(!res.ok){
-        note.textContent = "⚠️ Lookup error (HTTP " + res.status + ").";
-        note.className   = "op-lookup-note err";
-        return;
-      }
-
-      const rows = await res.json();
-
-      if(!rows.length){
-        note.textContent = "❌ No employee found with ID \"" + idVal + "\".";
-        note.className   = "op-lookup-note err";
-        nameEl.value     = "";
-        return;
-      }
-
-      nameEl.value     = rows[0].full_name;
-      note.textContent = "✅ " + rows[0].full_name;
-      note.className   = "op-lookup-note ok";
-
-    }catch(e){
-      note.textContent = "⚠️ " + e.message;
+// ── Load all Recycling employees into dropdown ────────────
+async function loadOperators(){
+  const sel  = document.getElementById("operatorSel");
+  const note = document.getElementById("opNote");
+  try{
+    const res = await fetch(
+      SUPABASE_URL + "/rest/v1/employees" +
+      "?select=employee_id,full_name" +
+      "&department=ilike.recycling" +
+      "&order=full_name.asc",
+      { headers: authHeaders() }
+    );
+    if(!res.ok) throw new Error("HTTP " + res.status);
+    const rows = await res.json();
+    if(!rows.length){
+      sel.innerHTML    = "<option value=''>— No Recycling staff found —</option>";
+      note.textContent = "No employees found in Recycling department.";
       note.className   = "op-lookup-note err";
+      return;
     }
-  }, 400);
+    sel.innerHTML = "<option value=''>— Select Operator —</option>" +
+      rows.map(r =>
+        `<option value="${r.employee_id}" data-name="${r.full_name}">${r.full_name} (${r.employee_id})</option>`
+      ).join("");
+    note.textContent = rows.length + " Recycling staff loaded.";
+    note.className   = "op-lookup-note ok";
+  }catch(e){
+    sel.innerHTML    = "<option value=''>— Error loading staff —</option>";
+    note.textContent = "⚠️ Could not load staff: " + e.message;
+    note.className   = "op-lookup-note err";
+  }
 }
 
 // ── Submit ─────────────────────────────────────────────────
@@ -243,20 +217,17 @@ async function submitEntry(){
   const assetSel  = document.getElementById("asset");
   const assetCode = assetSel.value;
   const kg        = parseFloat(document.getElementById("kgProduced").value);
-  const operatorId   = document.getElementById("operatorId").value.trim() || null;
-  const operatorName = document.getElementById("operatorName").value.trim() || null;
+  const opSel      = document.getElementById("operatorSel");
+  const operatorId   = opSel.value || null;
+  const operatorName = opSel.value
+    ? (opSel.options[opSel.selectedIndex].dataset.name || null)
+    : null;
 
   if(!date)                { showStatus("err","Select a production date."); return; }
   if(!shift)               { showStatus("err","Select a shift."); return; }
   if(!branch)              { showStatus("err","Select a branch."); return; }
   if(!assetCode)           { showStatus("err","Select a machine."); return; }
   if(isNaN(kg) || kg < 0) { showStatus("err","Enter a valid KG produced value."); return; }
-
-  // If an ID was typed but name didn't resolve, block submission
-  if(operatorId && !operatorName){
-    showStatus("err","Operator ID not found. Clear it or wait for the lookup to complete.");
-    return;
-  }
 
   btn.disabled = true;
   showStatus("info","Saving...");
@@ -295,10 +266,7 @@ async function submitEntry(){
     document.getElementById("asset").value        = "";
     document.getElementById("targetKg").value     = "";
     document.getElementById("kgProduced").value   = "";
-    document.getElementById("operatorId").value   = "";
-    document.getElementById("operatorName").value = "";
-    document.getElementById("opNote").textContent = "";
-    document.getElementById("opNote").className   = "op-lookup-note";
+    document.getElementById("operatorSel").value = "";
 
   }catch(e){
     showStatus("err","❌ " + e.message);
