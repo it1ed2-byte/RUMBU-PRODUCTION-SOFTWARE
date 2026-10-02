@@ -195,18 +195,12 @@ async function init(){
       document.getElementById("btnAddAsset").style.display = "none";
     }
 
-    // Run units + operators in parallel — faster init
-    const [unitRes, opRes] = await Promise.all([
-      sb.from("weaving_units").select("unit_code,shed,section").order("section").order("unit_code"),
-      sb.from("weaving_unit_operators").select("unit_code, group_name, operator_name, employee_id, is_trainee")
-    ]);
-    if(unitRes.error) throw unitRes.error;
-    UNITS = unitRes.data || [];
+    const { data: unitRows, error: uErr } = await sb.from("weaving_units")
+      .select("unit_code,shed,section").order("section").order("unit_code");
+    if(uErr) throw uErr;
+    UNITS = unitRows || [];
     populateUnitDropdown();
     populateShedFilter();
-
-    // Build operator map
-    buildOpsMap(opRes.data || []);
 
     status.style.color = "var(--ok)"; status.textContent = "Connected. " + UNITS.length + " units loaded.";
     await loadAssets();
@@ -254,10 +248,6 @@ async function loadAssets(){
   if(!ASSETS.length){ body.innerHTML = `<tr><td colspan="12">No assets match these filters.</td></tr>`; return; }
 
   body.innerHTML = ASSETS.map(a => {
-    const ops = OPS_MAP[a.unit_code] || {};
-    const opA = ops["A"] || "—";
-    const opB = ops["B"] || "—";
-    const canSwitch = canWrite() && opA !== "—" && opB !== "—";
     return `
     <tr>
       <td><b>${a.asset_code}</b></td>
@@ -268,9 +258,9 @@ async function loadAssets(){
       <td>${a.target_normal_mat}</td>
       <td>${a.target_hajj_mat}</td>
       <td>${a.target_prayer_mat}</td>
-      <td>${opA}${canWrite() ? ` <button class="btn-sm btn-ghost" onclick="openOpChange('${a.unit_code}','A')" style="margin-left:4px;">✎</button>` : ""}</td>
-      <td>${opB}${canWrite() ? ` <button class="btn-sm btn-ghost" onclick="openOpChange('${a.unit_code}','B')" style="margin-left:4px;">✎</button>` : ""}</td>
-      <td>${canSwitch ? `<button class="btn-sm btn-ghost" onclick="switchOperators('${a.unit_code}')">⇄ Switch</button>` : "—"}</td>
+      <td>${OPS_MAP[a.unit_code]?.A || "—"}${canWrite() ? ` <button class="btn-sm btn-ghost" onclick="openOpChange('${a.unit_code}','A')" style="margin-left:4px;">✎</button>` : ""}</td>
+      <td>${OPS_MAP[a.unit_code]?.B || "—"}${canWrite() ? ` <button class="btn-sm btn-ghost" onclick="openOpChange('${a.unit_code}','B')" style="margin-left:4px;">✎</button>` : ""}</td>
+      <td>${canWrite() ? `<button class="btn-sm btn-ghost" onclick="switchOperators('${a.unit_code}')">⇄ Switch</button>` : "—"}</td>
       <td>${canWrite() ? `<button class="btn-sm btn-ghost" onclick="openEditAsset('${a.asset_code}')">Edit</button>` : ""}</td>
     </tr>`;
   }).join("");
@@ -419,41 +409,38 @@ async function applyLogFilter(){
 document.getElementById("log_action_type").innerHTML = '<option value="">All</option>' +
   ACTION_TYPES.map(t=>`<option value="${t}">${t}</option>`).join("");
 
-// ── Shared OPS_MAP builder ───────────────────────────────
-function buildOpsMap(rows){
-  OPS_MAP = {};
-  rows.forEach(o => {
-    if(!OPS_MAP[o.unit_code]) OPS_MAP[o.unit_code] = {};
-    const label = o.is_trainee ? "Trainee" : (o.operator_name || "—");
-    OPS_MAP[o.unit_code][o.group_name] = label;
-    if(o.group_name === "A") OPS_MAP[o.unit_code]["_empA"] = o.employee_id;
-    if(o.group_name === "B") OPS_MAP[o.unit_code]["_empB"] = o.employee_id;
-  });
-}
-
 // ── Operator change from manage-target ───────────────────
 let OP_CHANGE_TARGET = null; // { unit_code, group_name }
 let OP_PICKED_EMP    = null;
 let opSearchTimer    = null;
 
-function openOpChange(unitCode, group){
+async function openOpChange(unitCode, group){
   OP_CHANGE_TARGET = { unit_code: unitCode, group_name: group };
   OP_PICKED_EMP    = null;
-  const ops        = OPS_MAP[unitCode] || {};
-  const current    = ops[group] || "—";
 
   document.getElementById("opChangePanelTitle").textContent =
     "Change Operator — " + unitCode + " (Group " + group + " / " +
     (group === "A" ? "Morning" : "Night") + ")";
-  document.getElementById("opChangePanelSub").textContent =
-    "Current: " + current;
-  document.getElementById("opEmpSearch").value    = "";
+  document.getElementById("opChangePanelSub").textContent = "Loading current operator...";
+  document.getElementById("opEmpSearch").value     = "";
   document.getElementById("opEmpResults").innerHTML = "";
   document.getElementById("opPickedBox").className  = "picked-box empty";
   document.getElementById("opPickedBox").textContent = "No employee selected yet.";
   document.getElementById("opChangeStatus").style.display = "none";
   document.getElementById("opChangePanel").style.display  = "block";
   window.scrollTo({ top: 0, behavior: "smooth" });
+
+  // Fetch current operator for this unit+group only (single row)
+  const { data } = await sb.from("weaving_unit_operators")
+    .select("operator_name, employee_id")
+    .eq("unit_code", unitCode).eq("group_name", group).maybeSingle();
+  const current = (data && data.operator_name) ? data.operator_name : "None assigned";
+  if(data){ 
+    if(!OPS_MAP[unitCode]) OPS_MAP[unitCode] = {};
+    OPS_MAP[unitCode][group] = data.operator_name || "—";
+    OPS_MAP[unitCode]["_emp" + group] = data.employee_id;
+  }
+  document.getElementById("opChangePanelSub").textContent = "Current: " + current;
 }
 
 function closeOpChangePanel(){
@@ -569,11 +556,18 @@ async function saveOperatorFromTarget(){
 
 // Switch Group A and Group B operators for a unit
 async function switchOperators(unitCode){
-  const ops = OPS_MAP[unitCode] || {};
-  const empA = ops["_empA"];
-  const empB = ops["_empB"];
-  const nameA = ops["A"] || "—";
-  const nameB = ops["B"] || "—";
+  // Always fetch fresh from DB for this unit only
+  const { data: rows, error: fetchErr } = await sb.from("weaving_unit_operators")
+    .select("group_name, operator_name, employee_id")
+    .eq("unit_code", unitCode);
+  if(fetchErr){ alert("Could not load operators: " + fetchErr.message); return; }
+
+  const rowA = (rows || []).find(r => r.group_name === "A");
+  const rowB = (rows || []).find(r => r.group_name === "B");
+  const nameA = rowA?.operator_name || "—";
+  const nameB = rowB?.operator_name || "—";
+  const empA  = rowA?.employee_id || null;
+  const empB  = rowB?.employee_id || null;
 
   if(nameA === "—" || nameB === "—"){
     alert("Both operators must be assigned before switching."); return;
