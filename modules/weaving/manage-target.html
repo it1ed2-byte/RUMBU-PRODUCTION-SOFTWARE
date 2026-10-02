@@ -32,6 +32,12 @@
   .newUnitBlock.show{display:block;}
   #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);}
   .diff{font-size:12px;color:var(--muted);}
+  .emp-result{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;border:1px solid var(--line);border-radius:8px;margin-top:6px;cursor:pointer;background:var(--card);}
+  .emp-result:hover{background:var(--bg);}
+  .emp-result .n{font-weight:700;color:var(--heading);}
+  .emp-result .m{font-size:12px;color:var(--muted);}
+  .picked-box{background:var(--bg);border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:12px 14px;margin-top:10px;}
+  .picked-box.empty{color:var(--muted);font-size:13px;}
 </style>
 </head>
 <body>
@@ -94,6 +100,24 @@
     </div>
     <div class="status" id="editStatus" style="display:none;"></div>
   </div>
+
+  <!-- ── Operator Change Panel ─────────────────────────── -->
+  <div class="card-panel" id="opChangePanel" style="display:none;">
+    <h3 id="opChangePanelTitle">Change Operator</h3>
+    <p class="sub" id="opChangePanelSub"></p>
+    <div class="field">
+      <label>Search Employee (name or ID)</label>
+      <input type="text" id="opEmpSearch" placeholder="Start typing..." oninput="searchOpEmployees()">
+      <div id="opEmpResults"></div>
+    </div>
+    <div class="picked-box empty" id="opPickedBox">No employee selected yet.</div>
+    <div class="row-actions" style="margin-top:12px;">
+      <button onclick="saveOperatorFromTarget()">Confirm Change</button>
+      <button class="btn-ghost" onclick="closeOpChangePanel()">Cancel</button>
+    </div>
+    <div class="status" id="opChangeStatus" style="display:none;"></div>
+  </div>
+  <!-- ───────────────────────────────────────────────────── -->
 
   <div class="filters">
     <div class="f"><label>Section</label><select id="filt_section" onchange="populateShedFilter(); loadAssets();"><option value="">All</option><option>Rumbu Mainmat</option><option>MamaSannu</option></select></div>
@@ -248,8 +272,8 @@ async function loadAssets(){
       <td>${a.target_normal_mat}</td>
       <td>${a.target_hajj_mat}</td>
       <td>${a.target_prayer_mat}</td>
-      <td>${opA}</td>
-      <td>${opB}</td>
+      <td>${opA}${canWrite() ? ` <button class="btn-sm btn-ghost" onclick="openOpChange('${a.unit_code}','A')" style="margin-left:4px;">✎</button>` : ""}</td>
+      <td>${opB}${canWrite() ? ` <button class="btn-sm btn-ghost" onclick="openOpChange('${a.unit_code}','B')" style="margin-left:4px;">✎</button>` : ""}</td>
       <td>${canSwitch ? `<button class="btn-sm btn-ghost" onclick="switchOperators('${a.unit_code}')">⇄ Switch</button>` : "—"}</td>
       <td>${canWrite() ? `<button class="btn-sm btn-ghost" onclick="openEditAsset('${a.asset_code}')">Edit</button>` : ""}</td>
     </tr>`;
@@ -398,6 +422,148 @@ async function applyLogFilter(){
 
 document.getElementById("log_action_type").innerHTML = '<option value="">All</option>' +
   ACTION_TYPES.map(t=>`<option value="${t}">${t}</option>`).join("");
+
+// ── Operator change from manage-target ───────────────────
+let OP_CHANGE_TARGET = null; // { unit_code, group_name }
+let OP_PICKED_EMP    = null;
+let opSearchTimer    = null;
+
+function openOpChange(unitCode, group){
+  OP_CHANGE_TARGET = { unit_code: unitCode, group_name: group };
+  OP_PICKED_EMP    = null;
+  const ops        = OPS_MAP[unitCode] || {};
+  const current    = ops[group] || "—";
+
+  document.getElementById("opChangePanelTitle").textContent =
+    "Change Operator — " + unitCode + " (Group " + group + " / " +
+    (group === "A" ? "Morning" : "Night") + ")";
+  document.getElementById("opChangePanelSub").textContent =
+    "Current: " + current;
+  document.getElementById("opEmpSearch").value    = "";
+  document.getElementById("opEmpResults").innerHTML = "";
+  document.getElementById("opPickedBox").className  = "picked-box empty";
+  document.getElementById("opPickedBox").textContent = "No employee selected yet.";
+  document.getElementById("opChangeStatus").style.display = "none";
+  document.getElementById("opChangePanel").style.display  = "block";
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function closeOpChangePanel(){
+  document.getElementById("opChangePanel").style.display = "none";
+  OP_CHANGE_TARGET = null;
+  OP_PICKED_EMP    = null;
+}
+
+function searchOpEmployees(){
+  clearTimeout(opSearchTimer);
+  opSearchTimer = setTimeout(runOpEmpSearch, 250);
+}
+
+async function runOpEmpSearch(){
+  const q       = document.getElementById("opEmpSearch").value.trim();
+  const results = document.getElementById("opEmpResults");
+  if(q.length < 2){ results.innerHTML = ""; return; }
+  try{
+    const { data, error } = await sb.from("employees")
+      .select("employee_id, full_name, department, rank")
+      .or("department.ilike.%weaving%,unit.ilike.%weaving%")
+      .or(`full_name.ilike.%${q}%,employee_id.ilike.%${q}%`)
+      .order("full_name").limit(12);
+    if(error) throw error;
+    if(!data || !data.length){
+      results.innerHTML = `<p class="sub">No matching Weaving employee found.</p>`;
+      return;
+    }
+    results.innerHTML = data.map(e => `
+      <div class="emp-result" onclick='pickOpEmployee(${JSON.stringify(e).replace(/'/g,"&apos;")})'>
+        <div>
+          <div class="n">${e.full_name}</div>
+          <div class="m">${e.employee_id} · ${e.department || ""}</div>
+        </div>
+        <div class="m">${e.rank || "no rank"}</div>
+      </div>`).join("");
+  }catch(e){
+    results.innerHTML = `<p class="sub">Search error: ${e.message}</p>`;
+  }
+}
+
+function pickOpEmployee(emp){
+  OP_PICKED_EMP = emp;
+  const box = document.getElementById("opPickedBox");
+  box.className   = "picked-box";
+  box.innerHTML   = `Selected: <b>${emp.full_name}</b> (${emp.employee_id}) — ${emp.rank || "no rank"}`;
+  document.getElementById("opEmpResults").innerHTML = "";
+  document.getElementById("opEmpSearch").value      = emp.full_name;
+}
+
+async function saveOperatorFromTarget(){
+  if(!canWrite()) return;
+  const statusEl = document.getElementById("opChangeStatus");
+  statusEl.style.display = "block";
+  statusEl.className     = "status";
+  statusEl.textContent   = "Saving...";
+
+  if(!OP_PICKED_EMP){
+    statusEl.className   = "status err";
+    statusEl.textContent = "Search and select an employee first.";
+    return;
+  }
+  if(!OP_CHANGE_TARGET){
+    statusEl.className   = "status err";
+    statusEl.textContent = "No target selected.";
+    return;
+  }
+
+  try{
+    const { unit_code, group_name } = OP_CHANGE_TARGET;
+
+    // Check if a row already exists for this unit+group
+    const { data: existing } = await sb.from("weaving_unit_operators")
+      .select("unit_code").eq("unit_code", unit_code).eq("group_name", group_name).maybeSingle();
+
+    if(existing){
+      const { error } = await sb.from("weaving_unit_operators").update({
+        employee_id:   OP_PICKED_EMP.employee_id,
+        operator_name: OP_PICKED_EMP.full_name,
+        is_trainee:    false
+      }).eq("unit_code", unit_code).eq("group_name", group_name);
+      if(error) throw error;
+    } else {
+      const { error } = await sb.from("weaving_unit_operators").insert({
+        unit_code:     unit_code,
+        group_name:    group_name,
+        employee_id:   OP_PICKED_EMP.employee_id,
+        operator_name: OP_PICKED_EMP.full_name,
+        is_trainee:    false
+      });
+      if(error) throw error;
+    }
+
+    await logActivity("weaving_operator_changed",
+      ME.username + " changed Group " + group_name + " operator for unit " + unit_code +
+      " to "" + OP_PICKED_EMP.full_name + "" (" + OP_PICKED_EMP.employee_id + ") from manage-target");
+
+    // Refresh OPS_MAP
+    const { data: opRows } = await sb.from("weaving_unit_operators_full")
+      .select("unit_code, group_name, operator_name, employee_id, is_trainee");
+    OPS_MAP = {};
+    (opRows || []).forEach(o => {
+      if(!OPS_MAP[o.unit_code]) OPS_MAP[o.unit_code] = {};
+      const label = o.is_trainee ? "Trainee" : (o.operator_name || "—");
+      OPS_MAP[o.unit_code][o.group_name] = label;
+      if(o.group_name === "A") OPS_MAP[o.unit_code]["_empA"] = o.employee_id;
+      if(o.group_name === "B") OPS_MAP[o.unit_code]["_empB"] = o.employee_id;
+    });
+
+    statusEl.className   = "status ok";
+    statusEl.textContent = "✅ Operator updated.";
+    await loadAssets();
+    setTimeout(closeOpChangePanel, 800);
+  }catch(e){
+    statusEl.className   = "status err";
+    statusEl.textContent = "Error: " + e.message;
+  }
+}
 
 // Switch Group A and Group B operators for a unit
 async function switchOperators(unitCode){
