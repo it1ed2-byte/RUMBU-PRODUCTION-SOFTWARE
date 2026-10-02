@@ -106,8 +106,8 @@
   <div class="table-wrap">
     <div class="table-scroll">
       <table id="assetsTable">
-        <thead><tr><th>Asset</th><th>Unit</th><th>Shed</th><th>Section</th><th>Mat Type</th><th>Normal</th><th>Hajj</th><th>Prayer</th><th>Operator A</th><th>Operator B</th><th></th></tr></thead>
-        <tbody id="assetsBody"><tr><td colspan="11">Loading...</td></tr></tbody>
+        <thead><tr><th>Asset</th><th>Unit</th><th>Shed</th><th>Section</th><th>Mat Type</th><th>Normal</th><th>Hajj</th><th>Prayer</th><th>Operator A</th><th>Operator B</th><th>Switch</th><th></th></tr></thead>
+        <tbody id="assetsBody"><tr><td colspan="12">Loading...</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -179,12 +179,15 @@ async function init(){
 
     // Build operator map for the manage-target table
     const { data: opRows } = await sb.from("weaving_unit_operators_full")
-      .select("unit_code, group_name, operator_name, is_trainee");
+      .select("unit_code, group_name, operator_name, employee_id, is_trainee");
     OPS_MAP = {};
     (opRows || []).forEach(o => {
       if(!OPS_MAP[o.unit_code]) OPS_MAP[o.unit_code] = {};
       const label = o.is_trainee ? "Trainee" : (o.operator_name || "—");
       OPS_MAP[o.unit_code][o.group_name] = label;
+      // store employee_id for switch operation
+      if(o.group_name === "A") OPS_MAP[o.unit_code]["_empA"] = o.employee_id;
+      if(o.group_name === "B") OPS_MAP[o.unit_code]["_empB"] = o.employee_id;
     });
 
     status.style.color = "var(--ok)"; status.textContent = "Connected. " + UNITS.length + " units loaded.";
@@ -228,12 +231,13 @@ async function loadAssets(){
   const body = document.getElementById("assetsBody");
   if(error){ body.innerHTML = `<tr><td colspan="9">Error: ${error.message}</td></tr>`; return; }
   ASSETS = data || [];
-  if(!ASSETS.length){ body.innerHTML = `<tr><td colspan="11">No assets match these filters.</td></tr>`; return; }
+  if(!ASSETS.length){ body.innerHTML = `<tr><td colspan="12">No assets match these filters.</td></tr>`; return; }
 
   body.innerHTML = ASSETS.map(a => {
     const ops = OPS_MAP[a.unit_code] || {};
     const opA = ops["A"] || "—";
     const opB = ops["B"] || "—";
+    const canSwitch = canWrite() && opA !== "—" && opB !== "—";
     return `
     <tr>
       <td><b>${a.asset_code}</b></td>
@@ -246,6 +250,7 @@ async function loadAssets(){
       <td>${a.target_prayer_mat}</td>
       <td>${opA}</td>
       <td>${opB}</td>
+      <td>${canSwitch ? `<button class="btn-sm btn-ghost" onclick="switchOperators('${a.unit_code}')">⇄ Switch</button>` : "—"}</td>
       <td>${canWrite() ? `<button class="btn-sm btn-ghost" onclick="openEditAsset('${a.asset_code}')">Edit</button>` : ""}</td>
     </tr>`;
   }).join("");
@@ -393,6 +398,52 @@ async function applyLogFilter(){
 
 document.getElementById("log_action_type").innerHTML = '<option value="">All</option>' +
   ACTION_TYPES.map(t=>`<option value="${t}">${t}</option>`).join("");
+
+// Switch Group A and Group B operators for a unit
+async function switchOperators(unitCode){
+  const ops = OPS_MAP[unitCode] || {};
+  const empA = ops["_empA"];
+  const empB = ops["_empB"];
+  const nameA = ops["A"] || "—";
+  const nameB = ops["B"] || "—";
+
+  if(nameA === "—" || nameB === "—"){
+    alert("Both operators must be assigned before switching."); return;
+  }
+  if(!confirm(`Switch operators for unit ${unitCode}?\n\nGroup A: ${nameA} → will become Group B\nGroup B: ${nameB} → will become Group A`)) return;
+
+  try{
+    // Swap by updating both rows simultaneously
+    const { error: e1 } = await sb.from("weaving_unit_operators")
+      .update({ operator_name: nameB, employee_id: empB || null })
+      .eq("unit_code", unitCode).eq("group_name", "A");
+    if(e1) throw e1;
+
+    const { error: e2 } = await sb.from("weaving_unit_operators")
+      .update({ operator_name: nameA, employee_id: empA || null })
+      .eq("unit_code", unitCode).eq("group_name", "B");
+    if(e2) throw e2;
+
+    await logActivity("weaving_operator_changed",
+      ME.username + " switched operators for unit " + unitCode +
+      " — A↔B: " + nameA + " ↔ " + nameB);
+
+    // Refresh OPS_MAP
+    const { data: opRows } = await sb.from("weaving_unit_operators_full")
+      .select("unit_code, group_name, operator_name, employee_id, is_trainee");
+    OPS_MAP = {};
+    (opRows || []).forEach(o => {
+      if(!OPS_MAP[o.unit_code]) OPS_MAP[o.unit_code] = {};
+      const label = o.is_trainee ? "Trainee" : (o.operator_name || "—");
+      OPS_MAP[o.unit_code][o.group_name] = label;
+      OPS_MAP[o.unit_code]["_empA"] = o.group_name === "A" ? o.employee_id : OPS_MAP[o.unit_code]["_empA"];
+      OPS_MAP[o.unit_code]["_empB"] = o.group_name === "B" ? o.employee_id : OPS_MAP[o.unit_code]["_empB"];
+    });
+    await loadAssets();
+  }catch(e){
+    alert("Switch failed: " + e.message);
+  }
+}
 
 init();
 </script>

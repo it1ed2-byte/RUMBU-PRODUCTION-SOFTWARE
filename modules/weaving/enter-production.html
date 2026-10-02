@@ -33,6 +33,7 @@
   .picked-box{background:var(--bg);border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:12px 14px;margin-top:8px;}
   .picked-box.empty{color:var(--muted);font-size:13px;}
   .readonly-field{background:var(--bg);border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:11px 12px;font-size:14px;color:var(--muted);}
+
   .total-box{font-size:22px;font-weight:800;color:var(--heading);background:var(--bg);border:1px solid var(--line-2);border-radius:var(--radius-sm);padding:11px 12px;text-align:center;}
 </style>
 </head>
@@ -84,9 +85,7 @@
     <div class="picked-box empty" id="pickedAssetBox">No asset selected yet.</div>
 
     <div class="form-row">
-      <div class="field"><label>Group</label>
-        <select id="f_group" onchange="lookupOperator()"><option value="">Select...</option><option>A</option><option>B</option></select>
-      </div>
+      <div class="field"><label>Group (auto from shift)</label><div class="readonly-field" id="lk_group">—</div><input type="hidden" id="f_group"></div>
       <div class="field"><label>Target (auto)</label><div class="readonly-field" id="lk_target">—</div></div>
     </div>
 
@@ -195,6 +194,7 @@ function resetEntryFields(){
   document.getElementById("pickedAssetBox").className = "picked-box empty";
   document.getElementById("pickedAssetBox").textContent = "No asset selected yet.";
   document.getElementById("f_group").value = "";
+  document.getElementById("lk_group").textContent = "—";
   document.getElementById("lk_target").textContent = "—";
   document.getElementById("f_double").value = 0;
   document.getElementById("f_single").value = 0;
@@ -275,25 +275,39 @@ function recomputeTotal(){
   document.getElementById("lk_total").textContent = (d+s+b+c);
 }
 
+// Auto-select operator based on shift:
+// Morning shift → Group A operator
+// Night shift   → Group B operator
 async function lookupOperator(){
-  if(!PICKED_ASSET) return;
-  const group = document.getElementById("f_group").value;
-  if(!group){ document.getElementById("lk_opname").textContent = "—"; document.getElementById("f_opid").value=""; document.getElementById("lk_rank").textContent = "—"; return; }
+  if(!PICKED_ASSET || !CURRENT_INIT) return;
+
+  const shift = CURRENT_INIT.shift;
+  const group = (shift === "Night") ? "B" : "A"; // Morning → A, Night → B
+
+  document.getElementById("f_group").value = group;
+  document.getElementById("lk_group").textContent = "Group " + group + " (" + shift + ")";
+  document.getElementById("lk_opname").textContent = "Loading...";
+  document.getElementById("f_opid").value = "";
+  document.getElementById("lk_rank").textContent = "—";
+
   try{
     const { data, error } = await sb.from("weaving_unit_operators_full")
-      .select("*").eq("unit_code", PICKED_ASSET.unit_code).eq("group_name", group).maybeSingle();
+      .select("*")
+      .eq("unit_code", PICKED_ASSET.unit_code)
+      .eq("group_name", group)
+      .maybeSingle();
     if(error) throw error;
     if(!data){
-      document.getElementById("lk_opname").textContent = "No operator assigned — set one in Manage Operator";
-      document.getElementById("f_opid").value = "";
+      document.getElementById("lk_opname").textContent = "No operator assigned for Group " + group + " — set one in Manage Operator";
       document.getElementById("lk_rank").textContent = "—";
       return;
     }
-    document.getElementById("lk_opname").textContent = data.operator_name;
+    document.getElementById("lk_opname").textContent = data.is_trainee ? "Trainee / Vacant" : data.operator_name;
     document.getElementById("f_opid").value = data.employee_id || "";
     document.getElementById("lk_rank").textContent = data.rank || (data.is_trainee ? "Trainee" : "—");
+    recomputeTarget();
   }catch(e){
-    console.warn("Operator lookup failed:", e);
+    document.getElementById("lk_opname").textContent = "Error: " + e.message;
   }
 }
 
