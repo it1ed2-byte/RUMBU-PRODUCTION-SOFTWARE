@@ -94,10 +94,10 @@ function field(r, ...keys){
 async function fetchFiltered(startDate, endDate){
   let all = [], offset = 0; const pageSize = 1000;
 
-  // Use mc_stoppage_time for date filtering — matches AppScript DATE(MC_Stoppage_Time)
+  // Use `date` column for server-side filter — confirmed working in control table
   const dateFilter =
-    "&mc_stoppage_time=gte." + startDate + "T00:00:00" +
-    "&mc_stoppage_time=lte." + endDate   + "T23:59:59";
+    "&date=gte." + startDate +
+    "&date=lte." + endDate;
 
   for(let guard = 0; guard < 500; guard++){
     const headers = Object.assign({}, authHeaders(), {
@@ -106,7 +106,7 @@ async function fetchFiltered(startDate, endDate){
     });
     const res = await fetch(
       SUPABASE_URL + "/rest/v1/control?select=*" +
-      dateFilter + "&order=mc_stoppage_time.desc",
+      dateFilter + "&order=id.asc",
       { headers }
     );
     if(!res.ok) throw new Error("control: HTTP " + res.status);
@@ -163,10 +163,11 @@ async function generate(){
     return;
   }
 
-  // Populate dropdowns from the loaded data (after first generate)
+  // Populate dropdowns from loaded data
   repopulateDropdown("department", rows, r => field(r,"department"));
   repopulateDropdown("assets",     rows, r => field(r,"assets"));
-  repopulateDropdown("section",    rows, r => field(r,"section"));
+  // Section is fixed — only these two values are valid
+  fixSectionDropdown();
 
   // ── Client-side filters ────────────────────────────────
   const filtered = rows.filter(r => {
@@ -180,16 +181,17 @@ async function generate(){
     }
     if(shift !== "All" && r.shift !== shift) return false;
     if(section !== "All"){
-      const sec = (field(r,"section")||"").toUpperCase().trim();
-      const fSec = section.toUpperCase().trim();
-      if(!sec.includes(fSec) && sec !== fSec) return false;
+      const rawSec = (field(r,"section")||"").toUpperCase().trim();
+      // Map raw section values to the two canonical names
+      const isMama  = rawSec.includes("MAMA") || rawSec.includes("MAMASANNU");
+      const isRumbu = !isMama;
+      if(section === "MamaSannu"    && !isMama)  return false;
+      if(section === "Rumbu Mainmat" && !isRumbu) return false;
     }
 
-    // FIX: require mc_stoppage_time and finish_time at minimum
-    // starting_time optional — waiting time shows 0 if missing
-    const stop   = parseDT(field(r,"mc_stoppage_time","stop_time"));
+    // require finish_time at minimum
     const finish = parseDT(field(r,"finish_time"));
-    return !!(stop && finish);
+    return !!finish;
   });
 
   if(!filtered.length){
@@ -228,10 +230,8 @@ async function generate(){
     const est      = Math.round(parseNum(field(r, "estimated_duration", "extimated_time")));
     const diff     = est - repair;
 
-    // FIX: date derived from mc_stoppage_time so it's never blank
-    const recDate  = stop
-      ? stop.toISOString().slice(0, 10)
-      : (field(r, "date_col", "date") || "");
+    // date from the confirmed `date` column
+    const recDate = field(r, "date_col", "date") || "";
 
     html += `<tr>
       <td>${i + 1}</td>
@@ -249,6 +249,17 @@ async function generate(){
 
   html += "</tbody></table></div>";
   document.getElementById("reportArea").innerHTML = html;
+}
+
+// Section only ever shows these two values — never derived from raw data
+function fixSectionDropdown(){
+  const sel  = document.getElementById("section");
+  const curr = sel.value;
+  sel.innerHTML =
+    `<option value="All">All</option>
+     <option value="Rumbu Mainmat">Rumbu Mainmat</option>
+     <option value="MamaSannu">Mama Sannu</option>`;
+  if(curr === "Rumbu Mainmat" || curr === "MamaSannu") sel.value = curr;
 }
 
 function repopulateDropdown(id, rows, getter){
