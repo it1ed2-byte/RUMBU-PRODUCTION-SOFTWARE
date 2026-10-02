@@ -46,31 +46,70 @@
   <label>Section</label>
   <select id="section"><option value="All">All</option></select>
   <button onclick="generate()">Generate Report</button>
-  <button class="alt" onclick="window.print()">Print / Save as PDF</button>
-  <div id="status">Connecting to Supabase...</div>
+  <button class="alt no-print" onclick="window.print()">Print / Save as PDF</button>
+  <div id="status">Ready — select dates and click Generate.</div>
 </div>
 
 <div id="reportArea"></div>
 
 <script>
-const SUPABASE_URL = "https://betfhunzmhtdzgvufmfk.supabase.co";
+const SUPABASE_URL     = "https://betfhunzmhtdzgvufmfk.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp";
 
-let CTRL_ROWS = []; CTRL_ROWS.forEach(normalizeControlRow);
+function authHeaders(){
+  return {
+    "apikey":        SUPABASE_ANON_KEY,
+    "Authorization": "Bearer " + SUPABASE_ANON_KEY
+  };
+}
 
-function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
-function parseDT(v){ const d=new Date(v); return isNaN(d)?null:d; }
-function minutesBetween(a,b){ return (!a||!b) ? 0 : Math.round((b-a)/60000); }
-function extractNumber(v){ if(v==null) return 0; const m=String(v).match(/\d+(\.\d+)?/); return m?Number(m[0]):0; }
+function parseDT(v){
+  if(!v) return null;
+  const d = new Date(v);
+  return isNaN(d) ? null : d;
+}
 
+function minutesBetween(a, b){
+  return (!a || !b) ? 0 : Math.round((b - a) / 60000);
+}
 
-// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
-async function fetchAllRows(table, select){
+function parseNum(v){
+  // FIX: use parseFloat (matches SAFE_CAST in BigQuery)
+  if(v == null) return 0;
+  const n = parseFloat(String(v));
+  return isNaN(n) ? 0 : n;
+}
+
+// FIX: safe field reader — treats null and undefined identically
+function field(r, ...keys){
+  for(const k of keys){
+    const v = r[k];
+    if(v !== null && v !== undefined && v !== "") return v;
+  }
+  return null;
+}
+
+// FIX: paginate with server-side date filter so we never
+// load the full table — only the rows in the requested range.
+async function fetchFiltered(startDate, endDate){
   let all = [], offset = 0; const pageSize = 1000;
-  for(let guard=0; guard<500; guard++){
-    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
-    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=" + (select||"*") + "&order=id.asc", { headers });
-    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+
+  // Use mc_stoppage_time for date filtering — matches AppScript DATE(MC_Stoppage_Time)
+  const dateFilter =
+    "&mc_stoppage_time=gte." + startDate + "T00:00:00" +
+    "&mc_stoppage_time=lte." + endDate   + "T23:59:59";
+
+  for(let guard = 0; guard < 500; guard++){
+    const headers = Object.assign({}, authHeaders(), {
+      "Range-Unit": "items",
+      "Range":      offset + "-" + (offset + pageSize - 1)
+    });
+    const res = await fetch(
+      SUPABASE_URL + "/rest/v1/control?select=*" +
+      dateFilter + "&order=mc_stoppage_time.desc",
+      { headers }
+    );
+    if(!res.ok) throw new Error("control: HTTP " + res.status);
     const batch = await res.json();
     all = all.concat(batch);
     if(batch.length < pageSize) break;
@@ -79,101 +118,147 @@ async function fetchAllRows(table, select){
   return all;
 }
 
-function normalizeControlRow(r){
-  if(r.date_col === undefined) r.date_col = r.date;
-  if(r.names === undefined) r.names = r.nurse_name;
-  if(r.stop_time === undefined) r.stop_time = r.mc_stoppage_time;
-  if(r.extimated_time === undefined) r.extimated_time = r.estimated_duration;
-  if(r.discription === undefined) r.discription = r.description;
-  return r;
-}
-
-async function init(){
-  const status = document.getElementById("status");
+// ── Init: just set default dates — do NOT load data yet ──
+function init(){
   const today = new Date();
-  const iso = today.toISOString().slice(0,10);
-  const past = new Date(today); past.setDate(today.getDate()-7);
-  document.getElementById("endDate").value = iso;
-  document.getElementById("startDate").value = past.toISOString().slice(0,10);
-
-  try{
-    CTRL_ROWS = await fetchAllRows("control","*");
-    CTRL_ROWS.forEach(normalizeControlRow);
-    // Populate Department dropdown from distinct values in loaded data
-    const depts = ["All", ...new Set(CTRL_ROWS.map(r=>(r.department||"").trim()).filter(Boolean)).values()].sort();
-    const deptSel = document.getElementById("department");
-    depts.forEach(d=>{ if(d!=="All"){ const o=document.createElement("option"); o.value=d; o.textContent=d; deptSel.appendChild(o); }});
-
-    // Populate Assets dropdown
-    const assetsList = ["All", ...new Set(CTRL_ROWS.map(r=>(r.assets||"").trim()).filter(Boolean)).values()].sort();
-    const assetSel = document.getElementById("assets");
-    assetsList.forEach(a=>{ if(a!=="All"){ const o=document.createElement("option"); o.value=a; o.textContent=a; assetSel.appendChild(o); }});
-
-    // Populate Section dropdown
-    const secs = ["All", ...new Set(CTRL_ROWS.map(r=>(r.section||"").trim()).filter(Boolean)).values()].sort();
-    const secSel = document.getElementById("section");
-    secs.forEach(s=>{ if(s!=="All"){ const o=document.createElement("option"); o.value=s; o.textContent=s; secSel.appendChild(o); }});
-
-    status.style.color="#1d8a4e";
-    status.textContent = "Connected. control: " + CTRL_ROWS.length + " rows.";
-  }catch(e){
-    status.style.color="#c0392b";
-    status.textContent = "Could not read data: " + (e.message||e);
-  }
+  const iso   = today.toISOString().slice(0, 10);
+  const past  = new Date(today);
+  past.setDate(today.getDate() - 7);
+  document.getElementById("endDate").value   = iso;
+  document.getElementById("startDate").value = past.toISOString().slice(0, 10);
 }
 
-function generate(){
-  if(!CTRL_ROWS.length){ alert("control returned 0 rows — check its read policy."); return; }
+// ── Generate: fetch only the needed date range ────────────
+async function generate(){
+  const status    = document.getElementById("status");
   const startDate = document.getElementById("startDate").value;
-  const endDate = document.getElementById("endDate").value;
+  const endDate   = document.getElementById("endDate").value;
   const department = document.getElementById("department").value;
-  const assets = document.getElementById("assets").value;
-  const shift = document.getElementById("shift").value;
-  const section = document.getElementById("section").value;
-  if(!startDate || !endDate){ alert("Please select both dates."); return; }
+  const assetFilt  = document.getElementById("assets").value;
+  const shift      = document.getElementById("shift").value;
+  const section    = document.getElementById("section").value;
 
-  // NOTE: this report shows ALL job codes — GAS has no job_code filter.
-  // Only date range, department, assets, shift, section filters apply.
-  const rows = CTRL_ROWS.filter(r=>{
-    if(r.date_col < startDate || r.date_col > endDate) return false;
-    if(department !== "All" && (r.department||"").trim() !== department) return false;
-    if(assets !== "All" && (r.assets||"").trim() !== assets) return false;
-    if(shift !== "All" && r.shift !== shift) return false;
-    if(section !== "All"){
-      const sec = (r.section||"").toUpperCase().trim();
-      if(section === "MamaSannu" && !sec.includes("MAMASANNU")) return false;
-      if(section === "Rumbu Mainmat" && sec.includes("MAMASANNU")) return false;
-      if(section !== "MamaSannu" && section !== "Rumbu Mainmat" && sec !== section.toUpperCase().trim()) return false;
-    }
-    const stop = parseDT(r.stop_time), start_t = parseDT(r.starting_time), finish = parseDT(r.finish_time);
-    return !!(stop && start_t && finish);
-  });
-
-  if(!rows.length){
-    document.getElementById("reportArea").innerHTML = `<div class="wide"><p>⚠️ No records found for the selected filters.</p></div>`;
+  if(!startDate || !endDate){
+    alert("Please select both dates.");
     return;
   }
 
-  rows.sort((a,b)=> (b.date_col||"").localeCompare(a.date_col||""));
+  status.style.color = "#1565C0";
+  status.textContent = "Loading…";
+  document.getElementById("reportArea").innerHTML = "";
 
-  let html = `<div class="wide"><h2 style="text-align:center;color:#1565C0;">🛠️ Repair by Assets Report</h2>
-    <p style="text-align:center;">${startDate} &rarr; ${endDate} | Dept: ${department} | Assets: ${assets} | Shift: ${shift} | Section: ${section}</p>
-    <table><thead><tr><th>Asset</th><th>Job Code</th><th>Nurse Name</th><th>DTime</th><th>RTime</th><th>WTime</th><th>ETime</th><th>Diff</th><th>Date</th></tr></thead><tbody>`;
+  let rows;
+  try{
+    rows = await fetchFiltered(startDate, endDate);
+    status.textContent = "Loaded " + rows.length + " rows for date range.";
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "Error: " + e.message;
+    return;
+  }
 
-  rows.forEach(r=>{
-    const stop = parseDT(r.stop_time), start = parseDT(r.starting_time), finish = parseDT(r.finish_time);
-    const downtime = Math.round(minutesBetween(stop, finish));
-    const repair   = Math.round(minutesBetween(start, finish));
-    const waiting  = downtime - repair;
-    const est      = Math.round(extractNumber(r.extimated_time));
-    const diff     = est - repair; // positive = efficient (est > actual repair)
-    html += `<tr><td>${r.assets||""}</td><td>${r.job_code||""}</td><td>${r.names||""}</td>` +
-      `<td>${downtime}</td><td>${repair}</td><td>${waiting}</td>` +
-      `<td>${est}</td><td class="${diff>0?'green':'red'}">${diff}</td><td>${r.date_col||""}</td></tr>`;
+  if(!rows.length){
+    document.getElementById("reportArea").innerHTML =
+      `<div class="wide"><p>⚠️ No records found for ${startDate} → ${endDate}.</p></div>`;
+    return;
+  }
+
+  // Populate dropdowns from the loaded data (after first generate)
+  repopulateDropdown("department", rows, r => field(r,"department"));
+  repopulateDropdown("assets",     rows, r => field(r,"assets"));
+  repopulateDropdown("section",    rows, r => field(r,"section"));
+
+  // ── Client-side filters ────────────────────────────────
+  const filtered = rows.filter(r => {
+    if(department !== "All"){
+      const d = (field(r,"department")||"").trim();
+      if(d !== department) return false;
+    }
+    if(assetFilt !== "All"){
+      const a = (field(r,"assets")||"").trim();
+      if(a !== assetFilt) return false;
+    }
+    if(shift !== "All" && r.shift !== shift) return false;
+    if(section !== "All"){
+      const sec = (field(r,"section")||"").toUpperCase().trim();
+      const fSec = section.toUpperCase().trim();
+      if(!sec.includes(fSec) && sec !== fSec) return false;
+    }
+
+    // FIX: require mc_stoppage_time and finish_time at minimum
+    // starting_time optional — waiting time shows 0 if missing
+    const stop   = parseDT(field(r,"mc_stoppage_time","stop_time"));
+    const finish = parseDT(field(r,"finish_time"));
+    return !!(stop && finish);
+  });
+
+  if(!filtered.length){
+    document.getElementById("reportArea").innerHTML =
+      `<div class="wide"><p>⚠️ No records match the selected filters.</p></div>`;
+    status.textContent = "No records after filtering.";
+    return;
+  }
+
+  status.style.color = "#1d8a4e";
+  status.textContent  = filtered.length + " record(s) found.";
+
+  // ── Build report table ─────────────────────────────────
+  let html = `<div class="wide">
+    <h2 style="text-align:center;color:#1565C0;">🛠️ Repair by Assets Report</h2>
+    <p style="text-align:center;">
+      ${startDate} → ${endDate} | Dept: ${department} |
+      Assets: ${assetFilt} | Shift: ${shift} | Section: ${section}
+    </p>
+    <table><thead><tr>
+      <th>#</th><th>Asset</th><th>Job Code</th><th>Nurse Name</th>
+      <th>Downtime (min)</th><th>Repair (min)</th><th>Waiting (min)</th>
+      <th>Estimated (min)</th><th>Diff</th><th>Date</th>
+    </tr></thead><tbody>`;
+
+  filtered.forEach((r, i) => {
+    // FIX: use field() to safely read with column name fallbacks
+    const stop   = parseDT(field(r, "mc_stoppage_time", "stop_time"));
+    const start  = parseDT(field(r, "starting_time"));
+    const finish = parseDT(field(r, "finish_time"));
+
+    // FIX: downtime = finish - mc_stoppage_time
+    const downtime = minutesBetween(stop, finish);
+    const repair   = minutesBetween(start, finish);
+    const waiting  = start ? (downtime - repair) : 0;
+    const est      = Math.round(parseNum(field(r, "estimated_duration", "extimated_time")));
+    const diff     = est - repair;
+
+    // FIX: date derived from mc_stoppage_time so it's never blank
+    const recDate  = stop
+      ? stop.toISOString().slice(0, 10)
+      : (field(r, "date_col", "date") || "");
+
+    html += `<tr>
+      <td>${i + 1}</td>
+      <td>${field(r,"assets")||""}</td>
+      <td>${field(r,"job_code")||""}</td>
+      <td>${field(r,"names","nurse_name")||""}</td>
+      <td>${downtime}</td>
+      <td>${repair}</td>
+      <td>${waiting}</td>
+      <td>${est}</td>
+      <td class="${diff >= 0 ? "green" : "red"}">${diff}</td>
+      <td>${recDate}</td>
+    </tr>`;
   });
 
   html += "</tbody></table></div>";
   document.getElementById("reportArea").innerHTML = html;
+}
+
+function repopulateDropdown(id, rows, getter){
+  const sel  = document.getElementById(id);
+  const curr = sel.value;
+  const vals = [...new Set(rows.map(getter).filter(Boolean))].sort();
+  sel.innerHTML = `<option value="All">All</option>` +
+    vals.map(v => `<option value="${v}">${v}</option>`).join("");
+  // restore previous selection if still valid
+  if(vals.includes(curr)) sel.value = curr;
 }
 
 init();
