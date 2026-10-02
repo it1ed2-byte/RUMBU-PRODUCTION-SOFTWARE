@@ -195,24 +195,18 @@ async function init(){
       document.getElementById("btnAddAsset").style.display = "none";
     }
 
-    const { data: unitRows, error: uErr } = await sb.from("weaving_units").select("unit_code,shed,section").order("section").order("unit_code");
-    if(uErr) throw uErr;
-    UNITS = unitRows || [];
+    // Run units + operators in parallel — faster init
+    const [unitRes, opRes] = await Promise.all([
+      sb.from("weaving_units").select("unit_code,shed,section").order("section").order("unit_code"),
+      sb.from("weaving_unit_operators").select("unit_code, group_name, operator_name, employee_id, is_trainee")
+    ]);
+    if(unitRes.error) throw unitRes.error;
+    UNITS = unitRes.data || [];
     populateUnitDropdown();
     populateShedFilter();
 
-    // Build operator map for the manage-target table
-    const { data: opRows } = await sb.from("weaving_unit_operators_full")
-      .select("unit_code, group_name, operator_name, employee_id, is_trainee");
-    OPS_MAP = {};
-    (opRows || []).forEach(o => {
-      if(!OPS_MAP[o.unit_code]) OPS_MAP[o.unit_code] = {};
-      const label = o.is_trainee ? "Trainee" : (o.operator_name || "—");
-      OPS_MAP[o.unit_code][o.group_name] = label;
-      // store employee_id for switch operation
-      if(o.group_name === "A") OPS_MAP[o.unit_code]["_empA"] = o.employee_id;
-      if(o.group_name === "B") OPS_MAP[o.unit_code]["_empB"] = o.employee_id;
-    });
+    // Build operator map
+    buildOpsMap(opRes.data || []);
 
     status.style.color = "var(--ok)"; status.textContent = "Connected. " + UNITS.length + " units loaded.";
     await loadAssets();
@@ -245,7 +239,9 @@ async function loadAssets(){
   const matType = document.getElementById("filt_mattype").value;
   const q = document.getElementById("filt_search").value.trim();
 
-  let query = sb.from("weaving_assets_full").select("*").order("section").order("shed").order("unit_code").order("asset_code");
+  let query = sb.from("weaving_assets_full")
+    .select("asset_code,unit_code,shed,section,mat_type,target_normal_mat,target_hajj_mat,target_prayer_mat")
+    .order("unit_code");
   if(section) query = query.eq("section", section);
   if(shed) query = query.eq("shed", shed);
   if(matType) query = query.eq("mat_type", matType);
@@ -423,6 +419,18 @@ async function applyLogFilter(){
 document.getElementById("log_action_type").innerHTML = '<option value="">All</option>' +
   ACTION_TYPES.map(t=>`<option value="${t}">${t}</option>`).join("");
 
+// ── Shared OPS_MAP builder ───────────────────────────────
+function buildOpsMap(rows){
+  OPS_MAP = {};
+  rows.forEach(o => {
+    if(!OPS_MAP[o.unit_code]) OPS_MAP[o.unit_code] = {};
+    const label = o.is_trainee ? "Trainee" : (o.operator_name || "—");
+    OPS_MAP[o.unit_code][o.group_name] = label;
+    if(o.group_name === "A") OPS_MAP[o.unit_code]["_empA"] = o.employee_id;
+    if(o.group_name === "B") OPS_MAP[o.unit_code]["_empB"] = o.employee_id;
+  });
+}
+
 // ── Operator change from manage-target ───────────────────
 let OP_CHANGE_TARGET = null; // { unit_code, group_name }
 let OP_PICKED_EMP    = null;
@@ -543,17 +551,11 @@ async function saveOperatorFromTarget(){
       ME.username + " changed Group " + group_name + " operator for unit " + unit_code +
       " to "" + OP_PICKED_EMP.full_name + "" (" + OP_PICKED_EMP.employee_id + ") from manage-target");
 
-    // Refresh OPS_MAP
-    const { data: opRows } = await sb.from("weaving_unit_operators_full")
-      .select("unit_code, group_name, operator_name, employee_id, is_trainee");
-    OPS_MAP = {};
-    (opRows || []).forEach(o => {
-      if(!OPS_MAP[o.unit_code]) OPS_MAP[o.unit_code] = {};
-      const label = o.is_trainee ? "Trainee" : (o.operator_name || "—");
-      OPS_MAP[o.unit_code][o.group_name] = label;
-      if(o.group_name === "A") OPS_MAP[o.unit_code]["_empA"] = o.employee_id;
-      if(o.group_name === "B") OPS_MAP[o.unit_code]["_empB"] = o.employee_id;
-    });
+    // Update OPS_MAP locally — no extra DB round trip
+    if(!OPS_MAP[unit_code]) OPS_MAP[unit_code] = {};
+    OPS_MAP[unit_code][group_name] = OP_PICKED_EMP.full_name;
+    if(group_name === "A") OPS_MAP[unit_code]["_empA"] = OP_PICKED_EMP.employee_id;
+    if(group_name === "B") OPS_MAP[unit_code]["_empB"] = OP_PICKED_EMP.employee_id;
 
     statusEl.className   = "status ok";
     statusEl.textContent = "✅ Operator updated.";
@@ -594,17 +596,12 @@ async function switchOperators(unitCode){
       ME.username + " switched operators for unit " + unitCode +
       " — A↔B: " + nameA + " ↔ " + nameB);
 
-    // Refresh OPS_MAP
-    const { data: opRows } = await sb.from("weaving_unit_operators_full")
-      .select("unit_code, group_name, operator_name, employee_id, is_trainee");
-    OPS_MAP = {};
-    (opRows || []).forEach(o => {
-      if(!OPS_MAP[o.unit_code]) OPS_MAP[o.unit_code] = {};
-      const label = o.is_trainee ? "Trainee" : (o.operator_name || "—");
-      OPS_MAP[o.unit_code][o.group_name] = label;
-      OPS_MAP[o.unit_code]["_empA"] = o.group_name === "A" ? o.employee_id : OPS_MAP[o.unit_code]["_empA"];
-      OPS_MAP[o.unit_code]["_empB"] = o.group_name === "B" ? o.employee_id : OPS_MAP[o.unit_code]["_empB"];
-    });
+    // Update OPS_MAP locally — no extra DB round trip
+    if(!OPS_MAP[unitCode]) OPS_MAP[unitCode] = {};
+    OPS_MAP[unitCode]["A"] = nameB;
+    OPS_MAP[unitCode]["B"] = nameA;
+    OPS_MAP[unitCode]["_empA"] = empB || null;
+    OPS_MAP[unitCode]["_empB"] = empA || null;
     await loadAssets();
   }catch(e){
     alert("Switch failed: " + e.message);
