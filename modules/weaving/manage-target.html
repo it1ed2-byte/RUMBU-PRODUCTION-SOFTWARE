@@ -106,8 +106,8 @@
   <div class="table-wrap">
     <div class="table-scroll">
       <table id="assetsTable">
-        <thead><tr><th>Asset</th><th>Unit</th><th>Shed</th><th>Section</th><th>Mat Type</th><th>Normal</th><th>Hajj</th><th>Prayer</th><th></th></tr></thead>
-        <tbody id="assetsBody"><tr><td colspan="9">Loading...</td></tr></tbody>
+        <thead><tr><th>Asset</th><th>Unit</th><th>Shed</th><th>Section</th><th>Mat Type</th><th>Normal</th><th>Hajj</th><th>Prayer</th><th>Operator A</th><th>Operator B</th><th></th></tr></thead>
+        <tbody id="assetsBody"><tr><td colspan="11">Loading...</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -140,6 +140,8 @@ let UNITS = [];       // {unit_code, shed, section}
 let ASSETS = [];      // current filtered view of weaving_assets_full
 let EDIT_ASSET_CODE = null; // null = adding new; set = editing existing
 let LOG_ROWS = [];
+// Operator lookup map: { unit_code: { A: "Name", B: "Name" } }
+let OPS_MAP = {};
 const ACTION_TYPES = ["weaving_asset_added","weaving_asset_mat_type_changed","weaving_asset_target_changed","weaving_unit_added"];
 
 function canWrite(){ return ME && (ME.role === "admin" || ME.role === "super_admin"); }
@@ -174,6 +176,16 @@ async function init(){
     UNITS = unitRows || [];
     populateUnitDropdown();
     populateShedFilter();
+
+    // Build operator map for the manage-target table
+    const { data: opRows } = await sb.from("weaving_unit_operators_full")
+      .select("unit_code, group_name, operator_name, is_trainee");
+    OPS_MAP = {};
+    (opRows || []).forEach(o => {
+      if(!OPS_MAP[o.unit_code]) OPS_MAP[o.unit_code] = {};
+      const label = o.is_trainee ? "Trainee" : (o.operator_name || "—");
+      OPS_MAP[o.unit_code][o.group_name] = label;
+    });
 
     status.style.color = "var(--ok)"; status.textContent = "Connected. " + UNITS.length + " units loaded.";
     await loadAssets();
@@ -216,9 +228,13 @@ async function loadAssets(){
   const body = document.getElementById("assetsBody");
   if(error){ body.innerHTML = `<tr><td colspan="9">Error: ${error.message}</td></tr>`; return; }
   ASSETS = data || [];
-  if(!ASSETS.length){ body.innerHTML = `<tr><td colspan="9">No assets match these filters.</td></tr>`; return; }
+  if(!ASSETS.length){ body.innerHTML = `<tr><td colspan="11">No assets match these filters.</td></tr>`; return; }
 
-  body.innerHTML = ASSETS.map(a => `
+  body.innerHTML = ASSETS.map(a => {
+    const ops = OPS_MAP[a.unit_code] || {};
+    const opA = ops["A"] || "—";
+    const opB = ops["B"] || "—";
+    return `
     <tr>
       <td><b>${a.asset_code}</b></td>
       <td>${a.unit_code}</td>
@@ -228,8 +244,11 @@ async function loadAssets(){
       <td>${a.target_normal_mat}</td>
       <td>${a.target_hajj_mat}</td>
       <td>${a.target_prayer_mat}</td>
+      <td>${opA}</td>
+      <td>${opB}</td>
       <td>${canWrite() ? `<button class="btn-sm btn-ghost" onclick="openEditAsset('${a.asset_code}')">Edit</button>` : ""}</td>
-    </tr>`).join("");
+    </tr>`;
+  }).join("");
 }
 
 function openAddAsset(){
