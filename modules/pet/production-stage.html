@@ -250,23 +250,20 @@
           </div>
 
           <p style="font-size:12px;color:var(--muted);margin:0 0 10px;">
-            Generate labels one grade at a time — select the grade, enter how many bags of that grade, then generate.
-            Repeat for the other grade if this run produced both; each click adds more labels to this run without replacing what's already generated.
+            Enter how many bags of each grade this run produced — leave one blank (or 0) if this run only produced one grade.
+            One click generates labels for both. Generating again later adds more without replacing what's already here.
           </p>
           <div class="grid3">
             <div>
-              <label>Grade *</label>
-              <select id="bagGrade">
-                <option value="AA">AA — A Grade Production</option>
-                <option value="AB">AB — B Grade Production</option>
-              </select>
+              <label>AA — A Grade Quantity</label>
+              <input type="number" class="no-spinner" id="bagCountAA" min="0" step="1" inputmode="numeric" placeholder="0">
             </div>
             <div>
-              <label>Quantity of QR to Produce *</label>
-              <input type="number" class="no-spinner" id="bagCount" min="1" step="1" inputmode="numeric">
+              <label>AB — B Grade Quantity</label>
+              <input type="number" class="no-spinner" id="bagCountAB" min="0" step="1" inputmode="numeric" placeholder="0">
             </div>
             <div style="display:flex;align-items:flex-end;">
-              <button onclick="generateBagReferences()" id="bagGenBtn" style="width:100%;">Generate Reference Numbers &amp; QR Codes</button>
+              <button onclick="generateBagReferences()" id="bagGenBtn" style="width:100%;">Generate QR for All</button>
             </div>
           </div>
           <div id="bagGenStatus" style="margin-top:8px;font-size:13px;font-weight:700;min-height:16px;"></div>
@@ -494,7 +491,8 @@ async function openProdForm(id){
 
   // Reset the bag-tracking UI, then decide what to show based on where this
   // collection actually is in the flow.
-  document.getElementById("bagCount").value="";
+  document.getElementById("bagCountAA").value="";
+  document.getElementById("bagCountAB").value="";
   document.getElementById("bagGenStatus").textContent="";
   document.getElementById("bagQrGrid").innerHTML="";
   document.getElementById("bagPrintActions").style.display="none";
@@ -515,12 +513,12 @@ async function openProdForm(id){
     document.getElementById("prodSaveRow").style.display="none";
     document.getElementById("kanoUsageStandaloneRow").style.display="block";
     document.getElementById("bagTrackingCard").style.display="block";
-    // Generation is repeatable now (one grade at a time), so reopening
-    // never locks these inputs — it just shows whatever's been generated
-    // so far and leaves the door open to generate more (e.g. the other
-    // grade, or more of the same grade if more bags come in later).
-    document.getElementById("bagCount").value="";
-    document.getElementById("bagCount").disabled=false;
+    // Generation is repeatable now, so reopening never locks these inputs —
+    // it just shows whatever's been generated so far and leaves the door
+    // open to generate more (e.g. more of either grade, if more bags come
+    // in later).
+    document.getElementById("bagCountAA").value="";
+    document.getElementById("bagCountAB").value="";
     document.getElementById("bagGenBtn").disabled=false;
     const { data:bags } = await sb.from("pet_stage4_bags").select("*").eq("collection_id",id).order("bag_index");
     if(bags&&bags.length){
@@ -875,11 +873,14 @@ function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,
 
 async function generateBagReferences(){
   const st=document.getElementById("bagGenStatus");
-  const countEl=document.getElementById("bagCount");
-  const gradeEl=document.getElementById("bagGrade");
-  const grade=gradeEl.value;
-  const count=parseInt(countEl.value);
-  if(!count||count<1||!/^\d+$/.test(countEl.value)){ st.style.color="var(--bad)"; st.textContent="Enter a whole number of bags (at least 1)."; return; }
+  const aaEl=document.getElementById("bagCountAA");
+  const abEl=document.getElementById("bagCountAB");
+  const aaCount=parseInt(aaEl.value)||0;
+  const abCount=parseInt(abEl.value)||0;
+
+  if(aaEl.value && !/^\d+$/.test(aaEl.value)){ st.style.color="var(--bad)"; st.textContent="AA quantity must be a whole number."; return; }
+  if(abEl.value && !/^\d+$/.test(abEl.value)){ st.style.color="var(--bad)"; st.textContent="AB quantity must be a whole number."; return; }
+  if(aaCount<=0 && abCount<=0){ st.style.color="var(--bad)"; st.textContent="Enter a quantity for at least one grade."; return; }
 
   // QR generation is gated on a Flake Scan quality result already
   // existing for this production run — upload it via Flake Scan Quality
@@ -897,23 +898,31 @@ async function generateBagReferences(){
   genBtn.disabled=true; // guards against a double-click mid-request only — re-enabled below either way
   st.style.color="var(--muted)"; st.textContent="Generating reference numbers...";
   try{
-    const { data, error } = await sb.rpc("generate_bag_references", {
-      p_production_id: CURRENT_PROD_ID,
-      p_collection_id: CURRENT_PROD.id,
-      p_grade: grade,
-      p_bag_count: count
-    });
-    if(error) throw new Error(error.message);
+    const newBags = [];
+    if(aaCount > 0){
+      const { data, error } = await sb.rpc("generate_bag_references", {
+        p_production_id: CURRENT_PROD_ID, p_collection_id: CURRENT_PROD.id, p_grade: "AA", p_bag_count: aaCount
+      });
+      if(error) throw new Error("AA: " + error.message);
+      newBags.push(...data);
+    }
+    if(abCount > 0){
+      const { data, error } = await sb.rpc("generate_bag_references", {
+        p_production_id: CURRENT_PROD_ID, p_collection_id: CURRENT_PROD.id, p_grade: "AB", p_bag_count: abCount
+      });
+      if(error) throw new Error("AB: " + error.message);
+      newBags.push(...data);
+    }
 
-    // Appends to whatever's already been generated for this run (e.g. the
-    // other grade, generated moments earlier) rather than replacing it —
-    // generation is repeatable now, not a one-shot action.
-    GENERATED_BAGS = GENERATED_BAGS.concat(data);
+    // Appends to whatever's already been generated for this run (e.g. an
+    // earlier visit's labels) rather than replacing it — generation is
+    // repeatable now, not a one-shot action.
+    GENERATED_BAGS = GENERATED_BAGS.concat(newBags);
     renderBagQrGrid(GENERATED_BAGS);
     document.getElementById("bagPrintActions").style.display="block";
     document.getElementById("finalSubmitRow").style.display="flex";
-    countEl.value=""; // ready for the next grade, if any
-    st.style.color="var(--ok)"; st.textContent=count+" "+grade+" reference number(s) and QR codes generated. Archiving labels...";
+    aaEl.value=""; abEl.value=""; // ready for next time, if more come in later
+    st.style.color="var(--ok)"; st.textContent=newBags.length+" reference number(s) and QR codes generated. Archiving labels...";
 
     // Archive ALL labels generated so far for this run as one PDF — not
     // dependent on whether the person actually prints successfully — so a
