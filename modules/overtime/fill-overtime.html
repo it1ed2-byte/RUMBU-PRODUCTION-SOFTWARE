@@ -297,17 +297,20 @@ function findEmployee(idVal){
   const loose = looseAll.filter(empInEntryScope);
   if(loose.length === 1) return { emp:loose[0], reason:"" };
   if(loose.length > 1 || exact.length > 1) return { emp:null, reason:"ambiguous" };
-  if(looseAll.length) return { emp:null, reason:"outofscope" };
+  if(looseAll.length) return { emp:null, reason:"outofscope", cand:(exactAll[0] || looseAll[0]) };
   return { emp:null, reason:"" };
 }
 
 // True only when an employee belongs to the current entry's Branch and
 // Department. The Unit is deliberately NOT checked: any staff registered
 // under this Branch + Department is accepted, whatever their Unit.
+// Compared ignoring capitals, extra spaces and punctuation differences in spacing,
+// so "Technical", "TECHNICAL " and "technical" count as the same.
+function normText(s){ return String(s||"").toLowerCase().replace(/\s+/g," ").trim(); }
 function empInEntryScope(emp){
   if(!CURRENT_ENTRY || !emp) return false;
-  if((emp.branch||"") !== (CURRENT_ENTRY.section||"")) return false;
-  if((emp.department||"") !== (CURRENT_ENTRY.department||"")) return false;
+  if(normText(emp.branch) !== normText(CURRENT_ENTRY.section)) return false;
+  if(normText(emp.department) !== normText(CURRENT_ENTRY.department)) return false;
   return true;
 }
 
@@ -478,11 +481,20 @@ async function saveReason(rowId){
 function lookupEmployee(){
   const idVal = document.getElementById("empIdInput").value.trim();
   const nameField = document.getElementById("empNameDisplay");
+  const noteEl = document.getElementById("addStatus");
+  if(noteEl && noteEl.className.indexOf("err") !== -1) noteEl.textContent = "";
   if(!idVal){ nameField.value = ""; nameField.className = ""; return; }
   // Only match staff who belong to this entry's Department/Unit scope.
   const r = findEmployee(idVal);
   if(r.emp){ nameField.value = r.emp.full_name; nameField.className = "found-name"; }
-  else if(r.reason === "outofscope"){ nameField.value = "ID exists, but not in this branch/department"; nameField.className = "not-found"; }
+  else if(r.reason === "outofscope"){
+    nameField.value = "ID exists, but not in this branch/department"; nameField.className = "not-found";
+    const c = r.cand || {}, st = document.getElementById("addStatus");
+    st.className = "status err";
+    st.textContent = (c.full_name ? c.full_name + " is registered under " : "This ID is registered under ") +
+      "Branch: \"" + (c.branch || "(blank)") + "\", Department: \"" + (c.department || "(blank)") + "\". " +
+      "This request is for Branch: \"" + (CURRENT_ENTRY ? CURRENT_ENTRY.section : "") + "\", Department: \"" + (CURRENT_ENTRY ? CURRENT_ENTRY.department : "") + "\".";
+  }
   else if(r.reason === "ambiguous"){ nameField.value = "More than one staff share this ID"; nameField.className = "not-found"; }
   else { nameField.value = "No staff found"; nameField.className = "not-found"; }
 }
