@@ -326,11 +326,35 @@ async function populateBranches(){
   });
 }
 
-async function loadEmployees(){
-  const { data, error } = await sb.from("employees").select("id, employee_id, full_name, department, branch").order("full_name");
-  if(error){ console.warn("Could not load employees:", error.message); return; }
-  EMPLOYEES = (data||[]).map(e=>({ ...e, id: String(e.id) }));
+// PostgREST returns at most 1,000 rows per request, so employees are fetched
+// in pages. Without this, anyone beyond the first 1,000 (by name) could not be
+// found in the picker, and already-assigned people showed as "#id".
+async function fetchAllRows(buildQuery){
+  const PAGE_SIZE = 1000;
+  let all = [], from = 0;
+  while(true){
+    const { data, error } = await buildQuery().range(from, from + PAGE_SIZE - 1);
+    if(error) throw error;
+    all = all.concat(data || []);
+    if(!data || data.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+  return all;
 }
+
+async function loadEmployees(){
+  try{
+    // Stable order (name, then id) so pages never overlap or skip rows.
+    const data = await fetchAllRows(() =>
+      sb.from("employees").select("id, employee_id, full_name, department, branch").order("full_name").order("id"));
+    EMPLOYEES = data.map(e=>({ ...e, id: String(e.id) }));
+  }catch(error){
+    console.warn("Could not load employees:", error.message);
+  }
+}
+
+// "MST-101", "mst101" and "MST 101" all reduce to the same key for searching.
+function normKey(s){ return String(s||"").toLowerCase().replace(/[^a-z0-9]/g,""); }
 
 async function deptsForBranch(branch){
   if(!branch) return [];
@@ -345,7 +369,11 @@ function renderPicker(key){
   const wrap = document.getElementById(key + "_picker");
   const q = (document.getElementById(key + "_search").value || "").trim().toLowerCase();
   if(!q){ wrap.innerHTML = "<p class='empty' style='padding:6px;'>Type a name or ID above to find employees.</p>"; return; }
-  const rows = EMPLOYEES.filter(e => (e.full_name + " " + e.employee_id).toLowerCase().indexOf(q) !== -1).slice(0, 60);
+  const qKey = normKey(q);
+  const rows = EMPLOYEES.filter(e =>
+    (e.full_name + " " + e.employee_id).toLowerCase().indexOf(q) !== -1 ||
+    (qKey && normKey(e.employee_id).indexOf(qKey) !== -1)
+  ).slice(0, 60);
   if(!rows.length){ wrap.innerHTML = "<p class='empty' style='padding:6px;'>No employees match.</p>"; return; }
   const set = SEL[key];
   wrap.innerHTML = rows.map(e=>{
