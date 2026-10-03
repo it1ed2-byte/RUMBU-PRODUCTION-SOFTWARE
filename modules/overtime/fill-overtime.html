@@ -70,6 +70,9 @@
   .rejbox{background:#fdecea;border:1px solid var(--red);border-radius:8px;padding:10px 14px;margin-bottom:14px;color:#7a1f1f;font-size:13px;}
   .infobox{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:13px;line-height:1.7;}
   .found-name{color:var(--green)!important;font-weight:700;}
+  tr.flagged td{background:#fdecea !important;}
+  .flagbox{background:#fdecea;border:1px solid var(--red);border-radius:8px;padding:12px 14px;margin-top:12px;color:#7a1f1f;font-size:13px;line-height:1.6;}
+  .flagbox ul{margin:6px 0 0 18px;padding:0;}
   .not-found{color:var(--red)!important;font-weight:700;}
 </style>
 </head>
@@ -119,6 +122,15 @@
       <textarea id="reasonInput" placeholder="Why this employee is doing overtime"></textarea>
       <button class="mini" style="margin-top:10px;" onclick="addEmployeeToEntry()">+ Add Employee</button>
       <div class="status" id="addStatus"></div>
+
+      <h4>Overtime List (photo or PDF) <span style="color:var(--red);">*</span></h4>
+      <p class="sub" style="margin:0 0 8px;"><b>Required.</b> You must attach a picture or PDF of the overtime list before you can submit (JPG, PNG, WEBP, HEIC or PDF, up to 10 MB each). Staff must still be added above. Every approver can see this file.</p>
+      <div id="attachListWrap"></div>
+      <div class="row" style="align-items:flex-end;margin-top:8px;">
+        <div><label>Choose file(s)</label><input type="file" id="attachInput" accept="image/*,application/pdf" multiple></div>
+        <div style="flex:0 0 auto;"><button class="mini" id="attachBtn" onclick="uploadAttachments()">⬆ Upload</button></div>
+      </div>
+      <div class="status" id="attachStatus"></div>
 
       <div id="responseNoteWrap" style="display:none;margin-top:8px;">
         <label>Response to Rejection <span style="color:var(--red);">*</span></label>
@@ -245,9 +257,48 @@ async function init(){
   }
 }
 
+// PostgREST returns at most 1,000 rows per request, so the employee list is
+// fetched in pages. Without this, any staff beyond the first 1,000 were
+// never loaded and their name never appeared.
+async function fetchAllRows(query){
+  const PAGE_SIZE = 1000;
+  let all = [], from = 0;
+  while(true){
+    const { data, error } = await query.range(from, from + PAGE_SIZE - 1);
+    if(error) throw error;
+    all = all.concat(data || []);
+    if(!data || data.length < PAGE_SIZE) break;
+    from += PAGE_SIZE;
+  }
+  return all;
+}
+
 async function loadEmployees(){
-  const { data } = await sb.from("employees").select("id, employee_id, full_name, department, branch, unit");
-  EMPLOYEES = data || [];
+  EMPLOYEES = await fetchAllRows(
+    sb.from("employees").select("id, employee_id, full_name, department, branch, unit").order("id")
+  );
+}
+
+// "MST-101", "mst101" and " MST 101 " all reduce to the same key.
+function normId(s){ return String(s||"").toUpperCase().replace(/[^A-Z0-9]/g,""); }
+
+// Finds the employee for a typed ID inside this entry's scope.
+// 1) exact match (ignoring case/spaces) wins; 2) otherwise a match that
+// ignores hyphens/punctuation, but only when it is unambiguous.
+// Returns { emp, reason } where reason is "", "outofscope" or "ambiguous".
+function findEmployee(idVal){
+  const typed = String(idVal||"").trim();
+  const key = normId(typed);
+  if(!key) return { emp:null, reason:"" };
+  const exactAll = EMPLOYEES.filter(e => String(e.employee_id||"").trim().toLowerCase() === typed.toLowerCase());
+  const looseAll = EMPLOYEES.filter(e => normId(e.employee_id) === key);
+  const exact = exactAll.filter(empInEntryScope);
+  if(exact.length === 1) return { emp:exact[0], reason:"" };
+  const loose = looseAll.filter(empInEntryScope);
+  if(loose.length === 1) return { emp:loose[0], reason:"" };
+  if(loose.length > 1 || exact.length > 1) return { emp:null, reason:"ambiguous" };
+  if(looseAll.length) return { emp:null, reason:"outofscope" };
+  return { emp:null, reason:"" };
 }
 
 // True only when an employee actually belongs to the current entry's scope:
@@ -382,7 +433,10 @@ async function openEntry(entryId){
   document.getElementById("addStatus").textContent = "";
   document.getElementById("submitStatus").textContent = "";
 
+  document.getElementById("attachInput").value = "";
+  document.getElementById("attachStatus").textContent = "";
   await loadEntryEmployees(entryId);
+  await loadAttachments(entryId);
 }
 
 function backToQueue(){
@@ -432,8 +486,10 @@ function lookupEmployee(){
   const nameField = document.getElementById("empNameDisplay");
   if(!idVal){ nameField.value = ""; nameField.className = ""; return; }
   // Only match staff who belong to this entry's Department/Unit scope.
-  const match = EMPLOYEES.find(e => (e.employee_id||"").toLowerCase() === idVal.toLowerCase() && empInEntryScope(e));
-  if(match){ nameField.value = match.full_name; nameField.className = "found-name"; }
+  const r = findEmployee(idVal);
+  if(r.emp){ nameField.value = r.emp.full_name; nameField.className = "found-name"; }
+  else if(r.reason === "outofscope"){ nameField.value = "ID exists, but not in this department/unit"; nameField.className = "not-found"; }
+  else if(r.reason === "ambiguous"){ nameField.value = "More than one staff share this ID"; nameField.className = "not-found"; }
   else { nameField.value = "No staff found"; nameField.className = "not-found"; }
 }
 
@@ -442,7 +498,8 @@ async function addEmployeeToEntry(){
   if(!CURRENT_ENTRY) return;
   const idVal = document.getElementById("empIdInput").value.trim();
   const reason = document.getElementById("reasonInput").value.trim();
-  const match = EMPLOYEES.find(e => (e.employee_id||"").toLowerCase() === idVal.toLowerCase() && empInEntryScope(e));
+  const found = findEmployee(idVal);
+  const match = found.emp;
 
   if(!idVal || !match){
     const unitNote = (CURRENT_ENTRY && CURRENT_ENTRY.units && CURRENT_ENTRY.units !== "ALL") ? (" in unit " + CURRENT_ENTRY.units) : "";
@@ -501,8 +558,39 @@ async function submitEntry(){
   const responseNote = document.getElementById("responseNoteInput").value.trim();
   if(isCorrection && !responseNote){ status.className="status err"; status.textContent="Enter a Response to Rejection before resubmitting."; return; }
 
-  status.className="status"; status.textContent="Submitting…";
+  // The overtime list photo/PDF is mandatory. Count from the database, not the screen.
+  status.className="status"; status.textContent="Checking attached list…";
   try{
+    const { count, error: attErr } = await sb.from("overtime_attachments")
+      .select("id", { count:"exact", head:true }).eq("department_entry_id", CURRENT_ENTRY.id);
+    if(attErr) throw attErr;
+    if(!count){
+      status.className = "status err";
+      status.textContent = "Attach a picture or PDF of the overtime list before submitting.";
+      try{ document.getElementById("attachInput").scrollIntoView({ behavior:"smooth", block:"center" }); }catch(e){}
+      return;
+    }
+  }catch(e){
+    status.className = "status err";
+    status.textContent = "Could not check the attached list (" + (e.message || e) + "). Nothing was submitted.";
+    return;
+  }
+
+  status.className="status"; status.textContent="Checking salary records…";
+  try{
+    // Block the submission if any listed staff has no salary on record.
+    const missing = await findStaffWithoutSalary();
+    renderEmployeeFlags(missing);
+    if(missing.length){
+      const lines = missing.map(m => "<li><b>" + esc(m.code || "(no ID)") + "</b>" + (m.name ? " — " + esc(m.name) : "") + "</li>").join("");
+      status.className = "status err";
+      status.innerHTML = "<div class=\"flagbox\"><b>Not submitted.</b> " + missing.length + " staff member(s) have no salary on record. " +
+        "Remove them from this request or ask HR to add their salary, then submit again:<ul>" + lines + "</ul></div>";
+      await logActivity("overtime_step2_blocked_no_salary", ME.username + " tried to submit overtime entry #" + CURRENT_ENTRY.id + " but it was blocked: no salary on record for " + missing.map(m=>m.code).join(", "));
+      return;
+    }
+
+    status.textContent="Submitting…";
     const updateFields = { status: "awaiting_step3", updated_at: new Date().toISOString() };
     if(isCorrection) updateFields.correction_note = responseNote;
     const { error } = await sb.from("overtime_department_entries").update(updateFields).eq("id", CURRENT_ENTRY.id);
@@ -514,6 +602,135 @@ async function submitEntry(){
   }catch(e){
     status.className = "status err"; status.textContent = "❌ " + e.message;
   }
+}
+
+// ─────────── OVERTIME LIST ATTACHMENTS (photo / PDF) ───────────
+// Files live in the private "overtime-attachments" bucket; one row per file
+// in overtime_attachments links it to the entry. Needs overtime_attachments.sql.
+const ATTACH_BUCKET = "overtime-attachments";
+const ATTACH_MAX_BYTES = 10 * 1024 * 1024;
+const ATTACH_EXT = { jpg:"image/jpeg", jpeg:"image/jpeg", png:"image/png", webp:"image/webp", heic:"image/heic", heif:"image/heif", pdf:"application/pdf" };
+let CURRENT_ATTACHMENTS = [];
+
+function attachExt(name){ const m = /\.([A-Za-z0-9]+)$/.exec(name||""); return m ? m[1].toLowerCase() : ""; }
+function attachType(file){
+  const byExt = ATTACH_EXT[attachExt(file.name)];
+  if(file.type && Object.values(ATTACH_EXT).indexOf(file.type.toLowerCase()) !== -1) return file.type.toLowerCase();
+  return byExt || "";
+}
+function safeFileName(n){ return String(n||"file").replace(/[^A-Za-z0-9._-]+/g,"_").slice(-80); }
+function fmtSize(b){ b = Number(b)||0; return b >= 1048576 ? (b/1048576).toFixed(1) + " MB" : Math.max(1, Math.round(b/1024)) + " KB"; }
+
+async function loadAttachments(entryId){
+  const wrap = document.getElementById("attachListWrap");
+  const { data, error } = await sb.from("overtime_attachments").select("*").eq("department_entry_id", entryId).order("created_at");
+  if(error){
+    CURRENT_ATTACHMENTS = [];
+    wrap.innerHTML = "<p class='status err'>❌ Could not load attachments (" + esc(error.message) + "). Has overtime_attachments.sql been run in Supabase?</p>";
+    return;
+  }
+  CURRENT_ATTACHMENTS = data || [];
+  if(!CURRENT_ATTACHMENTS.length){ wrap.innerHTML = "<p class='empty'>No file attached yet.</p>"; return; }
+  let html = "<table><thead><tr><th>File</th><th>Size</th><th>Uploaded by</th><th></th></tr></thead><tbody>";
+  CURRENT_ATTACHMENTS.forEach(a=>{
+    html += "<tr><td>" + esc(a.file_name) + "</td><td>" + fmtSize(a.size_bytes) + "</td><td>" + esc(a.uploaded_by_username||"") + "</td>" +
+      "<td><button class=\"mini\" onclick=\"viewAttachment(" + a.id + ")\">View</button> " +
+      "<button class=\"mini red\" onclick=\"removeAttachment(" + a.id + ")\">Remove</button></td></tr>";
+  });
+  html += "</tbody></table>";
+  wrap.innerHTML = html;
+}
+
+async function uploadAttachments(){
+  const status = document.getElementById("attachStatus");
+  const input = document.getElementById("attachInput");
+  const btn = document.getElementById("attachBtn");
+  if(!CURRENT_ENTRY) return;
+  const files = Array.from(input.files || []);
+  if(!files.length){ status.className = "status err"; status.textContent = "Choose a photo or PDF first."; return; }
+
+  const problems = [];
+  files.forEach(f=>{
+    if(!attachType(f)) problems.push(f.name + ": only JPG, PNG, WEBP, HEIC or PDF files are allowed");
+    else if(f.size > ATTACH_MAX_BYTES) problems.push(f.name + ": larger than 10 MB (" + fmtSize(f.size) + ")");
+    else if(f.size === 0) problems.push(f.name + ": file is empty");
+  });
+  if(problems.length){ status.className = "status err"; status.innerHTML = problems.map(esc).join("<br>"); return; }
+
+  btn.disabled = true;
+  let ok = 0; const failed = [];
+  for(let i = 0; i < files.length; i++){
+    const f = files[i];
+    status.className = "status"; status.textContent = "Uploading " + (i+1) + " of " + files.length + "…";
+    const path = "entry-" + CURRENT_ENTRY.id + "/" + Date.now() + "_" + i + "_" + safeFileName(f.name);
+    try{
+      const up = await sb.storage.from(ATTACH_BUCKET).upload(path, f, { contentType: attachType(f), upsert: false });
+      if(up.error) throw up.error;
+      const ins = await sb.from("overtime_attachments").insert({
+        department_entry_id: CURRENT_ENTRY.id, file_path: path, file_name: f.name,
+        mime_type: attachType(f), size_bytes: f.size, uploaded_by_username: ME.username
+      });
+      if(ins.error){ await sb.storage.from(ATTACH_BUCKET).remove([path]); throw ins.error; }
+      ok++;
+    }catch(e){ failed.push(f.name + ": " + (e.message || e)); }
+  }
+  btn.disabled = false;
+  input.value = "";
+  if(ok) await logActivity("overtime_step2_attachment_added", ME.username + " attached " + ok + " file(s) to overtime entry #" + CURRENT_ENTRY.id);
+  await loadAttachments(CURRENT_ENTRY.id);
+  if(failed.length){
+    status.className = "status err";
+    status.innerHTML = (ok ? "✅ " + ok + " uploaded. " : "") + "❌ " + failed.length + " failed:<br>" + failed.map(esc).join("<br>");
+  } else {
+    status.className = "status ok"; status.textContent = "✅ " + ok + " file(s) uploaded.";
+  }
+}
+
+async function viewAttachment(id){
+  const a = CURRENT_ATTACHMENTS.find(x=>x.id===id); if(!a) return;
+  const w = window.open("", "_blank");   // open first so pop-up blockers allow it
+  const { data, error } = await sb.storage.from(ATTACH_BUCKET).createSignedUrl(a.file_path, 300);
+  if(error || !data){ if(w) w.close(); alert("Could not open the file: " + (error ? error.message : "no link returned")); return; }
+  if(w) w.location.href = data.signedUrl; else window.location.href = data.signedUrl;
+}
+
+async function removeAttachment(id){
+  const a = CURRENT_ATTACHMENTS.find(x=>x.id===id); if(!a) return;
+  if(!confirm("Remove \"" + a.file_name + "\" from this request?")) return;
+  try{
+    const rm = await sb.storage.from(ATTACH_BUCKET).remove([a.file_path]);
+    if(rm.error) throw rm.error;
+    const del = await sb.from("overtime_attachments").delete().eq("id", id);
+    if(del.error) throw del.error;
+    await logActivity("overtime_step2_attachment_removed", ME.username + " removed attachment \"" + a.file_name + "\" from overtime entry #" + CURRENT_ENTRY.id);
+    await loadAttachments(CURRENT_ENTRY.id);
+  }catch(e){ alert("Could not remove: " + (e.message || e)); }
+}
+
+// ─────────── SALARY CHECK (used on Submit) ───────────
+// Salary amounts are Super-Admin-only, so the check runs in the database and
+// returns ONLY the IDs that have no usable salary (missing row, blank or 0).
+// Needs the function in overtime_salary_check.sql to be created once.
+async function findStaffWithoutSalary(){
+  const linked = CURRENT_EMPLOYEES.filter(e => e.employee_id !== null && e.employee_id !== undefined);
+  const orphans = CURRENT_EMPLOYEES.filter(e => e.employee_id === null || e.employee_id === undefined)
+    .map(e => ({ code:e.employee_code, name:e.employee_name }));
+  let flagged = [];
+  if(linked.length){
+    const { data, error } = await sb.rpc("overtime_employees_missing_salary", { p_employee_ids: linked.map(e => String(e.employee_id)) });
+    if(error) throw new Error("Salary check could not run (" + error.message + "). Nothing was submitted.");
+    const bad = new Set((data||[]).map(r => String(r.employee_id !== undefined ? r.employee_id : r)));
+    flagged = linked.filter(e => bad.has(String(e.employee_id))).map(e => ({ code:e.employee_code, name:e.employee_name }));
+  }
+  return orphans.concat(flagged);
+}
+
+function renderEmployeeFlags(missing){
+  const codes = new Set(missing.map(m => m.code));
+  CURRENT_EMPLOYEES.forEach(e => {
+    const row = document.getElementById("emprow_" + e.id);
+    if(row) row.classList.toggle("flagged", codes.has(e.employee_code));
+  });
 }
 
 // ─────────── COMPLETED FORMS (already submitted) ───────────
