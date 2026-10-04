@@ -87,21 +87,21 @@ let ME=null, PROD_REPORT_ROWS=[];
 const ACTIVE_PET_BRANCHES = ["LagosWash", "KanoWash"];
 
 const STATUS_LABELS={
-  submitted:'Awaiting Quality Control Fill',
-  stage2_approval:'Quality Control Approval Pending',
+  submitted:'Awaiting Bottle Inspection',
+  stage2_approval:'Bottle Inspection Approval Pending',
   rejected_to_stage1:'Returned to Initiator',
   stage3p1_filling:'Payment Phase 1 Fill',
   stage3p1_approval:'Payment Phase 1 Approval',
-  rejected_to_stage2:'Returned to Quality Control',
+  rejected_to_stage2:'Returned to Bottle Inspection',
   stage4a_offloading_filling:'Bottle Offloading Fill',
   stage4a_offloading_approval:'Bottle Offloading Approval',
   rejected_to_stage4a:'Returned to Bottle Offloading',
   stage4b_weight_filling:'Rumbu Weight Fill',
   stage4b_weight_approval:'Rumbu Weight Approval',
   rejected_to_stage4b:'Returned to Rumbu Weight',
-  stage4c_qc_filling:'Quality Control (2) Fill',
-  stage4c_qc_approval:'Quality Control (2) Approval',
-  rejected_to_stage4c:'Returned to Quality Control (2)',
+  stage4c_qc_filling:'Quality Control Fill',
+  stage4c_qc_approval:'Quality Control Approval',
+  rejected_to_stage4c:'Returned to Quality Control',
   stage4_filling:'Production Fill',
   stage4_approval:'Production Approval',
   rejected_to_stage3p1:'Returned to Payment Ph.1',
@@ -249,9 +249,11 @@ async function openDetail(id){
   document.getElementById("modalLog").innerHTML="Loading...";
   document.getElementById("modal").classList.add("open");
 
-  const [{ data:c },{ data:qc },{ data:pay },{ data:prod },{ data:log }]=await Promise.all([
+  const [{ data:c },{ data:qc },{ data:insp },{ data:off },{ data:pay },{ data:prod },{ data:log }]=await Promise.all([
     sb.from("pet_collections").select("*").eq("id",id).single(),
     sb.from("pet_stage2_qc").select("*").eq("collection_id",id).single(),
+    sb.from("pet_stage2_inspection").select("*").eq("collection_id",id).maybeSingle(),
+    sb.from("pet_stage4a_offloading").select("*").eq("collection_id",id).maybeSingle(),
     sb.from("pet_stage3_payment").select("*").eq("collection_id",id).single(),
     sb.from("pet_stage4_production").select("*").eq("collection_id",id).single(),
     sb.from("pet_activity_log").select("*").eq("collection_id",id).order("created_at",{ascending:true})
@@ -265,9 +267,19 @@ async function openDetail(id){
     html+=row("Form Number",c.form_number)+row("Form Date",c.form_date)+row("Status",STATUS_LABELS[c.status]||c.status)+row("Section",c.section)+row("Agent",`${c.agent_name} (${c.agent_code})`)+row("Waybill Weight",c.agent_waybill_weight+" kg")+row("Rumbu Weight",c.rumbu_weighbridge_weight+" kg")+row("Initiated by",c.initiator_username);
   }
   html+="</div>";
+  if(insp){
+    html+=`<h4 style="color:var(--heading);margin:14px 0 6px;">Stage 2 — Bottle Inspection</h4><div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:12px;">`;
+    html+=row("Raw Material Type",insp.raw_material_type)+row("Material Source",insp.material_source)+row("Colored Bottles?",insp.q_colored)+row("With Labels?",insp.q_labels)+row("With Caps?",insp.q_caps)+row("Non-Food Contact?",insp.q_non_food)+row("Non-PET Products?",insp.q_non_pet);
+    html+="</div>";
+  }
+  if(off){
+    html+=`<h4 style="color:var(--heading);margin:14px 0 6px;">Stage 4 — Bottle Offloading</h4><div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:12px;">`;
+    html+=row("LOT",off.offload_location)+row("Bales",off.number_of_bales);
+    html+="</div>";
+  }
   if(qc){
-    html+=`<h4 style="color:var(--heading);margin:14px 0 6px;">Stage 2 — Quality Control</h4><div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:12px;">`;
-    html+=row("Grade",qc.bottle_grade)+row("LOT",qc.offload_location)+row("Bales",qc.number_of_bales)+row("Avg Bale Weight",qc.avg_bale_weight_kg+" kg")+row("Avg Bale Volume",qc.avg_bale_volume)+row("Bale Density",qc.bale_density);
+    html+=`<h4 style="color:var(--heading);margin:14px 0 6px;">Stage 6 — Quality Control</h4><div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:12px;">`;
+    html+=row("Grade",qc.bottle_grade)+row("Avg Bale Weight",qc.avg_bale_weight_kg+" kg")+row("Avg Bale Volume",qc.avg_bale_volume)+row("Bale Density",qc.bale_density);
     html+="</div>";
   }
   if(pay){
@@ -276,7 +288,7 @@ async function openDetail(id){
     html+="</div>";
   }
   if(prod){
-    html+=`<h4 style="color:var(--heading);margin:14px 0 6px;">Stage 4 — Production</h4><div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:12px;">`;
+    html+=`<h4 style="color:var(--heading);margin:14px 0 6px;">Stage 7 — Production</h4><div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:12px;">`;
     html+=row("Start",prod.production_start?new Date(prod.production_start).toLocaleString("en-GB"):"—")+row("End",prod.production_end?new Date(prod.production_end).toLocaleString("en-GB"):"—")+row("Total Colored Flex",prod.colored_flex_kg+" kg")+row("Total Non-Colored Flex",prod.non_colored_flex_kg+" kg")+row("Total Production",prod.total_production_kg+" kg");
     html+="</div>";
     html+=`<div style="font-size:11px;color:var(--muted);margin:10px 0 4px;">Waste Breakdown (kg)</div><div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:6px;font-size:12px;">`;

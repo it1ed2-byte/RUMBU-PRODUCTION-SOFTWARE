@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Bottle Inspection — PET Collection</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme")||"navy"); }catch(e){} })();
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) document.documentElement.setAttribute("data-theme",e.data.rumbuTheme); });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="review-modal.js"></script>
+<script src="queue-collapse.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1100px;margin:0 auto;}
+  label{font-size:12px;font-weight:700;display:block;margin:10px 0 4px;color:var(--muted);text-transform:uppercase;letter-spacing:.2px;}
+  label .req{color:#dc2626;}
+  input,select,textarea{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);}
+  input[readonly]{background:var(--bg);color:var(--muted);}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;}
+  .sec-title{font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--heading);margin:18px 0 10px;padding-bottom:4px;border-bottom:2px solid var(--line);}
+  .queue-row{padding:10px 14px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;background:var(--card);gap:10px;flex-wrap:wrap;}
+  .queue-row .meta{font-size:12px;color:var(--muted);}
+  .badge-status{display:inline-block;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:700;}
+  .bs-submitted{background:#dbeafe;color:#1e40af;}
+  .bs-rejected{background:#fee2e2;color:#991b1b;}
+  .bs-approval{background:#fef3c7;color:#92400e;}
+  .panel{border:1px solid var(--line);border-radius:10px;padding:18px;margin-bottom:16px;}
+  .panel-title{font-weight:700;font-size:14px;color:var(--heading);margin:0 0 14px;}
+  .correction-note{background:#fef3c7;border:1px solid #d97706;border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:12px;}
+  .approve-card{border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:10px;background:var(--card);}
+  @media(max-width:700px){ .grid2,.grid3{grid-template-columns:1fr;} }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back</button>
+  <div id="connStatus" style="font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);">Loading...</div>
+
+  <!-- Fill queue -->
+  <div id="fillSection" style="display:none;">
+    <div class="panel">
+      <div class="panel-title" id="fillQueueTitle">Your Fill Queue — Stage 2: Bottle Inspection</div>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Collections waiting for Bottle Inspection. Select one to fill.</p>
+      <div id="fillQueue"></div>
+    </div>
+
+    <div id="biForm" style="display:none;">
+      <div class="card-panel">
+        <h3 style="color:var(--heading);margin:0 0 4px;" id="biFormTitle">Bottle Inspection</h3>
+        <div id="biCorrectionNote" style="display:none;" class="correction-note"></div>
+        <div class="grid3" style="margin-bottom:8px;">
+          <div><label>Form Number</label><input type="text" id="biFormNum" readonly></div>
+          <div><label>Agent Name</label><input type="text" id="biAgent" readonly></div>
+          <div><label>Agent Code</label><input type="text" id="biAgentCode" readonly></div>
+        </div>
+
+        <div class="sec-title">Raw Material</div>
+        <div class="grid2">
+          <div>
+            <label>Raw Material Type <span class="req">*</span></label>
+            <input type="text" id="biMaterialType" placeholder="e.g. PET BOTTLE">
+          </div>
+          <div>
+            <label>Material Source <span class="req">*</span></label>
+            <select id="biMaterialSource"></select>
+          </div>
+        </div>
+
+        <div class="sec-title">Bottle Inspection</div>
+        <div class="grid2" id="biQuestions"></div>
+
+        <div style="margin-top:20px;display:flex;gap:10px;">
+          <button onclick="submitInspection()">Submit</button>
+          <button class="btn-ghost" onclick="closeBiForm()">Cancel</button>
+        </div>
+        <div id="biFormStatus" style="margin-top:10px;font-size:13px;font-weight:700;min-height:16px;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Approval queue -->
+  <div id="approvalSection" style="display:none;">
+    <div class="panel" style="margin-top:16px;">
+      <div class="panel-title" id="approvalQueueTitle">Your Approval Queue — Stage 2: Bottle Inspection</div>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Review and approve or reject the following Bottle Inspection submissions. ALL assigned approvers must approve.</p>
+      <div id="approvalQueue"></div>
+    </div>
+  </div>
+
+  <div id="noQueue" style="display:none;text-align:center;color:var(--muted);padding:40px 0;font-size:14px;">
+    No collections assigned to you at this stage.
+  </div>
+</div>
+
+<script>
+let ME=null, ALL_SECTIONS=[], IS_FILLER=false, IS_APPROVER=false, CURRENT_COLLECTION=null, BI_QUEUE_DATA=[];
+
+// Stage 2 sits straight after Initiate. Approving moves on to Stage 3
+// (Payment 90%); rejecting sends the form back to the Initiator.
+const NEXT_STATUS   = { stage2:'stage3p1_filling' };
+const REJECT_STATUS = { stage2:'rejected_to_stage1' };
+
+// Dropdown values for Material Source — exactly the three from the list.
+const MATERIAL_SOURCES = ["POST CONSUMER MSW","INDUSTRIAL WASTE","LANDFILLS"];
+
+// The Yes/No questions, one entry each. To add or reword a question later,
+// add/edit a line here (and add a matching column in pet_stage2_inspection).
+const QUESTIONS = [
+  { col:"q_colored",  label:"ARE THERE ANY COLORED PET BOTTLES?" },
+  { col:"q_labels",   label:"ARE THERE ANY PET BOTTLES WITH LABELS?" },
+  { col:"q_caps",     label:"ARE THERE ANY PET BOTTLES WITH CAPS?" },
+  { col:"q_non_food", label:"ARE THERE ANY NON-FOOD CONTACT PET PRODUCTS?" },
+  { col:"q_non_pet",  label:"ARE THERE ANY NON-PET PRODUCTS?" }
+];
+
+function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+function buildFormControls(){
+  document.getElementById("biMaterialSource").innerHTML =
+    '<option value="">Select...</option>' + MATERIAL_SOURCES.map(s=>`<option value="${s}">${s}</option>`).join("");
+  document.getElementById("biQuestions").innerHTML = QUESTIONS.map(q=>`
+    <div>
+      <label>${q.label} <span class="req">*</span></label>
+      <select id="bi_${q.col}">
+        <option value="">Select...</option>
+        <option value="YES">YES</option>
+        <option value="NO">NO</option>
+      </select>
+    </div>`).join("");
+}
+
+async function init(){
+  const cs = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    buildFormControls();
+
+    const { data: secData } = await sb.from("app_sections").select("name").order("name");
+    ALL_SECTIONS = (secData||[]).map(s=>s.name);
+
+    const [{ data: fillerRows }, { data: approverRows }] = await Promise.all([
+      sb.from("pet_stage_fillers").select("section").eq("stage","stage2").eq("profile_id",ME.id),
+      sb.from("pet_stage_approvers").select("section").eq("stage","stage2").eq("profile_id",ME.id)
+    ]);
+    IS_FILLER   = (fillerRows&&fillerRows.length>0) || ME.role==="super_admin";
+    IS_APPROVER = (approverRows&&approverRows.length>0) || ME.role==="super_admin";
+
+    const fillerSections   = fillerRows   ? fillerRows.map(r=>r.section)   : [];
+    const approverSections = approverRows ? approverRows.map(r=>r.section) : [];
+
+    await Promise.all([
+      IS_FILLER   ? loadFillQueue(fillerSections)   : null,
+      IS_APPROVER ? loadApprovalQueue(approverSections) : null
+    ]);
+
+    if(!IS_FILLER && !IS_APPROVER){
+      document.getElementById("noQueue").style.display="block";
+    }
+    cs.style.color="var(--ok)"; cs.textContent="Connected.";
+  }catch(e){
+    cs.style.color="var(--bad)"; cs.textContent="Error: "+e.message;
+  }
+}
+
+async function loadFillQueue(sections){
+  const { data } = await sb.from("pet_collections")
+    .select("id,form_number,agent_name,agent_code,section,status,updated_at")
+    .in("status",["submitted","rejected_to_stage2"])
+    .in("section", sections.length ? sections : ALL_SECTIONS)
+    .order("updated_at",{ascending:false});
+
+  const el = document.getElementById("fillSection");
+  const queue = document.getElementById("fillQueue");
+  el.style.display = "block";
+
+  if(!data||!data.length){
+    queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No collections waiting for Bottle Inspection.</p>`;
+    setupCollapsibleQueue("fillQueueTitle", "fillQueue", 0, "Your Fill Queue — Stage 2: Bottle Inspection");
+    return;
+  }
+  queue.innerHTML = data.map(c=>`<div class="queue-row">
+    <div>
+      <b style="font-size:13px;">${esc(c.form_number)}</b>
+      <span class="meta" style="margin-left:8px;">${esc(c.agent_name)} (${esc(c.agent_code)}) — ${esc(c.section)}</span>
+      <span class="badge-status bs-${c.status==='submitted'?'submitted':'rejected'}" style="margin-left:8px;">
+        ${c.status==='submitted'?'New':'Returned for correction'}
+      </span>
+    </div>
+    <button onclick="openBiForm(${c.id})">Fill Bottle Inspection</button>
+  </div>`).join("");
+  setupCollapsibleQueue("fillQueueTitle", "fillQueue", data.length, "Your Fill Queue — Stage 2: Bottle Inspection");
+}
+
+function reviewSections(src){
+  return [
+    { heading: "Raw Material", rows: [
+      ["Raw Material Type", src.raw_material_type],
+      ["Material Source", src.material_source],
+    ]},
+    { heading: "Bottle Inspection", rows: QUESTIONS.map(q=>[q.label, src[q.col]]) }
+  ];
+}
+
+async function loadApprovalQueue(sections){
+  const { data } = await sb.from("pet_collections")
+    .select("id,form_number,agent_name,agent_code,section,status,cycle,updated_at,pet_stage2_inspection(*)")
+    .eq("status","stage2_approval")
+    .in("section", sections.length ? sections : ALL_SECTIONS)
+    .order("updated_at",{ascending:false});
+
+  const el = document.getElementById("approvalSection");
+  el.style.display = "block";
+
+  if(!data||!data.length){
+    document.getElementById("approvalQueue").innerHTML=`<p style="font-size:13px;color:var(--muted);">No submissions awaiting your approval.</p>`;
+    setupCollapsibleQueue("approvalQueueTitle", "approvalQueue", 0, "Your Approval Queue — Stage 2: Bottle Inspection");
+    return;
+  }
+
+  // Scoped to THIS cycle — a decision from before a reject/correct loop
+  // must not hide the buttons once the form is corrected and resubmitted.
+  const { data: myDecisions } = await sb.from("pet_approvals")
+    .select("collection_id,decision,cycle").eq("approver_profile_id",ME.id).eq("stage","stage2");
+  const decided = new Set((myDecisions||[]).map(d=>d.collection_id+":"+d.cycle));
+
+  BI_QUEUE_DATA = data;
+  document.getElementById("approvalQueue").innerHTML = data.map(c=>{
+    const bi = c.pet_stage2_inspection?.[0]||c.pet_stage2_inspection||{};
+    const hasDec = decided.has(c.id+":"+c.cycle);
+    return `<div class="approve-card">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
+        <div>
+          <b>${esc(c.form_number)}</b> — ${esc(c.agent_name)} (${esc(c.section)})
+          <div style="font-size:12px;color:var(--muted);margin-top:4px;">
+            ${esc(bi.raw_material_type||"—")} | ${esc(bi.material_source||"—")}
+          </div>
+        </div>
+        ${hasDec ? `<span class="badge-status bs-approval">Decision submitted — awaiting others</span>` : ""}
+      </div>
+      ${!hasDec ? `<div style="margin-top:10px;"><button onclick="openBiReview(${c.id})">Review to Confirm or Reject</button></div>` : ""}
+    </div>`;
+  }).join("");
+  setupCollapsibleQueue("approvalQueueTitle", "approvalQueue", data.length, "Your Approval Queue — Stage 2: Bottle Inspection");
+}
+
+function openBiReview(collectionId){
+  const c = BI_QUEUE_DATA.find(x=>x.id===collectionId);
+  if(!c) return;
+  const bi = c.pet_stage2_inspection?.[0]||c.pet_stage2_inspection||{};
+  showReviewModal({
+    title: "Bottle Inspection — Review Submission",
+    subtitle: c.form_number + " — " + c.agent_name + " (" + c.agent_code + ") — " + c.section,
+    mode: "decide",
+    sections: reviewSections(bi),
+    onApprove: ()=>decide(collectionId,'stage2','approved',null),
+    onReject: (note)=>decide(collectionId,'stage2','rejected',note)
+  });
+}
+
+async function openBiForm(id){
+  const { data: c } = await sb.from("pet_collections").select("*, pet_stage2_inspection(*)").eq("id",id).single();
+  if(!c) return;
+  CURRENT_COLLECTION = c;
+  const bi = (Array.isArray(c.pet_stage2_inspection) ? c.pet_stage2_inspection[0] : c.pet_stage2_inspection) || {};
+
+  document.getElementById("biFormNum").value   = c.form_number;
+  document.getElementById("biAgent").value     = c.agent_name;
+  document.getElementById("biAgentCode").value = c.agent_code;
+
+  document.getElementById("biMaterialType").value   = bi.raw_material_type || "";
+  document.getElementById("biMaterialSource").value = bi.material_source || "";
+  QUESTIONS.forEach(q=>{ document.getElementById("bi_"+q.col).value = bi[q.col] || ""; });
+
+  if(c.status==="rejected_to_stage2"){
+    const { data: log } = await sb.from("pet_activity_log")
+      .select("note").eq("collection_id",id).eq("action","rejected")
+      .order("created_at",{ascending:false}).limit(1);
+    if(log&&log.length&&log[0].note){
+      const el = document.getElementById("biCorrectionNote");
+      el.style.display="block";
+      el.innerHTML=`<b>Rejection reason:</b> ${esc(log[0].note)}`;
+    }
+  } else {
+    document.getElementById("biCorrectionNote").style.display="none";
+  }
+
+  document.getElementById("biFormTitle").textContent =
+    "Bottle Inspection — " + c.form_number + (c.status==="rejected_to_stage2"?" (CORRECTION)":"");
+  document.getElementById("biFormStatus").textContent = "";
+  document.getElementById("biForm").style.display="block";
+  document.getElementById("biForm").scrollIntoView({behavior:"smooth"});
+}
+
+function collectFormValues(){
+  const v = {
+    raw_material_type: document.getElementById("biMaterialType").value.trim(),
+    material_source:   document.getElementById("biMaterialSource").value
+  };
+  QUESTIONS.forEach(q=>{ v[q.col] = document.getElementById("bi_"+q.col).value; });
+  return v;
+}
+
+async function submitInspection(){
+  const st = document.getElementById("biFormStatus");
+  const v = collectFormValues();
+
+  // Every field on this form is mandatory.
+  if(!v.raw_material_type){ st.style.color="var(--bad)"; st.textContent=`"Raw Material Type" is required.`; return; }
+  if(!v.material_source){ st.style.color="var(--bad)"; st.textContent=`"Material Source" is required.`; return; }
+  for(const q of QUESTIONS){
+    if(!v[q.col]){ st.style.color="var(--bad)"; st.textContent=`Answer: "${q.label}"`; return; }
+  }
+
+  st.textContent = "";
+  showReviewModal({
+    title: "Review Before Submitting",
+    subtitle: (CURRENT_COLLECTION?.form_number||"") + " — check everything below before it goes for approval",
+    mode: "submit",
+    sections: reviewSections(v),
+    onConfirm: proceedWithInspectionSubmit
+  });
+}
+
+async function proceedWithInspectionSubmit(){
+  const st = document.getElementById("biFormStatus");
+  st.style.color="var(--muted)"; st.textContent="Saving...";
+  try{
+    const v = collectFormValues();
+    const payload = Object.assign({
+      collection_id:        CURRENT_COLLECTION.id,
+      filled_by_profile_id: ME.id,
+      filled_at:            new Date().toISOString()
+    }, v);
+
+    const { data: existing } = await sb.from("pet_stage2_inspection").select("id").eq("collection_id",CURRENT_COLLECTION.id).maybeSingle();
+    if(existing){
+      const { error } = await sb.from("pet_stage2_inspection").update(payload).eq("collection_id",CURRENT_COLLECTION.id);
+      if(error) throw new Error("Could not save inspection data: "+error.message);
+    } else {
+      const { error } = await sb.from("pet_stage2_inspection").insert(payload);
+      if(error) throw new Error("Could not save inspection data: "+error.message);
+    }
+
+    const oldStatus = CURRENT_COLLECTION.status;
+    const { error: stErr } = await sb.from("pet_collections").update({ status:"stage2_approval", updated_at:new Date().toISOString() }).eq("id",CURRENT_COLLECTION.id);
+    if(stErr) throw new Error("Inspection data was saved, but could not advance status: "+stErr.message);
+
+    const { error: logErr } = await sb.from("pet_activity_log").insert({
+      collection_id: CURRENT_COLLECTION.id, action:"stage2_filled", stage:"stage2",
+      actor_profile_id: ME.id, actor_username: ME.username,
+      old_status: oldStatus, new_status: "stage2_approval"
+    });
+    if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
+
+    st.style.color="var(--ok)"; st.textContent="Submitted for approval.";
+    setTimeout(()=>{ closeBiForm(); init(); }, 1200);
+  }catch(e){
+    st.style.color="var(--bad)"; st.textContent="Error: "+e.message;
+  }
+}
+
+function closeBiForm(){
+  document.getElementById("biForm").style.display="none";
+  CURRENT_COLLECTION=null;
+}
+
+async function decide(collectionId, stage, decision, note){
+  if(decision==="rejected" && !note){ alert("Rejection reason is required."); return; }
+  try{
+    const { data: c, error: cErr } = await sb.from("pet_collections").select("section,cycle,status").eq("id",collectionId).single();
+    if(cErr) throw new Error("Could not load collection: "+cErr.message);
+
+    const { error: apprErr } = await sb.from("pet_approvals").insert({
+      collection_id: collectionId, stage, cycle: c.cycle,
+      approver_profile_id: ME.id, approver_username: ME.username,
+      decision, correction_note: note||null, decided_at: new Date().toISOString()
+    });
+    if(apprErr) throw new Error("Could not record your decision: "+apprErr.message);
+
+    if(decision==="rejected"){
+      const newStatus = REJECT_STATUS[stage];
+      const newCycle  = (c.cycle||1) + 1;
+      const { error: updErr } = await sb.from("pet_collections").update({ status:newStatus, cycle:newCycle, updated_at:new Date().toISOString() }).eq("id",collectionId);
+      if(updErr) throw new Error("Could not update status: "+updErr.message);
+      const { error: logErr } = await sb.from("pet_activity_log").insert({
+        collection_id: collectionId, action:"rejected", stage,
+        actor_profile_id: ME.id, actor_username: ME.username,
+        old_status: c.status, new_status: newStatus, note
+      });
+      if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
+    } else {
+      // A super_admin's own decision is sufficient on its own, so the whole
+      // pipeline can be tested solo before real approvers are assigned.
+      const allApproved = (ME.role==="super_admin") ? true : await checkAllApproved(collectionId, stage, c.cycle, c.section);
+      if(allApproved){
+        const newStatus = NEXT_STATUS[stage];
+        const { error: updErr } = await sb.from("pet_collections").update({ status:newStatus, updated_at:new Date().toISOString() }).eq("id",collectionId);
+        if(updErr) throw new Error("Could not advance status: "+updErr.message);
+        const { error: logErr } = await sb.from("pet_activity_log").insert({
+          collection_id: collectionId, action:"approved_all", stage,
+          actor_profile_id: ME.id, actor_username: ME.username,
+          old_status: c.status, new_status: newStatus
+        });
+        if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
+      } else {
+        const { error: logErr } = await sb.from("pet_activity_log").insert({
+          collection_id: collectionId, action:"approved_partial", stage,
+          actor_profile_id: ME.id, actor_username: ME.username,
+          old_status: c.status, new_status: c.status, note: "Awaiting remaining approvers"
+        });
+        if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
+      }
+    }
+    await init();
+  }catch(e){ alert("Error: "+e.message); }
+}
+
+async function checkAllApproved(collectionId, stage, cycle, section){
+  const [{ data: approvers }, { data: approvals }] = await Promise.all([
+    sb.from("pet_stage_approvers").select("profile_id").eq("section",section).eq("stage",stage),
+    sb.from("pet_approvals").select("approver_profile_id").eq("collection_id",collectionId).eq("stage",stage).eq("cycle",cycle).eq("decision","approved")
+  ]);
+  if(!approvers||!approvers.length) return true; // no approvers configured = auto-approve
+  const assignedIds = new Set(approvers.map(a=>a.profile_id));
+  const approvedIds = new Set((approvals||[]).map(a=>a.approver_profile_id));
+  return [...assignedIds].every(id=>approvedIds.has(id));
+}
+
+init();
+</script>
+</body>
+</html>

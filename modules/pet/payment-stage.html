@@ -212,7 +212,7 @@ async function loadP1FillQueue(sections){
 
 async function loadP1ApprovalQueue(sections){
   const { data }=await sb.from("pet_collections")
-    .select("id,form_number,agent_name,agent_code,section,status,cycle,agent_waybill_weight,rumbu_weighbridge_weight,pet_stage3_payment(*),pet_stage2_qc(offload_location)")
+    .select("id,form_number,agent_name,agent_code,section,status,cycle,agent_waybill_weight,pet_stage3_payment(*)")
     .eq("status","stage3p1_approval")
     .in("section",sections.length?sections:ALL_SECTIONS)
     .order("updated_at",{ascending:false});
@@ -251,16 +251,13 @@ function openP1Review(collectionId){
   const c = P1_QUEUE_DATA.find(x=>x.id===collectionId);
   if(!c) return;
   const pay = (Array.isArray(c.pet_stage3_payment)?c.pet_stage3_payment[0]:c.pet_stage3_payment)||{};
-  const qc  = (Array.isArray(c.pet_stage2_qc)?c.pet_stage2_qc[0]:c.pet_stage2_qc)||{};
   showReviewModal({
     title: "Phase 1 (90%) Payment — Review Submission",
     subtitle: c.form_number + " — " + c.agent_name + " (" + c.agent_code + ") — " + c.section,
     mode: "decide",
     sections: [
-      { heading: "Quality Control Context", rows: [
-        ["LOT Assigned", qc.offload_location],
+      { heading: "Collection Context", rows: [
         ["Agent Waybill Weight", (c.agent_waybill_weight||0) + " kg"],
-        ["Rumbu Weighbridge Weight", (c.rumbu_weighbridge_weight||0) + " kg"],
       ]},
       { heading: "Payment Details", rows: [
         ["Odoo PO Number", pay.odoo_po_number],
@@ -295,7 +292,7 @@ async function loadP2FillQueue(sections){
 
 async function loadP2ApprovalQueue(sections){
   const { data }=await sb.from("pet_collections")
-    .select("id,form_number,agent_name,agent_code,section,status,cycle,pet_stage3_payment(*),pet_stage4_production(*),pet_stage2_qc(offload_location)")
+    .select("id,form_number,agent_name,agent_code,section,status,cycle,pet_stage3_payment(*),pet_stage4_production(*),pet_stage4a_offloading(offload_location)")
     .eq("status","stage3p2_approval")
     .in("section",sections.length?sections:ALL_SECTIONS)
     .order("updated_at",{ascending:false});
@@ -335,14 +332,14 @@ function openP2Review(collectionId){
   if(!c) return;
   const pay  = (Array.isArray(c.pet_stage3_payment)?c.pet_stage3_payment[0]:c.pet_stage3_payment)||{};
   const prod = (Array.isArray(c.pet_stage4_production)?c.pet_stage4_production[0]:c.pet_stage4_production)||{};
-  const qc   = (Array.isArray(c.pet_stage2_qc)?c.pet_stage2_qc[0]:c.pet_stage2_qc)||{};
+  const off  = (Array.isArray(c.pet_stage4a_offloading)?c.pet_stage4a_offloading[0]:c.pet_stage4a_offloading)||{};
   showReviewModal({
     title: "Phase 2 (10% Balance) Payment — Review Submission",
     subtitle: c.form_number + " — " + c.agent_name + " (" + c.agent_code + ") — " + c.section,
     mode: "decide",
     sections: [
       { heading: "Production Context", rows: [
-        ["LOT", qc.offload_location],
+        ["LOT", off.offload_location],
         ["Production Start", prod.production_start ? new Date(prod.production_start).toLocaleString("en-GB") : null],
         ["Production End", prod.production_end ? new Date(prod.production_end).toLocaleString("en-GB") : null],
         ["Total Colored Flex (kg)", prod.colored_flex_kg],
@@ -363,7 +360,7 @@ function openP2Review(collectionId){
 }
 
 async function openP1Form(id){
-  const { data:c }=await sb.from("pet_collections").select("*,pet_stage3_payment(*),pet_stage2_qc(*)").eq("id",id).single();
+  const { data:c }=await sb.from("pet_collections").select("*,pet_stage3_payment(*)").eq("id",id).single();
   if(!c) return;
   CURRENT_P1=c;
   const pay=(Array.isArray(c.pet_stage3_payment)?c.pet_stage3_payment[0]:c.pet_stage3_payment)||{};
@@ -374,11 +371,8 @@ async function openP1Form(id){
   document.getElementById("p1PO").value=pay.odoo_po_number||"";
   document.getElementById("p1ReceiptUrl").textContent=pay.payment_90pct_attachment||"";
 
-  const qc=(Array.isArray(c.pet_stage2_qc)?c.pet_stage2_qc[0]:c.pet_stage2_qc)||{};
   document.getElementById("p1Summary").innerHTML=`
-    <div class="info-row"><b>Waybill Weight:</b> ${c.agent_waybill_weight||0} kg</div>
-    <div class="info-row"><b>Rumbu Weight:</b> ${c.rumbu_weighbridge_weight||0} kg</div>
-    <div class="info-row"><b>LOT Assigned:</b> ${qc.offload_location||"—"}</div>`;
+    <div class="info-row"><b>Waybill Weight:</b> ${c.agent_waybill_weight||0} kg</div>`;
 
   if(c.status==="rejected_to_stage3p1"){
     const { data:log }=await sb.from("pet_activity_log").select("note").eq("collection_id",id).eq("action","rejected").order("created_at",{ascending:false}).limit(1);
@@ -450,11 +444,10 @@ async function proceedWithP1Submit(){
 function closeP1Form(){ document.getElementById("p1Form").style.display="none"; CURRENT_P1=null; }
 
 async function openP2Form(id){
-  const { data:c }=await sb.from("pet_collections").select("*,pet_stage3_payment(*),pet_stage2_qc(*),pet_stage4_production(*)").eq("id",id).single();
+  const { data:c }=await sb.from("pet_collections").select("*,pet_stage3_payment(*),pet_stage4_production(*)").eq("id",id).single();
   if(!c) return;
   CURRENT_P2=c;
   const pay=(Array.isArray(c.pet_stage3_payment)?c.pet_stage3_payment[0]:c.pet_stage3_payment)||{};
-  const qc=(Array.isArray(c.pet_stage2_qc)?c.pet_stage2_qc[0]:c.pet_stage2_qc)||{};
   const prod=(Array.isArray(c.pet_stage4_production)?c.pet_stage4_production[0]:c.pet_stage4_production)||{};
 
   document.getElementById("p2FormNum").value=c.form_number;
@@ -471,7 +464,7 @@ async function openP2Form(id){
   document.getElementById("p2DeductAmt").value=pay.deduction_amount||"";
 
   document.getElementById("p2Summary").innerHTML=`
-    <div class="info-row"><b>Total Waste (Stage 4):</b> ${prod.total_waste_kg||0} kg</div>
+    <div class="info-row"><b>Total Waste:</b> ${prod.total_waste_kg||0} kg</div>
     <div class="info-row"><b>Total Colored Flex:</b> ${prod.colored_flex_kg||0} kg</div>
     <div class="info-row"><b>Total Non-Colored Flex:</b> ${prod.non_colored_flex_kg||0} kg</div>
     <div class="info-row"><b>Total Production:</b> ${prod.total_production_kg||0} kg</div>
