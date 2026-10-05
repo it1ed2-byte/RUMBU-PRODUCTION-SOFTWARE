@@ -53,7 +53,7 @@
 <div id="reportArea"></div>
 
 <script>
-const SUPABASE_URL     = "https://betfhunzmhtdzgvufmfk.supabase.co";
+const SUPABASE_URL      = "https://betfhunzmhtdzgvufmfk.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp";
 
 function authHeaders(){
@@ -74,13 +74,11 @@ function minutesBetween(a, b){
 }
 
 function parseNum(v){
-  // FIX: use parseFloat (matches SAFE_CAST in BigQuery)
   if(v == null) return 0;
   const n = parseFloat(String(v));
   return isNaN(n) ? 0 : n;
 }
 
-// FIX: safe field reader — treats null and undefined identically
 function field(r, ...keys){
   for(const k of keys){
     const v = r[k];
@@ -89,12 +87,8 @@ function field(r, ...keys){
   return null;
 }
 
-// FIX: paginate with server-side date filter so we never
-// load the full table — only the rows in the requested range.
 async function fetchFiltered(startDate, endDate){
   let all = [], offset = 0; const pageSize = 1000;
-
-  // Use `date` column for server-side filter — confirmed working in control table
   const dateFilter =
     "&date=gte." + startDate +
     "&date=lte." + endDate;
@@ -118,30 +112,53 @@ async function fetchFiltered(startDate, endDate){
   return all;
 }
 
-// ── Init: just set default dates — do NOT load data yet ──
-function init(){
+async function init(){
   const today = new Date();
   const iso   = today.toISOString().slice(0, 10);
   const past  = new Date(today);
   past.setDate(today.getDate() - 7);
   document.getElementById("endDate").value   = iso;
   document.getElementById("startDate").value = past.toISOString().slice(0, 10);
+
+  // Populate Department and Assets dropdowns on page load
+  // so users see options before clicking Generate
+  try{
+    const [deptRes, assetRes] = await Promise.all([
+      fetch(SUPABASE_URL + "/rest/v1/control?select=department&department=not.is.null&order=department.asc&limit=5000", { headers: authHeaders() }),
+      fetch(SUPABASE_URL + "/rest/v1/control?select=assets&assets=not.is.null&order=assets.asc&limit=5000",             { headers: authHeaders() })
+    ]);
+    if(deptRes.ok){
+      const deptRows = await deptRes.json();
+      const depts = [...new Set(deptRows.map(r => r.department).filter(Boolean))].sort();
+      const deptSel = document.getElementById("department");
+      deptSel.innerHTML = `<option value="All">All</option>` +
+        depts.map(v => `<option value="${v}">${v}</option>`).join("");
+    }
+    if(assetRes.ok){
+      const assetRows = await assetRes.json();
+      const assets = [...new Set(assetRows.map(r => r.assets).filter(Boolean))].sort();
+      const assetSel = document.getElementById("assets");
+      assetSel.innerHTML = `<option value="All">All</option>` +
+        assets.map(v => `<option value="${v}">${v}</option>`).join("");
+    }
+  }catch(e){
+    console.warn("Could not pre-load dropdown values:", e.message);
+  }
+
+  // Section is always these fixed values
+  fixSectionDropdown();
 }
 
-// ── Generate: fetch only the needed date range ────────────
 async function generate(){
-  const status    = document.getElementById("status");
-  const startDate = document.getElementById("startDate").value;
-  const endDate   = document.getElementById("endDate").value;
+  const status     = document.getElementById("status");
+  const startDate  = document.getElementById("startDate").value;
+  const endDate    = document.getElementById("endDate").value;
   const department = document.getElementById("department").value;
   const assetFilt  = document.getElementById("assets").value;
   const shift      = document.getElementById("shift").value;
   const section    = document.getElementById("section").value;
 
-  if(!startDate || !endDate){
-    alert("Please select both dates.");
-    return;
-  }
+  if(!startDate || !endDate){ alert("Please select both dates."); return; }
 
   status.style.color = "#1565C0";
   status.textContent = "Loading…";
@@ -163,13 +180,10 @@ async function generate(){
     return;
   }
 
-  // Populate dropdowns from loaded data
   repopulateDropdown("department", rows, r => field(r,"department"));
   repopulateDropdown("assets",     rows, r => field(r,"assets"));
-  // Section is fixed — only these two values are valid
   fixSectionDropdown();
 
-  // ── Client-side filters ────────────────────────────────
   const filtered = rows.filter(r => {
     if(department !== "All"){
       const d = (field(r,"department")||"").trim();
@@ -182,14 +196,11 @@ async function generate(){
     if(shift !== "All" && r.shift !== shift) return false;
     if(section !== "All"){
       const rawSec = (field(r,"section")||"").toUpperCase().trim();
-      // Map raw section values to the two canonical names
       const isMama  = rawSec.includes("MAMA") || rawSec.includes("MAMASANNU");
       const isRumbu = !isMama;
-      if(section === "MamaSannu"    && !isMama)  return false;
+      if(section === "MamaSannu"     && !isMama)  return false;
       if(section === "Rumbu Mainmat" && !isRumbu) return false;
     }
-
-    // require finish_time at minimum
     const finish = parseDT(field(r,"finish_time"));
     return !!finish;
   });
@@ -204,7 +215,6 @@ async function generate(){
   status.style.color = "#1d8a4e";
   status.textContent  = filtered.length + " record(s) found.";
 
-  // ── Build report table ─────────────────────────────────
   let html = `<div class="wide">
     <h2 style="text-align:center;color:#1565C0;">🛠️ Repair by Assets Report</h2>
     <p style="text-align:center;">
@@ -218,20 +228,15 @@ async function generate(){
     </tr></thead><tbody>`;
 
   filtered.forEach((r, i) => {
-    // FIX: use field() to safely read with column name fallbacks
     const stop   = parseDT(field(r, "mc_stoppage_time", "stop_time"));
     const start  = parseDT(field(r, "starting_time"));
     const finish = parseDT(field(r, "finish_time"));
-
-    // FIX: downtime = finish - mc_stoppage_time
     const downtime = minutesBetween(stop, finish);
     const repair   = minutesBetween(start, finish);
     const waiting  = start ? (downtime - repair) : 0;
     const est      = Math.round(parseNum(field(r, "estimated_duration", "extimated_time")));
     const diff     = est - repair;
-
-    // date from the confirmed `date` column
-    const recDate = field(r, "date_col", "date") || "";
+    const recDate  = field(r, "date_col", "date") || "";
 
     html += `<tr>
       <td>${i + 1}</td>
@@ -251,7 +256,6 @@ async function generate(){
   document.getElementById("reportArea").innerHTML = html;
 }
 
-// Section only ever shows these two values — never derived from raw data
 function fixSectionDropdown(){
   const sel  = document.getElementById("section");
   const curr = sel.value;
@@ -268,7 +272,6 @@ function repopulateDropdown(id, rows, getter){
   const vals = [...new Set(rows.map(getter).filter(Boolean))].sort();
   sel.innerHTML = `<option value="All">All</option>` +
     vals.map(v => `<option value="${v}">${v}</option>`).join("");
-  // restore previous selection if still valid
   if(vals.includes(curr)) sel.value = curr;
 }
 
