@@ -330,10 +330,39 @@ function findEmployee(idVal, pool){
 async function resolveEmployee(idVal){
   const local = findEmployee(idVal);
   if(local.emp || local.reason) return local;
-  const rows = await fetchEmployeeById(idVal);
-  if(!rows.length) return { emp:null, reason:"" };
-  rows.forEach(r => { if(!EMPLOYEES.some(e => String(e.id) === String(r.id))) EMPLOYEES.push(r); });
-  return findEmployee(idVal, rows);
+
+  // 1) Ask the database function (works for every account, whatever rows it can read).
+  const typed = String(idVal||"").trim();
+  const { data, error } = await sb.rpc("overtime_lookup_employee", {
+    p_id: typed,
+    p_branch: CURRENT_ENTRY ? CURRENT_ENTRY.section : "",
+    p_department: CURRENT_ENTRY ? CURRENT_ENTRY.department : ""
+  });
+  if(!error){
+    const rows = data || [];
+    if(!rows.length) return { emp:null, reason:"" };
+    const inScope = rows.filter(r => r.in_scope);
+    let pick = null;
+    if(inScope.length === 1) pick = inScope[0];
+    else if(inScope.length > 1){
+      const exact = inScope.filter(r => String(r.employee_id||"").trim().toLowerCase() === typed.toLowerCase());
+      if(exact.length === 1) pick = exact[0]; else return { emp:null, reason:"ambiguous" };
+    }
+    if(pick){
+      const emp = { id:pick.id, employee_id:pick.employee_id, full_name:pick.full_name, branch:pick.branch, department:pick.department, unit:pick.unit };
+      return { emp:emp, reason:"" };
+    }
+    return { emp:null, reason:"outofscope", cand:{ full_name:"", branch:rows[0].branch, department:rows[0].department } };
+  }
+  console.warn("Overtime: overtime_lookup_employee failed:", error.message);
+
+  // 2) Fallback if the function has not been created yet: query the table directly.
+  const rows2 = await fetchEmployeeById(idVal);
+  if(rows2.length){
+    rows2.forEach(r => { if(!EMPLOYEES.some(e => String(e.id) === String(r.id))) EMPLOYEES.push(r); });
+    return findEmployee(idVal, rows2);
+  }
+  return { emp:null, reason:"error", msg:error.message };
 }
 
 // True only when an employee belongs to the current entry's Branch and
@@ -534,6 +563,11 @@ async function lookupEmployee(){
       "This request is for Branch: \"" + (CURRENT_ENTRY ? CURRENT_ENTRY.section : "") + "\", Department: \"" + (CURRENT_ENTRY ? CURRENT_ENTRY.department : "") + "\".";
   }
   else if(r.reason === "ambiguous"){ nameField.value = "More than one staff share this ID"; nameField.className = "not-found"; }
+  else if(r.reason === "error"){
+    nameField.value = "Lookup failed - tell IT"; nameField.className = "not-found";
+    const st = document.getElementById("addStatus"); st.className = "status err";
+    st.textContent = "The staff search could not run: " + r.msg + " (has overtime_employee_lookup.sql been run in Supabase?)";
+  }
   else { nameField.value = "No staff found"; nameField.className = "not-found"; }
 }
 
