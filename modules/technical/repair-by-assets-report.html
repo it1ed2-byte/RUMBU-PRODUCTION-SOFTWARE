@@ -56,23 +56,10 @@
 const SUPABASE_URL      = "https://betfhunzmhtdzgvufmfk.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp";
 
-// FIX: read the logged-in user's session token from localStorage
-// so RLS policies see the real authenticated user, not anon.
-function getSessionToken(){
-  try{
-    const raw = localStorage.getItem("sb-betfhunzmhtdzgvufmfk-auth-token");
-    if(raw){
-      const parsed = JSON.parse(raw);
-      if(parsed && parsed.access_token) return parsed.access_token;
-    }
-  }catch(e){}
-  return SUPABASE_ANON_KEY; // fallback
-}
-
 function authHeaders(){
   return {
     "apikey":        SUPABASE_ANON_KEY,
-    "Authorization": "Bearer " + getSessionToken()
+    "Authorization": "Bearer " + SUPABASE_ANON_KEY
   };
 }
 
@@ -125,13 +112,41 @@ async function fetchFiltered(startDate, endDate){
   return all;
 }
 
-function init(){
+async function init(){
   const today = new Date();
   const iso   = today.toISOString().slice(0, 10);
   const past  = new Date(today);
   past.setDate(today.getDate() - 7);
   document.getElementById("endDate").value   = iso;
   document.getElementById("startDate").value = past.toISOString().slice(0, 10);
+
+  // Populate Department and Assets dropdowns on page load
+  // so users see options before clicking Generate
+  try{
+    const [deptRes, assetRes] = await Promise.all([
+      fetch(SUPABASE_URL + "/rest/v1/control?select=department&department=not.is.null&order=department.asc&limit=5000", { headers: authHeaders() }),
+      fetch(SUPABASE_URL + "/rest/v1/control?select=assets&assets=not.is.null&order=assets.asc&limit=5000",             { headers: authHeaders() })
+    ]);
+    if(deptRes.ok){
+      const deptRows = await deptRes.json();
+      const depts = [...new Set(deptRows.map(r => r.department).filter(Boolean))].sort();
+      const deptSel = document.getElementById("department");
+      deptSel.innerHTML = `<option value="All">All</option>` +
+        depts.map(v => `<option value="${v}">${v}</option>`).join("");
+    }
+    if(assetRes.ok){
+      const assetRows = await assetRes.json();
+      const assets = [...new Set(assetRows.map(r => r.assets).filter(Boolean))].sort();
+      const assetSel = document.getElementById("assets");
+      assetSel.innerHTML = `<option value="All">All</option>` +
+        assets.map(v => `<option value="${v}">${v}</option>`).join("");
+    }
+  }catch(e){
+    console.warn("Could not pre-load dropdown values:", e.message);
+  }
+
+  // Section is always these fixed values
+  fixSectionDropdown();
 }
 
 async function generate(){
