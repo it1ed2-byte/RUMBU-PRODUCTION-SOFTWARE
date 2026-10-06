@@ -14,7 +14,6 @@
 </script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="../../auth.js"></script>
-<script src="overtime-attachments-view.js"></script>
 <style>
   :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;--amber:#d97706;}
   *{box-sizing:border-box;}
@@ -108,8 +107,6 @@
       <div id="entryInfo"></div>
       <h4>Employees — confirm the Hours Worked</h4>
       <div id="employeesListWrap"></div>
-      <h4>Overtime List (photo / PDF)</h4>
-      <div id="attachWrap"></div>
       <div id="responseNoteWrap" style="display:none;margin-top:10px;">
         <label>Response to Rejection <span style="color:var(--red);">*</span></label>
         <textarea id="responseNoteInput" placeholder="Explain what was corrected before resubmitting"></textarea>
@@ -158,6 +155,7 @@ let CURRENT_ENTRY = null;
 let CURRENT_ROWS = [];      // employees with computed (hidden) pay
 let CURRENT_PROPOSE = 11;
 let QUEUE_ROWS = [];
+let OWN_DEPTS = [];     // departments on ALL of my own forms (any status), so the dropdown always has choices
 let HISTORY_ROWS = [];
 const COMPANY = "Rumbu Industries Limited";
 const PROPOSE_HOURS_DEFAULT = 11;
@@ -211,6 +209,9 @@ async function init(){
   }
 }
 
+// Department names are compared case-insensitively, so "Production" and "PRODUCTION" are one department.
+function normDept(d){ return String(d == null ? "" : d).trim().toUpperCase(); }
+
 // ===== QUEUE: my entries awaiting review =====
 async function loadQueue(){
   showView("queueView");
@@ -225,8 +226,17 @@ async function loadQueue(){
     if(error) throw error;
     QUEUE_ROWS = data || [];
 
+    // Departments from every form I have initiated (any status). Non-fatal if this lookup fails.
+    OWN_DEPTS = [];
+    try{
+      const own = await sb.from("overtime_department_entries")
+        .select("department, overtime_initiations!inner(initiator_profile_id)")
+        .eq("overtime_initiations.initiator_profile_id", ME.id);
+      if(!own.error) OWN_DEPTS = (own.data || []).map(r => r.department);
+    }catch(e){ console.warn("Could not load own departments (non-fatal):", e); }
+
     const deptSel = document.getElementById("deptFilter");
-    const depts = [...new Set(QUEUE_ROWS.map(r=>r.department))].sort();
+    const depts = [...new Set(QUEUE_ROWS.map(r=>r.department).concat(OWN_DEPTS).map(normDept).filter(Boolean))].sort();
     const current = deptSel.value;
     deptSel.innerHTML = '<option value="all">All</option>' + depts.map(d=>`<option value="${esc(d)}">${esc(d)}</option>`).join("");
     if(depts.indexOf(current) !== -1) deptSel.value = current;
@@ -240,8 +250,13 @@ async function loadQueue(){
 function renderQueue(){
   const wrap = document.getElementById("queueWrap");
   const deptFilter = document.getElementById("deptFilter").value;
-  const rows = (deptFilter === "all") ? QUEUE_ROWS : QUEUE_ROWS.filter(r=>r.department===deptFilter);
-  if(!rows.length){ wrap.innerHTML = "<p class='empty'>Nothing is waiting for your review right now.</p>"; return; }
+  const rows = (deptFilter === "all") ? QUEUE_ROWS : QUEUE_ROWS.filter(r=>normDept(r.department)===deptFilter);
+  if(!rows.length){
+    wrap.innerHTML = "<p class='empty'>" + (deptFilter === "all"
+      ? "Nothing is waiting for your review right now."
+      : "Nothing is waiting for your review in " + esc(deptFilter) + " right now.") + "</p>";
+    return;
+  }
 
   let html = "<table><thead><tr><th>Form No.</th><th>Department</th><th>Units</th><th>Overtime Date</th><th>Propose Hours</th><th>Status</th><th></th></tr></thead><tbody>";
   rows.forEach(r=>{
@@ -314,7 +329,6 @@ async function openEntry(entryId){
   });
 
   renderEmployeeRows();
-  renderOvertimeAttachments("attachWrap", [{ id: entryId, department: entry.department }]);
 }
 
 function backToQueue(){
@@ -490,9 +504,7 @@ async function openHistoryDetail(entryId){
     list.forEach(x=>{ html += "<tr><td>" + esc(x.employee_code) + "</td><td>" + esc(x.employee_name) + "</td><td>" + esc(x.reason_for_overtime) + "</td><td>" + esc(x.hours_worked ?? "") + "</td></tr>"; });
     html += "</tbody></table>";
   }
-  html += "<h4>Overtime List (photo / PDF)</h4><div id=\"histAttachWrap\"></div>";
   body.innerHTML = html;
-  renderOvertimeAttachments("histAttachWrap", [{ id: entryId, department: r.department }]);
 }
 
 init();
