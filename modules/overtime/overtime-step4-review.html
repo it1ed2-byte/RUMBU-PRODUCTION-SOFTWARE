@@ -156,6 +156,7 @@ let ME = null;
 let CURRENT_ENTRY = null;
 let CURRENT_ROWS = [];      // employees with computed (hidden) pay
 let CURRENT_PROPOSE = 11;
+let SALARY_MISSING = [];    // employees on the open form with no usable salary; saving is blocked while this is not empty
 let QUEUE_ROWS = [];
 let SCOPE_DEPTS = [];   // registered departments of the branches I review, so the dropdown always has choices
 let MY_SECTIONS = [];   // branches where I am assigned as the Step 4 (HR Review) reviewer
@@ -349,20 +350,35 @@ async function openEntry(entryId){
   const empIds = (emps||[]).map(e=>e.employee_id).filter(Boolean);
   let salaryMap = {};
   if(empIds.length){
-    const { data: sals } = await sb.from("employee_salaries").select("*").in("employee_id", empIds);
-    (sals||[]).forEach(s=>{ salaryMap[s.employee_id] = Number(s.salary) || 0; });
+    // employee_salaries is readable only by HR console and super admin accounts (row-level security),
+    // so a direct query returns nothing for a Step 4 reviewer. Read through the secured function instead
+    // (create it once with overtime_step4_salary_fix.sql).
+    const { data: sals, error: salErr } = await sb.rpc("overtime_step4_salaries", { p_employee_ids: empIds.map(String) });
+    if(salErr){
+      alert("Could not read salaries (" + salErr.message + "). The form was not opened, so nothing was saved with a zero amount.");
+      backToQueue();
+      return;
+    }
+    (sals||[]).forEach(s=>{ salaryMap[String(s.employee_id)] = Number(s.salary) || 0; });
   }
 
   // Compute pay in the background: Daily Rate = Monthly × 7.6923% (≈ /13),
   // Actual Amount = (Daily Rate / Propose Hours) × Hours Worked. These are
   // saved to the database but never displayed on this page.
   CURRENT_ROWS = (emps||[]).map(e=>{
-    const monthlySalary = salaryMap[e.employee_id] || 0;
+    const monthlySalary = salaryMap[String(e.employee_id)] || 0;
     const dailyRate = Math.round(monthlySalary * 0.076923 * 100) / 100;
     const hoursWorked = clampHours(e.hours_worked != null ? e.hours_worked : CURRENT_PROPOSE);
     const actualAmount = Math.round((dailyRate / CURRENT_PROPOSE) * hoursWorked * 100) / 100;
     return { ...e, monthly_salary: monthlySalary, daily_rate: dailyRate, hours_worked: hoursWorked, actual_amount: actualAmount };
   });
+
+  // Never save a zero amount silently: list anyone with no usable salary and block Save / Submit until fixed.
+  SALARY_MISSING = CURRENT_ROWS.filter(r => !(r.monthly_salary > 0)).map(r => (r.employee_code || "") + " " + (r.employee_name || ""));
+  if(SALARY_MISSING.length){
+    rejBanner.innerHTML += "<div class=\"rejbox\"><b>⚠ No salary found for:</b> " + SALARY_MISSING.map(esc).join(", ") +
+      ". Saving and submitting are blocked until a salary is added for each person (HR console).</div>";
+  }
 
   renderEmployeeRows();
 }
@@ -408,6 +424,9 @@ function onHoursChanged(rowId, newHours, inputEl){
 
 // Writes each employee's Hours Worked + computed Daily Rate + Actual Amount.
 async function persistRows(){
+  if(SALARY_MISSING.length){
+    throw new Error("No salary found for: " + SALARY_MISSING.join(", ") + ". Nothing was saved.");
+  }
   for(const row of CURRENT_ROWS){
     // Final safety net: never save more than MAX_HOURS, and keep the amount in step with it
     row.hours_worked = clampHours(row.hours_worked);
