@@ -38,10 +38,10 @@
 
   <!-- Phase 1 -->
   <div id="p1FillSection" style="display:none;">
-    <div class="phase-header">Stage 3 — Phase 1: 90% Payment (Fill Queue)</div>
+    <div class="phase-header">Stage 3 — 90% Payment</div>
     <div class="phase-body">
       <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Collections approved by Quality Control awaiting first payment entry.</p>
-      <div class="panel-title" id="p1FillQueueTitle" style="font-size:13px;margin-bottom:8px;">Pending Entries</div>
+      <div class="panel-title" id="p1FillQueueTitle" style="font-size:13px;margin-bottom:8px;">Your Queue</div>
       <div id="p1FillQueue"></div>
 
       <!-- Phase 1 Form -->
@@ -69,7 +69,7 @@
           </div>
         </div>
         <div style="margin-top:16px;display:flex;gap:10px;">
-          <button onclick="submitP1()">Submit for Approval</button>
+          <button onclick="submitP1()">Submit</button>
           <button class="btn-ghost" onclick="closeP1Form()">Cancel</button>
         </div>
         <div id="p1FormStatus" style="margin-top:10px;font-size:13px;font-weight:700;min-height:16px;"></div>
@@ -77,21 +77,12 @@
     </div>
   </div>
 
-  <div id="p1ApprovalSection" style="display:none;">
-    <div class="phase-header" style="background:var(--accent);">Stage 3 — Phase 1: 90% Payment (Approval Queue)</div>
-    <div class="phase-body">
-      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Approve or reject Phase 1 payment submissions.</p>
-      <div class="panel-title" id="p1ApprovalQueueTitle" style="font-size:13px;margin-bottom:8px;">Pending Approvals</div>
-      <div id="p1ApprovalQueue"></div>
-    </div>
-  </div>
-
   <!-- Phase 2 -->
   <div id="p2FillSection" style="display:none;margin-top:16px;">
-    <div class="phase-header">Stage 3 — Phase 2: 10% Balance Payment (Fill Queue)</div>
+    <div class="phase-header">Payment 10% Balance (after Production)</div>
     <div class="phase-body">
       <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Production complete. Enter deduction and balance payment receipt.</p>
-      <div class="panel-title" id="p2FillQueueTitle" style="font-size:13px;margin-bottom:8px;">Pending Entries</div>
+      <div class="panel-title" id="p2FillQueueTitle" style="font-size:13px;margin-bottom:8px;">Your Queue</div>
       <div id="p2FillQueue"></div>
 
       <!-- Phase 2 Form -->
@@ -127,19 +118,11 @@
           </div>
         </div>
         <div style="margin-top:16px;display:flex;gap:10px;">
-          <button onclick="submitP2()">Submit for Approval</button>
+          <button onclick="submitP2()">Submit</button>
           <button class="btn-ghost" onclick="closeP2Form()">Cancel</button>
         </div>
         <div id="p2FormStatus" style="margin-top:10px;font-size:13px;font-weight:700;min-height:16px;"></div>
       </div>
-    </div>
-  </div>
-
-  <div id="p2ApprovalSection" style="display:none;margin-top:16px;">
-    <div class="phase-header" style="background:var(--accent);">Stage 3 — Phase 2: 10% Balance Payment (Approval Queue)</div>
-    <div class="phase-body">
-      <div class="panel-title" id="p2ApprovalQueueTitle" style="font-size:13px;margin-bottom:8px;">Pending Approvals</div>
-      <div id="p2ApprovalQueue"></div>
     </div>
   </div>
 
@@ -178,15 +161,34 @@ async function init(){
     const p1FillerSecs=(f1||[]).map(r=>r.section), p1ApprSecs=(a1||[]).map(r=>r.section);
     const p2FillerSecs=(f2||[]).map(r=>r.section), p2ApprSecs=(a2||[]).map(r=>r.section);
 
-    let anyQueue=false;
-    if(isP1Filler){   await loadP1FillQueue(p1FillerSecs);   document.getElementById("p1FillSection").style.display="block"; anyQueue=true; }
-    if(isP1Approver){ await loadP1ApprovalQueue(p1ApprSecs); document.getElementById("p1ApprovalSection").style.display="block"; anyQueue=true; }
-    if(isP2Filler){   await loadP2FillQueue(p2FillerSecs);   document.getElementById("p2FillSection").style.display="block"; anyQueue=true; }
-    if(isP2Approver){ await loadP2ApprovalQueue(p2ApprSecs); document.getElementById("p2ApprovalSection").style.display="block"; anyQueue=true; }
-    if(!anyQueue) document.getElementById("noQueue").style.display="block";
+    const [p1f,p1a,p2f,p2a] = await Promise.all([
+      isP1Filler   ? loadP1FillQueue(p1FillerSecs)     : [],
+      isP1Approver ? loadP1ApprovalQueue(p1ApprSecs)   : [],
+      isP2Filler   ? loadP2FillQueue(p2FillerSecs)     : [],
+      isP2Approver ? loadP2ApprovalQueue(p2ApprSecs)   : []
+    ]);
+    if(isP1Filler||isP1Approver) renderQueue("p1", (p1f||[]).concat(p1a||[]));
+    if(isP2Filler||isP2Approver) renderQueue("p2", (p2f||[]).concat(p2a||[]));
+    if(!(isP1Filler||isP1Approver||isP2Filler||isP2Approver)) document.getElementById("noQueue").style.display="block";
 
     cs.style.color="var(--ok)"; cs.textContent="Connected.";
   }catch(e){ cs.style.color="var(--bad)"; cs.textContent="Error: "+e.message; }
+}
+
+// One single list per phase: items to fill AND items to review/approve.
+function renderQueue(p, rows){
+  document.getElementById(p+"FillSection").style.display = "block";
+  document.getElementById(p+"FillQueue").innerHTML = rows.length
+    ? rows.join("")
+    : `<p style="font-size:13px;color:var(--muted);">Nothing is waiting for you here.</p>`;
+  setupCollapsibleQueue(p+"FillQueueTitle", p+"FillQueue", rows.length, "Your Queue");
+}
+
+// True when at least one approver is assigned to this stage for this branch.
+// If nobody is, there is no approval step and submitting moves straight on.
+async function stageHasApprovers(stage, section){
+  const { data } = await sb.from("pet_stage_approvers").select("profile_id").eq("section",section).eq("stage",stage);
+  return !!(data && data.length);
 }
 
 async function loadP1FillQueue(sections){
@@ -195,19 +197,12 @@ async function loadP1FillQueue(sections){
     .in("status",["stage3p1_filling","rejected_to_stage3p1"])
     .in("section",sections.length?sections:ALL_SECTIONS)
     .order("updated_at",{ascending:false});
-  const queue=document.getElementById("p1FillQueue");
-  if(!data||!data.length){
-    queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No collections waiting for Phase 1 payment entry.</p>`;
-    setupCollapsibleQueue("p1FillQueueTitle","p1FillQueue",0,"Pending Entries");
-    return;
-  }
-  queue.innerHTML=data.map(c=>`<div class="queue-row">
+  return (data||[]).map(c=>`<div class="queue-row">
     <div><b>${c.form_number}</b> <span style="font-size:12px;color:var(--muted);margin-left:8px;">${c.agent_name} — ${c.section}</span>
     ${c.status==="rejected_to_stage3p1"?`<span style="font-size:11px;color:var(--bad);margin-left:8px;">(Returned for correction)</span>`:""}
     </div>
     <button onclick="openP1Form(${c.id})">Enter Payment</button>
-  </div>`).join("");
-  setupCollapsibleQueue("p1FillQueueTitle","p1FillQueue",data.length,"Pending Entries");
+  </div>`);
 }
 
 async function loadP1ApprovalQueue(sections){
@@ -216,12 +211,7 @@ async function loadP1ApprovalQueue(sections){
     .eq("status","stage3p1_approval")
     .in("section",sections.length?sections:ALL_SECTIONS)
     .order("updated_at",{ascending:false});
-  const queue=document.getElementById("p1ApprovalQueue");
-  if(!data||!data.length){
-    queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No Phase 1 submissions awaiting approval.</p>`;
-    setupCollapsibleQueue("p1ApprovalQueueTitle","p1ApprovalQueue",0,"Pending Approvals");
-    return;
-  }
+  if(!data||!data.length) return [];
 
   // Scoped to THIS cycle — a decision from before a reject/correct loop must not
   // hide the buttons once the form has been corrected and resubmitted.
@@ -229,10 +219,11 @@ async function loadP1ApprovalQueue(sections){
   const decided=new Set((myDec||[]).map(d=>d.collection_id+":"+d.cycle));
 
   P1_QUEUE_DATA = data;
-  queue.innerHTML=data.map(c=>{
+  return data.map(c=>{
     const pay=(Array.isArray(c.pet_stage3_payment)?c.pet_stage3_payment[0]:c.pet_stage3_payment)||{};
     const hasDec=decided.has(c.id+":"+c.cycle);
     return `<div class="approve-card">
+      <div style="margin-bottom:6px;"><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:700;background:#fef3c7;color:#92400e;">Awaiting your approval</span></div>
       <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;">
         <div><b>${c.form_number}</b> — ${c.agent_name} (${c.section})
           <div style="font-size:12px;color:var(--muted);">PO: ${pay.odoo_po_number||"—"}</div>
@@ -240,11 +231,10 @@ async function loadP1ApprovalQueue(sections){
         ${hasDec?`<span style="color:var(--ok);font-size:12px;font-weight:700;">Decision submitted</span>`:""}
       </div>
       ${!hasDec?`<div style="margin-top:10px;">
-        <button onclick="openP1Review(${c.id})">Review to Confirm or Reject</button>
+        <button onclick="openP1Review(${c.id})">Review &amp; Approve</button>
       </div>`:""}
     </div>`;
-  }).join("");
-  setupCollapsibleQueue("p1ApprovalQueueTitle","p1ApprovalQueue",data.length,"Pending Approvals");
+  });
 }
 
 function openP1Review(collectionId){
@@ -275,19 +265,12 @@ async function loadP2FillQueue(sections){
     .in("status",["stage3p2_filling","rejected_to_stage4"])
     .in("section",sections.length?sections:ALL_SECTIONS)
     .order("updated_at",{ascending:false});
-  const queue=document.getElementById("p2FillQueue");
-  if(!data||!data.length){
-    queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No collections ready for Phase 2 payment.</p>`;
-    setupCollapsibleQueue("p2FillQueueTitle","p2FillQueue",0,"Pending Entries");
-    return;
-  }
-  queue.innerHTML=data.map(c=>`<div class="queue-row">
+  return (data||[]).map(c=>`<div class="queue-row">
     <div><b>${c.form_number}</b> <span style="font-size:12px;color:var(--muted);margin-left:8px;">${c.agent_name} — ${c.section}</span>
     ${c.status==="rejected_to_stage4"?`<span style="font-size:11px;color:var(--bad);margin-left:8px;">(Returned for correction)</span>`:""}
     </div>
     <button onclick="openP2Form(${c.id})">Enter Balance Payment</button>
-  </div>`).join("");
-  setupCollapsibleQueue("p2FillQueueTitle","p2FillQueue",data.length,"Pending Entries");
+  </div>`);
 }
 
 async function loadP2ApprovalQueue(sections){
@@ -296,12 +279,7 @@ async function loadP2ApprovalQueue(sections){
     .eq("status","stage3p2_approval")
     .in("section",sections.length?sections:ALL_SECTIONS)
     .order("updated_at",{ascending:false});
-  const queue=document.getElementById("p2ApprovalQueue");
-  if(!data||!data.length){
-    queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No Phase 2 submissions awaiting approval.</p>`;
-    setupCollapsibleQueue("p2ApprovalQueueTitle","p2ApprovalQueue",0,"Pending Approvals");
-    return;
-  }
+  if(!data||!data.length) return [];
 
   // Scoped to THIS cycle — a decision from before a reject/correct loop must not
   // hide the buttons once the form has been corrected and resubmitted.
@@ -309,10 +287,11 @@ async function loadP2ApprovalQueue(sections){
   const decided=new Set((myDec||[]).map(d=>d.collection_id+":"+d.cycle));
 
   P2_QUEUE_DATA = data;
-  queue.innerHTML=data.map(c=>{
+  return data.map(c=>{
     const pay=(Array.isArray(c.pet_stage3_payment)?c.pet_stage3_payment[0]:c.pet_stage3_payment)||{};
     const hasDec=decided.has(c.id+":"+c.cycle);
     return `<div class="approve-card">
+      <div style="margin-bottom:6px;"><span style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:700;background:#fef3c7;color:#92400e;">Awaiting your approval</span></div>
       <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;">
         <div><b>${c.form_number}</b> — ${c.agent_name} (${c.section})
           <div style="font-size:12px;color:var(--muted);">Deduction: ${pay.deduction_pct||0}% | Receipt: ${pay.payment_10pct_attachment?"✔":"Pending"}</div>
@@ -320,11 +299,10 @@ async function loadP2ApprovalQueue(sections){
         ${hasDec?`<span style="color:var(--ok);font-size:12px;font-weight:700;">Decision submitted</span>`:""}
       </div>
       ${!hasDec?`<div style="margin-top:10px;">
-        <button onclick="openP2Review(${c.id})">Review to Confirm or Reject</button>
+        <button onclick="openP2Review(${c.id})">Review &amp; Approve</button>
       </div>`:""}
     </div>`;
-  }).join("");
-  setupCollapsibleQueue("p2ApprovalQueueTitle","p2ApprovalQueue",data.length,"Pending Approvals");
+  });
 }
 
 function openP2Review(collectionId){
@@ -396,7 +374,7 @@ async function submitP1(){
   st.textContent = "";
   showReviewModal({
     title: "Review Before Submitting",
-    subtitle: (CURRENT_P1?.form_number||"") + " — check everything below before it goes for approval",
+    subtitle: (CURRENT_P1?.form_number||"") + " — check everything below before you submit",
     mode: "submit",
     sections: [{ rows: [
       ["Odoo PO Number", po],
@@ -431,12 +409,14 @@ async function proceedWithP1Submit(){
     }
 
     const oldStatus=CURRENT_P1.status;
-    const { error: stErr } = await sb.from("pet_collections").update({ status:"stage3p1_approval", updated_at:new Date().toISOString() }).eq("id",CURRENT_P1.id);
+    const needsApproval = await stageHasApprovers("stage3p1", CURRENT_P1.section);
+    const nextStatus = needsApproval ? "stage3p1_approval" : NEXT_STATUS.stage3p1;
+    const { error: stErr } = await sb.from("pet_collections").update({ status:nextStatus, updated_at:new Date().toISOString() }).eq("id",CURRENT_P1.id);
     if(stErr) throw new Error("Payment data was saved, but could not advance status: "+stErr.message);
-    const { error: logErr } = await sb.from("pet_activity_log").insert({ collection_id:CURRENT_P1.id, action:"stage3p1_filled", stage:"stage3p1", actor_profile_id:ME.id, actor_username:ME.username, old_status:oldStatus, new_status:"stage3p1_approval" });
+    const { error: logErr } = await sb.from("pet_activity_log").insert({ collection_id:CURRENT_P1.id, action:"stage3p1_filled", stage:"stage3p1", actor_profile_id:ME.id, actor_username:ME.username, old_status:oldStatus, new_status:nextStatus });
     if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
 
-    st.style.color="var(--ok)"; st.textContent="Submitted for approval.";
+    st.style.color="var(--ok)"; st.textContent = needsApproval ? "Submitted for approval." : "Submitted — moved on to the next stage.";
     setTimeout(()=>{ closeP1Form(); init(); },1200);
   }catch(e){ st.style.color="var(--bad)"; st.textContent="Error: "+e.message; }
 }
@@ -493,7 +473,7 @@ async function submitP2(){
   st.textContent = "";
   showReviewModal({
     title: "Review Before Submitting",
-    subtitle: (CURRENT_P2?.form_number||"") + " — check everything below before it goes for approval",
+    subtitle: (CURRENT_P2?.form_number||"") + " — check everything below before you submit",
     mode: "submit",
     sections: [{ rows: [
       ["Deduction %", document.getElementById("p2DeductPct").value],
@@ -524,12 +504,14 @@ async function proceedWithP2Submit(){
     if(payErr) throw new Error("Could not save balance payment data: "+payErr.message);
 
     const oldStatus=CURRENT_P2.status;
-    const { error: stErr } = await sb.from("pet_collections").update({ status:"stage3p2_approval", updated_at:new Date().toISOString() }).eq("id",CURRENT_P2.id);
+    const needsApproval = await stageHasApprovers("stage3p2", CURRENT_P2.section);
+    const nextStatus = needsApproval ? "stage3p2_approval" : NEXT_STATUS.stage3p2;
+    const { error: stErr } = await sb.from("pet_collections").update({ status:nextStatus, updated_at:new Date().toISOString() }).eq("id",CURRENT_P2.id);
     if(stErr) throw new Error("Payment data was saved, but could not advance status: "+stErr.message);
-    const { error: logErr } = await sb.from("pet_activity_log").insert({ collection_id:CURRENT_P2.id, action:"stage3p2_filled", stage:"stage3p2", actor_profile_id:ME.id, actor_username:ME.username, old_status:oldStatus, new_status:"stage3p2_approval" });
+    const { error: logErr } = await sb.from("pet_activity_log").insert({ collection_id:CURRENT_P2.id, action:"stage3p2_filled", stage:"stage3p2", actor_profile_id:ME.id, actor_username:ME.username, old_status:oldStatus, new_status:nextStatus });
     if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
 
-    st.style.color="var(--ok)"; st.textContent="Submitted for approval.";
+    st.style.color="var(--ok)"; st.textContent = needsApproval ? "Submitted for approval." : "Submitted — collection is complete.";
     setTimeout(()=>{ closeP2Form(); init(); },1200);
   }catch(e){ st.style.color="var(--bad)"; st.textContent="Error: "+e.message; }
 }

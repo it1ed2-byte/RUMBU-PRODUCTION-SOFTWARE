@@ -42,8 +42,8 @@
 
   <div id="fillSection" style="display:none;">
     <div class="panel">
-      <div class="panel-title" id="fillQueueTitle">Your Fill Queue — Stage 5: Rumbu Weight Details</div>
-      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Collections waiting for the Rumbu Weighbridge weight and slip. Select one to fill.</p>
+      <div class="panel-title" id="fillQueueTitle">Your Queue — Stage 5: Rumbu Weight Details</div>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Everything waiting for you at this stage — items to fill and items to review and approve — in one list.</p>
       <div id="fillQueue"></div>
     </div>
 
@@ -70,19 +70,11 @@
         </div>
 
         <div style="margin-top:20px;display:flex;gap:10px;">
-          <button onclick="submitRumbuWeight()">Submit for Approval</button>
+          <button onclick="submitRumbuWeight()">Submit</button>
           <button class="btn-ghost" onclick="closeRwForm()">Cancel</button>
         </div>
         <div id="rwFormStatus" style="margin-top:10px;font-size:13px;font-weight:700;min-height:16px;"></div>
       </div>
-    </div>
-  </div>
-
-  <div id="approvalSection" style="display:none;">
-    <div class="panel" style="margin-top:16px;">
-      <div class="panel-title" id="approvalQueueTitle">Your Approval Queue — Stage 5: Rumbu Weight Details</div>
-      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Review and approve or reject the following Rumbu Weight submissions. ALL assigned approvers must approve.</p>
-      <div id="approvalQueue"></div>
     </div>
   </div>
 
@@ -118,10 +110,11 @@ async function init(){
     const fillerSections   = fillerRows   ? fillerRows.map(r=>r.section)   : [];
     const approverSections = approverRows ? approverRows.map(r=>r.section) : [];
 
-    await Promise.all([
-      IS_FILLER   ? loadFillQueue(fillerSections)   : null,
-      IS_APPROVER ? loadApprovalQueue(approverSections) : null
+    const [fillRows, apprRows] = await Promise.all([
+      IS_FILLER   ? loadFillQueue(fillerSections)   : [],
+      IS_APPROVER ? loadApprovalQueue(approverSections) : []
     ]);
+    if(IS_FILLER || IS_APPROVER) renderQueue((fillRows||[]).concat(apprRows||[]));
 
     if(!IS_FILLER && !IS_APPROVER){
       document.getElementById("noQueue").style.display="block";
@@ -133,6 +126,15 @@ async function init(){
   }
 }
 
+// One single list per stage: items to fill AND items to review/approve.
+function renderQueue(rows){
+  document.getElementById("fillSection").style.display = "block";
+  document.getElementById("fillQueue").innerHTML = rows.length
+    ? rows.join("")
+    : `<p style="font-size:13px;color:var(--muted);">Nothing is waiting for you at this stage.</p>`;
+  setupCollapsibleQueue("fillQueueTitle", "fillQueue", rows.length, "Your Queue — Stage 5: Rumbu Weight Details");
+}
+
 async function loadFillQueue(sections){
   const { data } = await sb.from("pet_collections")
     .select("id,form_number,agent_name,agent_code,section,status,updated_at")
@@ -140,16 +142,7 @@ async function loadFillQueue(sections){
     .in("section", sections.length ? sections : ALL_SECTIONS)
     .order("updated_at",{ascending:false});
 
-  const el = document.getElementById("fillSection");
-  const queue = document.getElementById("fillQueue");
-  el.style.display = "block";
-
-  if(!data||!data.length){
-    queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No collections waiting for Rumbu Weight entry.</p>`;
-    setupCollapsibleQueue("fillQueueTitle", "fillQueue", 0, "Your Fill Queue — Stage 5: Rumbu Weight Details");
-    return;
-  }
-  queue.innerHTML = data.map(c=>`<div class="queue-row">
+  return (data||[]).map(c=>`<div class="queue-row">
     <div>
       <b style="font-size:13px;">${c.form_number}</b>
       <span class="meta" style="margin-left:8px;">${c.agent_name} (${c.agent_code}) — ${c.section}</span>
@@ -158,8 +151,7 @@ async function loadFillQueue(sections){
       </span>
     </div>
     <button onclick="openRwForm(${c.id})">Fill Weight Details</button>
-  </div>`).join("");
-  setupCollapsibleQueue("fillQueueTitle", "fillQueue", data.length, "Your Fill Queue — Stage 5: Rumbu Weight Details");
+  </div>`);
 }
 
 async function loadApprovalQueue(sections){
@@ -169,23 +161,17 @@ async function loadApprovalQueue(sections){
     .in("section", sections.length ? sections : ALL_SECTIONS)
     .order("updated_at",{ascending:false});
 
-  const el = document.getElementById("approvalSection");
-  el.style.display = "block";
-
-  if(!data||!data.length){
-    document.getElementById("approvalQueue").innerHTML=`<p style="font-size:13px;color:var(--muted);">No submissions awaiting your approval.</p>`;
-    setupCollapsibleQueue("approvalQueueTitle", "approvalQueue", 0, "Your Approval Queue — Stage 5: Rumbu Weight Details");
-    return;
-  }
+  if(!data||!data.length) return [];
 
   const { data: myDecisions } = await sb.from("pet_approvals")
     .select("collection_id,decision,cycle").eq("approver_profile_id",ME.id).eq("stage","stage4b");
   const decided = new Set((myDecisions||[]).map(d=>d.collection_id+":"+d.cycle));
 
   RW_QUEUE_DATA = data;
-  document.getElementById("approvalQueue").innerHTML = data.map(c=>{
+  return data.map(c=>{
     const hasDec = decided.has(c.id+":"+c.cycle);
     return `<div class="approve-card">
+      <div style="margin-bottom:6px;"><span class="badge-status bs-approval">Awaiting your approval</span></div>
       <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
         <div>
           <b>${c.form_number}</b> — ${c.agent_name} (${c.section})
@@ -197,11 +183,10 @@ async function loadApprovalQueue(sections){
       </div>
       ${!hasDec ? `
       <div style="margin-top:10px;">
-        <button onclick="openRwReview(${c.id})">Review to Confirm or Reject</button>
+        <button onclick="openRwReview(${c.id})">Review &amp; Approve</button>
       </div>` : ""}
     </div>`;
-  }).join("");
-  setupCollapsibleQueue("approvalQueueTitle", "approvalQueue", data.length, "Your Approval Queue — Stage 5: Rumbu Weight Details");
+  });
 }
 
 function openRwReview(collectionId){
@@ -275,7 +260,7 @@ async function submitRumbuWeight(){
   st.textContent = "";
   showReviewModal({
     title: "Review Before Submitting",
-    subtitle: (CURRENT_COLLECTION?.form_number||"") + " — check everything below before it goes for approval",
+    subtitle: (CURRENT_COLLECTION?.form_number||"") + " — check everything below before you submit",
     mode: "submit",
     sections: [
       { heading: "Weight Details", rows: [
@@ -296,10 +281,12 @@ async function proceedWithRumbuWeightSubmit(){
     const attachmentUrl = file ? await uploadFile(file, "weighbridges") : (document.getElementById("rwFileUrl").textContent || null);
 
     const oldStatus = CURRENT_COLLECTION.status;
+    const needsApproval = await stageHasApprovers("stage4b", CURRENT_COLLECTION.section);
+    const nextStatus = needsApproval ? "stage4b_weight_approval" : NEXT_STATUS.stage4b;
     const { error: updErr } = await sb.from("pet_collections").update({
       rumbu_weighbridge_weight: rumbuW,
       rumbu_weighbridge_attachment: attachmentUrl,
-      status: "stage4b_weight_approval",
+      status: nextStatus,
       updated_at: new Date().toISOString()
     }).eq("id",CURRENT_COLLECTION.id);
     if(updErr) throw new Error("Could not save weight details: "+updErr.message);
@@ -311,11 +298,11 @@ async function proceedWithRumbuWeightSubmit(){
       actor_profile_id: ME.id,
       actor_username:   ME.username,
       old_status:       oldStatus,
-      new_status:       "stage4b_weight_approval"
+      new_status: nextStatus
     });
     if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
 
-    st.style.color="var(--ok)"; st.textContent="Submitted for approval.";
+    st.style.color="var(--ok)"; st.textContent = needsApproval ? "Submitted for approval." : "Submitted — moved on to the next stage.";
     setTimeout(()=>{ closeRwForm(); init(); }, 1200);
   }catch(e){
     st.style.color="var(--bad)"; st.textContent="Error: "+e.message;
@@ -380,6 +367,14 @@ async function decide(collectionId, stage, decision, note){
     }
     await init();
   }catch(e){ alert("Error: "+e.message); }
+}
+
+// True when at least one approver is assigned to this stage for this branch.
+// If nobody is assigned, there is no approval step: submitting moves the
+// collection straight on to the next stage.
+async function stageHasApprovers(stage, section){
+  const { data } = await sb.from("pet_stage_approvers").select("profile_id").eq("section",section).eq("stage",stage);
+  return !!(data && data.length);
 }
 
 async function checkAllApproved(collectionId, stage, cycle, section){

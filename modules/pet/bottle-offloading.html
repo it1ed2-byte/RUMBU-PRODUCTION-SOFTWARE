@@ -42,8 +42,8 @@
   <!-- Fill queue -->
   <div id="fillSection" style="display:none;">
     <div class="panel">
-      <div class="panel-title" id="fillQueueTitle">Your Fill Queue — Stage 4: Bottle Offloading</div>
-      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Collections waiting for Bottle Offloading data entry. Select one to fill.</p>
+      <div class="panel-title" id="fillQueueTitle">Your Queue — Stage 4: Bottle Offloading</div>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Everything waiting for you at this stage — items to fill and items to review and approve — in one list.</p>
       <div id="fillQueue"></div>
     </div>
 
@@ -71,20 +71,11 @@
         <input type="hidden" id="ofLotName">
 
         <div style="margin-top:20px;display:flex;gap:10px;">
-          <button onclick="submitOffloading()">Submit for Approval</button>
+          <button onclick="submitOffloading()">Submit</button>
           <button class="btn-ghost" onclick="closeOfForm()">Cancel</button>
         </div>
         <div id="ofFormStatus" style="margin-top:10px;font-size:13px;font-weight:700;min-height:16px;"></div>
       </div>
-    </div>
-  </div>
-
-  <!-- Approval queue -->
-  <div id="approvalSection" style="display:none;">
-    <div class="panel" style="margin-top:16px;">
-      <div class="panel-title" id="approvalQueueTitle">Your Approval Queue — Stage 4: Bottle Offloading</div>
-      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Review and approve or reject the following Bottle Offloading submissions. ALL assigned approvers must approve.</p>
-      <div id="approvalQueue"></div>
     </div>
   </div>
 
@@ -120,10 +111,11 @@ async function init(){
     const fillerSections   = fillerRows   ? fillerRows.map(r=>r.section)   : [];
     const approverSections = approverRows ? approverRows.map(r=>r.section) : [];
 
-    await Promise.all([
-      IS_FILLER   ? loadFillQueue(fillerSections)   : null,
-      IS_APPROVER ? loadApprovalQueue(approverSections) : null
+    const [fillRows, apprRows] = await Promise.all([
+      IS_FILLER   ? loadFillQueue(fillerSections)   : [],
+      IS_APPROVER ? loadApprovalQueue(approverSections) : []
     ]);
+    if(IS_FILLER || IS_APPROVER) renderQueue((fillRows||[]).concat(apprRows||[]));
 
     if(!IS_FILLER && !IS_APPROVER){
       document.getElementById("noQueue").style.display="block";
@@ -135,6 +127,15 @@ async function init(){
   }
 }
 
+// One single list per stage: items to fill AND items to review/approve.
+function renderQueue(rows){
+  document.getElementById("fillSection").style.display = "block";
+  document.getElementById("fillQueue").innerHTML = rows.length
+    ? rows.join("")
+    : `<p style="font-size:13px;color:var(--muted);">Nothing is waiting for you at this stage.</p>`;
+  setupCollapsibleQueue("fillQueueTitle", "fillQueue", rows.length, "Your Queue — Stage 4: Bottle Offloading");
+}
+
 async function loadFillQueue(sections){
   const { data } = await sb.from("pet_collections")
     .select("id,form_number,agent_name,agent_code,section,status,updated_at")
@@ -142,16 +143,7 @@ async function loadFillQueue(sections){
     .in("section", sections.length ? sections : ALL_SECTIONS)
     .order("updated_at",{ascending:false});
 
-  const el = document.getElementById("fillSection");
-  const queue = document.getElementById("fillQueue");
-  el.style.display = "block";
-
-  if(!data||!data.length){
-    queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No collections waiting for Bottle Offloading entry.</p>`;
-    setupCollapsibleQueue("fillQueueTitle", "fillQueue", 0, "Your Fill Queue — Stage 4: Bottle Offloading");
-    return;
-  }
-  queue.innerHTML = data.map(c=>`<div class="queue-row">
+  return (data||[]).map(c=>`<div class="queue-row">
     <div>
       <b style="font-size:13px;">${c.form_number}</b>
       <span class="meta" style="margin-left:8px;">${c.agent_name} (${c.agent_code}) — ${c.section}</span>
@@ -160,8 +152,7 @@ async function loadFillQueue(sections){
       </span>
     </div>
     <button onclick="openOfForm(${c.id})">Fill Offloading Data</button>
-  </div>`).join("");
-  setupCollapsibleQueue("fillQueueTitle", "fillQueue", data.length, "Your Fill Queue — Stage 4: Bottle Offloading");
+  </div>`);
 }
 
 async function loadApprovalQueue(sections){
@@ -171,24 +162,18 @@ async function loadApprovalQueue(sections){
     .in("section", sections.length ? sections : ALL_SECTIONS)
     .order("updated_at",{ascending:false});
 
-  const el = document.getElementById("approvalSection");
-  el.style.display = "block";
-
-  if(!data||!data.length){
-    document.getElementById("approvalQueue").innerHTML=`<p style="font-size:13px;color:var(--muted);">No submissions awaiting your approval.</p>`;
-    setupCollapsibleQueue("approvalQueueTitle", "approvalQueue", 0, "Your Approval Queue — Stage 4: Bottle Offloading");
-    return;
-  }
+  if(!data||!data.length) return [];
 
   const { data: myDecisions } = await sb.from("pet_approvals")
     .select("collection_id,decision,cycle").eq("approver_profile_id",ME.id).eq("stage","stage4a");
   const decided = new Set((myDecisions||[]).map(d=>d.collection_id+":"+d.cycle));
 
   OF_QUEUE_DATA = data;
-  document.getElementById("approvalQueue").innerHTML = data.map(c=>{
+  return data.map(c=>{
     const of = c.pet_stage4a_offloading?.[0]||c.pet_stage4a_offloading||{};
     const hasDec = decided.has(c.id+":"+c.cycle);
     return `<div class="approve-card">
+      <div style="margin-bottom:6px;"><span class="badge-status bs-approval">Awaiting your approval</span></div>
       <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
         <div>
           <b>${c.form_number}</b> — ${c.agent_name} (${c.section})
@@ -200,11 +185,10 @@ async function loadApprovalQueue(sections){
       </div>
       ${!hasDec ? `
       <div style="margin-top:10px;">
-        <button onclick="openOfReview(${c.id})">Review to Confirm or Reject</button>
+        <button onclick="openOfReview(${c.id})">Review &amp; Approve</button>
       </div>` : ""}
     </div>`;
-  }).join("");
-  setupCollapsibleQueue("approvalQueueTitle", "approvalQueue", data.length, "Your Approval Queue — Stage 4: Bottle Offloading");
+  });
 }
 
 function openOfReview(collectionId){
@@ -300,7 +284,7 @@ async function submitOffloading(){
   st.textContent = "";
   showReviewModal({
     title: "Review Before Submitting",
-    subtitle: (CURRENT_COLLECTION?.form_number||"") + " — check everything below before it goes for approval",
+    subtitle: (CURRENT_COLLECTION?.form_number||"") + " — check everything below before you submit",
     mode: "submit",
     sections: [
       { heading: "Off-Loading", rows: [
@@ -338,7 +322,9 @@ async function proceedWithOffloadingSubmit(){
     }
 
     const oldStatus = CURRENT_COLLECTION.status;
-    const { error: stErr } = await sb.from("pet_collections").update({ status:"stage4a_offloading_approval", updated_at: new Date().toISOString() }).eq("id",CURRENT_COLLECTION.id);
+    const needsApproval = await stageHasApprovers("stage4a", CURRENT_COLLECTION.section);
+    const nextStatus = needsApproval ? "stage4a_offloading_approval" : NEXT_STATUS.stage4a;
+    const { error: stErr } = await sb.from("pet_collections").update({ status: nextStatus, updated_at: new Date().toISOString() }).eq("id",CURRENT_COLLECTION.id);
     if(stErr) throw new Error("Offloading data was saved, but could not advance status: "+stErr.message);
 
     const { error: logErr } = await sb.from("pet_activity_log").insert({
@@ -348,11 +334,12 @@ async function proceedWithOffloadingSubmit(){
       actor_profile_id: ME.id,
       actor_username:   ME.username,
       old_status:       oldStatus,
-      new_status:       "stage4a_offloading_approval"
+      new_status: nextStatus
     });
     if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
 
-    st.style.color="var(--ok)"; st.textContent="Submitted for approval.";
+    if(!needsApproval) await occupyLot(CURRENT_COLLECTION.id);
+    st.style.color="var(--ok)"; st.textContent = needsApproval ? "Submitted for approval." : "Submitted — moved on to the next stage.";
     setTimeout(()=>{ closeOfForm(); init(); }, 1200);
   }catch(e){
     st.style.color="var(--bad)"; st.textContent="Error: "+e.message;
@@ -400,22 +387,7 @@ async function decide(collectionId, stage, decision, note){
         const { error: updErr } = await sb.from("pet_collections").update({ status: newStatus, updated_at: new Date().toISOString() }).eq("id",collectionId);
         if(updErr) throw new Error("Could not advance status: "+updErr.message);
 
-        // This LOT-occupy logic used to live in QC's own approval — it moves
-        // here now, since LOT selection itself moved to this stage.
-        const { data: of, error: ofSelErr } = await sb.from("pet_stage4a_offloading").select("lot_id").eq("collection_id",collectionId).maybeSingle();
-        if(ofSelErr) throw new Error("Status advanced, but could not read Offloading data to occupy LOT: "+ofSelErr.message);
-        if(of?.lot_id){
-          const { error: relErr } = await sb.from("pet_lots")
-            .update({ is_occupied:false, current_collection_id:null })
-            .eq("current_collection_id", collectionId)
-            .neq("id", of.lot_id);
-          if(relErr) console.warn("Could not release a stale LOT link (non-fatal):", relErr.message);
-
-          const { error: lotErr } = await sb.from("pet_lots").update({ is_occupied:true, current_collection_id:collectionId }).eq("id",of.lot_id);
-          if(lotErr) throw new Error("Status advanced, but could not mark LOT as occupied: "+lotErr.message);
-        } else {
-          console.warn("No LOT recorded on this collection's Offloading data — LOT occupancy was not set.");
-        }
+        await occupyLot(collectionId);
         const { error: logErr } = await sb.from("pet_activity_log").insert({
           collection_id: collectionId, action:"approved_all", stage,
           actor_profile_id: ME.id, actor_username: ME.username,
@@ -434,6 +406,35 @@ async function decide(collectionId, stage, decision, note){
     }
     await init();
   }catch(e){ alert("Error: "+e.message); }
+}
+
+// True when at least one approver is assigned to this stage for this branch.
+// If nobody is assigned, there is no approval step: submitting moves the
+// collection straight on to the next stage.
+async function stageHasApprovers(stage, section){
+  const { data } = await sb.from("pet_stage_approvers").select("profile_id").eq("section",section).eq("stage",stage);
+  return !!(data && data.length);
+}
+
+// Marks the chosen LOT as occupied. Runs when this stage completes — either
+// on the last approval, or straight away when no approver is assigned.
+async function occupyLot(collectionId){
+        // This LOT-occupy logic used to live in QC's own approval — it moves
+        // here now, since LOT selection itself moved to this stage.
+        const { data: of, error: ofSelErr } = await sb.from("pet_stage4a_offloading").select("lot_id").eq("collection_id",collectionId).maybeSingle();
+        if(ofSelErr) throw new Error("Status advanced, but could not read Offloading data to occupy LOT: "+ofSelErr.message);
+        if(of?.lot_id){
+          const { error: relErr } = await sb.from("pet_lots")
+            .update({ is_occupied:false, current_collection_id:null })
+            .eq("current_collection_id", collectionId)
+            .neq("id", of.lot_id);
+          if(relErr) console.warn("Could not release a stale LOT link (non-fatal):", relErr.message);
+
+          const { error: lotErr } = await sb.from("pet_lots").update({ is_occupied:true, current_collection_id:collectionId }).eq("id",of.lot_id);
+          if(lotErr) throw new Error("Status advanced, but could not mark LOT as occupied: "+lotErr.message);
+        } else {
+          console.warn("No LOT recorded on this collection's Offloading data — LOT occupancy was not set.");
+        }
 }
 
 async function checkAllApproved(collectionId, stage, cycle, section){

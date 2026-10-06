@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Production Approval — PET Collection</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme")||"navy"); }catch(e){} })();
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) document.documentElement.setAttribute("data-theme",e.data.rumbuTheme); });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="review-modal.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1100px;margin:0 auto;}
+  input{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);}
+  .panel{border:1px solid var(--line);border-radius:10px;padding:18px;margin-bottom:16px;}
+  .panel-title{font-weight:700;font-size:14px;color:var(--heading);margin:0 0 6px;}
+  .badge-status{display:inline-block;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:700;}
+  .bs-new{background:#dbeafe;color:#1e40af;}
+  .bs-rejected{background:#fee2e2;color:#991b1b;}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 12px;}
+  .chip{border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:20px;padding:4px 12px;font-size:12px;font-weight:600;cursor:pointer;}
+  .chip.active{background:var(--accent);color:var(--logo-fg);border-color:var(--accent);}
+  .pa-row{padding:12px 14px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;background:var(--card);gap:12px;flex-wrap:wrap;}
+  .pa-row .meta{font-size:12px;color:var(--muted);margin-top:3px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back</button>
+  <div id="connStatus" style="font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);">Loading...</div>
+
+  <div id="mainSection" style="display:none;">
+    <div class="panel">
+      <div class="panel-title" id="queueTitle">Stage 7: Production Approval</div>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 8px;">
+        Collections that have cleared Quality Control and are waiting to go into production. Pick the agent's collection
+        you want produced next and send it straight to Stage 8: Production — or return it to Quality Control with a reason.
+      </p>
+      <input type="text" id="fSearch" placeholder="Filter by agent name, agent code or form number..." oninput="renderList()">
+      <div class="chips" id="agentChips"></div>
+      <div id="queue"></div>
+    </div>
+  </div>
+
+  <div id="noQueue" style="display:none;text-align:center;color:var(--muted);padding:40px 0;font-size:14px;">
+    You are not assigned as a Production Approver. Ask an administrator to add you under Manage Assignments &rarr; Stage 7 — Production Approval.
+  </div>
+</div>
+
+<script>
+let ME=null, ALL_SECTIONS=[], ROWS=[], AGENT_FILTER="";
+
+// Stage 7. One approver is enough here — it is the plant manager's pick, not
+// a multi-person sign-off. Approve = send to Stage 8 Production.
+// Reject = back to Stage 6 Quality Control (reason required).
+const NEXT_STATUS   = { stage4d:'stage4_filling' };
+const REJECT_STATUS = { stage4d:'rejected_to_stage4c' };
+
+function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+function one(x){ return (Array.isArray(x)?x[0]:x)||{}; }
+function ago(iso){
+  if(!iso) return "";
+  const d=Math.floor((Date.now()-new Date(iso).getTime())/86400000);
+  return d<=0 ? "today" : d===1 ? "1 day ago" : d+" days ago";
+}
+
+async function init(){
+  const cs=document.getElementById("connStatus");
+  try{
+    ME=await requireAuth("../../login.html");
+    if(!ME) return;
+
+    const { data: secData } = await sb.from("app_sections").select("name").order("name");
+    ALL_SECTIONS=(secData||[]).map(s=>s.name);
+
+    const { data: apprRows } = await sb.from("pet_stage_approvers").select("section").eq("stage","stage4d").eq("profile_id",ME.id);
+    const isApprover=(apprRows&&apprRows.length>0)||ME.role==="super_admin";
+    if(!isApprover){ document.getElementById("noQueue").style.display="block"; cs.style.color="var(--ok)"; cs.textContent="Connected."; return; }
+    const sections=(apprRows||[]).map(r=>r.section);
+
+    const { data } = await sb.from("pet_collections")
+      .select("id,form_number,agent_name,agent_code,section,status,cycle,updated_at,agent_waybill_weight,rumbu_weighbridge_weight,pet_stage2_inspection(*),pet_stage4a_offloading(*),pet_stage2_qc(*)")
+      .in("status",["stage4d_production_approval","rejected_to_stage4d"])
+      .in("section", sections.length?sections:ALL_SECTIONS)
+      .order("updated_at",{ascending:true});
+    ROWS=data||[];
+
+    document.getElementById("mainSection").style.display="block";
+    renderChips(); renderList();
+    cs.style.color="var(--ok)"; cs.textContent="Connected.";
+  }catch(e){ cs.style.color="var(--bad)"; cs.textContent="Error: "+e.message; }
+}
+
+function renderChips(){
+  const counts={};
+  ROWS.forEach(c=>{ const k=c.agent_name+" ("+c.agent_code+")"; counts[k]=(counts[k]||0)+1; });
+  const keys=Object.keys(counts).sort();
+  document.getElementById("agentChips").innerHTML = keys.length
+    ? `<span class="chip ${AGENT_FILTER===""?"active":""}" onclick="setAgent('')">All agents (${ROWS.length})</span>` +
+      keys.map(k=>`<span class="chip ${AGENT_FILTER===k?"active":""}" data-agent="${esc(k)}" onclick="setAgent(this.dataset.agent)">${esc(k)} — ${counts[k]}</span>`).join("")
+    : "";
+}
+function setAgent(k){ AGENT_FILTER=k; renderChips(); renderList(); }
+
+function renderList(){
+  const q=(document.getElementById("fSearch").value||"").trim().toLowerCase();
+  const rows=ROWS.filter(c=>{
+    const key=c.agent_name+" ("+c.agent_code+")";
+    if(AGENT_FILTER && key!==AGENT_FILTER) return false;
+    if(!q) return true;
+    return (c.agent_name+" "+c.agent_code+" "+c.form_number).toLowerCase().includes(q);
+  });
+  document.getElementById("queueTitle").textContent = "Stage 7: Production Approval — " + rows.length + (rows.length===1?" collection waiting":" collections waiting");
+  document.getElementById("queue").innerHTML = rows.length ? rows.map(c=>{
+    const off=one(c.pet_stage4a_offloading), qc=one(c.pet_stage2_qc);
+    const returned=c.status==="rejected_to_stage4d";
+    return `<div class="pa-row">
+      <div>
+        <b>${esc(c.form_number)}</b> — ${esc(c.agent_name)} (${esc(c.agent_code)}) · ${esc(c.section)}
+        <span class="badge-status ${returned?"bs-rejected":"bs-new"}" style="margin-left:8px;">${returned?"Returned from Production":"Awaiting your decision"}</span>
+        <div class="meta">LOT: ${esc(off.offload_location||"—")} · Bales: ${esc(off.number_of_bales!=null?off.number_of_bales:"—")} ·
+          Rumbu weight: ${esc(c.rumbu_weighbridge_weight!=null?c.rumbu_weighbridge_weight:"—")} kg · Grade: ${esc(qc.bottle_grade||"—")} · waiting ${esc(ago(c.updated_at))}</div>
+      </div>
+      <button onclick="openReview(${c.id})">Review &amp; Decide</button>
+    </div>`;
+  }).join("") : `<p style="font-size:13px;color:var(--muted);">${ROWS.length?"No collections match that filter.":"Nothing is waiting for production approval."}</p>`;
+}
+
+async function openReview(id){
+  const c=ROWS.find(x=>x.id===id); if(!c) return;
+  const insp=one(c.pet_stage2_inspection), off=one(c.pet_stage4a_offloading), qc=one(c.pet_stage2_qc);
+  const diff=(Number(c.rumbu_weighbridge_weight)||0)-(Number(c.agent_waybill_weight)||0);
+  const pct=k=>qc["qc_pct_"+k]!=null ? qc["qc_pct_"+k]+"%" : null;
+
+  let returnedNote="";
+  if(c.status==="rejected_to_stage4d"){
+    const { data: log } = await sb.from("pet_activity_log").select("note").eq("collection_id",id).eq("action","rejected").order("created_at",{ascending:false}).limit(1);
+    if(log&&log.length&&log[0].note) returnedNote=" — returned from Production: "+log[0].note;
+  }
+  showReviewModal({
+    title: "Production Approval — "+c.form_number,
+    subtitle: c.agent_name+" ("+c.agent_code+") — "+c.section+returnedNote,
+    mode: "decide",
+    approveLabel: "✔ Send to Production",
+    rejectLabel:  "✘ Return to Quality Control",
+    noteLabel:    "Reason (required only if returning to Quality Control)",
+    sections: [
+      { heading: "Collection", rows: [
+        ["Agent", c.agent_name+" ("+c.agent_code+")"],
+        ["Agent Waybill Weight", (c.agent_waybill_weight||0)+" kg"],
+        ["Rumbu Weighbridge Weight", (c.rumbu_weighbridge_weight||0)+" kg"],
+        ["Weight Difference (Rumbu − Agent)", diff.toFixed(2)+" kg"],
+      ]},
+      { heading: "Bottle Inspection", rows: [
+        ["Raw Material Type", insp.raw_material_type],
+        ["Material Source", insp.material_source],
+        ["Colored PET Bottles?", insp.q_colored],
+        ["PET Bottles with Labels?", insp.q_labels],
+        ["PET Bottles with Caps?", insp.q_caps],
+        ["Non-Food Contact PET Products?", insp.q_non_food],
+        ["Non-PET Products?", insp.q_non_pet],
+      ]},
+      { heading: "Bottle Offloading", rows: [
+        ["LOT", off.offload_location],
+        ["Number of Bales", off.number_of_bales],
+      ]},
+      { heading: "Quality Control", rows: [
+        ["Bottle Grade", qc.bottle_grade],
+        ["Avg Bale Weight (kg)", qc.avg_bale_weight_kg],
+        ["Avg Bale Volume", qc.avg_bale_volume],
+        ["Bale Density", qc.bale_density],
+        ["Colored PET Bottles %", pct("coloured")],
+        ["PET Bottles with Labels %", pct("labels")],
+        ["PET Bottles with Caps & Rings %", pct("caps_rings")],
+        ["Non-Food Contact PET Bottles %", pct("non_food")],
+        ["Non-PET Product %", pct("non_pet")],
+        ["Aged PET Bottles %", pct("aged")],
+        ["Oily PET Bottles %", pct("oily")],
+        ["Bottles with Metal Ring %", pct("metal")],
+      ]}
+    ],
+    onApprove: ()=>decide(id,"approved",null),
+    onReject:  (note)=>decide(id,"rejected",note)
+  });
+}
+
+async function decide(collectionId, decision, note){
+  const stage="stage4d";
+  if(decision==="rejected" && !note){ alert("A reason is required."); return; }
+  try{
+    const { data: c, error: cErr } = await sb.from("pet_collections").select("section,cycle,status").eq("id",collectionId).single();
+    if(cErr) throw new Error("Could not load collection: "+cErr.message);
+
+    const { error: apprErr } = await sb.from("pet_approvals").insert({
+      collection_id:collectionId, stage, cycle:c.cycle,
+      approver_profile_id:ME.id, approver_username:ME.username,
+      decision, correction_note:note||null, decided_at:new Date().toISOString()
+    });
+    if(apprErr) throw new Error("Could not record your decision: "+apprErr.message);
+
+    if(decision==="rejected"){
+      const newStatus=REJECT_STATUS[stage];
+      const { error: updErr } = await sb.from("pet_collections").update({ status:newStatus, cycle:(c.cycle||1)+1, updated_at:new Date().toISOString() }).eq("id",collectionId);
+      if(updErr) throw new Error("Could not update status: "+updErr.message);
+      const { error: logErr } = await sb.from("pet_activity_log").insert({
+        collection_id:collectionId, action:"rejected", stage,
+        actor_profile_id:ME.id, actor_username:ME.username,
+        old_status:c.status, new_status:newStatus, note
+      });
+      if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
+    } else {
+      const newStatus=NEXT_STATUS[stage];
+      const { error: updErr } = await sb.from("pet_collections").update({ status:newStatus, updated_at:new Date().toISOString() }).eq("id",collectionId);
+      if(updErr) throw new Error("Could not send to Production: "+updErr.message);
+      const { error: logErr } = await sb.from("pet_activity_log").insert({
+        collection_id:collectionId, action:"approved_all", stage,
+        actor_profile_id:ME.id, actor_username:ME.username,
+        old_status:c.status, new_status:newStatus, note:"Sent to Production by plant manager"
+      });
+      if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
+    }
+    await init();
+  }catch(e){ alert("Error: "+e.message); }
+}
+
+init();
+</script>
+</body>
+</html>

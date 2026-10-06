@@ -79,8 +79,8 @@
   <!-- Fill queue -->
   <div id="fillSection" style="display:none;">
     <div class="card-panel">
-      <div class="panel-title" id="fillQueueTitle" style="font-weight:700;font-size:14px;color:var(--heading);margin:0 0 10px;">Stage 7 — Production (Fill Queue)</div>
-      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Enter production details for collections ready to go into production.</p>
+      <div class="panel-title" id="fillQueueTitle" style="font-weight:700;font-size:14px;color:var(--heading);margin:0 0 10px;">Your Queue — Stage 8: Production</div>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Everything waiting for you at this stage — collections to fill and collections to review and approve — in one list.</p>
       <div id="fillQueue"></div>
     </div>
 
@@ -126,36 +126,6 @@
           </div>
         </div>
 
-        <div class="sec-title">Waste Data</div>
-        <p style="font-size:12px;color:var(--muted);margin:0 0 8px;">The waste breakdown is recorded at <b>Stage 6 — Quality Control</b> (each category's percentage &times; the Rumbu Weighbridge Weight). The totals below come from there, so nothing needs to be typed here.</p>
-        <div id="pfNoQcWaste" style="display:none;" class="correction-note">No waste figures were found from Stage 6 — Quality Control for this collection, so Production cannot be saved yet.</div>
-        <div class="grid3" style="margin-top:6px;">
-          <div>
-            <label>Total Waste Record (kg) — from Stage 6 Quality Control</label>
-            <input type="number" id="pfTotalWaste" readonly>
-          </div>
-          <div>
-            <label>Accepted Waste (Rumbu Weighbridge Weight × 3%)</label>
-            <input type="number" id="pfAcceptedWaste" readonly>
-          </div>
-          <div>
-            <label>Unacceptable Waste (kg)</label>
-            <input type="number" id="pfUnacceptableKg" readonly>
-          </div>
-          <div>
-            <label>Unacceptable Waste Value (if &gt; 0)</label>
-            <input type="number" id="pfUnacceptableVal" readonly>
-          </div>
-          <div>
-            <label>Weight Difference (Rumbu − Agent)</label>
-            <input type="number" id="pfWeightDiff" readonly>
-          </div>
-          <div>
-            <label>Total Production + Total Waste (kg)</label>
-            <input type="number" id="pfProductionPlusWaste" readonly>
-          </div>
-        </div>
-
         <!-- Kano Material Used — filled in alongside waste, before Save and
              Continue, so it's part of one single-pass entry. Saved together
              with the production/waste data when Save and Continue is
@@ -185,6 +155,38 @@
             <div class="status" id="kanoUsageStatus"></div>
           </div>
         </div>
+
+        <div class="sec-title">Waste Calculation — worked out at the end of production</div>
+        <p style="font-size:12px;color:var(--muted);margin:0 0 8px;">Worked out automatically from the <b>Stage 6 — Quality Control</b> percentages: each category's weight = its percentage &times; the Rumbu Weighbridge Weight, rounded to the nearest whole kg. Nothing to type here.</p>
+        <div id="pfNoQcWaste" style="display:none;" class="correction-note">The Stage 6 — Quality Control percentages are missing for this collection, so the waste cannot be calculated and Production cannot be saved yet.</div>
+        <div class="grid4" id="pfKgGrid"></div>
+        <div class="grid3" style="margin-top:6px;">
+          <div>
+            <label>Total Waste Record (kg) — sum of the 8 categories</label>
+            <input type="number" id="pfTotalWaste" readonly>
+          </div>
+          <div>
+            <label>Accepted Waste (Rumbu Weighbridge Weight × 3%)</label>
+            <input type="number" id="pfAcceptedWaste" readonly>
+          </div>
+          <div>
+            <label>Unacceptable Waste (kg)</label>
+            <input type="number" id="pfUnacceptableKg" readonly>
+          </div>
+          <div>
+            <label>Unacceptable Waste Value (if &gt; 0)</label>
+            <input type="number" id="pfUnacceptableVal" readonly>
+          </div>
+          <div>
+            <label>Weight Difference (Rumbu − Agent)</label>
+            <input type="number" id="pfWeightDiff" readonly>
+          </div>
+          <div>
+            <label>Total Production + Total Waste (kg)</label>
+            <input type="number" id="pfProductionPlusWaste" readonly>
+          </div>
+        </div>
+
 
         <div style="margin-top:20px;display:flex;gap:10px;" id="prodSaveRow">
           <button onclick="saveAndContinue()">Save and Continue</button>
@@ -242,18 +244,9 @@
         </div>
 
         <div style="margin-top:20px;gap:10px;display:none;" id="finalSubmitRow">
-          <button onclick="submitProd()">Submit for Approval</button>
+          <button onclick="submitProd()">Submit</button>
         </div>
       </div>
-    </div>
-  </div>
-
-  <!-- Approval queue -->
-  <div id="approvalSection" style="display:none;margin-top:16px;">
-    <div class="card-panel">
-      <div class="panel-title" id="approvalQueueTitle" style="font-weight:700;font-size:14px;color:var(--heading);margin:0 0 10px;">Stage 7 — Production (Approval Queue)</div>
-      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Review and approve or reject. Approval frees the LOT and triggers Phase 2 payment.</p>
-      <div id="approvalQueue"></div>
     </div>
   </div>
 
@@ -266,7 +259,7 @@
 let ME=null, CURRENT_PROD=null, CURRENT_PROD_ID=null, ALL_SECTIONS=[], PROD_QUEUE_DATA=[], QC_WASTE=null;
 
 const NEXT_STATUS={stage4:'stage3p2_filling'};
-const REJECT_STATUS={stage4:'rejected_to_stage4c'};
+const REJECT_STATUS={stage4:'rejected_to_stage4d'};
 
 async function init(){
   const cs=document.getElementById("connStatus");
@@ -286,13 +279,24 @@ async function init(){
     const fSecs=(fillerRows||[]).map(r=>r.section);
     const aSecs=(approverRows||[]).map(r=>r.section);
 
-    let anyQ=false;
-    if(isFiller){   await loadFillQueue(fSecs);   document.getElementById("fillSection").style.display="block"; anyQ=true; }
-    if(isApprover){ await loadApprovalQueue(aSecs); document.getElementById("approvalSection").style.display="block"; anyQ=true; }
-    if(!anyQ) document.getElementById("noQueue").style.display="block";
+    const [fillRows, apprRows] = await Promise.all([
+      isFiller   ? loadFillQueue(fSecs)     : [],
+      isApprover ? loadApprovalQueue(aSecs) : []
+    ]);
+    if(isFiller || isApprover) renderQueue((fillRows||[]).concat(apprRows||[]));
+    else document.getElementById("noQueue").style.display="block";
 
     cs.style.color="var(--ok)"; cs.textContent="Connected.";
   }catch(e){ cs.style.color="var(--bad)"; cs.textContent="Error: "+e.message; }
+}
+
+// One single list: items to fill AND items to review/approve.
+function renderQueue(rows){
+  document.getElementById("fillSection").style.display = "block";
+  document.getElementById("fillQueue").innerHTML = rows.length
+    ? rows.join("")
+    : `<p style="font-size:13px;color:var(--muted);">Nothing is waiting for you at this stage.</p>`;
+  setupCollapsibleQueue("fillQueueTitle","fillQueue",rows.length,"Your Queue — Stage 8: Production");
 }
 
 async function loadFillQueue(sections){
@@ -301,20 +305,13 @@ async function loadFillQueue(sections){
     .in("status",["stage4_filling","rejected_to_stage4","stage4_bagging"])
     .in("section",sections.length?sections:ALL_SECTIONS)
     .order("updated_at",{ascending:false});
-  const queue=document.getElementById("fillQueue");
-  if(!data||!data.length){
-    queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No collections ready for production entry.</p>`;
-    setupCollapsibleQueue("fillQueueTitle","fillQueue",0,"Stage 7 — Production (Fill Queue)");
-    return;
-  }
-  queue.innerHTML=data.map(c=>`<div class="queue-row">
+  return (data||[]).map(c=>`<div class="queue-row">
     <div><b>${c.form_number}</b> <span style="font-size:12px;color:var(--muted);margin-left:8px;">${c.agent_name} (${c.agent_code}) — ${c.section}</span>
     ${c.status==="rejected_to_stage4"?`<span style="font-size:11px;color:var(--bad);margin-left:8px;">(Returned for correction)</span>`:""}
     ${c.status==="stage4_bagging"?`<span style="font-size:11px;color:var(--accent);margin-left:8px;">(Bag tracking pending)</span>`:""}
     </div>
     <button onclick="openProdForm(${c.id})">${c.status==="stage4_bagging"?"Continue Bag Tracking":"Enter Production Data"}</button>
-  </div>`).join("");
-  setupCollapsibleQueue("fillQueueTitle","fillQueue",data.length,"Stage 7 — Production (Fill Queue)");
+  </div>`);
 }
 
 async function loadApprovalQueue(sections){
@@ -323,12 +320,7 @@ async function loadApprovalQueue(sections){
     .eq("status","stage4_approval")
     .in("section",sections.length?sections:ALL_SECTIONS)
     .order("updated_at",{ascending:false});
-  const queue=document.getElementById("approvalQueue");
-  if(!data||!data.length){
-    queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No production submissions awaiting approval.</p>`;
-    setupCollapsibleQueue("approvalQueueTitle","approvalQueue",0,"Stage 7 — Production (Approval Queue)");
-    return;
-  }
+  if(!data||!data.length) return [];
 
   // Scoped to THIS cycle — a decision from before a reject/correct loop must not
   // hide the buttons once the form has been corrected and resubmitted.
@@ -336,11 +328,12 @@ async function loadApprovalQueue(sections){
   const decided=new Set((myDec||[]).map(d=>d.collection_id+":"+d.cycle));
 
   PROD_QUEUE_DATA = data;
-  queue.innerHTML=data.map(c=>{
+  return data.map(c=>{
     const prod=(Array.isArray(c.pet_stage4_production)?c.pet_stage4_production[0]:c.pet_stage4_production)||{};
     const off=(Array.isArray(c.pet_stage4a_offloading)?c.pet_stage4a_offloading[0]:c.pet_stage4a_offloading)||{};
     const hasDec=decided.has(c.id+":"+c.cycle);
     return `<div class="approve-card">
+      <div style="margin-bottom:6px;"><span class="badge-status bs-approval" style="display:inline-block;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:700;background:#fef3c7;color:#92400e;">Awaiting your approval</span></div>
       <div style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;">
         <div>
           <b>${c.form_number}</b> — ${c.agent_name} (${c.section})
@@ -357,11 +350,10 @@ async function loadApprovalQueue(sections){
         ${hasDec?`<span style="color:var(--ok);font-size:12px;font-weight:700;">Decision submitted</span>`:""}
       </div>
       ${!hasDec?`<div style="margin-top:10px;">
-        <button onclick="openProdReview(${c.id})">Review to Confirm or Reject</button>
+        <button onclick="openProdReview(${c.id})">Review &amp; Approve</button>
       </div>`:""}
     </div>`;
-  }).join("");
-  setupCollapsibleQueue("approvalQueueTitle","approvalQueue",data.length,"Stage 7 — Production (Approval Queue)");
+  });
 }
 
 async function openProdReview(collectionId){
@@ -418,12 +410,9 @@ async function openProdForm(id){
   const off=(Array.isArray(c.pet_stage4a_offloading)?c.pet_stage4a_offloading[0]:c.pet_stage4a_offloading)||{};
   const prod=(Array.isArray(c.pet_stage4_production)?c.pet_stage4_production[0]:c.pet_stage4_production)||{};
 
-  // Waste figures now come from Stage 6 (Quality Control): percentages x
-  // Rumbu Weighbridge Weight, already worked out and saved there. Production
-  // no longer asks for them — it just carries them forward.
-  const WK=["coloured","labels","caps_rings","non_food","non_pet","aged","oily","metal"];
-  QC_WASTE = (qc && qc.qc_total_waste_kg!=null) ? { total: Number(qc.qc_total_waste_kg) } : null;
-  if(QC_WASTE){ WK.forEach(k=>{ QC_WASTE[k] = Number(qc["qc_waste_"+k+"_kg"])||0; }); }
+  // Waste is worked out here, at the end of production, from the Stage 6
+  // (Quality Control) percentages x the Rumbu Weighbridge Weight.
+  QC_WASTE = wasteFromQc(qc, c.rumbu_weighbridge_weight);
 
   document.getElementById("pfFormNum").value=c.form_number;
   document.getElementById("pfAgentCode").value=c.agent_code;
@@ -511,7 +500,25 @@ function computeProductionTotals(){
   computeProductionPlusWaste();
 }
 
+const WASTE_KEYS = [["coloured","Coloured PET (kg)"],["labels","Labelled Bottles (kg)"],["caps_rings","Caps & Rings (kg)"],["non_food","Non-Food Contact (kg)"],
+  ["non_pet","Non-PET Product (kg)"],["aged","Aged PET Bottles (kg)"],["oily","Oily PET Bottles (kg)"],["metal","Bottles with Metal Ring (kg)"]];
+
+// Waste, worked out from Stage 6's percentages x the Rumbu Weighbridge Weight.
+// Returns null if Stage 6's percentages are missing.
+function wasteFromQc(qc, rumbuW){
+  if(!qc || WASTE_KEYS.some(([k])=>qc["qc_pct_"+k]==null)) return null;
+  const out={}; let total=0;
+  WASTE_KEYS.forEach(([k])=>{ const kg=Math.round((parseFloat(rumbuW)||0)*Number(qc["qc_pct_"+k])/100); out[k]=kg; total+=kg; });
+  out.total=total;
+  return out;
+}
+
 function computeWaste(){
+  const grid=document.getElementById("pfKgGrid");
+  if(!grid.children.length){
+    grid.innerHTML=WASTE_KEYS.map(([k,l])=>`<div><label>${l}</label><input type="number" id="pfKg_${k}" readonly></div>`).join("");
+  }
+  WASTE_KEYS.forEach(([k])=>{ document.getElementById("pfKg_"+k).value = QC_WASTE ? QC_WASTE[k] : ""; });
   const totalWaste = QC_WASTE ? QC_WASTE.total : 0;
   document.getElementById("pfTotalWaste").value = totalWaste.toFixed(2);
   document.getElementById("pfNoQcWaste").style.display = QC_WASTE ? "none" : "block";
@@ -545,7 +552,7 @@ async function saveAndContinue(){
   const end=document.getElementById("pfEnd").value;
   if(!start||!end){ st.style.color="var(--bad)"; st.textContent="Production start and end times are required."; return; }
 
-  if(!QC_WASTE){ st.style.color="var(--bad)"; st.textContent="No waste figures were found from Stage 6 — Quality Control for this collection. Complete Stage 6 first."; return; }
+  if(!QC_WASTE){ st.style.color="var(--bad)"; st.textContent="The Stage 6 — Quality Control percentages are missing for this collection, so the waste cannot be calculated. Complete Stage 6 first."; return; }
 
   // Colored/Non-Colored Flex are mandatory — Total Production, and in turn
   // Total Production + Waste, are both derived from them, so leaving either
@@ -986,7 +993,7 @@ async function submitProd(){
   st.textContent = "";
   showReviewModal({
     title: "Review Before Submitting",
-    subtitle: (CURRENT_PROD?.form_number||"") + " — check everything below before it goes for approval",
+    subtitle: (CURRENT_PROD?.form_number||"") + " — check everything below before you submit",
     mode: "submit",
     sections: [
       { heading: "Production Entry", rows: [
@@ -1008,12 +1015,15 @@ async function proceedWithProdSubmit(){
   st.style.color="var(--muted)"; st.textContent="Submitting...";
   try{
     const oldStatus=CURRENT_PROD.status;
-    const { error: stErr } = await sb.from("pet_collections").update({ status:"stage4_approval", updated_at:new Date().toISOString() }).eq("id",CURRENT_PROD.id);
+    const needsApproval = await stageHasApprovers("stage4", CURRENT_PROD.section);
+    const nextStatus = needsApproval ? "stage4_approval" : NEXT_STATUS.stage4;
+    if(!needsApproval) await freeLot(CURRENT_PROD.id);
+    const { error: stErr } = await sb.from("pet_collections").update({ status:nextStatus, updated_at:new Date().toISOString() }).eq("id",CURRENT_PROD.id);
     if(stErr) throw new Error("Could not advance status: "+stErr.message);
-    const { error: logErr } = await sb.from("pet_activity_log").insert({ collection_id:CURRENT_PROD.id, action:"stage4_filled", stage:"stage4", actor_profile_id:ME.id, actor_username:ME.username, old_status:oldStatus, new_status:"stage4_approval" });
+    const { error: logErr } = await sb.from("pet_activity_log").insert({ collection_id:CURRENT_PROD.id, action:"stage4_filled", stage:"stage4", actor_profile_id:ME.id, actor_username:ME.username, old_status:oldStatus, new_status:nextStatus });
     if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
 
-    st.style.color="var(--ok)"; st.textContent="Submitted for approval.";
+    st.style.color="var(--ok)"; st.textContent = needsApproval ? "Submitted for approval." : "Submitted — moved on to Payment (10%).";
     setTimeout(()=>{ closeProdForm(); init(); },1200);
   }catch(e){ st.style.color="var(--bad)"; st.textContent="Error: "+e.message; }
 }
@@ -1039,6 +1049,27 @@ async function decide(collectionId, decision, note){
       const allApproved=(ME.role==="super_admin") ? true : await checkAllApproved(collectionId,stage,c.cycle,c.section);
       if(allApproved){
         const newStatus=NEXT_STATUS[stage];
+        await freeLot(collectionId);
+        const { error: updErr } = await sb.from("pet_collections").update({ status:newStatus, updated_at:new Date().toISOString() }).eq("id",collectionId);
+        if(updErr) throw new Error("LOT freed, but could not advance status: "+updErr.message);
+        const { error: logErr } = await sb.from("pet_activity_log").insert({ collection_id:collectionId, action:"approved_all_lot_freed", stage, actor_profile_id:ME.id, actor_username:ME.username, old_status:c.status, new_status:newStatus, note:"LOT freed. Phase 2 payment triggered." });
+        if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
+      }
+    }
+    await init();
+  }catch(e){ alert("Error: "+e.message); }
+}
+
+// True when at least one approver is assigned to this stage for this branch.
+// If nobody is, there is no approval step and submitting completes the stage.
+async function stageHasApprovers(stage, section){
+  const { data } = await sb.from("pet_stage_approvers").select("profile_id").eq("section",section).eq("stage",stage);
+  return !!(data && data.length);
+}
+
+// Frees the LOT this collection was holding. Runs when Production completes —
+// on the last approval, or straight away when no approver is assigned.
+async function freeLot(collectionId){
         // Free the LOT
         const { data:prod4, error:prodSelErr }=await sb.from("pet_stage4_production").select("lot_id").eq("collection_id",collectionId).maybeSingle();
         if(prodSelErr) throw new Error("Could not read production data to free LOT: "+prodSelErr.message);
@@ -1048,14 +1079,6 @@ async function decide(collectionId, decision, note){
         } else {
           console.warn("No LOT recorded on this collection's production data — LOT was not freed.");
         }
-        const { error: updErr } = await sb.from("pet_collections").update({ status:newStatus, updated_at:new Date().toISOString() }).eq("id",collectionId);
-        if(updErr) throw new Error("LOT freed, but could not advance status: "+updErr.message);
-        const { error: logErr } = await sb.from("pet_activity_log").insert({ collection_id:collectionId, action:"approved_all_lot_freed", stage, actor_profile_id:ME.id, actor_username:ME.username, old_status:c.status, new_status:newStatus, note:"LOT freed. Phase 2 payment triggered." });
-        if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
-      }
-    }
-    await init();
-  }catch(e){ alert("Error: "+e.message); }
 }
 
 async function checkAllApproved(collectionId,stage,cycle,section){

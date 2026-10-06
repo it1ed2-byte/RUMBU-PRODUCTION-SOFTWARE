@@ -33,7 +33,6 @@
   .panel-title{font-weight:700;font-size:14px;color:var(--heading);margin:0 0 14px;}
   .correction-note{background:#fef3c7;border:1px solid #d97706;border-radius:8px;padding:10px 14px;font-size:13px;margin-bottom:12px;}
   .approve-card{border:1px solid var(--line);border-radius:8px;padding:14px;margin-bottom:10px;background:var(--card);}
-  .calc-note{font-size:12px;color:var(--muted);margin:0 0 8px;}
   @media(max-width:700px){ .grid2,.grid3,.grid4{grid-template-columns:1fr;} }
 </style>
 </head>
@@ -45,8 +44,8 @@
   <!-- Fill queue -->
   <div id="fillSection" style="display:none;">
     <div class="panel">
-      <div class="panel-title" id="fillQueueTitle">Your Fill Queue — Stage 6: Quality Control</div>
-      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Collections waiting for Quality Control data entry. Select one to fill.</p>
+      <div class="panel-title" id="fillQueueTitle">Your Queue — Stage 6: Quality Control</div>
+      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Everything waiting for you at this stage — items to fill and items to review and approve — in one list.</p>
       <div id="fillQueue"></div>
     </div>
 
@@ -90,34 +89,12 @@
         <div class="sec-title">c. Bottle Composition (%)</div>
         <div class="grid2" id="pctGrid"></div>
 
-        <!-- d. Waste calculation — this used to be typed in by hand at
-             Production. It now lives here and is worked out automatically
-             from the percentages above. -->
-        <div class="sec-title">d. Waste Calculation</div>
-        <p class="calc-note">Each category's weight = its percentage &times; the Rumbu Weighbridge Weight above, rounded to the nearest whole kg.</p>
-        <div class="grid4" id="kgGrid"></div>
-        <div class="grid3" style="margin-top:6px;">
-          <div><label>Total Waste Record (kg) — sum of the 8 categories</label><input type="number" id="qfTotalWaste" readonly></div>
-          <div><label>Accepted Waste (Rumbu Weighbridge Weight &times; 3%)</label><input type="number" id="qfAcceptedWaste" readonly></div>
-          <div><label>Unacceptable Waste (kg)</label><input type="number" id="qfUnaccKg" readonly></div>
-          <div><label>Unacceptable Waste Value (if &gt; 0)</label><input type="number" id="qfUnaccVal" readonly></div>
-        </div>
-
         <div style="margin-top:20px;display:flex;gap:10px;">
-          <button onclick="submitQC()">Submit for Approval</button>
+          <button onclick="submitQC()">Submit</button>
           <button class="btn-ghost" onclick="closeQCForm()">Cancel</button>
         </div>
         <div id="qcFormStatus" style="margin-top:10px;font-size:13px;font-weight:700;min-height:16px;"></div>
       </div>
-    </div>
-  </div>
-
-  <!-- Approval queue -->
-  <div id="approvalSection" style="display:none;">
-    <div class="panel" style="margin-top:16px;">
-      <div class="panel-title" id="approvalQueueTitle">Your Approval Queue — Stage 6: Quality Control</div>
-      <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Review and approve or reject the following Quality Control submissions. ALL assigned approvers must approve.</p>
-      <div id="approvalQueue"></div>
     </div>
   </div>
 
@@ -130,9 +107,8 @@
 let ME=null, ALL_SECTIONS=[], IS_FILLER=false, IS_APPROVER=false, CURRENT_COLLECTION=null, QC_QUEUE_DATA=[];
 
 // Stage 6 sits after Rumbu Weight Details (Stage 5) and right before
-// Production. Approving hands the collection to Production; rejecting sends
-// it back to Stage 5.
-const NEXT_STATUS   = { stage4c:'stage4_filling' };
+// the plant manager's Stage 7 (Production Approval). Rejecting sends it back to Stage 5.
+const NEXT_STATUS   = { stage4c:'stage4d_production_approval' };
 const REJECT_STATUS = { stage4c:'rejected_to_stage4b' };
 
 // The percentage dropdown list. Currently 0%–100% in 1% steps. If your
@@ -140,8 +116,8 @@ const REJECT_STATUS = { stage4c:'rejected_to_stage4b' };
 const PCT_OPTIONS = Array.from({length:101}, (_,i)=>i);
 
 // The 8 composition categories. `key` ties together the form field, the
-// database columns (qc_pct_<key>, qc_waste_<key>_kg) and Production's
-// waste_<...>_kg columns.
+// database column (qc_pct_<key>). Production works the kg figures out
+// from these percentages at the end of its own form.
 const WASTE_CATS = [
   { key:"coloured",   label:"Colored PET Bottles" },
   { key:"labels",     label:"PET Bottles with Labels" },
@@ -159,9 +135,7 @@ function buildWasteControls(){
   const opts = '<option value="">Select...</option>' + PCT_OPTIONS.map(n=>`<option value="${n}">${n}%</option>`).join("");
   document.getElementById("pctGrid").innerHTML = WASTE_CATS.map(c=>`
     <div><label>${c.label.toUpperCase()} % *</label>
-      <select id="qfPct_${c.key}" onchange="computeWasteFromPct()">${opts}</select></div>`).join("");
-  document.getElementById("kgGrid").innerHTML = WASTE_CATS.map(c=>`
-    <div><label>${c.label} (kg)</label><input type="number" id="qfKg_${c.key}" readonly></div>`).join("");
+      <select id="qfPct_${c.key}">${opts}</select></div>`).join("");
 }
 
 async function init(){
@@ -184,10 +158,11 @@ async function init(){
     const fillerSections   = fillerRows   ? fillerRows.map(r=>r.section)   : [];
     const approverSections = approverRows ? approverRows.map(r=>r.section) : [];
 
-    await Promise.all([
-      IS_FILLER   ? loadFillQueue(fillerSections)   : null,
-      IS_APPROVER ? loadApprovalQueue(approverSections) : null
+    const [fillRows, apprRows] = await Promise.all([
+      IS_FILLER   ? loadFillQueue(fillerSections)   : [],
+      IS_APPROVER ? loadApprovalQueue(approverSections) : []
     ]);
+    if(IS_FILLER || IS_APPROVER) renderQueue((fillRows||[]).concat(apprRows||[]));
 
     if(!IS_FILLER && !IS_APPROVER){
       document.getElementById("noQueue").style.display="block";
@@ -198,6 +173,15 @@ async function init(){
   }
 }
 
+// One single list per stage: items to fill AND items to review/approve.
+function renderQueue(rows){
+  document.getElementById("fillSection").style.display = "block";
+  document.getElementById("fillQueue").innerHTML = rows.length
+    ? rows.join("")
+    : `<p style="font-size:13px;color:var(--muted);">Nothing is waiting for you at this stage.</p>`;
+  setupCollapsibleQueue("fillQueueTitle", "fillQueue", rows.length, "Your Queue — Stage 6: Quality Control");
+}
+
 async function loadFillQueue(sections){
   const { data } = await sb.from("pet_collections")
     .select("id,form_number,agent_name,agent_code,section,status,updated_at")
@@ -205,16 +189,7 @@ async function loadFillQueue(sections){
     .in("section", sections.length ? sections : ALL_SECTIONS)
     .order("updated_at",{ascending:false});
 
-  const el = document.getElementById("fillSection");
-  const queue = document.getElementById("fillQueue");
-  el.style.display = "block";
-
-  if(!data||!data.length){
-    queue.innerHTML=`<p style="font-size:13px;color:var(--muted);">No collections waiting for Quality Control entry.</p>`;
-    setupCollapsibleQueue("fillQueueTitle", "fillQueue", 0, "Your Fill Queue — Stage 6: Quality Control");
-    return;
-  }
-  queue.innerHTML = data.map(c=>`<div class="queue-row">
+  return (data||[]).map(c=>`<div class="queue-row">
     <div>
       <b style="font-size:13px;">${esc(c.form_number)}</b>
       <span class="meta" style="margin-left:8px;">${esc(c.agent_name)} (${esc(c.agent_code)}) — ${esc(c.section)}</span>
@@ -223,11 +198,10 @@ async function loadFillQueue(sections){
       </span>
     </div>
     <button onclick="openQCForm(${c.id})">Fill Quality Control Data</button>
-  </div>`).join("");
-  setupCollapsibleQueue("fillQueueTitle", "fillQueue", data.length, "Your Fill Queue — Stage 6: Quality Control");
+  </div>`);
 }
 
-function qcReviewSections(qc, rumbuW){
+function qcReviewSections(qc){
   return [
     { heading: "Bottle Grade", rows: [ ["Bottle Grade", qc.bottle_grade] ] },
     { heading: "Physical Form", rows: [
@@ -236,11 +210,6 @@ function qcReviewSections(qc, rumbuW){
       ["Bale Density", qc.bale_density],
     ]},
     { heading: "Bottle Composition (%)", rows: WASTE_CATS.map(c=>[c.label, qc["qc_pct_"+c.key]!=null ? qc["qc_pct_"+c.key]+"%" : null]) },
-    { heading: "Waste Calculation (kg)", rows: WASTE_CATS.map(c=>[c.label, qc["qc_waste_"+c.key+"_kg"]]).concat([
-      ["Total Waste Record (kg)", qc.qc_total_waste_kg],
-      ["Accepted Waste (kg)", qc.qc_accepted_waste_kg],
-      ["Unacceptable Waste (kg)", qc.qc_unacceptable_waste_kg],
-    ])}
   ];
 }
 
@@ -251,14 +220,7 @@ async function loadApprovalQueue(sections){
     .in("section", sections.length ? sections : ALL_SECTIONS)
     .order("updated_at",{ascending:false});
 
-  const el = document.getElementById("approvalSection");
-  el.style.display = "block";
-
-  if(!data||!data.length){
-    document.getElementById("approvalQueue").innerHTML=`<p style="font-size:13px;color:var(--muted);">No submissions awaiting your approval.</p>`;
-    setupCollapsibleQueue("approvalQueueTitle", "approvalQueue", 0, "Your Approval Queue — Stage 6: Quality Control");
-    return;
-  }
+  if(!data||!data.length) return [];
 
   // Scoped to THIS cycle — a decision from before a reject/correct loop
   // must not hide the buttons once the form is corrected and resubmitted.
@@ -267,23 +229,23 @@ async function loadApprovalQueue(sections){
   const decided = new Set((myDecisions||[]).map(d=>d.collection_id+":"+d.cycle));
 
   QC_QUEUE_DATA = data;
-  document.getElementById("approvalQueue").innerHTML = data.map(c=>{
+  return data.map(c=>{
     const qc = c.pet_stage2_qc?.[0]||c.pet_stage2_qc||{};
     const hasDec = decided.has(c.id+":"+c.cycle);
     return `<div class="approve-card">
+      <div style="margin-bottom:6px;"><span class="badge-status bs-approval">Awaiting your approval</span></div>
       <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;">
         <div>
           <b>${esc(c.form_number)}</b> — ${esc(c.agent_name)} (${esc(c.section)})
           <div style="font-size:12px;color:var(--muted);margin-top:4px;">
-            Grade: ${esc(qc.bottle_grade||"—")} | Total Waste: ${esc(qc.qc_total_waste_kg!=null?qc.qc_total_waste_kg:"—")} kg
+            Grade: ${esc(qc.bottle_grade||"—")}
           </div>
         </div>
         ${hasDec ? `<span class="badge-status bs-approval">Decision submitted — awaiting others</span>` : ""}
       </div>
-      ${!hasDec ? `<div style="margin-top:10px;"><button onclick="openQCReview(${c.id})">Review to Confirm or Reject</button></div>` : ""}
+      ${!hasDec ? `<div style="margin-top:10px;"><button onclick="openQCReview(${c.id})">Review &amp; Approve</button></div>` : ""}
     </div>`;
-  }).join("");
-  setupCollapsibleQueue("approvalQueueTitle", "approvalQueue", data.length, "Your Approval Queue — Stage 6: Quality Control");
+  });
 }
 
 function openQCReview(collectionId){
@@ -296,7 +258,7 @@ function openQCReview(collectionId){
     mode: "decide",
     sections: [
       { heading: "Rumbu Weighbridge", rows: [ ["Rumbu Weighbridge Weight", (c.rumbu_weighbridge_weight||0) + " kg"] ] }
-    ].concat(qcReviewSections(qc, c.rumbu_weighbridge_weight)),
+    ].concat(qcReviewSections(qc)),
     onApprove: ()=>decide(collectionId,'stage4c','approved',null),
     onReject: (note)=>decide(collectionId,'stage4c','rejected',note)
   });
@@ -326,7 +288,6 @@ async function openQCForm(id){
     setField("qfDensity",qc.bale_density);
     WASTE_CATS.forEach(w=>{ if(qc["qc_pct_"+w.key]!=null) document.getElementById("qfPct_"+w.key).value = String(Number(qc["qc_pct_"+w.key])); });
   }
-  computeWasteFromPct();
 
   if(c.status==="rejected_to_stage4c"){
     const { data: log } = await sb.from("pet_activity_log")
@@ -353,35 +314,6 @@ function setField(id, val){
   if(el && val!=null) el.value = val;
 }
 
-// ---- The waste formula (moved here from Production) ----
-//   category kg  = round( Rumbu Weighbridge Weight x percentage / 100 )
-//   total waste  = sum of the 8 category kg
-//   accepted     = Rumbu Weighbridge Weight x 3%
-//   unacceptable = total waste - accepted   (value = that, only if > 0)
-// Whole-kg rounding matches how these figures were always recorded.
-function computeWasteFromPct(){
-  const rumbuW = parseFloat(CURRENT_COLLECTION?.rumbu_weighbridge_weight)||0;
-  const kgs = {};
-  let total = 0;
-  WASTE_CATS.forEach(c=>{
-    const raw = document.getElementById("qfPct_"+c.key).value;
-    const pct = raw==="" ? 0 : parseFloat(raw);
-    const kg = Math.round(rumbuW * pct / 100);
-    kgs[c.key] = kg;
-    total += kg;
-    document.getElementById("qfKg_"+c.key).value = kg;
-  });
-  const accepted = parseFloat((rumbuW*0.03).toFixed(2));
-  const unaccKg  = parseFloat((total-accepted).toFixed(2));
-  const unaccVal = unaccKg>0 ? unaccKg : 0;
-  document.getElementById("qfTotalWaste").value    = total.toFixed(2);
-  document.getElementById("qfAcceptedWaste").value = accepted.toFixed(2);
-  document.getElementById("qfUnaccKg").value       = unaccKg.toFixed(2);
-  document.getElementById("qfUnaccVal").value      = unaccVal.toFixed(2);
-  return { rumbuW, kgs, total, accepted, unaccKg, unaccVal };
-}
-window.computeWasteFromPct = computeWasteFromPct;
-
 async function submitQC(){
   const st = document.getElementById("qcFormStatus");
 
@@ -397,26 +329,22 @@ async function submitQC(){
   for(const c of WASTE_CATS){
     if(document.getElementById("qfPct_"+c.key).value===""){ st.style.color="var(--bad)"; st.textContent=`"${c.label} %" is required (choose 0% if none).`; return; }
   }
-  const calc = computeWasteFromPct();
-  if(!(calc.rumbuW>0)){ st.style.color="var(--bad)"; st.textContent="The Rumbu Weighbridge Weight is missing for this collection — Stage 5 (Rumbu Weight Details) must be completed first."; return; }
 
   st.textContent = "";
   const view = {
     bottle_grade: document.getElementById("qfGrade").value,
     avg_bale_weight_kg: document.getElementById("qfAvgWeight").value,
     avg_bale_volume: document.getElementById("qfAvgVol").value,
-    bale_density: document.getElementById("qfDensity").value,
-    qc_total_waste_kg: calc.total, qc_accepted_waste_kg: calc.accepted, qc_unacceptable_waste_kg: calc.unaccKg
+    bale_density: document.getElementById("qfDensity").value
   };
   WASTE_CATS.forEach(c=>{
     view["qc_pct_"+c.key] = document.getElementById("qfPct_"+c.key).value;
-    view["qc_waste_"+c.key+"_kg"] = calc.kgs[c.key];
   });
   showReviewModal({
     title: "Review Before Submitting",
-    subtitle: (CURRENT_COLLECTION?.form_number||"") + " — check everything below before it goes for approval",
+    subtitle: (CURRENT_COLLECTION?.form_number||"") + " — check everything below before you submit",
     mode: "submit",
-    sections: qcReviewSections(view, calc.rumbuW),
+    sections: qcReviewSections(view),
     onConfirm: proceedWithQCSubmit
   });
 }
@@ -425,25 +353,19 @@ async function proceedWithQCSubmit(){
   const st = document.getElementById("qcFormStatus");
   st.style.color="var(--muted)"; st.textContent="Saving...";
   try{
-    const calc = computeWasteFromPct();
     const qcPayload = {
       collection_id:       CURRENT_COLLECTION.id,
-      tonnage_kg:          calc.rumbuW,
+      tonnage_kg:          parseFloat(CURRENT_COLLECTION.rumbu_weighbridge_weight)||0,
       agent_code_ref:      CURRENT_COLLECTION.agent_code,
       bottle_grade:        document.getElementById("qfGrade").value||null,
       avg_bale_weight_kg:  parseFloat(document.getElementById("qfAvgWeight").value)||null,
       avg_bale_volume:     parseFloat(document.getElementById("qfAvgVol").value)||null,
       bale_density:        parseFloat(document.getElementById("qfDensity").value)||null,
-      qc_total_waste_kg:          calc.total,
-      qc_accepted_waste_kg:       calc.accepted,
-      qc_unacceptable_waste_kg:   calc.unaccKg,
-      qc_unacceptable_waste_value: calc.unaccVal,
       filled_by_profile_id: ME.id,
       filled_at:           new Date().toISOString()
     };
     WASTE_CATS.forEach(c=>{
       qcPayload["qc_pct_"+c.key] = parseFloat(document.getElementById("qfPct_"+c.key).value);
-      qcPayload["qc_waste_"+c.key+"_kg"] = calc.kgs[c.key];
     });
 
     const { data: existing } = await sb.from("pet_stage2_qc").select("id").eq("collection_id",CURRENT_COLLECTION.id).maybeSingle();
@@ -456,7 +378,9 @@ async function proceedWithQCSubmit(){
     }
 
     const oldStatus = CURRENT_COLLECTION.status;
-    const { error: stErr } = await sb.from("pet_collections").update({ status:"stage4c_qc_approval", updated_at: new Date().toISOString() }).eq("id",CURRENT_COLLECTION.id);
+    const needsApproval = await stageHasApprovers("stage4c", CURRENT_COLLECTION.section);
+    const nextStatus = needsApproval ? "stage4c_qc_approval" : NEXT_STATUS.stage4c;
+    const { error: stErr } = await sb.from("pet_collections").update({ status: nextStatus, updated_at: new Date().toISOString() }).eq("id",CURRENT_COLLECTION.id);
     if(stErr) throw new Error("QC data was saved, but could not advance status: "+stErr.message);
 
     const { error: logErr } = await sb.from("pet_activity_log").insert({
@@ -466,11 +390,11 @@ async function proceedWithQCSubmit(){
       actor_profile_id: ME.id,
       actor_username:   ME.username,
       old_status:       oldStatus,
-      new_status:       "stage4c_qc_approval"
+      new_status: nextStatus
     });
     if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
 
-    st.style.color="var(--ok)"; st.textContent="Submitted for approval.";
+    st.style.color="var(--ok)"; st.textContent = needsApproval ? "Submitted for approval." : "Submitted — moved on to the next stage.";
     setTimeout(()=>{ closeQCForm(); init(); }, 1200);
   }catch(e){
     st.style.color="var(--bad)"; st.textContent="Error: "+e.message;
@@ -537,6 +461,14 @@ async function decide(collectionId, stage, decision, note){
     }
     await init();
   }catch(e){ alert("Error: "+e.message); }
+}
+
+// True when at least one approver is assigned to this stage for this branch.
+// If nobody is assigned, there is no approval step: submitting moves the
+// collection straight on to the next stage.
+async function stageHasApprovers(stage, section){
+  const { data } = await sb.from("pet_stage_approvers").select("profile_id").eq("section",section).eq("stage",stage);
+  return !!(data && data.length);
 }
 
 async function checkAllApproved(collectionId, stage, cycle, section){

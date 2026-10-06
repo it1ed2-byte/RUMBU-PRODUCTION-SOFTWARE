@@ -74,17 +74,21 @@
   // mode: "submit" (Confirm & Submit / Go Back) or "decide" (Approve / Reject)
   window.showReviewModal = function(opts){
     const { title, subtitle, sections, mode } = opts;
+    // Optional wording for the decide-mode buttons (defaults unchanged).
+    const approveLabel = opts.approveLabel || "✔ Approve";
+    const rejectLabel  = opts.rejectLabel  || "✘ Reject";
+    const noteLabel    = opts.noteLabel    || "Rejection reason (required only if rejecting)";
     const overlay = document.createElement("div");
     overlay.className = "rm-overlay";
 
     let footerHtml = "";
     if(mode === "decide"){
       footerHtml = `
-        <label class="rm-note-label">Rejection reason (required only if rejecting)</label>
+        <label class="rm-note-label">${noteLabel}</label>
         <input type="text" id="rmNote" placeholder="Explain what needs correcting...">
         <div class="rm-btns">
-          <button id="rmApprove" style="background:var(--ok);">✔ Approve</button>
-          <button id="rmReject" style="background:var(--bad);">✘ Reject</button>
+          <button id="rmApprove" style="background:var(--ok);">${approveLabel}</button>
+          <button id="rmReject" style="background:var(--bad);">${rejectLabel}</button>
           <button id="rmCancel" class="btn-ghost">Cancel</button>
         </div>`;
     } else {
