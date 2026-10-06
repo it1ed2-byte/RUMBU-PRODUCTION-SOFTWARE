@@ -91,6 +91,7 @@
         <button class="link-btn" onclick="openHistory()">Review History →</button>
       </div>
       <div class="toolbar">
+        <div class="grow"><label>Branch</label><select id="branchFilter" onchange="renderQueue()"><option value="all">All</option></select></div>
         <div class="grow"><label>Department</label><select id="deptFilter" onchange="renderQueue()"><option value="all">All</option></select></div>
         <div style="flex:0 0 auto;"><button class="mini grey" onclick="loadQueue()">Refresh</button></div>
       </div>
@@ -126,10 +127,11 @@
     <div class="backbar"><button class="mini grey" onclick="backToQueue()">← Back to Review list</button></div>
     <div class="card">
       <h3>Review History</h3>
-      <p class="sub">Your initiations that have moved past review. Click any row to view it.</p>
+      <p class="sub">Forms in your branches that have moved past review. Click any row to view it.</p>
       <div class="toolbar">
         <div><label>From Date</label><input type="date" id="fromDate"></div>
         <div><label>To Date</label><input type="date" id="toDate"></div>
+        <div><label>Branch</label><select id="histBranch" onchange="loadHistory()"><option value="all">All</option></select></div>
         <div style="flex:0 0 auto;"><button class="mini grey" onclick="loadHistory()">Refresh</button></div>
       </div>
       <div id="historyWrap"></div>
@@ -161,6 +163,8 @@ let IS_SUPER_ADMIN_BLANKET = false;   // super admins see every branch, like Ste
 let HISTORY_ROWS = [];
 const COMPANY = "Rumbu Industries Limited";
 const PROPOSE_HOURS_DEFAULT = 11;
+const MAX_HOURS = 11;      // hours worked can never exceed this; anything higher is reset to it
+function clampHours(v){ const n = Number(v); if(!isFinite(n)) return 0; return Math.min(MAX_HOURS, Math.max(0, n)); }
 const TO_REVIEW = ["awaiting_step4","rejected_to_step4"];
 
 function esc(s){
@@ -261,6 +265,12 @@ async function loadQueue(){
     deptSel.innerHTML = '<option value="all">All</option>' + depts.map(d=>`<option value="${esc(d)}">${esc(d)}</option>`).join("");
     if(depts.indexOf(current) !== -1) deptSel.value = current;
 
+    const branchSel = document.getElementById("branchFilter");
+    const branches = [...new Set(QUEUE_ROWS.map(r=>r.section).concat(MY_SECTIONS).filter(b => b && b !== "ALL_BRANCHES"))].sort();
+    const currentBranch = branchSel.value;
+    branchSel.innerHTML = '<option value="all">All</option>' + branches.map(b=>`<option value="${esc(b)}">${esc(b)}</option>`).join("");
+    if(branches.indexOf(currentBranch) !== -1) branchSel.value = currentBranch;
+
     renderQueue();
   }catch(e){
     wrap.innerHTML = "<p class='status err'>❌ " + esc(e.message) + "</p>";
@@ -270,7 +280,8 @@ async function loadQueue(){
 function renderQueue(){
   const wrap = document.getElementById("queueWrap");
   const deptFilter = document.getElementById("deptFilter").value;
-  const rows = (deptFilter === "all") ? QUEUE_ROWS : QUEUE_ROWS.filter(r=>normDept(r.department)===deptFilter);
+  const branchFilter = document.getElementById("branchFilter").value;
+  const rows = QUEUE_ROWS.filter(r => (deptFilter === "all" || normDept(r.department) === deptFilter) && (branchFilter === "all" || r.section === branchFilter));
   if(notAssignedReviewer()){
     wrap.innerHTML = "<p class='empty'>You are not assigned as an HR Review (Step 4) reviewer for any branch. Ask IT to assign you in Overtime Setup.</p>";
     return;
@@ -282,11 +293,12 @@ function renderQueue(){
     return;
   }
 
-  let html = "<table><thead><tr><th>Form No.</th><th>Department</th><th>Units</th><th>Overtime Date</th><th>Propose Hours</th><th>Status</th><th></th></tr></thead><tbody>";
+  let html = "<table><thead><tr><th>Form No.</th><th>Branch</th><th>Department</th><th>Units</th><th>Overtime Date</th><th>Propose Hours</th><th>Status</th><th></th></tr></thead><tbody>";
   rows.forEach(r=>{
     const isRejected = r.status === "rejected_to_step4";
     html += "<tr class=\"clickrow\" onclick=\"openEntry(" + r.id + ")\">" +
       "<td><b>" + esc(r.overtime_initiations?.form_number||"") + "</b></td>" +
+      "<td>" + esc(r.section||"") + "</td>" +
       "<td>" + esc(r.department) + "</td>" +
       "<td>" + esc(r.units || "ALL") + "</td>" +
       "<td>" + fmtDate(r.overtime_initiations?.overtime_date||"") + "</td>" +
@@ -347,7 +359,7 @@ async function openEntry(entryId){
   CURRENT_ROWS = (emps||[]).map(e=>{
     const monthlySalary = salaryMap[e.employee_id] || 0;
     const dailyRate = Math.round(monthlySalary * 0.076923 * 100) / 100;
-    const hoursWorked = e.hours_worked != null ? Number(e.hours_worked) : CURRENT_PROPOSE;
+    const hoursWorked = clampHours(e.hours_worked != null ? e.hours_worked : CURRENT_PROPOSE);
     const actualAmount = Math.round((dailyRate / CURRENT_PROPOSE) * hoursWorked * 100) / 100;
     return { ...e, monthly_salary: monthlySalary, daily_rate: dailyRate, hours_worked: hoursWorked, actual_amount: actualAmount };
   });
@@ -370,7 +382,7 @@ function renderEmployeeRows(){
       "<td>" + esc(e.employee_code) + "</td>" +
       "<td>" + esc(e.employee_name) + "</td>" +
       "<td>" + esc(e.reason_for_overtime) + "</td>" +
-      "<td><input class=\"hours\" type=\"number\" step=\"0.5\" min=\"0\" value=\"" + esc(e.hours_worked) + "\" onchange=\"onHoursChanged(" + e.id + ", this.value)\"></td>" +
+      "<td><input class=\"hours\" type=\"number\" step=\"0.5\" min=\"0\" max=\"" + MAX_HOURS + "\" value=\"" + esc(e.hours_worked) + "\" onchange=\"onHoursChanged(" + e.id + ", this.value, this)\"></td>" +
       "</tr>";
   });
   html += "</tbody></table>";
@@ -378,10 +390,18 @@ function renderEmployeeRows(){
 }
 
 // Recompute the (hidden) amount whenever Hours Worked changes.
-function onHoursChanged(rowId, newHours){
+// Hours above MAX_HOURS (11) are reset to 11, and the box is updated so the user sees it.
+function onHoursChanged(rowId, newHours, inputEl){
   const row = CURRENT_ROWS.find(r=>r.id===rowId);
   if(!row) return;
-  const hw = Math.max(0, Number(newHours) || 0);
+  const typed = Number(newHours);
+  const hw = clampHours(newHours);
+  if(inputEl) inputEl.value = hw;
+  if(isFinite(typed) && typed > MAX_HOURS){
+    const st = document.getElementById("submitStatus");
+    st.className = "status err";
+    st.textContent = "Hours worked cannot be more than " + MAX_HOURS + " — the value was reset to " + MAX_HOURS + ".";
+  }
   row.hours_worked = hw;
   row.actual_amount = Math.round((row.daily_rate / CURRENT_PROPOSE) * hw * 100) / 100;
 }
@@ -389,6 +409,9 @@ function onHoursChanged(rowId, newHours){
 // Writes each employee's Hours Worked + computed Daily Rate + Actual Amount.
 async function persistRows(){
   for(const row of CURRENT_ROWS){
+    // Final safety net: never save more than MAX_HOURS, and keep the amount in step with it
+    row.hours_worked = clampHours(row.hours_worked);
+    row.actual_amount = Math.round((row.daily_rate / CURRENT_PROPOSE) * row.hours_worked * 100) / 100;
     const { error } = await sb.from("overtime_employees").update({
       hours_worked: row.hours_worked, daily_rate: row.daily_rate, actual_amount: row.actual_amount
     }).eq("id", row.id);
@@ -483,14 +506,21 @@ async function loadHistory(){
     let rows = data || [];
     if(from) rows = rows.filter(r => (r.overtime_initiations?.overtime_date||"") >= from);
     if(to)   rows = rows.filter(r => (r.overtime_initiations?.overtime_date||"") <= to);
+    const hb = document.getElementById("histBranch");
+    const hbCur = hb.value;
+    const hbs = [...new Set(rows.map(r=>r.section).filter(Boolean))].sort();
+    hb.innerHTML = '<option value="all">All</option>' + hbs.map(b=>`<option value="${esc(b)}">${esc(b)}</option>`).join("");
+    if(hbs.indexOf(hbCur) !== -1) hb.value = hbCur;
+    if(hb.value !== "all") rows = rows.filter(r => r.section === hb.value);
     HISTORY_ROWS = rows;
 
     if(!rows.length){ wrap.innerHTML = "<p class='empty'>No submitted forms yet.</p>"; return; }
 
-    let html = "<table><thead><tr><th>Form No.</th><th>Department</th><th>Units</th><th>Overtime Date</th><th>Status</th><th></th></tr></thead><tbody>";
+    let html = "<table><thead><tr><th>Form No.</th><th>Branch</th><th>Department</th><th>Units</th><th>Overtime Date</th><th>Status</th><th></th></tr></thead><tbody>";
     rows.forEach(r=>{
       html += "<tr class=\"clickrow\" onclick=\"openHistoryDetail(" + r.id + ")\">" +
         "<td><b>" + esc(r.overtime_initiations?.form_number||"") + "</b></td>" +
+      "<td>" + esc(r.section||"") + "</td>" +
         "<td>" + esc(r.department) + "</td>" +
         "<td>" + esc(r.units || "ALL") + "</td>" +
         "<td>" + fmtDate(r.overtime_initiations?.overtime_date||"") + "</td>" +
