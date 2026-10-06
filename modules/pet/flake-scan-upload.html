@@ -38,12 +38,12 @@
 
 <div class="wrap" id="app" style="display:none;">
   <h2 style="color:var(--heading);">Flake Scan Quality Results</h2>
-  <p style="font-size:12.5px;color:var(--muted);">Upload a production run's Flake Scan analysis export here before generating its bag labels — QR generation is blocked until a result exists for that run. Each run holds one result; uploading again for the same run replaces it.</p>
+  <p style="font-size:12.5px;color:var(--muted);">Audit / correction page. Flake Scan results are normally uploaded by the lab in <b>Stage 9 — Lab Testing</b>, <b>one per batch</b>. Use this page to look up a batch's result or to replace it. QR generation for a batch is blocked until that batch has a result.</p>
 
   <div class="card-panel">
-    <h3 style="margin-top:0;">1. Select the Production Run</h3>
+    <h3 style="margin-top:0;">1. Select the Batch</h3>
     <label>Search by Form Number</label>
-    <input type="text" id="searchProd" placeholder="Type a Form Number..." oninput="renderProdList()">
+    <input type="text" id="searchProd" placeholder="Type a Form Number (e.g. PBR - 00001)..." oninput="renderProdList()">
     <div id="prodList" style="margin-top:10px;max-height:280px;overflow-y:auto;"></div>
   </div>
 
@@ -88,26 +88,30 @@ async function init(){
 }
 
 async function loadProductions(){
-  // Single nested join: pet_collections → pet_stage4_production → pet_flake_scan_results.
-  // The previous query joined pet_stage4_production twice (once directly, once aliased),
-  // which PostgREST rejects. One join is enough — the scan result nests inside it.
-  const { data, error } = await sb.from("pet_collections")
-    .select("id,form_number,agent_name,section,pet_stage4_production(id,pet_flake_scan_results(id))")
-    .not("pet_stage4_production", "is", null)
-    .order("updated_at", { ascending: false })
-    .limit(200);
+  // One row per lab BATCH (a production run can have several, each with its own result).
+  // Three plain queries instead of nested joins keeps this simple and robust.
+  const { data:batches, error } = await sb.from("pet_lab_batches")
+    .select("id,collection_id,production_id,batch_no,batch_date")
+    .order("created_at", { ascending: false }).limit(300);
   if(error){ document.getElementById("prodList").innerHTML = "Error: " + error.message; return; }
-  PRODUCTIONS = (data||[]).map(c=>{
-    const prod = Array.isArray(c.pet_stage4_production) ? c.pet_stage4_production[0] : c.pet_stage4_production;
-    const scanResult = prod && prod.pet_flake_scan_results
-      ? (Array.isArray(prod.pet_flake_scan_results) ? prod.pet_flake_scan_results[0] : prod.pet_flake_scan_results)
-      : null;
+  const ids  = (batches||[]).map(b=>b.id);
+  const cids = [...new Set((batches||[]).map(b=>b.collection_id))];
+  let results=[], cols=[];
+  if(ids.length){
+    results = (await sb.from("pet_flake_scan_results").select("id,batch_id").in("batch_id", ids)).data || [];
+    cols    = (await sb.from("pet_collections").select("id,form_number,agent_name,section").in("id", cids)).data || [];
+  }
+  const hasResult = new Set(results.map(r=>r.batch_id));
+  const colMap = {}; cols.forEach(c=>{ colMap[c.id]=c; });
+  PRODUCTIONS = (batches||[]).map(b=>{
+    const c = colMap[b.collection_id] || {};
     return {
-      collection_id: c.id, form_number: c.form_number, agent_name: c.agent_name, section: c.section,
-      production_id: prod ? prod.id : null,
-      has_result: !!scanResult
+      batch_id: b.id, batch_no: b.batch_no, batch_date: b.batch_date,
+      collection_id: b.collection_id, production_id: b.production_id,
+      form_number: c.form_number, agent_name: c.agent_name, section: c.section,
+      has_result: hasResult.has(b.id)
     };
-  }).filter(p=>p.production_id);
+  });
   renderProdList();
 }
 
@@ -115,20 +119,20 @@ function renderProdList(){
   const q = (document.getElementById("searchProd").value||"").toLowerCase().trim();
   const wrap = document.getElementById("prodList");
   const rows = PRODUCTIONS.filter(p=> !q || (p.form_number||"").toLowerCase().includes(q));
-  if(!rows.length){ wrap.innerHTML = "<p style='color:var(--muted);font-size:12.5px;'>No matching production runs.</p>"; return; }
+  if(!rows.length){ wrap.innerHTML = "<p style='color:var(--muted);font-size:12.5px;'>No matching batches.</p>"; return; }
   wrap.innerHTML = rows.map(p=>`
-    <div class="prod-row ${SELECTED_PROD && SELECTED_PROD.production_id===p.production_id ? 'selected':''}" onclick="selectProduction(${p.production_id})">
-      <div><b>${p.form_number}</b> ${p.has_result ? '<span class="already-badge">Result on file</span>' : ''}<div class="sub">${p.agent_name||""} — ${p.section||""}</div></div>
+    <div class="prod-row ${SELECTED_PROD && SELECTED_PROD.batch_id===p.batch_id ? 'selected':''}" onclick="selectProduction(${p.batch_id})">
+      <div><b>${p.form_number}</b> — Batch ${p.batch_no} <span style="color:var(--muted);font-size:11.5px;">(${p.batch_date})</span> ${p.has_result ? '<span class="already-badge">Result on file</span>' : ''}<div class="sub">${p.agent_name||""} — ${p.section||""}</div></div>
     </div>
   `).join("");
 }
 window.renderProdList = renderProdList;
 
-function selectProduction(productionId){
-  SELECTED_PROD = PRODUCTIONS.find(p=>p.production_id===productionId);
+function selectProduction(batchId){
+  SELECTED_PROD = PRODUCTIONS.find(p=>p.batch_id===batchId);
   renderProdList();
   document.getElementById("uploadCard").style.display = "block";
-  document.getElementById("selectedFormLabel").textContent = SELECTED_PROD.form_number;
+  document.getElementById("selectedFormLabel").textContent = SELECTED_PROD.form_number + " — Batch " + SELECTED_PROD.batch_no;
   document.getElementById("previewWrap").innerHTML = "";
   document.getElementById("parseStatus").textContent = "";
   PARSED_RESULT = null;
@@ -339,7 +343,7 @@ async function submitResult(){
   status.className = "status"; status.textContent = "Saving...";
   const p = PARSED_RESULT;
   const payload = {
-    production_id: SELECTED_PROD.production_id,
+    production_id: SELECTED_PROD.production_id, batch_id: SELECTED_PROD.batch_id,
     scan_id: p.scan_id, description: p.description, filename: p.filename,
     sample_weight: p.sample_weight, execution_start: p.execution_start, execution_stop: p.execution_stop,
     execution_duration: p.execution_duration, product_name: p.product_name, product_description: p.product_description,
@@ -366,17 +370,17 @@ async function submitResult(){
   };
 
   try{
-    const { error } = await sb.from("pet_flake_scan_results").upsert(payload, { onConflict: "production_id" });
+    const { error } = await sb.from("pet_flake_scan_results").upsert(payload, { onConflict: "batch_id" });
     if(error) throw error;
 
     await sb.from("pet_activity_log").insert({
       collection_id: SELECTED_PROD.collection_id, action: "flake_scan_uploaded", stage: "stage4",
       actor_profile_id: ME.id, actor_username: ME.username,
       old_status: null, new_status: null,
-      note: "Flake Scan result uploaded for " + SELECTED_PROD.form_number + (SELECTED_PROD.has_result ? " (replaced existing result)" : "")
+      note: "Flake Scan result uploaded for " + SELECTED_PROD.form_number + " — Batch " + SELECTED_PROD.batch_no + (SELECTED_PROD.has_result ? " (replaced existing result)" : "")
     });
 
-    status.className = "status ok"; status.textContent = "✅ Saved. QR generation is now unlocked for this production run.";
+    status.className = "status ok"; status.textContent = "✅ Saved. QR generation is now unlocked for this batch.";
     SELECTED_PROD.has_result = true;
     renderProdList();
   }catch(e){

@@ -26,6 +26,9 @@
   .chip.active{background:var(--accent);color:var(--logo-fg);border-color:var(--accent);}
   .pa-row{padding:12px 14px;border:1px solid var(--line);border-radius:8px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;background:var(--card);gap:12px;flex-wrap:wrap;}
   .pa-row .meta{font-size:12px;color:var(--muted);margin-top:3px;}
+  .guide-box{background:var(--bg);border-left:4px solid var(--accent);border-radius:8px;padding:10px 14px;font-size:12.5px;line-height:1.7;margin-bottom:14px;}
+  .guide-box b{color:var(--heading);}
+  .guide-box ol{margin:4px 0 0 18px;padding:0;}
 </style>
 </head>
 <body>
@@ -33,12 +36,21 @@
   <button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back</button>
   <div id="connStatus" style="font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);">Loading...</div>
 
+  <div class="guide-box">
+    <b>How Stage 7 — Production Approval works</b>
+    <ol>
+      <li>Everything that has cleared Quality Control is listed here, oldest first.</li>
+      <li>Use the <b>agent buttons</b> or the <b>search box</b> to find the agent whose material you want produced next, then open it to see the weights, LOT and Quality Control results.</li>
+      <li><b>Send to Production</b> starts the run: the <b>production start time is stamped automatically</b> and the lab (Stage 9) can begin bagging — over one day or several. Or <b>Return to Quality Control</b>, with a reason, if something is wrong.</li>
+    </ol>
+  </div>
+
   <div id="mainSection" style="display:none;">
     <div class="panel">
       <div class="panel-title" id="queueTitle">Stage 7: Production Approval</div>
       <p style="font-size:12px;color:var(--muted);margin:0 0 8px;">
         Collections that have cleared Quality Control and are waiting to go into production. Pick the agent's collection
-        you want produced next and send it straight to Stage 8: Production — or return it to Quality Control with a reason.
+        you want produced next and send it straight to Stage 8: Production — this starts the production clock. Or return it to Quality Control with a reason.
       </p>
       <input type="text" id="fSearch" placeholder="Filter by agent name, agent code or form number..." oninput="renderList()">
       <div class="chips" id="agentChips"></div>
@@ -143,7 +155,7 @@ async function openReview(id){
   }
   showReviewModal({
     title: "Production Approval — "+c.form_number,
-    subtitle: c.agent_name+" ("+c.agent_code+") — "+c.section+returnedNote,
+    subtitle: c.agent_name+" ("+c.agent_code+") — "+c.section+returnedNote+" — sending to Production stamps the production start time",
     mode: "decide",
     approveLabel: "✔ Send to Production",
     rejectLabel:  "✘ Return to Quality Control",
@@ -188,6 +200,29 @@ async function openReview(id){
   });
 }
 
+// Starts the production run: creates the run's production record with the start time
+// (and keeps the ORIGINAL start time if the run is being re-sent after a return).
+// The lab (Stage 9) attaches its batches and bags to this record.
+async function startRun(collectionId){
+  const { data:c, error:cErr } = await sb.from("pet_collections").select("agent_code").eq("id",collectionId).single();
+  if(cErr) throw new Error("Could not load the collection to start production: "+cErr.message);
+  const { data:off } = await sb.from("pet_stage4a_offloading").select("lot_id,offload_location").eq("collection_id",collectionId).maybeSingle();
+  const { data:ex, error:exErr } = await sb.from("pet_stage4_production").select("id,production_start").eq("collection_id",collectionId).maybeSingle();
+  if(exErr) throw new Error("Could not check the production record: "+exErr.message);
+  const now=new Date().toISOString();
+  if(!ex){
+    const { error } = await sb.from("pet_stage4_production").insert({
+      collection_id:collectionId, agent_code:c.agent_code,
+      lot_id:(off&&off.lot_id)||null, offload_location:(off&&off.offload_location)||null,
+      production_start:now
+    });
+    if(error) throw new Error("Could not start the production run: "+error.message+" — make sure the Lab Testing SQL has been run.");
+  } else if(!ex.production_start){
+    const { error } = await sb.from("pet_stage4_production").update({ production_start:now }).eq("id",ex.id);
+    if(error) throw new Error("Could not stamp the production start time: "+error.message);
+  }
+}
+
 async function decide(collectionId, decision, note){
   const stage="stage4d";
   if(decision==="rejected" && !note){ alert("A reason is required."); return; }
@@ -214,6 +249,8 @@ async function decide(collectionId, decision, note){
       if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
     } else {
       const newStatus=NEXT_STATUS[stage];
+      // Start the production run FIRST: if this fails the collection must not move on.
+      await startRun(collectionId);
       const { error: updErr } = await sb.from("pet_collections").update({ status:newStatus, updated_at:new Date().toISOString() }).eq("id",collectionId);
       if(updErr) throw new Error("Could not send to Production: "+updErr.message);
       const { error: logErr } = await sb.from("pet_activity_log").insert({
@@ -222,6 +259,11 @@ async function decide(collectionId, decision, note){
         old_status:c.status, new_status:newStatus, note:"Sent to Production by plant manager"
       });
       if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
+      await sb.from("pet_activity_log").insert({
+        collection_id:collectionId, action:"production_started", stage:"stage4",
+        actor_profile_id:ME.id, actor_username:ME.username, old_status:null, new_status:null,
+        note:"Production run started — start time stamped automatically"
+      });
     }
     await init();
   }catch(e){ alert("Error: "+e.message); }
