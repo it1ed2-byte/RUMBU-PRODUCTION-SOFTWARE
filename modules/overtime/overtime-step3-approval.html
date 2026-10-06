@@ -14,7 +14,6 @@
 </script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="../../auth.js"></script>
-<script src="overtime-attachments-view.js"></script>
 <style>
   :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;--amber:#d97706;}
   *{box-sizing:border-box;}
@@ -92,6 +91,7 @@
         <button class="link-btn" onclick="openHistory()">My Approval History →</button>
       </div>
       <div class="toolbar">
+        <div class="grow"><label>Branch</label><select id="branchFilter" onchange="renderQueue()"><option value="all">All</option></select></div>
         <div class="grow"><label>Department</label><select id="deptFilter" onchange="renderQueue()"><option value="all">All</option></select></div>
         <div style="flex:0 0 auto;"><button class="mini grey" onclick="loadQueue()">Refresh</button></div>
       </div>
@@ -109,8 +109,6 @@
       <div id="progressInfo" class="progress"></div>
       <h4 style="color:var(--navy);font-size:13px;margin:0 0 4px;">Employees</h4>
       <div id="employeesListWrap"></div>
-      <h4>Overtime List (photo / PDF)</h4>
-      <div id="attachWrap"></div>
       <div id="responseNoteWrap" style="display:none;margin-top:10px;">
         <label>Response to Rejection <span style="color:var(--red);">*</span></label>
         <textarea id="responseNoteInput" placeholder="Explain what was corrected before re-approving"></textarea>
@@ -145,6 +143,7 @@
       <div class="toolbar">
         <div><label>From Date</label><input type="date" id="histFrom"></div>
         <div><label>To Date</label><input type="date" id="histTo"></div>
+        <div><label>Branch</label><select id="histBranch" onchange="loadHistory()"><option value="all">All</option></select></div>
         <div style="flex:0 0 auto;"><button class="mini grey" onclick="loadHistory()">Refresh</button></div>
       </div>
       <div id="historyWrap"></div>
@@ -269,6 +268,12 @@ async function loadQueue(){
     deptSel.innerHTML = '<option value="all">All</option>' + depts.map(d=>`<option value="${esc(d)}">${esc(d)}</option>`).join("");
     if(depts.indexOf(current) !== -1) deptSel.value = current;
 
+    const branchSel = document.getElementById("branchFilter");
+    const branches = [...new Set(QUEUE_ROWS.map(r=>r.section).concat(MY_SECTIONS).filter(b => b && b !== "ALL_BRANCHES"))].sort();
+    const currentBranch = branchSel.value;
+    branchSel.innerHTML = '<option value="all">All</option>' + branches.map(b=>`<option value="${esc(b)}">${esc(b)}</option>`).join("");
+    if(branches.indexOf(currentBranch) !== -1) branchSel.value = currentBranch;
+
     renderQueue();
   }catch(e){
     wrap.innerHTML = "<p class='status err'>❌ " + esc(e.message) + "</p>";
@@ -278,7 +283,8 @@ async function loadQueue(){
 function renderQueue(){
   const wrap = document.getElementById("queueWrap");
   const deptFilter = document.getElementById("deptFilter").value;
-  const rows = (deptFilter === "all") ? QUEUE_ROWS : QUEUE_ROWS.filter(r=>r.department===deptFilter);
+  const branchFilter = document.getElementById("branchFilter").value;
+  const rows = QUEUE_ROWS.filter(r => (deptFilter === "all" || r.department === deptFilter) && (branchFilter === "all" || r.section === branchFilter));
   if(!rows.length){ wrap.innerHTML = "<p class='empty'>Nothing is waiting for your approval right now.</p>"; return; }
 
   let html = "<table><thead><tr><th>Form No.</th><th>Branch</th><th>Department</th><th>Units</th><th>Overtime Date</th><th>Hours</th><th>Status</th><th></th></tr></thead><tbody>";
@@ -286,7 +292,7 @@ function renderQueue(){
     const isRejected = r.status === "rejected_to_step3";
     html += "<tr class=\"clickrow\" onclick=\"openEntry(" + r.id + ")\">" +
       "<td><b>" + esc(r.overtime_initiations?.form_number||"") + "</b></td>" +
-      "<td>" + esc(r.section) + "</td>" +
+      "<td>" + esc(r.section||"") + "</td>" +
       "<td>" + esc(r.department) + "</td>" +
       "<td>" + esc(r.units || "ALL") + "</td>" +
       "<td>" + fmtDate(r.overtime_initiations?.overtime_date||"") + "</td>" +
@@ -343,7 +349,6 @@ async function openEntry(entryId){
     listWrap.innerHTML = html;
   }
 
-  renderOvertimeAttachments("attachWrap", [{ id: entryId, department: entry.department }]);
   await renderApprovalProgress(entry);
 }
 
@@ -519,14 +524,23 @@ async function loadHistory(){
     }
     HISTORY_ROWS = votes.map(v => ({ ...v, entry: entryMap[v.department_entry_id] || null }));
 
+    const hb = document.getElementById("histBranch");
+    const hbCur = hb.value;
+    const hbs = [...new Set(HISTORY_ROWS.map(h=>h.entry?.section).filter(Boolean))].sort();
+    hb.innerHTML = '<option value="all">All</option>' + hbs.map(b=>`<option value="${esc(b)}">${esc(b)}</option>`).join("");
+    if(hbs.indexOf(hbCur) !== -1) hb.value = hbCur;
+    const histBranchF = hb.value;
+
     if(!HISTORY_ROWS.length){ wrap.innerHTML = "<p class='empty'>You have not approved or rejected any forms yet.</p>"; return; }
 
-    let html = "<table><thead><tr><th>Form No.</th><th>Department</th><th>Overtime Date</th><th>My Decision</th><th>Decided</th><th></th></tr></thead><tbody>";
+    let html = "<table><thead><tr><th>Form No.</th><th>Branch</th><th>Department</th><th>Overtime Date</th><th>My Decision</th><th>Decided</th><th></th></tr></thead><tbody>";
     HISTORY_ROWS.forEach((h, i)=>{
       const e = h.entry;
+      if(histBranchF !== "all" && e?.section !== histBranchF) return;   // openHistoryDetail(i) still uses the full-list index
       const tag = h.decision === "approved" ? "approved" : "rejected";
       html += "<tr class=\"clickrow\" onclick=\"openHistoryDetail(" + i + ")\">" +
         "<td><b>" + esc(e?.overtime_initiations?.form_number||"—") + "</b></td>" +
+        "<td>" + esc(e?.section||"—") + "</td>" +
         "<td>" + esc(e?.department||"—") + "</td>" +
         "<td>" + fmtDate(e?.overtime_initiations?.overtime_date||"") + "</td>" +
         "<td><span class=\"tag " + tag + "\">" + h.decision.toUpperCase() + "</span></td>" +
@@ -566,9 +580,7 @@ async function openHistoryDetail(idx){
     list.forEach(x=>{ html += "<tr><td>" + esc(x.employee_code) + "</td><td>" + esc(x.employee_name) + "</td><td>" + esc(x.reason_for_overtime) + "</td></tr>"; });
     html += "</tbody></table>";
   }
-  html += "<h4 style=\"color:var(--navy);font-size:13px;margin:14px 0 4px;\">Overtime List (photo / PDF)</h4><div id=\"histAttachWrap\"></div>";
   body.innerHTML = html;
-  renderOvertimeAttachments("histAttachWrap", [{ id: h.department_entry_id, department: e?.department }]);
 }
 
 init();
