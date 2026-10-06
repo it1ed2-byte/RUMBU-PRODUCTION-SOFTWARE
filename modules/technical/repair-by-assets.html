@@ -13,21 +13,22 @@
   })();
 </script>
 <style>
-  :root{--navy:var(--heading);}
   *{box-sizing:border-box;}
   body{font-family:var(--sans);background:var(--bg);margin:0;padding:16px;}
   .container{max-width:520px;margin:0 auto 16px;background:var(--card);border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,.1);padding:20px;}
-  h3{text-align:center;color:var(--navy);}
+  h3{text-align:center;color:var(--heading);}
   label{font-weight:600;margin-top:10px;display:block;}
-  input,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6px;margin-bottom:8px;}
-  button{width:100%;padding:10px;background:var(--navy);color:#fff;font-weight:bold;border:none;border-radius:6px;cursor:pointer;margin-top:6px;}
+  input,select{width:100%;padding:8px;border:1px solid var(--line);border-radius:6px;margin-bottom:8px;background:var(--card);color:var(--text);}
+  button{width:100%;padding:10px;background:var(--heading);color:#fff;font-weight:bold;border:none;border-radius:6px;cursor:pointer;margin-top:6px;}
   button.alt{background:#38761d;}
   #status{text-align:center;margin-top:10px;font-weight:bold;font-size:13px;}
+  .muted{font-size:11px;color:var(--muted);text-align:right;margin-top:-6px;margin-bottom:6px;}
   .wide{max-width:1100px;margin:0 auto;background:var(--card);border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,.1);padding:20px;}
   table{width:100%;border-collapse:collapse;margin-top:10px;font-size:12px;}
   th,td{border:1px solid #333;padding:5px;text-align:center;white-space:nowrap;}
-  th{background:var(--navy);color:#fff;}
+  th{background:var(--heading);color:#fff;}
   .green{background:#A5D6A7;} .red{background:#FFCDD2;}
+  .badge{display:inline-block;background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:2px 7px;font-size:11px;margin-left:6px;color:var(--muted);}
   @media print{ .no-print{display:none !important;} }
 </style>
 </head>
@@ -35,19 +36,37 @@
 
 <div class="container no-print">
   <h3>🛠️ Repair by Assets Report</h3>
-  <label>Start Date</label><input type="date" id="startDate">
-  <label>End Date</label><input type="date" id="endDate">
-  <label>Department</label>
-  <select id="department"><option value="All">All</option></select>
-  <label>Assets</label>
-  <select id="assets"><option value="All">All</option></select>
-  <label>Shift</label>
-  <select id="shift"><option value="All">All</option><option>Morning</option><option>Night</option></select>
+
   <label>Section</label>
-  <select id="section"><option value="All">All</option></select>
+  <select id="section" onchange="onSectionChange()">
+    <option value="All">All</option>
+    <option value="Rumbu Mainmat">Rumbu Mainmat</option>
+    <option value="MamaSannu">Mama Sannu</option>
+  </select>
+
+  <label>Department <span class="badge" id="deptCount">loading…</span></label>
+  <select id="department" onchange="filterAssets()">
+    <option value="All">All Departments</option>
+  </select>
+
+  <label>Asset <span class="badge" id="assetCount">loading…</span></label>
+  <select id="assets">
+    <option value="All">All Assets</option>
+  </select>
+
+  <label>Start Date</label><input type="date" id="startDate">
+  <label>End Date</label>  <input type="date" id="endDate">
+
+  <label>Shift</label>
+  <select id="shift">
+    <option value="All">All Shifts</option>
+    <option>Morning</option>
+    <option>Night</option>
+  </select>
+
   <button onclick="generate()">Generate Report</button>
   <button class="alt no-print" onclick="window.print()">Print / Save as PDF</button>
-  <div id="status">Ready — select dates and click Generate.</div>
+  <div id="status">Loading asset list…</div>
 </div>
 
 <div id="reportArea"></div>
@@ -63,35 +82,149 @@ function authHeaders(){
   };
 }
 
-function parseDT(v){
-  if(!v) return null;
-  const d = new Date(v);
-  return isNaN(d) ? null : d;
+// ── Asset catalogue: dept → [assets] per section ──────────
+// Populated from control table on init, filtered to Rumbu+MamaSannu
+let CATALOGUE = {
+  "All":           { depts: [], assetsByDept: {} },
+  "Rumbu Mainmat": { depts: [], assetsByDept: {} },
+  "MamaSannu":     { depts: [], assetsByDept: {} }
+};
+
+function sectionKey(raw){
+  if(!raw) return "Rumbu Mainmat";
+  const u = raw.toUpperCase().trim();
+  if(u.includes("MAMA")) return "MamaSannu";
+  return "Rumbu Mainmat";
 }
 
-function minutesBetween(a, b){
-  return (!a || !b) ? 0 : Math.round((b - a) / 60000);
-}
+async function initDropdowns(){
+  const status = document.getElementById("status");
+  try{
+    // Fetch department+assets+section — no date filter, section restricted to Rumbu/Mama
+    // Two pages max (2000 rows) — enough to capture all unique dept/asset combos
+    let all = [];
+    for(let offset = 0; offset < 4000; offset += 1000){
+      const headers = Object.assign({}, authHeaders(), {
+        "Range-Unit": "items",
+        "Range":      offset + "-" + (offset + 999)
+      });
+      const res = await fetch(
+        SUPABASE_URL +
+        "/rest/v1/control?select=department,assets,section" +
+        "&or=(section.ilike.*umbu*,section.ilike.*ama*)" +
+        "&order=id.asc",
+        { headers }
+      );
+      if(!res.ok) break;
+      const batch = await res.json();
+      all = all.concat(batch);
+      if(batch.length < 1000) break;
+    }
 
-function parseNum(v){
-  if(v == null) return 0;
-  const n = parseFloat(String(v));
-  return isNaN(n) ? 0 : n;
-}
+    // Build catalogue
+    all.forEach(r => {
+      const dept  = (r.department || "").trim();
+      const asset = (r.assets     || "").trim();
+      const sec   = sectionKey(r.section);
+      if(!dept && !asset) return;
 
-function field(r, ...keys){
-  for(const k of keys){
-    const v = r[k];
-    if(v !== null && v !== undefined && v !== "") return v;
+      ["All", sec].forEach(key => {
+        const cat = CATALOGUE[key];
+        if(dept && !cat.depts.includes(dept)) cat.depts.push(dept);
+        if(dept && asset){
+          if(!cat.assetsByDept[dept]) cat.assetsByDept[dept] = [];
+          if(!cat.assetsByDept[dept].includes(asset)) cat.assetsByDept[dept].push(asset);
+        }
+        if(asset && !dept){
+          if(!cat.assetsByDept["__all__"]) cat.assetsByDept["__all__"] = [];
+          if(!cat.assetsByDept["__all__"].includes(asset)) cat.assetsByDept["__all__"].push(asset);
+        }
+      });
+    });
+
+    // Sort everything
+    Object.values(CATALOGUE).forEach(cat => {
+      cat.depts.sort();
+      Object.values(cat.assetsByDept).forEach(arr => arr.sort());
+    });
+
+    fillDeptDropdown("All");
+    filterAssets();
+
+    const total = all.length;
+    status.textContent = "Ready — " + total + " records scanned for filter options.";
+    status.style.color = "var(--ok, #1d8a4e)";
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "Filter init error: " + e.message;
   }
-  return null;
 }
 
-async function fetchFiltered(startDate, endDate){
-  let all = [], offset = 0; const pageSize = 1000;
-  const dateFilter =
-    "&date=gte." + startDate +
-    "&date=lte." + endDate;
+function fillDeptDropdown(section){
+  const sel   = document.getElementById("department");
+  const curr  = sel.value;
+  const depts = CATALOGUE[section]?.depts || [];
+
+  sel.innerHTML = `<option value="All">All Departments</option>` +
+    depts.map(d => `<option value="${d}">${d}</option>`).join("");
+  document.getElementById("deptCount").textContent = depts.length + " depts";
+
+  if(depts.includes(curr)) sel.value = curr;
+}
+
+function filterAssets(){
+  const section = document.getElementById("section").value;
+  const dept    = document.getElementById("department").value;
+  const sel     = document.getElementById("assets");
+  const curr    = sel.value;
+
+  const cat  = CATALOGUE[section] || CATALOGUE["All"];
+  let assets = [];
+
+  if(dept === "All"){
+    // All assets across all depts for this section
+    const seen = new Set();
+    Object.values(cat.assetsByDept).forEach(arr =>
+      arr.forEach(a => { if(!seen.has(a)){ seen.add(a); assets.push(a); } })
+    );
+    assets.sort();
+  } else {
+    assets = cat.assetsByDept[dept] || [];
+  }
+
+  sel.innerHTML = `<option value="All">All Assets</option>` +
+    assets.map(a => `<option value="${a}">${a}</option>`).join("");
+  document.getElementById("assetCount").textContent = assets.length + " assets";
+
+  if(assets.includes(curr)) sel.value = curr;
+}
+
+function onSectionChange(){
+  const section = document.getElementById("section").value;
+  fillDeptDropdown(section);
+  filterAssets();
+}
+
+// ── Fetch records for date range ──────────────────────────
+function parseDT(v){ if(!v) return null; const d=new Date(v); return isNaN(d)?null:d; }
+function minutesBetween(a,b){ return (!a||!b)?0:Math.round((b-a)/60000); }
+function parseNum(v){ if(v==null) return 0; const n=parseFloat(String(v)); return isNaN(n)?0:n; }
+function field(r,...keys){ for(const k of keys){ const v=r[k]; if(v!==null&&v!==undefined&&v!=="") return v; } return null; }
+
+async function fetchFiltered(startDate, endDate, section){
+  let all = [], offset = 0;
+  const pageSize = 1000;
+
+  let sectionFilter = "";
+  if(section === "Rumbu Mainmat"){
+    sectionFilter = "&or=(section.ilike.*umbu*,section.not.ilike.*ama*)";
+  } else if(section === "MamaSannu"){
+    sectionFilter = "&section=ilike.*ama*";
+  } else {
+    sectionFilter = "&or=(section.ilike.*umbu*,section.ilike.*ama*)";
+  }
+
+  const dateFilter = "&date=gte." + startDate + "&date=lte." + endDate;
 
   for(let guard = 0; guard < 500; guard++){
     const headers = Object.assign({}, authHeaders(), {
@@ -99,8 +232,7 @@ async function fetchFiltered(startDate, endDate){
       "Range":      offset + "-" + (offset + pageSize - 1)
     });
     const res = await fetch(
-      SUPABASE_URL + "/rest/v1/control?select=*" +
-      dateFilter + "&order=id.asc",
+      SUPABASE_URL + "/rest/v1/control?select=*" + dateFilter + sectionFilter + "&order=id.asc",
       { headers }
     );
     if(!res.ok) throw new Error("control: HTTP " + res.status);
@@ -112,43 +244,7 @@ async function fetchFiltered(startDate, endDate){
   return all;
 }
 
-async function init(){
-  const today = new Date();
-  const iso   = today.toISOString().slice(0, 10);
-  const past  = new Date(today);
-  past.setDate(today.getDate() - 7);
-  document.getElementById("endDate").value   = iso;
-  document.getElementById("startDate").value = past.toISOString().slice(0, 10);
-
-  // Populate Department and Assets dropdowns on page load
-  // so users see options before clicking Generate
-  try{
-    const [deptRes, assetRes] = await Promise.all([
-      fetch(SUPABASE_URL + "/rest/v1/control?select=department&department=not.is.null&order=department.asc&limit=5000", { headers: authHeaders() }),
-      fetch(SUPABASE_URL + "/rest/v1/control?select=assets&assets=not.is.null&order=assets.asc&limit=5000",             { headers: authHeaders() })
-    ]);
-    if(deptRes.ok){
-      const deptRows = await deptRes.json();
-      const depts = [...new Set(deptRows.map(r => r.department).filter(Boolean))].sort();
-      const deptSel = document.getElementById("department");
-      deptSel.innerHTML = `<option value="All">All</option>` +
-        depts.map(v => `<option value="${v}">${v}</option>`).join("");
-    }
-    if(assetRes.ok){
-      const assetRows = await assetRes.json();
-      const assets = [...new Set(assetRows.map(r => r.assets).filter(Boolean))].sort();
-      const assetSel = document.getElementById("assets");
-      assetSel.innerHTML = `<option value="All">All</option>` +
-        assets.map(v => `<option value="${v}">${v}</option>`).join("");
-    }
-  }catch(e){
-    console.warn("Could not pre-load dropdown values:", e.message);
-  }
-
-  // Section is always these fixed values
-  fixSectionDropdown();
-}
-
+// ── Generate report ───────────────────────────────────────
 async function generate(){
   const status     = document.getElementById("status");
   const startDate  = document.getElementById("startDate").value;
@@ -166,8 +262,8 @@ async function generate(){
 
   let rows;
   try{
-    rows = await fetchFiltered(startDate, endDate);
-    status.textContent = "Loaded " + rows.length + " rows for date range.";
+    rows = await fetchFiltered(startDate, endDate, section);
+    status.textContent = rows.length + " rows loaded.";
   }catch(e){
     status.style.color = "#c0392b";
     status.textContent = "Error: " + e.message;
@@ -180,27 +276,15 @@ async function generate(){
     return;
   }
 
-  repopulateDropdown("department", rows, r => field(r,"department"));
-  repopulateDropdown("assets",     rows, r => field(r,"assets"));
-  fixSectionDropdown();
-
+  // Client-side filters
   const filtered = rows.filter(r => {
     if(department !== "All"){
-      const d = (field(r,"department")||"").trim();
-      if(d !== department) return false;
+      if((field(r,"department")||"").trim() !== department) return false;
     }
     if(assetFilt !== "All"){
-      const a = (field(r,"assets")||"").trim();
-      if(a !== assetFilt) return false;
+      if((field(r,"assets")||"").trim() !== assetFilt) return false;
     }
     if(shift !== "All" && r.shift !== shift) return false;
-    if(section !== "All"){
-      const rawSec = (field(r,"section")||"").toUpperCase().trim();
-      const isMama  = rawSec.includes("MAMA") || rawSec.includes("MAMASANNU");
-      const isRumbu = !isMama;
-      if(section === "MamaSannu"     && !isMama)  return false;
-      if(section === "Rumbu Mainmat" && !isRumbu) return false;
-    }
     const finish = parseDT(field(r,"finish_time"));
     return !!finish;
   });
@@ -213,42 +297,47 @@ async function generate(){
   }
 
   status.style.color = "#1d8a4e";
-  status.textContent  = filtered.length + " record(s) found.";
+  status.textContent = filtered.length + " record(s) found.";
 
+  // Build report
+  const secLabel = section === "All" ? "All Sections" : section;
   let html = `<div class="wide">
-    <h2 style="text-align:center;color:#1565C0;">🛠️ Repair by Assets Report</h2>
-    <p style="text-align:center;">
-      ${startDate} → ${endDate} | Dept: ${department} |
-      Assets: ${assetFilt} | Shift: ${shift} | Section: ${section}
+    <h2 style="text-align:center;color:var(--heading);">🛠️ Repair by Assets Report</h2>
+    <p style="text-align:center;font-size:13px;">
+      ${startDate} → ${endDate} &nbsp;|&nbsp; Section: ${secLabel} &nbsp;|&nbsp;
+      Dept: ${department} &nbsp;|&nbsp; Asset: ${assetFilt} &nbsp;|&nbsp; Shift: ${shift}
     </p>
     <table><thead><tr>
-      <th>#</th><th>Asset</th><th>Job Code</th><th>Nurse Name</th>
+      <th>#</th><th>Date</th><th>Asset</th><th>Department</th><th>Job Code</th>
+      <th>Nurse Name</th><th>Shift</th>
       <th>Downtime (min)</th><th>Repair (min)</th><th>Waiting (min)</th>
-      <th>Estimated (min)</th><th>Diff</th><th>Date</th>
+      <th>Estimated (min)</th><th>Diff</th>
     </tr></thead><tbody>`;
 
   filtered.forEach((r, i) => {
-    const stop   = parseDT(field(r, "mc_stoppage_time", "stop_time"));
-    const start  = parseDT(field(r, "starting_time"));
-    const finish = parseDT(field(r, "finish_time"));
+    const stop   = parseDT(field(r,"mc_stoppage_time","stop_time"));
+    const start  = parseDT(field(r,"starting_time"));
+    const finish = parseDT(field(r,"finish_time"));
     const downtime = minutesBetween(stop, finish);
     const repair   = minutesBetween(start, finish);
     const waiting  = start ? (downtime - repair) : 0;
-    const est      = Math.round(parseNum(field(r, "estimated_duration", "extimated_time")));
+    const est      = Math.round(parseNum(field(r,"estimated_duration","extimated_time")));
     const diff     = est - repair;
-    const recDate  = field(r, "date_col", "date") || "";
+    const recDate  = field(r,"date_col","date") || "";
 
     html += `<tr>
-      <td>${i + 1}</td>
+      <td>${i+1}</td>
+      <td>${recDate}</td>
       <td>${field(r,"assets")||""}</td>
+      <td>${field(r,"department")||""}</td>
       <td>${field(r,"job_code")||""}</td>
       <td>${field(r,"names","nurse_name")||""}</td>
+      <td>${r.shift||""}</td>
       <td>${downtime}</td>
       <td>${repair}</td>
       <td>${waiting}</td>
       <td>${est}</td>
-      <td class="${diff >= 0 ? "green" : "red"}">${diff}</td>
-      <td>${recDate}</td>
+      <td class="${diff>=0?"green":"red"}">${diff}</td>
     </tr>`;
   });
 
@@ -256,23 +345,13 @@ async function generate(){
   document.getElementById("reportArea").innerHTML = html;
 }
 
-function fixSectionDropdown(){
-  const sel  = document.getElementById("section");
-  const curr = sel.value;
-  sel.innerHTML =
-    `<option value="All">All</option>
-     <option value="Rumbu Mainmat">Rumbu Mainmat</option>
-     <option value="MamaSannu">Mama Sannu</option>`;
-  if(curr === "Rumbu Mainmat" || curr === "MamaSannu") sel.value = curr;
-}
-
-function repopulateDropdown(id, rows, getter){
-  const sel  = document.getElementById(id);
-  const curr = sel.value;
-  const vals = [...new Set(rows.map(getter).filter(Boolean))].sort();
-  sel.innerHTML = `<option value="All">All</option>` +
-    vals.map(v => `<option value="${v}">${v}</option>`).join("");
-  if(vals.includes(curr)) sel.value = curr;
+// ── Init ─────────────────────────────────────────────────
+function init(){
+  const today = new Date();
+  const past  = new Date(today); past.setDate(today.getDate()-7);
+  document.getElementById("endDate").value   = today.toISOString().slice(0,10);
+  document.getElementById("startDate").value = past.toISOString().slice(0,10);
+  initDropdowns();
 }
 
 init();
