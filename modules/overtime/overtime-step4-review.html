@@ -86,9 +86,9 @@
   <div id="queueView">
     <div class="card">
       <h3>Forms to Review</h3>
-      <p class="sub">Your own initiations, approved and now waiting for you to confirm the hours.</p>
+      <p class="sub">Forms for the branches you review, approved and now waiting for you to confirm the hours.</p>
       <div class="links">
-        <button class="link-btn" onclick="openHistory()">My Submission History →</button>
+        <button class="link-btn" onclick="openHistory()">Review History →</button>
       </div>
       <div class="toolbar">
         <div class="grow"><label>Department</label><select id="deptFilter" onchange="renderQueue()"><option value="all">All</option></select></div>
@@ -125,7 +125,7 @@
   <div id="historyView" style="display:none;">
     <div class="backbar"><button class="mini grey" onclick="backToQueue()">← Back to Review list</button></div>
     <div class="card">
-      <h3>My Submission History</h3>
+      <h3>Review History</h3>
       <p class="sub">Your initiations that have moved past review. Click any row to view it.</p>
       <div class="toolbar">
         <div><label>From Date</label><input type="date" id="fromDate"></div>
@@ -155,7 +155,9 @@ let CURRENT_ENTRY = null;
 let CURRENT_ROWS = [];      // employees with computed (hidden) pay
 let CURRENT_PROPOSE = 11;
 let QUEUE_ROWS = [];
-let OWN_DEPTS = [];     // departments on ALL of my own forms (any status), so the dropdown always has choices
+let SCOPE_DEPTS = [];   // registered departments of the branches I review, so the dropdown always has choices
+let MY_SECTIONS = [];   // branches where I am assigned as the Step 4 (HR Review) reviewer
+let IS_SUPER_ADMIN_BLANKET = false;   // super admins see every branch, like Step 3
 let HISTORY_ROWS = [];
 const COMPANY = "Rumbu Industries Limited";
 const PROPOSE_HOURS_DEFAULT = 11;
@@ -202,6 +204,7 @@ async function init(){
     if(!ME) return;
     document.getElementById("appArea").style.display = "block";
     status.textContent = "Connected.";
+    await loadMySections();
     await loadQueue();
   }catch(e){
     status.style.color = "#c0392b"; status.textContent = "❌ " + e.message;
@@ -212,31 +215,48 @@ async function init(){
 // Department names are compared case-insensitively, so "Production" and "PRODUCTION" are one department.
 function normDept(d){ return String(d == null ? "" : d).trim().toUpperCase(); }
 
-// ===== QUEUE: my entries awaiting review =====
+// Who may review: whoever is assigned to Step 4 in Overtime Setup ("HR Review — Step 4"), per branch.
+async function loadMySections(){
+  MY_SECTIONS = [];
+  IS_SUPER_ADMIN_BLANKET = false;
+  if(ME.role === "super_admin"){ IS_SUPER_ADMIN_BLANKET = true; return; }
+  const { data: emp } = await sb.from("employees").select("id").eq("linked_profile_id", ME.id).maybeSingle();
+  if(!emp) return;
+  const { data: scopes } = await sb.from("overtime_step_approvers").select("section").eq("employee_id", emp.id).eq("step", 4);
+  MY_SECTIONS = [...new Set((scopes||[]).map(s=>s.section))];
+}
+function notAssignedReviewer(){ return !IS_SUPER_ADMIN_BLANKET && !MY_SECTIONS.length; }
+
+// ===== QUEUE: entries in my branches awaiting review =====
 async function loadQueue(){
   showView("queueView");
   const wrap = document.getElementById("queueWrap");
   wrap.innerHTML = "<p class='loading'>Loading…</p>";
   try{
-    const { data, error } = await sb.from("overtime_department_entries")
-      .select("*, overtime_initiations!inner(form_number, overtime_date, propose_hours, initiator_profile_id)")
-      .in("status", TO_REVIEW)
-      .eq("overtime_initiations.initiator_profile_id", ME.id)
-      .order("created_at", { ascending: false });
-    if(error) throw error;
-    QUEUE_ROWS = data || [];
+    QUEUE_ROWS = [];
+    SCOPE_DEPTS = [];
+    if(!notAssignedReviewer()){
+      let q = sb.from("overtime_department_entries")
+        .select("*, overtime_initiations(form_number, overtime_date, propose_hours)")
+        .in("status", TO_REVIEW)
+        .order("created_at", { ascending: false });
+      if(!IS_SUPER_ADMIN_BLANKET) q = q.in("section", MY_SECTIONS);
+      const { data, error } = await q;
+      if(error) throw error;
+      QUEUE_ROWS = data || [];
 
-    // Departments from every form I have initiated (any status). Non-fatal if this lookup fails.
-    OWN_DEPTS = [];
-    try{
-      const own = await sb.from("overtime_department_entries")
-        .select("department, overtime_initiations!inner(initiator_profile_id)")
-        .eq("overtime_initiations.initiator_profile_id", ME.id);
-      if(!own.error) OWN_DEPTS = (own.data || []).map(r => r.department);
-    }catch(e){ console.warn("Could not load own departments (non-fatal):", e); }
+      // Registered departments of my branches, so the dropdown has choices even when nothing is waiting.
+      // Non-fatal if this lookup fails.
+      if(!IS_SUPER_ADMIN_BLANKET){
+        try{
+          const dres = await sb.from("departments").select("name").in("section", MY_SECTIONS);
+          if(!dres.error) SCOPE_DEPTS = (dres.data || []).map(d => d.name);
+        }catch(e){ console.warn("Could not load departments (non-fatal):", e); }
+      }
+    }
 
     const deptSel = document.getElementById("deptFilter");
-    const depts = [...new Set(QUEUE_ROWS.map(r=>r.department).concat(OWN_DEPTS).map(normDept).filter(Boolean))].sort();
+    const depts = [...new Set(QUEUE_ROWS.map(r=>r.department).concat(SCOPE_DEPTS).map(normDept).filter(Boolean))].sort();
     const current = deptSel.value;
     deptSel.innerHTML = '<option value="all">All</option>' + depts.map(d=>`<option value="${esc(d)}">${esc(d)}</option>`).join("");
     if(depts.indexOf(current) !== -1) deptSel.value = current;
@@ -251,6 +271,10 @@ function renderQueue(){
   const wrap = document.getElementById("queueWrap");
   const deptFilter = document.getElementById("deptFilter").value;
   const rows = (deptFilter === "all") ? QUEUE_ROWS : QUEUE_ROWS.filter(r=>normDept(r.department)===deptFilter);
+  if(notAssignedReviewer()){
+    wrap.innerHTML = "<p class='empty'>You are not assigned as an HR Review (Step 4) reviewer for any branch. Ask IT to assign you in Overtime Setup.</p>";
+    return;
+  }
   if(!rows.length){
     wrap.innerHTML = "<p class='empty'>" + (deptFilter === "all"
       ? "Nothing is waiting for your review right now."
@@ -448,11 +472,13 @@ async function loadHistory(){
   const to = document.getElementById("toDate").value;
   wrap.innerHTML = "<p class='loading'>Loading…</p>";
   try{
-    const { data, error } = await sb.from("overtime_department_entries")
-      .select("*, overtime_initiations!inner(form_number, form_date, overtime_date, propose_hours, initiator_profile_id)")
-      .eq("overtime_initiations.initiator_profile_id", ME.id)
-      .not("status", "in", "(" + TO_REVIEW.join(",") + ")")
+    if(notAssignedReviewer()){ HISTORY_ROWS = []; wrap.innerHTML = "<p class='empty'>No submitted forms yet.</p>"; return; }
+    let hq = sb.from("overtime_department_entries")
+      .select("*, overtime_initiations(form_number, form_date, overtime_date, propose_hours)")
+      .in("status", ["awaiting_step5","awaiting_step6","completed","rejected_to_step3","rejected_to_step5"])
       .order("updated_at", { ascending: false });
+    if(!IS_SUPER_ADMIN_BLANKET) hq = hq.in("section", MY_SECTIONS);
+    const { data, error } = await hq;
     if(error) throw error;
     let rows = data || [];
     if(from) rows = rows.filter(r => (r.overtime_initiations?.overtime_date||"") >= from);
