@@ -97,6 +97,7 @@
             <option value="returned">Returned</option>
           </select>
         </div>
+        <div><label>Department</label><select id="fDept" onchange="renderList()"><option value="all">All departments</option></select></div>
         <div><label>Search form / initiator</label><input type="text" id="fSearch" placeholder="Form no. or name" oninput="renderList()"></div>
         <div class="act"><button class="mini grey" onclick="loadList()">Refresh</button></div>
       </div>
@@ -283,33 +284,60 @@ async function loadList(){
 
     LIST_ROWS = initList.map(i=>{
       const es = entriesByInit[i.id] || [];
-      const total = es.length;
-      const done = es.filter(e=>e.status==="completed").length;
-      let minStep = 100;
-      es.forEach(e=>{ const s = STEP_OF[e.status] != null ? STEP_OF[e.status] : 50; if(s < minStep) minStep = s; });
-      const anyReturned = es.some(e=>String(e.status).indexOf("rejected")===0);
-      let head;
-      if(!total) head = "grey|No departments";
-      else if(done === total) head = "done|Completed";
-      else if(anyReturned) head = "returned|Needs correction";
-      else head = String(minStep) + "|" + (STEP_LABEL["awaiting_step"+minStep] || ("Step "+minStep));
       return {
         id:i.id, form_number:i.form_number||"", form_date:i.form_date, overtime_date:i.overtime_date,
-        section:i.section, initiator:i.initiator_username||"", total, done, minStep, anyReturned, head,
-        departments: [...new Set(es.map(e=>e.department).filter(Boolean))].sort().join(", "),
-        _staff: es.reduce((a,e)=>a+(counts[e.id]||0),0)
+        section:i.section, initiator:i.initiator_username||"",
+        entries: es.map(e=>({ department:e.department, status:e.status, staff:(counts[e.id]||0) }))
       };
-    }).filter(r => r.total > 0 || IS_SUPER);   // hide empty-after-scope forms for admins
+    }).filter(r => r.entries.length > 0 || IS_SUPER);   // hide empty-after-scope forms for admins
+
+    populateDeptFilter();
 
     renderList();
   }catch(e){ wrap.innerHTML = "<p class='status err' style='color:var(--red)'>❌ " + esc(e.message) + "</p>"; }
 }
 
+// Department names are compared case-insensitively, so "Production" on an older
+// form and "PRODUCTION" on a newer one are treated as the same department.
+function normDept(d){ return String(d == null ? "" : d).trim().toUpperCase(); }
+
+// Status summary for a set of department entries (a whole form, or just one department of it)
+function summarise(es){
+  const total = es.length;
+  const done = es.filter(e=>e.status==="completed").length;
+  let minStep = 100;
+  es.forEach(e=>{ const s = STEP_OF[e.status] != null ? STEP_OF[e.status] : 50; if(s < minStep) minStep = s; });
+  const anyReturned = es.some(e=>String(e.status).indexOf("rejected")===0);
+  let head;
+  if(!total) head = "grey|No departments";
+  else if(done === total) head = "done|Completed";
+  else if(anyReturned) head = "returned|Needs correction";
+  else head = String(minStep) + "|" + (STEP_LABEL["awaiting_step"+minStep] || ("Step "+minStep));
+  return { total, done, minStep, anyReturned, head, _staff: es.reduce((a,e)=>a+e.staff,0) };
+}
+
+function populateDeptFilter(){
+  const sel = document.getElementById("fDept");
+  const current = sel.value;
+  const names = [...new Set(LIST_ROWS.flatMap(r => r.entries.map(e => normDept(e.department))).filter(Boolean))].sort();
+  sel.innerHTML = "<option value=\"all\">All departments</option>" +
+    names.map(n => "<option value=\"" + esc(n) + "\">" + esc(n) + "</option>").join("");
+  sel.value = (current !== "all" && names.indexOf(current) !== -1) ? current : "all";
+}
+
 function renderList(){
   const wrap = document.getElementById("listWrap");
   const stepF = document.getElementById("fStep").value;
+  const deptF = document.getElementById("fDept").value;
   const term = (document.getElementById("fSearch").value||"").trim().toLowerCase();
-  let rows = LIST_ROWS.slice();
+
+  // With a department selected, the counts and current step describe that department only
+  let rows = LIST_ROWS.map(r=>{
+    const es = (deptF === "all") ? r.entries : r.entries.filter(e => normDept(e.department) === deptF);
+    return Object.assign({}, r, summarise(es));
+  });
+  if(deptF !== "all") rows = rows.filter(r => r.total > 0);
+
   if(stepF !== "all"){
     rows = rows.filter(r=>{
       if(stepF === "done") return r.done === r.total && r.total > 0;
@@ -320,7 +348,7 @@ function renderList(){
   if(term){ rows = rows.filter(r => (r.form_number + " " + r.initiator).toLowerCase().indexOf(term) !== -1); }
   if(!rows.length){ wrap.innerHTML = "<p class='empty'>No overtime matches these filters.</p>"; return; }
 
-  let html = "<table><thead><tr><th>Form No.</th><th>Branch</th><th>Department</th><th>Overtime Date</th><th>Initiator</th><th class='num'>Depts</th><th class='num'>Staff</th><th>Current Step</th><th></th></tr></thead><tbody>";
+  let html = "<table><thead><tr><th>Form No.</th><th>Branch</th><th>Overtime Date</th><th>Initiator</th><th class='num'>Depts</th><th class='num'>Staff</th><th>Current Step</th><th></th></tr></thead><tbody>";
   rows.forEach(r=>{
     const [cls, txt] = r.head.split("|");
     const tag = cls==="done" ? "green" : cls==="returned" ? "red" : cls==="grey" ? "grey" : "amber";
@@ -328,7 +356,6 @@ function renderList(){
     html += "<tr class='clickrow' onclick=\"openInitiation(" + r.id + ")\">" +
       "<td><b>" + esc(r.form_number) + "</b></td>" +
       "<td>" + esc(r.section) + "</td>" +
-      "<td>" + esc(r.departments) + "</td>" +
       "<td>" + fmtDate(r.overtime_date) + "</td>" +
       "<td>" + esc(r.initiator) + "</td>" +
       "<td class='num'>" + r.total + "</td>" +
