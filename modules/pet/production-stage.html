@@ -93,11 +93,12 @@
   <div class="guide-box">
     <b>How Stage 8 — Production works</b>
     <ol>
-      <li><b>Production starts automatically</b> when the plant manager sends an agent's material here (Stage 7). The start time is stamped for you.</li>
-      <li><b>Add a batch</b> each time one is made: the grade (<b>AA</b> or <b>AB</b>), the weight of <b>each bag</b>, and the <b>operator</b> and <b>shift leader</b> IDs (their names appear by themselves). Keep adding batches until the material is finished.</li>
-      <li>The lab (Stage 9) tests each batch as you add it. When the lab submits a result, <b>review it here</b>: <b>Approve</b>, ask for a <b>retest</b>, or ask for a <b>rerun</b>.</li>
-      <li><b>Approving a batch generates its QR labels</b>, which you can print and paste on the bags.</li>
-      <li>When every batch is approved and the material is finished, press <b>Complete Production</b>. Waste is worked out automatically from Quality Control, and the run goes to the next step.</li>
+      <li><b>Production starts automatically</b> when the plant manager sends an agent's material here (Stage 7). He also chooses the <b>company</b> the flake is made for, and can change it while the run is open.</li>
+      <li><b>Material into production</b> (Kano material used) is recorded by the person assigned to that duty.</li>
+      <li><b>Batch entry:</b> add a batch each time one is made: the grade (<b>AA</b> or <b>AB</b>), the weight of <b>each bag</b>, and the <b>operator</b> and <b>shift leader</b> IDs (their names appear by themselves). Keep adding batches until the material is finished.</li>
+      <li>The lab (Stage 9) tests each batch as you add it. <b>Result approval:</b> when the lab submits a result, the result approver sees it <b>beside the company's limits</b>, then passes the batch or asks for a <b>retest</b> or a <b>rerun</b>.</li>
+      <li><b>Labels:</b> once a batch is approved, the labels person generates, prints and downloads its QR labels.</li>
+      <li>When every batch is approved and the material is finished, the batch-entry person presses <b>Complete Production</b>. Waste is worked out automatically from Quality Control.</li>
     </ol>
   </div>
 
@@ -116,11 +117,14 @@
         </div>
         <div id="prodCorrNote" style="display:none;" class="correction-note"></div>
         <div class="info-box" id="prodSummary"></div>
+        <div id="companyLine" class="info-box" style="margin-top:8px;"></div>
+        <div id="dutyNote" style="font-size:12.5px;color:var(--muted);margin:8px 0 0;"></div>
 
         <div class="sec-title">1 · Progress</div>
         <p class="step-help">Material balance = Rumbu weight − waste (from the Stage 6 percentages) − every batch recorded so far. At about zero, the agent's material is finished.</p>
         <div class="tiles" id="runTiles"></div>
 
+        <div id="batchFormWrap">
         <div class="sec-title" id="bfTitle">2 · Add a batch</div>
         <p class="step-help" id="bfHelp">Enter one batch at a time. Every bag in a batch has the same grade. Weigh each bag and type its weight.</p>
         <div id="bfEditNote" class="correction-note" style="display:none;"></div>
@@ -144,6 +148,7 @@
           <button id="bfCancel" class="btn-ghost" onclick="resetBatchForm()" style="display:none;">Cancel edit</button>
         </div>
         <div id="bfStatus" style="margin-top:8px;font-size:13px;font-weight:700;min-height:16px;"></div>
+        </div>
 
         <div class="sec-title">3 · Batches</div>
         <p class="step-help">Newest first. Batches the lab has submitted show a <b>Review result</b> button.</p>
@@ -168,6 +173,7 @@
         <!-- Kano Material Used — optional. "Save Kano Material Used" can be pressed at any
              time while the run is open; anything still unsaved is saved when you press
              Complete Production. -->
+        <div id="materialWrap">
         <div id="kanoUsageCard" style="margin-top:10px;padding-top:20px;border-top:2px solid var(--line);">
           <div id="kanoUsagePrompt" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
             <span style="font-size:13px;">Do you want to record the weight of Kano material used for this production?</span>
@@ -189,6 +195,7 @@
             <div class="status" id="kanoUsageStatus"></div>
           </div>
         </div>
+        </div>
 
 
 
@@ -206,7 +213,7 @@
         </div>
 
         <div style="margin-top:20px;display:flex;gap:10px;" id="prodSaveRow">
-          <button onclick="completeProduction()">Complete Production</button>
+          <button id="completeBtn" onclick="completeProduction()">Complete Production</button>
           <button class="btn-ghost" onclick="closeProdForm()">Close run</button>
         </div>
         <div id="prodFormStatus" style="margin-top:10px;font-size:13px;font-weight:700;min-height:16px;"></div>
@@ -229,6 +236,33 @@ let ME=null, CURRENT_PROD=null, CURRENT_PROD_ID=null, ALL_SECTIONS=[], PROD_QUEU
 let PROD_REC={}, RUN_BATCHES=[], RUN_RESULTS={}, RUN_BAGS={}, OPEN_LABELS=new Set();
 let EDITING=null;                       // batch id being edited, or null when adding
 const EMP={op:null, sl:null};           // resolved employees: {employee_id, full_name}
+
+// ---- who may do what at Stage 8 (set in Manage Assignments) ----
+// Anyone assigned to plain "stage4" keeps all four duties. Super admin has all.
+const DUTY_KEYS={material:"stage4_material",batch:"stage4_batch",review:"stage4_resapp",labels:"stage4_labels"};
+const ALL_DUTY_STAGES=["stage4"].concat(Object.values(DUTY_KEYS));
+const DUTY_NAME={material:"material into production",batch:"batch entry",review:"result approval",labels:"labels PDF"};
+let MY_DUTY_ROWS=[], CAN={material:false,batch:false,review:false,labels:false};
+function dutiesFor(section){
+  const all=ME.role==="super_admin";
+  const legacy=MY_DUTY_ROWS.some(r=>r.stage==="stage4" && r.section===section);
+  const o={};
+  Object.keys(DUTY_KEYS).forEach(k=>{ o[k]=all||legacy||MY_DUTY_ROWS.some(r=>r.stage===DUTY_KEYS[k] && r.section===section); });
+  return o;
+}
+function needDuty(k){
+  if(CAN[k]) return true;
+  alert("You are not assigned to "+DUTY_NAME[k]+" for this section. Ask an administrator to add you under Manage Assignments, Stage 8.");
+  return false;
+}
+function applyDutyUi(){
+  const show=(id,on)=>{ const e=document.getElementById(id); if(e) e.style.display=on?"":"none"; };
+  show("batchFormWrap",CAN.batch); show("materialWrap",CAN.material); show("completeBtn",CAN.batch);
+  const mine=Object.keys(CAN).filter(k=>CAN[k]).map(k=>DUTY_NAME[k]);
+  document.getElementById("dutyNote").innerHTML = mine.length
+    ? "<b>Your duties on this run:</b> "+esc(mine.join(", "))+"."+(mine.length<4?" The other duties belong to other people.":"")
+    : "You can view this run, but you are not assigned to any duty on it.";
+}
 
 const NEXT_STATUS={stage4:'stage3p2_filling'};
 const REJECT_STATUS={stage4:'rejected_to_stage4d'};
@@ -273,12 +307,13 @@ async function init(){
     ALL_SECTIONS = (secData||[]).map(s=>s.name);
 
     const [{ data:fillerRows },{ data:approverRows }]=await Promise.all([
-      sb.from("pet_stage_fillers").select("section").eq("stage","stage4").eq("profile_id",ME.id),
+      sb.from("pet_stage_fillers").select("section,stage").in("stage",ALL_DUTY_STAGES).eq("profile_id",ME.id),
       sb.from("pet_stage_approvers").select("section").eq("stage","stage4").eq("profile_id",ME.id)
     ]);
     const isFiller   =(fillerRows&&fillerRows.length>0)||ME.role==="super_admin";
     const isApprover =(approverRows&&approverRows.length>0)||ME.role==="super_admin";
-    const fSecs=(fillerRows||[]).map(r=>r.section);
+    MY_DUTY_ROWS=fillerRows||[];
+    const fSecs=[...new Set((fillerRows||[]).map(r=>r.section))];
     const aSecs=(approverRows||[]).map(r=>r.section);
 
     const [fillRows, apprRows] = await Promise.all([
@@ -299,7 +334,7 @@ function renderQueue(rows){
 
 async function loadFillQueue(sections){
   const { data }=await sb.from("pet_collections")
-    .select("id,form_number,agent_name,agent_code,section,status,updated_at,rumbu_weighbridge_weight,pet_stage2_qc(*),pet_stage4_production(production_start),pet_lab_batches(total_kg,colored_flex_kg,non_colored_flex_kg,batch_status,bags_generated_at)")
+    .select("id,form_number,agent_name,agent_code,section,status,updated_at,rumbu_weighbridge_weight,pet_stage2_qc(*),pet_stage4_production(production_start,company_name),pet_lab_batches(total_kg,colored_flex_kg,non_colored_flex_kg,batch_status,bags_generated_at)")
     .in("status",RUN_STATUSES)
     .in("section",sections.length?sections:ALL_SECTIONS)
     .order("updated_at",{ascending:false});
@@ -313,6 +348,7 @@ async function loadFillQueue(sections){
     <div><b>${esc(c.form_number)}</b> <span style="font-size:12px;color:var(--muted);margin-left:8px;">${esc(c.agent_name)} (${esc(c.agent_code)}) — ${esc(c.section)}</span>
       ${c.status==="rejected_to_stage4"?`<span class="pill p-bad">Returned for correction</span>`:""}
       ${review?`<span class="pill p-info">${review} result${review===1?"":"s"} to review</span>`:""}
+      ${prod.company_name?`<span class="pill p-info">${esc(prod.company_name)}</span>`:`<span class="pill p-bad">No company set</span>`}
       <div class="meta">Started ${esc(fmtDT(prod.production_start))} · ${bs.length} batch${bs.length===1?"":"es"} · ${fmt(produced)} kg recorded · ${bal==null?"balance unknown":"balance "+fmt(bal)+" kg"}</div>
     </div>
     <button onclick="openProdForm(${c.id})">Open Run</button>
@@ -362,6 +398,7 @@ async function openProdReview(collectionId){
     sections: [
       { heading: "Production Time", rows: [
         ["LOT", off.offload_location||prod.offload_location],
+        ["Company", prod.company_name],
         ["Production Start", prod.production_start ? fmtDT(prod.production_start) : null],
         ["Production End", prod.production_end ? fmtDT(prod.production_end) : null],
       ]},
@@ -388,7 +425,7 @@ async function openProdReview(collectionId){
       { heading: "Batches", rows: [
         ["Number of Batches", bl.length],
         ["Bags Produced", bags],
-      ].concat(bl.map(b=>["Batch "+b.batch_no+" — "+fmtD(b.batch_date), fmt(bTotal(b))+" kg · "+bGrade(b)+" · "+(b.operator_name||"—")+" / "+(b.shift_leader_name||"—")])) }
+      ].concat(bl.map(b=>["Batch "+b.batch_no+" — "+fmtD(b.batch_date), fmt(bTotal(b))+" kg · "+bGrade(b)+" · "+(b.operator_name||"—")+" / "+(b.shift_leader_name||"—")+(b.standard_verdict&&b.standard_verdict!=="no_standard"?" · standard "+b.standard_verdict.toUpperCase()+(b.standard_override?" (overruled)":""):"")])) }
     ],
     onApprove: ()=>decide(collectionId,'approved',null),
     onReject: (note)=>decide(collectionId,'rejected',note)
@@ -497,13 +534,15 @@ function batchCard(b){
   const flake = !res ? `<span class="pill p-wait">Flake result: not uploaded</span>` : (res.passed===false?`<span class="pill p-bad">Flake result: FAILED</span>`:`<span class="pill p-ok">Flake result: PASSED</span>`);
   const hist = (b.retest_count||b.rerun_count) ? ` · retests ${b.retest_count||0} · reruns ${b.rerun_count||0}` : "";
   let actions="";
+  const quiet=t=>`<span style="font-size:12.5px;color:var(--muted);align-self:center;">${t}</span>`;
   if(st==="produced"||st==="rerun_requested"){
-    actions=`<button class="btn-sm" onclick="editBatch(${b.id})">Edit</button> <button class="btn-ghost btn-sm" onclick="removeBatch(${b.id})">Remove</button>`;
+    actions = CAN.batch ? `<button class="btn-sm" onclick="editBatch(${b.id})">Edit</button> <button class="btn-ghost btn-sm" onclick="removeBatch(${b.id})">Remove</button>` : "";
   } else if(st==="lab_done"){
-    actions=`<button class="btn-sm" onclick="openReview(${b.id})">Review result</button>`;
+    actions = CAN.review ? `<button class="btn-sm" onclick="openReview(${b.id})">Review result</button>` : `<button class="btn-ghost btn-sm" onclick="openReview(${b.id})">View result</button> ${quiet("Waiting for the result approver")}`;
   } else if(st==="approved"){
     const gen=!!b.bags_generated_at;
-    actions = gen ? `<button class="btn-sm" onclick="toggleLabels(${b.id})">${OPEN_LABELS.has(b.id)?"Hide labels":"Show / print labels"}</button>
+    if(!CAN.labels) actions = gen ? quiet("Labels are ready. The labels person prints and downloads them.") : quiet("Approved. Waiting for the labels person to generate the labels.");
+    else actions = gen ? `<button class="btn-sm" onclick="toggleLabels(${b.id})">${OPEN_LABELS.has(b.id)?"Hide labels":"Show / print labels"}</button>
       ${OPEN_LABELS.has(b.id)?`<button class="btn-sm" onclick="printLabels(${b.id})">🖨️ Print labels</button>`:""}
       ${b.labels_pdf_url?`<a href="${esc(b.labels_pdf_url)}" target="_blank" style="font-size:12.5px;align-self:center;">Download labels PDF</a>`:`<button class="btn-ghost btn-sm" onclick="rebuildPdf(${b.id})">Create labels PDF</button>`}`
       : `<button class="btn-sm" onclick="generateLabels(${b.id})">Generate labels</button>`;
@@ -513,7 +552,7 @@ function batchCard(b){
     <div class="batch-head">
       <div><b style="font-size:14px;color:var(--heading);">Batch ${b.batch_no}</b>
         <span style="color:var(--muted);font-size:12px;">· ${esc(fmtD(b.batch_date))} · Grade <b>${esc(bGrade(b))}</b> · ${b.bag_count||weights.length||"—"} bags · ${fmt(bTotal(b))} kg${hist}</span></div>
-      <div>${statusPill(st)}${flake}</div>
+      <div>${statusPill(st)}${flake}${stdPill(b)}</div>
     </div>
     <div class="kv"><b>Operator:</b> ${esc(b.operator_name||"—")}${b.operator_employee_id?" ("+esc(b.operator_employee_id)+")":""} · <b>Shift leader:</b> ${esc(b.shift_leader_name||"—")}${b.shift_leader_employee_id?" ("+esc(b.shift_leader_employee_id)+")":""}</div>
     ${chips?`<div class="bagchips">${chips}</div>`:""}
@@ -522,6 +561,14 @@ function batchCard(b){
     <div class="qr-grid" id="qr_${b.id}" style="display:${OPEN_LABELS.has(b.id)&&b.bags_generated_at?"grid":"none"};"></div>
     <div id="bs_${b.id}" style="font-size:12.5px;font-weight:700;min-height:14px;margin-top:6px;"></div>
   </div>`;
+}
+function stdPill(b){
+  if(!b.standard_verdict || b.standard_verdict==="no_standard") return "";
+  const sc=(b.standard_total?(" "+num(b.standard_pass_count)+"/"+num(b.standard_total)):"");
+  if(b.standard_verdict==="pass") return `<span class="pill p-ok" title="${esc(b.standard_company_name||"")}">Standard: PASS${sc}</span>`;
+  return b.standard_override
+    ? `<span class="pill p-bad" title="${esc(b.standard_company_name||"")}">Standard: FAIL${sc}, passed by approver</span>`
+    : `<span class="pill p-bad" title="${esc(b.standard_company_name||"")}">Standard: FAIL${sc}</span>`;
 }
 function renderBatchList(){
   const wrap=document.getElementById("batchList");
@@ -580,6 +627,7 @@ function resetBatchForm(){
 }
 
 function editBatch(id){
+  if(!needDuty("batch")) return;
   const b=RUN_BATCHES.find(x=>x.id===id); if(!b) return;
   const st=bStatus(b);
   if(st!=="produced" && st!=="rerun_requested"){ alert("This batch can no longer be edited."); return; }
@@ -609,6 +657,7 @@ async function logAct(action, note){
 }
 
 async function saveBatch(){
+  if(!needDuty("batch")) return;
   const st=document.getElementById("bfStatus");
   const bad=m=>{ st.style.color="var(--bad)"; st.textContent=m; };
   if(!CURRENT_PROD||!CURRENT_PROD_ID){ bad("Open a run first."); return; }
@@ -646,7 +695,8 @@ async function saveBatch(){
       if(was==="rerun_requested"){
         const { error:dErr } = await sb.from("pet_flake_scan_results").delete().eq("batch_id",EDITING);
         if(dErr) throw new Error("Could not clear the old lab result: "+dErr.message);
-        Object.assign(upd,{ batch_status:"produced", lab_submitted_at:null, lab_submitted_by:null, decision_at:null, decision_by:null, decision_note:null });
+        Object.assign(upd,{ batch_status:"produced", lab_submitted_at:null, lab_submitted_by:null, decision_at:null, decision_by:null, decision_note:null,
+          standard_company_id:null, standard_company_name:null, standard_verdict:null, standard_pass_count:null, standard_total:null, standard_checks:null, standard_override:false, standard_scored_at:null, standard_scored_by:null });
       }
       const { data, error } = await sb.from("pet_lab_batches").update(upd).eq("id",EDITING).in("batch_status",["produced","rerun_requested"]).select("id");
       if(error) throw new Error(error.message);
@@ -669,6 +719,7 @@ async function saveBatch(){
 }
 
 async function removeBatch(id){
+  if(!needDuty("batch")) return;
   const b=RUN_BATCHES.find(x=>x.id===id); if(!b) return;
   const s=bStatus(b);
   if(s!=="produced" && s!=="rerun_requested"){ alert("Only a batch that has not been reviewed can be removed."); return; }
@@ -680,7 +731,68 @@ async function removeBatch(id){
   await loadRunData(CURRENT_PROD.id); renderRunOverview();
 }
 
+// ---------------------------- company standard: comparison engine ----------------------------
+const SEC_LABEL={color_a:"Colour A",color_b:"Colour B",material_a:"Material A",material_b:"Material B",metal:"Metal",sample:"Sample"};
+const fmtS=n=>Number(n).toLocaleString(undefined,{maximumFractionDigits:4});
+function stdAutoLabel(ln){
+  if(ln.section==="metal") return "Metal pieces";
+  if(ln.section==="sample") return "Sample weight (g)";
+  if(ln.metric==="purity") return (SEC_LABEL[ln.section]||ln.section)+" total purity (%)";
+  return (SEC_LABEL[ln.section]||ln.section)+": "+(ln.category||"?")+" ("+(ln.metric==="ppm"?"ppm":"%")+")";
+}
+// The value the Flake Scan measured for one limit, or null when the scan has no such value.
+function stdMeasure(r, ln){
+  const s=ln.section;
+  if(s==="metal")  return (r.metal_evaluation_enabled===false || r.metal_pieces==null) ? null : Number(r.metal_pieces);
+  if(s==="sample") return r.sample_weight!=null ? Number(r.sample_weight) : null;
+  if(r[s+"_enabled"]===false) return null;
+  if(ln.metric==="purity") return r[s+"_total_purity"]!=null ? Number(r[s+"_total_purity"]) : null;
+  const cats=Array.isArray(r[s+"_categories"]) ? r[s+"_categories"] : [];
+  const want=String(ln.category||"").trim().toLowerCase();
+  const c=cats.find(x=>x && String(x.name||"").trim().toLowerCase()===want);
+  if(!c) return null;
+  const v = ln.metric==="ppm" ? c.ppm : c.percent;
+  return v!=null ? Number(v) : null;
+}
+// status: ok (inside the limits), fail (outside, with the difference), missing (the scan did not report it)
+function stdEvaluate(r, lines){
+  return (lines||[]).map(ln=>{
+    const v=stdMeasure(r,ln);
+    const min=ln.min_value!=null?Number(ln.min_value):null, max=ln.max_value!=null?Number(ln.max_value):null;
+    let status="ok", diff=null;
+    if(v==null) status="missing";
+    else if(min!=null && v<min){ status="fail"; diff=v-min; }
+    else if(max!=null && v>max){ status="fail"; diff=v-max; }
+    return { id:ln.id, label:ln.label||stdAutoLabel(ln), section:ln.section, category:ln.category||null, metric:ln.metric,
+             unit:ln.unit||"", min, max, value:v, status, diff };
+  });
+}
+function stdSum(checks){
+  const fails=checks.filter(c=>c.status==="fail").length, missing=checks.filter(c=>c.status==="missing").length, ok=checks.filter(c=>c.status==="ok").length;
+  return { fails, missing, ok, total:checks.length, verdict: !checks.length ? "no_standard" : (fails?"fail":"pass") };
+}
+function stdLimitText(c){
+  const p=[]; if(c.min!=null) p.push("min "+fmtS(c.min)); if(c.max!=null) p.push("max "+fmtS(c.max));
+  return p.join(" · ")+(c.unit?" "+c.unit:"");
+}
+function stdDiffText(c){
+  if(c.status!=="fail"||c.diff==null) return "";
+  return c.diff>0 ? "+"+fmtS(Math.abs(c.diff))+(c.unit?" "+c.unit:"")+" over the maximum" : fmtS(Math.abs(c.diff))+(c.unit?" "+c.unit:"")+" below the minimum";
+}
+function stdTable(checks){
+  return `<table><thead><tr><th>Limit</th><th>Required</th><th>Lab value</th><th>Difference</th><th>Result</th></tr></thead><tbody>${
+    checks.map(c=>{
+      const bad=c.status==="fail";
+      const st = bad ? `<b style="color:var(--bad);">Outside</b>` : c.status==="missing" ? `<b style="color:#b45309;">Not in scan</b>` : `<b style="color:var(--ok);">Within</b>`;
+      return `<tr style="${bad?"background:#fee2e2;":""}"><td>${esc(c.label)}</td><td>${esc(stdLimitText(c))}</td>
+        <td style="${bad?"color:var(--bad);font-weight:800;":""}">${c.value==null?"—":esc(fmtS(c.value))+(c.unit?" "+esc(c.unit):"")}</td>
+        <td style="color:var(--bad);font-weight:700;">${esc(stdDiffText(c))}</td><td>${st}</td></tr>`;
+    }).join("")}</tbody></table>`;
+}
+
 // ---------------------------- result review ----------------------------
+let REVIEW_CTX=null;                    // the comparison shown in the open review, used again when the decision is saved
+
 function secLine(title, enabled, passed, purity, limit, cats){
   if(!enabled) return `<tr><td>${title}</td><td colspan="3" style="color:var(--muted);">Not enabled</td></tr>`;
   const failing=(Array.isArray(cats)?cats:[]).filter(c=>c && c.passed===false).map(c=>esc(c.name)+(c.percent!=null?" ("+Number(c.percent).toFixed(2)+"%)":"")).join(", ");
@@ -689,14 +801,36 @@ function secLine(title, enabled, passed, purity, limit, cats){
 
 async function openReview(id){
   const b=RUN_BATCHES.find(x=>x.id===id); if(!b) return;
-  const [{ data:resRows }, { data:log }] = await Promise.all([
+  await refreshCompany();
+  const companyId=PROD_REC.company_id||null, companyName=PROD_REC.company_name||"";
+  const [{ data:resRows }, { data:log }, stdRes] = await Promise.all([
     sb.from("pet_flake_scan_results").select("*").eq("batch_id",id).limit(1),
-    sb.from("pet_activity_log").select("action,note,actor_username,created_at").eq("collection_id",CURRENT_PROD.id).ilike("note","Batch "+b.batch_no+" %").order("created_at",{ascending:false}).limit(12)
+    sb.from("pet_activity_log").select("action,note,actor_username,created_at").eq("collection_id",CURRENT_PROD.id).ilike("note","Batch "+b.batch_no+" %").order("created_at",{ascending:false}).limit(12),
+    companyId ? sb.from("pet_company_standards").select("*").eq("company_id",companyId).eq("is_active",true).order("sort_order").order("id") : Promise.resolve({ data:[] })
   ]);
   const r=(resRows&&resRows[0])||null;
+  const lines=(stdRes&&stdRes.data)||[];
+  const checks = r ? stdEvaluate(r,lines) : [];
+  const sum = stdSum(checks);
+  REVIEW_CTX={ id, companyId, companyName, lines, checks, sum };
   const weights=Array.isArray(b.bag_weights)?b.bag_weights:[];
+
+  let stdHtml;
+  if(!companyId){
+    stdHtml=`<div class="correction-note"><b>No company is set for this run.</b> The plant manager must choose the company in Stage 7 (Production Approval, Live production) before a result can be passed. You can still ask for a retest or a rerun.</div>`;
+  } else if(!lines.length){
+    stdHtml=`<div class="note-box"><b>${esc(companyName)}</b> has no limits yet, so there is nothing to compare. Add them in Company Standards. You can still decide on the lab result below.</div>`;
+  } else if(!r){
+    stdHtml=`<div class="correction-note">No lab result is on file, so nothing can be compared.</div>`;
+  } else {
+    const banner = sum.verdict==="fail"
+      ? `<div class="correction-note" style="border-left-color:var(--bad);"><b>Outside the standard of ${esc(companyName)}</b> on ${sum.fails} of ${sum.total} limit${sum.total===1?"":"s"}. Suggested result: <b style="color:var(--bad);">FAIL</b>.</div>`
+      : `<div class="guide-box" style="border-left-color:var(--ok);"><b>Meets the standard of ${esc(companyName)}</b> on ${sum.ok} of ${sum.total} limit${sum.total===1?"":"s"}. Suggested result: <b style="color:var(--ok);">PASS</b>.${sum.missing?` ${sum.missing} limit${sum.missing===1?" was":"s were"} not reported by the scan.`:""}</div>`;
+    stdHtml = banner + stdTable(checks);
+  }
+
   const resHtml = !r ? `<div class="correction-note">No lab result is on file for this batch.</div>` : `
-    <div style="text-align:center;margin:8px 0;">${r.passed===false?`<span class="pill p-bad" style="font-size:14px;padding:5px 18px;">❌ FAILED</span>`:`<span class="pill p-ok" style="font-size:14px;padding:5px 18px;">✅ PASSED</span>`}</div>
+    <div style="text-align:center;margin:8px 0;">${r.passed===false?`<span class="pill p-bad" style="font-size:14px;padding:5px 18px;">❌ Flake Scan machine: FAILED</span>`:`<span class="pill p-ok" style="font-size:14px;padding:5px 18px;">✅ Flake Scan machine: PASSED</span>`}</div>
     <div class="tiles"><div class="tile"><div class="v">${esc(r.sample_weight??"—")} g</div><div class="l">Sample weight</div></div>
       <div class="tile ${r.metal_pieces>0?"warn":""}"><div class="v">${esc(r.metal_pieces??0)}</div><div class="l">Metal pieces</div></div>
       <div class="tile"><div class="v" style="font-size:13px;">${esc(r.scan_id||"—")}</div><div class="l">Scan ID</div></div></div>
@@ -708,24 +842,30 @@ async function openReview(id){
     </tbody></table>`;
   const histHtml = (log&&log.length) ? `<table><thead><tr><th>When</th><th>Who</th><th>What</th></tr></thead><tbody>${log.map(l=>`<tr><td>${esc(fmtDT(l.created_at))}</td><td>${esc(l.actor_username||"—")}</td><td>${esc(l.note||l.action)}</td></tr>`).join("")}</tbody></table>` : `<p style="font-size:12px;color:var(--muted);">No earlier history for this batch.</p>`;
 
+  const canDecide = CAN.review && bStatus(b)==="lab_done";
+  const overrule = sum.verdict==="fail";
+  const decisionHtml = canDecide ? `
+    <div class="sec-title">Your decision</div>
+    <label style="margin-top:0;">Note (required for a retest, a rerun, or to pass a result that is outside the standard)</label>
+    <textarea id="rvNote" rows="2" placeholder="For example: sample looked contaminated, please retest / material mixed, make the batch again"></textarea>
+    <div class="actions">
+      <button id="rvApprove" onclick="decideBatch(${id},'approve')" style="background:${overrule?"#b45309":"var(--ok)"};" ${companyId?"":"disabled"}>${overrule?"✔ Pass anyway (outside the standard)":"✔ Pass and approve"}</button>
+      <button onclick="decideBatch(${id},'retest')" style="background:#b45309;">↻ Fail: request retest</button>
+      <button onclick="decideBatch(${id},'rerun')" style="background:var(--bad);">⟲ Fail: request rerun</button>
+    </div>` : `<div class="note-box">${CAN.review?"This batch is not waiting for a decision.":"You can view this result. Only the result approver can pass or fail it."}</div>`;
+
   document.getElementById("rvBox").innerHTML=`
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
       <h3 style="margin:0;color:var(--heading);">Review result — Batch ${b.batch_no}</h3>
       <button class="btn-ghost btn-sm" onclick="closeReview()">✕ Close</button>
     </div>
     <div class="kv" style="margin-top:6px;">Grade <b>${esc(bGrade(b))}</b> · ${b.bag_count||weights.length} bags · ${fmt(bTotal(b))} kg · ${esc(fmtD(b.batch_date))}<br>
-      <b>Operator:</b> ${esc(b.operator_name||"—")} · <b>Shift leader:</b> ${esc(b.shift_leader_name||"—")} · Retests ${b.retest_count||0} · Reruns ${b.rerun_count||0}</div>
+      <b>Company:</b> ${esc(companyName||"not set")} · <b>Operator:</b> ${esc(b.operator_name||"—")} · <b>Shift leader:</b> ${esc(b.shift_leader_name||"—")} · Retests ${b.retest_count||0} · Reruns ${b.rerun_count||0}</div>
     ${weights.length?`<div class="bagchips">${weights.map((w,i)=>`<span class="bagchip">Bag ${i+1}: ${fmt(w)} kg</span>`).join("")}</div>`:""}
+    <div class="sec-title">Company standard compared with the lab result</div>${stdHtml}
     <div class="sec-title">Lab result</div>${resHtml}
     <div class="sec-title">History of this batch</div>${histHtml}
-    <div class="sec-title">Your decision</div>
-    <label style="margin-top:0;">Note (required for a retest or a rerun)</label>
-    <textarea id="rvNote" rows="2" placeholder="For example: sample looked contaminated, please retest / material mixed, make the batch again"></textarea>
-    <div class="actions">
-      <button id="rvApprove" onclick="decideBatch(${id},'approve')" style="background:var(--ok);">✔ Approve and release QR labels</button>
-      <button onclick="decideBatch(${id},'retest')" style="background:#b45309;">↻ Request retest</button>
-      <button onclick="decideBatch(${id},'rerun')" style="background:var(--bad);">⟲ Request rerun</button>
-    </div>
+    ${decisionHtml}
     <div id="rvStatus" style="margin-top:10px;font-size:13px;font-weight:700;min-height:16px;"></div>`;
   document.getElementById("rvOverlay").style.display="block";
   document.body.style.overflow="hidden";
@@ -738,50 +878,56 @@ async function decideBatch(id, kind){
   const st=document.getElementById("rvStatus");
   const note=(document.getElementById("rvNote").value||"").trim();
   const bad=m=>{ st.style.color="var(--bad)"; st.textContent=m; };
+  if(!CAN.review){ bad("Only the result approver can decide on a result."); return; }
   if(bStatus(b)!=="lab_done"){ bad("This batch is not waiting for review any more. Close and refresh."); return; }
   if((kind==="retest"||kind==="rerun") && !note){ bad("Write a note: the lab or production needs to know why."); return; }
   const res=RUN_RESULTS[id];
+  const ctx=(REVIEW_CTX && REVIEW_CTX.id===id) ? REVIEW_CTX : null;
+  if(!ctx){ bad("Close this window and open the result again."); return; }
+  const verdict = ctx.lines.length && res ? ctx.sum.verdict : "no_standard";
   if(kind==="approve"){
-    if(!res){ bad("There is no lab result on file, so this batch cannot be approved."); return; }
-    if(res.passed===false && !confirm("The Flake Scan result FAILED. Approve this batch anyway?")) return;
+    if(!res){ bad("There is no lab result on file, so this batch cannot be passed."); return; }
+    if(!ctx.companyId){ bad("No company is set for this run. Ask the plant manager to choose it in Stage 7."); return; }
+    if(verdict==="fail"){
+      if(!note){ bad("This result is outside the company standard. Write a note saying why you are passing it."); return; }
+      if(!confirm("This result is OUTSIDE the standard of "+ctx.companyName+" on "+ctx.sum.fails+" limit(s).\n\nPass it anyway? Your note will be kept with the batch.")) return;
+    } else if(res.passed===false && !confirm("The Flake Scan machine marked this result FAILED, although it is inside the company limits. Pass it anyway?")) return;
   }
   const now=new Date().toISOString();
+  const snap={
+    standard_company_id: ctx.companyId, standard_company_name: ctx.companyName||null,
+    standard_verdict: verdict, standard_pass_count: ctx.sum.ok, standard_total: ctx.sum.total,
+    standard_checks: ctx.checks, standard_override: kind==="approve" && verdict==="fail",
+    standard_scored_at: now, standard_scored_by: ME.id
+  };
+  const score = ctx.sum.total ? (" ("+ctx.companyName+": "+ctx.sum.ok+" of "+ctx.sum.total+" limits met)") : (ctx.companyName?(" ("+ctx.companyName+": no limits set)"):"");
   try{
     st.style.color="var(--muted)"; st.textContent="Saving...";
     if(kind==="approve"){
-      // 1. Bags and reference numbers (skipped if already generated, e.g. after an interrupted attempt).
-      if(!b.bags_generated_at){
-        const n=b.bag_count||(Array.isArray(b.bag_weights)?b.bag_weights.length:0);
-        if(!n) throw new Error("This batch has no bag count.");
-        const aa=b.grade==="AA"?n:0, ab=b.grade==="AB"?n:0;
-        if(aa+ab<=0) throw new Error("This batch has no grade (AA or AB). Edit it through a rerun.");
-        const { error:gErr } = await sb.rpc("generate_batch_bags",{ p_batch_id:id, p_aa:aa, p_ab:ab });
-        if(gErr) throw new Error("Could not generate the bags: "+gErr.message);
-      }
-      // 2. Mark approved.
       const { data, error } = await sb.from("pet_lab_batches")
-        .update({ batch_status:"approved", decision_at:now, decision_by:ME.id, decision_note:note||null }).eq("id",id).eq("batch_status","lab_done").select("id");
+        .update(Object.assign({ batch_status:"approved", decision_at:now, decision_by:ME.id, decision_note:note||null }, snap)).eq("id",id).eq("batch_status","lab_done").select("id");
       if(error) throw new Error(error.message);
       if(!data||!data.length) throw new Error("Nothing was updated. The batch changed state; refresh the page.");
-      await logAct("batch_approved","Batch "+b.batch_no+" approved — QR labels released"+(note?(". Note: "+note):""));
-      OPEN_LABELS.add(id);
+      await logAct(snap.standard_override?"batch_approved_override":"batch_approved","Batch "+b.batch_no+" passed"+score+(snap.standard_override?" — OUTSIDE the standard, passed by the approver":"")+(note?(". Note: "+note):""));
       closeReview();
-      await loadRunData(CURRENT_PROD.id);
-      const nb=RUN_BATCHES.find(x=>x.id===id);
-      await applyBagWeights(nb);
       await loadRunData(CURRENT_PROD.id); renderRunOverview();
-      flash(id,"Labels generated. Creating the labels PDF...");
-      try{ await archiveLabelsPdf(RUN_BATCHES.find(x=>x.id===id)); await loadRunData(CURRENT_PROD.id); renderRunOverview(); flash(id,"✅ Batch approved. Labels are ready to print.","var(--ok)"); }
-      catch(pe){ flash(id,"Batch approved and labels generated, but the PDF could not be saved: "+esc(pe.message),"var(--bad)"); }
+      if(CAN.labels){
+        OPEN_LABELS.add(id);
+        flash(id,"Passed. Generating the labels...");
+        await generateLabels(id);
+        flash(id,"✅ Batch passed. Labels are ready to print.","var(--ok)");
+      } else {
+        flash(id,"✅ Batch passed. The labels person can now generate its labels.","var(--ok)");
+      }
       return;
     }
     const isRetest=kind==="retest";
-    const upd={ batch_status:isRetest?"retest_requested":"rerun_requested", decision_at:now, decision_by:ME.id, decision_note:note };
+    const upd=Object.assign({ batch_status:isRetest?"retest_requested":"rerun_requested", decision_at:now, decision_by:ME.id, decision_note:note }, snap);
     upd[isRetest?"retest_count":"rerun_count"]=(b[isRetest?"retest_count":"rerun_count"]||0)+1;
     const { data, error } = await sb.from("pet_lab_batches").update(upd).eq("id",id).eq("batch_status","lab_done").select("id");
     if(error) throw new Error(error.message);
     if(!data||!data.length) throw new Error("Nothing was updated. The batch changed state; refresh the page.");
-    await logAct(isRetest?"batch_retest_requested":"batch_rerun_requested","Batch "+b.batch_no+(isRetest?" retest requested (previous result "+(res?(res.passed===false?"FAILED":"PASSED"):"none")+"): ":" rerun requested: ")+note);
+    await logAct(isRetest?"batch_retest_requested":"batch_rerun_requested","Batch "+b.batch_no+" failed"+score+(isRetest?", retest requested (Flake Scan machine: ":", rerun requested (Flake Scan machine: ")+(res?(res.passed===false?"FAILED":"PASSED"):"no result")+"): "+note);
     closeReview();
     await loadRunData(CURRENT_PROD.id); renderRunOverview();
   }catch(e){ bad("Error: "+e.message); }
@@ -798,8 +944,9 @@ async function applyBagWeights(b){
   if(failed) console.warn(failed+" bag weight(s) could not be saved on the bag rows; labels use the batch's weights instead.");
 }
 
-// Older approved batches, or an approval that stopped half way.
+// Generates the bags, weights and labels PDF of an approved batch (done by the labels person, or straight after approval when the approver is also the labels person).
 async function generateLabels(id){
+  if(!needDuty("labels")) return;
   const b=RUN_BATCHES.find(x=>x.id===id); if(!b) return;
   try{
     flash(id,"Generating...");
@@ -814,6 +961,7 @@ async function generateLabels(id){
   }catch(e){ flash(id,"❌ "+esc(e.message),"var(--bad)"); }
 }
 async function rebuildPdf(id){
+  if(!needDuty("labels")) return;
   const b=RUN_BATCHES.find(x=>x.id===id); if(!b) return;
   try{ OPEN_LABELS.add(id); renderBatchList(); await archiveLabelsPdf(b); await loadRunData(CURRENT_PROD.id); renderRunOverview(); }
   catch(e){ flash(id,"❌ "+esc(e.message),"var(--bad)"); }
@@ -841,6 +989,7 @@ function toggleLabels(id){
   renderBatchList();
 }
 function printLabels(id){
+  if(!needDuty("labels")) return;
   const grid=document.getElementById("qr_"+id); if(!grid) return;
   grid.classList.add("print-target");
   const done=()=>{ grid.classList.remove("print-target"); window.removeEventListener("afterprint",done); };
@@ -911,6 +1060,7 @@ async function openProdForm(id){
     prod=ins;
   }
   PROD_REC=prod; CURRENT_PROD_ID=prod.id;
+  CAN=dutiesFor(c.section);
   QC_WASTE = wasteFromQc(qc, c.rumbu_weighbridge_weight);
   OPEN_LABELS=new Set();
   await loadRunData(c.id);
@@ -923,6 +1073,8 @@ async function openProdForm(id){
   document.getElementById("pfStart").value=fmtDT(prod.production_start);
   document.getElementById("pfEnd").value="";
 
+  renderCompanyLine();
+  applyDutyUi();
   resetBatchForm();
   document.getElementById("bfStatus").textContent="";
   renderRunOverview();
@@ -942,7 +1094,22 @@ async function openProdForm(id){
 }
 async function refreshRun(){
   if(!CURRENT_PROD) return;
+  await refreshCompany();
   await loadRunData(CURRENT_PROD.id); renderRunOverview();
+}
+
+// ---------------------------- company of this run (chosen by the plant manager at Stage 7) ----------------------------
+async function refreshCompany(){
+  if(!CURRENT_PROD_ID) return;
+  const { data } = await sb.from("pet_stage4_production").select("company_id,company_name").eq("id",CURRENT_PROD_ID).maybeSingle();
+  if(data){ PROD_REC.company_id=data.company_id; PROD_REC.company_name=data.company_name; }
+  renderCompanyLine();
+}
+function renderCompanyLine(){
+  const el=document.getElementById("companyLine"); if(!el) return;
+  el.innerHTML = PROD_REC.company_id
+    ? `<b>Company:</b> ${esc(PROD_REC.company_name||"—")} <span style="color:var(--muted);font-size:12px;">(chosen by the plant manager at Stage 7; he can change it while the run is open)</span>`
+    : `<b style="color:var(--bad);">No company is set for this run.</b> Results cannot be passed until the plant manager chooses the company in Stage 7 (Production Approval, Live production).`;
 }
 
 function lastBatchTime(){
@@ -955,6 +1122,7 @@ function lastBatchTime(){
 async function completeProduction(){
   const st=document.getElementById("prodFormStatus");
   if(!CURRENT_PROD) return;
+  if(!needDuty("batch")) return;
   await loadRunData(CURRENT_PROD.id);          // always judge on what is in the database now
   renderRunOverview();
   const probs=runProblems();
