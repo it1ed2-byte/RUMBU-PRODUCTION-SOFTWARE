@@ -8,7 +8,7 @@
   :root{ --navy:#1F3864; --accent:#c8a34e; --bg:#eef1f6; --card:#ffffff; --line:#e2e7f0; --muted:#6b7280; }
   *{box-sizing:border-box;}
   body{margin:0;font-family:'Segoe UI',Arial,sans-serif;background:var(--bg);color:#1a2333;padding:20px;}
-  .wrap{max-width:480px;margin:40px auto;}
+  .wrap{max-width:560px;margin:24px auto;}
   .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px;}
   .header{background:var(--navy);color:#fff;border-radius:14px 14px 0 0;margin:-24px -24px 20px;padding:20px 24px;text-align:center;}
   .header h1{margin:0;font-size:16px;letter-spacing:.3px;}
@@ -23,6 +23,28 @@
   .gate input{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:8px;font-size:15px;box-sizing:border-box;letter-spacing:2px;text-align:center;}
   .gate button{width:100%;margin-top:14px;padding:11px;border:none;border-radius:8px;background:var(--navy);color:#fff;font-size:14px;font-weight:700;cursor:pointer;}
   .gate .err{color:#c0392b;font-size:12px;text-align:center;margin-top:10px;min-height:16px;}
+  .sec{font-size:11px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--navy);margin:22px 0 8px;padding-bottom:4px;border-bottom:2px solid var(--line);}
+  .banner{border-radius:10px;padding:12px 14px;font-size:13px;line-height:1.5;margin:10px 0;}
+  .b-ok{background:#dcfce7;color:#166534;border:1px solid #86efac;}
+  .b-bad{background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;}
+  .b-warn{background:#fef3c7;color:#92400e;border:1px solid #fcd34d;}
+  .b-info{background:#f1f5f9;color:#475569;border:1px solid var(--line);}
+  .ctable{width:100%;border-collapse:collapse;font-size:12px;}
+  .ctable th{background:var(--navy);color:#fff;text-align:left;padding:6px 7px;font-size:11px;}
+  .ctable td{padding:6px 7px;border-bottom:1px solid var(--line);vertical-align:top;}
+  .ctable tr.bad td{background:#fee2e2;color:#991b1b;font-weight:700;}
+  .tscroll{overflow-x:auto;}
+  .kv2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:6px 0;}
+  .kv2 .k{background:var(--bg);border-radius:8px;padding:9px 10px;}
+  .kv2 .k .l{font-size:10px;color:var(--muted);text-transform:uppercase;font-weight:700;letter-spacing:.3px;}
+  .kv2 .k .v{font-size:14px;font-weight:800;color:var(--navy);margin-top:2px;word-break:break-word;}
+  .bagchip{display:inline-block;border:1px solid var(--line);background:var(--bg);border-radius:6px;padding:3px 8px;font-size:12px;font-weight:700;margin:2px 4px 2px 0;}
+  .bagchip.me{background:var(--navy);color:#fff;border-color:var(--navy);}
+  .tl{border-left:3px solid var(--line);margin:6px 0 0 6px;padding-left:12px;}
+  .tl .ev{margin-bottom:10px;font-size:12.5px;line-height:1.45;}
+  .tl .ev .t{font-size:11px;color:var(--muted);font-weight:700;}
+  details.wd{margin-top:8px;font-size:12.5px;} details.wd summary{cursor:pointer;font-weight:700;color:var(--navy);}
+  @media(max-width:480px){ .kv2{grid-template-columns:1fr;} }
 </style>
 </head>
 <body>
@@ -48,7 +70,7 @@
     <hr style="border:none;border-top:1px solid var(--line);margin:0 0 20px;">
 
     <div id="gate" class="gate">
-      <p style="text-align:center;font-size:13px;color:var(--muted);margin:0;">Enter the access password to view this bag's production information.</p>
+      <p style="text-align:center;font-size:13px;color:var(--muted);margin:0;">Enter the access password to view this bag's production details, history and comparison with the company standard.</p>
       <label>Password</label>
       <input type="password" id="gatePw" autocomplete="off" onkeydown="if(event.key==='Enter') checkPassword()">
       <button onclick="checkPassword()">View Information</button>
@@ -72,10 +94,6 @@
 </style>
 <script>
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
-function row(label, value){
-  return `<div class="row"><div class="l">${label}</div><div class="v">${value!=null&&value!==""?value:"—"}</div></div>`;
-}
 
 function qualitySectionTable(title, prefix, r){
   const enabled = r[prefix+"_enabled"];
@@ -138,6 +156,129 @@ async function loadQualityResult(){
 }
 window.loadQualityResult = loadQualityResult;
 
+// ---------------- production details (after the password) ----------------
+function esc(v){ return String(v==null?"":v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+const nz=v=>v!=null&&v!=="";
+const fmtN=(v,d)=>nz(v)&&!isNaN(Number(v))?Number(v).toLocaleString(undefined,{maximumFractionDigits:d==null?2:d}):"—";
+const fmtDT=iso=>iso?new Date(iso).toLocaleString("en-GB",{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"}):"—";
+const fmtD=iso=>iso?new Date(iso).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"}):"—";
+function kv(label,value){ return `<div class="k"><div class="l">${esc(label)}</div><div class="v">${nz(value)?value:"—"}</div></div>`; }
+function runLength(a,b){
+  if(!a||!b) return "—";
+  const h=(new Date(b)-new Date(a))/3600000; if(!(h>=0)) return "—";
+  return h<24 ? h.toFixed(1)+" hours" : (h/24).toFixed(1)+" days";
+}
+const STATUS_TEXT={ produced:"Waiting for the lab", lab_done:"Lab result submitted", approved:"Approved", retest_requested:"Retest requested", rerun_requested:"Rerun requested" };
+
+function limitText(c){
+  const p=[]; if(c.min!=null) p.push("min "+fmtN(c.min,4)); if(c.max!=null) p.push("max "+fmtN(c.max,4));
+  return p.join(" · ")+(c.unit?" "+c.unit:"");
+}
+function diffText(c){
+  if(c.status!=="fail"||c.diff==null) return "";
+  const u=c.unit?" "+c.unit:"";
+  return Number(c.diff)>0 ? "+"+fmtN(Math.abs(c.diff),4)+u+" over the maximum" : fmtN(Math.abs(c.diff),4)+u+" below the minimum";
+}
+function standardHtml(st, run){
+  if(!st){
+    return `<div class="banner b-info">No company standard was applied to this batch${run&&run.company_name?" ("+esc(run.company_name)+")":""}. Production was approved on the lab result alone.</div>`;
+  }
+  const checks=Array.isArray(st.checks)?st.checks:[];
+  if(st.verdict==="no_standard" || !checks.length){
+    return `<div class="banner b-info">${esc(st.company_name||"The company")} has no limits on file for this batch, so there is nothing to compare.</div>`;
+  }
+  const bad=checks.filter(c=>c.status==="fail").length;
+  let banner;
+  if(st.verdict==="pass"){
+    banner=`<div class="banner b-ok"><b>Meets the standard of ${esc(st.company_name||"the company")}</b> on ${fmtN(st.pass_count,0)} of ${fmtN(st.total,0)} limits.</div>`;
+  } else if(st.override){
+    banner=`<div class="banner b-warn"><b>Outside the standard of ${esc(st.company_name||"the company")}</b> on ${bad} of ${fmtN(st.total,0)} limits. Production approved it anyway and recorded the reason.</div>`;
+  } else {
+    banner=`<div class="banner b-bad"><b>Outside the standard of ${esc(st.company_name||"the company")}</b> on ${bad} of ${fmtN(st.total,0)} limits.</div>`;
+  }
+  const rows=checks.map(c=>{
+    const fail=c.status==="fail";
+    const res = fail ? "Outside" : (c.status==="missing" ? "Not in scan" : "Within");
+    return `<tr class="${fail?"bad":""}"><td>${esc(c.label)}</td><td>${esc(limitText(c))}</td><td>${c.value==null?"—":esc(fmtN(c.value,4))+(c.unit?" "+esc(c.unit):"")}</td><td>${esc(diffText(c))}</td><td>${res}</td></tr>`;
+  }).join("");
+  return banner+`<div class="tscroll"><table class="ctable"><thead><tr><th>Limit</th><th>Required</th><th>Lab value</th><th>Difference</th><th>Result</th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${st.scored_at?`<div style="font-size:11px;color:var(--muted);margin-top:6px;">Compared on ${esc(fmtDT(st.scored_at))}</div>`:""}`;
+}
+
+const HIST_TEXT={ production_started:"Production started" };
+function historyHtml(h){
+  const list=Array.isArray(h)?h:[];
+  if(!list.length) return `<div class="banner b-info">No history recorded for this batch.</div>`;
+  return `<div class="tl">${list.map(e=>`<div class="ev"><div class="t">${esc(fmtDT(e.at))}</div>${esc(e.note||HIST_TEXT[e.action]||String(e.action||"").replace(/_/g," "))}</div>`).join("")}</div>`;
+}
+
+function detailsHtml(d){
+  const bag=d.bag||{}, batch=d.batch, run=d.run||{}, st=d.standard;
+  let out=`<div style="text-align:center;margin-bottom:4px;"><span class="ref-badge">${esc(bag.reference)}</span></div>`;
+
+  if(batch){
+    const n=batch.bag_count||(Array.isArray(batch.bags)?batch.bags.length:null);
+    out+=`<div style="text-align:center;font-size:13px;color:var(--muted);margin-bottom:6px;">Bag ${esc(bag.index||"—")} of ${esc(n||"—")} · Grade <b style="color:var(--navy);">${esc(bag.grade||batch.grade||"—")}</b> · <b style="color:var(--navy);">${fmtN(bag.weight_kg)} kg</b></div>`;
+  } else {
+    out+=`<div style="text-align:center;font-size:13px;color:var(--muted);margin-bottom:6px;">Grade <b style="color:var(--navy);">${esc(bag.grade||"—")}</b> · <b style="color:var(--navy);">${bag.weight_kg!=null?fmtN(bag.weight_kg)+" kg":"weight not recorded"}</b></div>`;
+  }
+
+  if(batch){
+    out+=`<div class="sec">Comparison with the company standard</div>`+standardHtml(st,run);
+
+    const bags=Array.isArray(batch.bags)?batch.bags:[];
+    const weights=Array.isArray(batch.bag_weights)?batch.bag_weights:[];
+    const chips = bags.length
+      ? bags.map(b=>`<span class="bagchip ${b.reference===bag.reference?"me":""}">Bag ${esc(b.index)}: ${fmtN(b.weight_kg)} kg</span>`).join("")
+      : weights.map((w,i)=>`<span class="bagchip ${bag.index===i+1?"me":""}">Bag ${i+1}: ${fmtN(w)} kg</span>`).join("");
+    out+=`<div class="sec">This batch</div>
+      <div class="kv2">
+        ${kv("Batch number", esc(batch.batch_no))}
+        ${kv("Batch date", esc(fmtD(batch.batch_date)))}
+        ${kv("Grade", esc(batch.grade))}
+        ${kv("Batch total", fmtN(batch.total_kg)+" kg")}
+        ${kv("Operator", esc(batch.operator_name))}
+        ${kv("Shift leader", esc(batch.shift_leader_name))}
+        ${kv("Status", esc(STATUS_TEXT[batch.status]||batch.status))}
+        ${kv("Retests / reruns", fmtN(batch.retest_count,0)+" / "+fmtN(batch.rerun_count,0))}
+      </div>
+      <div style="margin-top:6px;font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;">Bags in this batch (this bag highlighted)</div>
+      <div>${chips||"—"}</div>`;
+  } else {
+    out+=`<div class="banner b-info" style="margin-top:12px;">This bag was made before batch records and company standards were introduced, so there is no batch comparison for it.</div>`;
+  }
+
+  out+=`<div class="sec">Production run</div>
+    <div class="kv2">
+      ${kv("Form number", esc(run.form_number))}
+      ${kv("Branch", esc(run.section))}
+      ${kv("Agent", esc(run.agent_name))}
+      ${kv("Produced for", esc(run.company_name))}
+      ${kv("Production start", esc(fmtDT(run.production_start)))}
+      ${kv("Production end", esc(fmtDT(run.production_end)))}
+      ${kv("Run length", esc(runLength(run.production_start,run.production_end)))}
+      ${kv("Batches in the run", fmtN(run.batch_count,0))}
+      ${kv("AA flake", nz(run.total_aa_kg)?fmtN(run.total_aa_kg)+" kg":"—")}
+      ${kv("AB flake", nz(run.total_ab_kg)?fmtN(run.total_ab_kg)+" kg":"—")}
+      ${kv("Total production", nz(run.total_production_kg)?fmtN(run.total_production_kg)+" kg":"—")}
+      ${Number(run.kano_used_kg)>0?kv("Kano material used", fmtN(run.kano_used_kg)+" kg"):""}
+    </div>`;
+
+  if(nz(run.total_waste_kg)){
+    const w=run.waste||{};
+    const WL=[["coloured","Coloured PET"],["labels","Labelled bottles"],["caps_rings","Caps and rings"],["non_food","Non-food contact"],["non_pet","Non-PET product"],["aged","Aged PET bottles"],["oily","Oily PET bottles"],["metal","Metal ring"]];
+    out+=`<div class="sec">Waste in the run</div>
+      <div class="kv2">${kv("Total waste", fmtN(run.total_waste_kg)+" kg")}${kv("Accepted waste", nz(run.accepted_waste_kg)?fmtN(run.accepted_waste_kg)+" kg":"—")}${kv("Unacceptable waste", nz(run.unacceptable_waste_kg)?fmtN(run.unacceptable_waste_kg)+" kg":"—")}</div>
+      <details class="wd"><summary>Waste by category</summary>
+        <table class="ctable" style="margin-top:6px;"><tbody>${WL.map(([k,l])=>`<tr><td>${l}</td><td style="text-align:right;">${nz(w[k])?fmtN(w[k])+" kg":"—"}</td></tr>`).join("")}</tbody></table>
+      </details>`;
+  }
+
+  if(batch) out+=`<div class="sec">History of this batch</div>`+historyHtml(d.history);
+  out+=`<div class="status">Rumbu Industries Group — PET Recycling Division</div>`;
+  return out;
+}
+
 async function checkPassword(){
   const params = new URLSearchParams(window.location.search);
   const ref = params.get("ref");
@@ -152,49 +293,22 @@ async function checkPassword(){
   content.style.display="block";
   content.innerHTML = `<p style="text-align:center;color:var(--muted);">Checking...</p>`;
 
-  const { data, error } = await sb.rpc("get_bag_public_info_gated", { p_reference: ref, p_password: pw });
-  const info = Array.isArray(data) ? data[0] : data;
+  const { data, error } = await sb.rpc("get_bag_batch_details", { p_reference: ref, p_password: pw });
+  const d = Array.isArray(data) ? data[0] : data;
 
-  if(error || !info){
+  if(error){
+    content.style.display="none";
+    err.textContent = /get_bag_batch_details/i.test(error.message||"") ? "The details service is not set up yet. Please tell IT." : "Could not load the information. Please try again.";
+    return;
+  }
+  if(!d){
     content.style.display="none";
     err.textContent="Incorrect password, or no record found for this reference number.";
     return;
   }
 
   document.getElementById("gate").style.display="none";
-
-  // Kano material used — a separate, small lookup by the same bag
-  // reference, since the existing gated RPC doesn't expose production_id
-  // to the client. Non-fatal if it fails — the rest of the page still
-  // shows correctly either way.
-  let kanoKg = null;
-  try{
-    const { data: kanoData } = await sb.rpc("get_kano_usage_by_bag", { p_reference: ref });
-    kanoKg = kanoData;
-  }catch(e){ /* non-fatal — just omit the row below */ }
-
-  content.innerHTML = `
-    <div style="text-align:center;margin-bottom:6px;"><span class="ref-badge">${info.bag_reference}</span></div>
-    ${row("Form Number", info.form_number)}
-    ${row("Agent", info.agent_name)}
-    ${row("Branch", info.section)}
-    ${row("Production Date", info.production_date)}
-    ${row("Colored Flex (kg)", info.colored_flex_kg)}
-    ${row("Non-Colored Flex (kg)", info.non_colored_flex_kg)}
-    ${row("Total Production (kg)", info.total_production_kg)}
-    ${(kanoKg != null && kanoKg > 0) ? row("Kano Material Used (kg)", Number(kanoKg).toLocaleString()) : ""}
-    ${row("Coloured PET Waste (kg)", info.waste_coloured_kg)}
-    ${row("Labelled Bottles Waste (kg)", info.waste_labels_kg)}
-    ${row("Caps & Rings Waste (kg)", info.waste_caps_rings_kg)}
-    ${row("Non-Food Contact Waste (kg)", info.waste_non_food_kg)}
-    ${row("Non-PET Product Waste (kg)", info.waste_non_pet_kg)}
-    ${row("Aged PET Bottles Waste (kg)", info.waste_aged_kg)}
-    ${row("Oily PET Bottles Waste (kg)", info.waste_oily_kg)}
-    ${row("Metal Ring Waste (kg)", info.waste_metal_kg)}
-    ${row("Total Waste (kg)", info.total_waste_kg)}
-    ${row("Total Bags Produced in This Batch", info.total_bags)}
-    <div class="status">Rumbu Industries Group — PET Recycling Division</div>
-  `;
+  content.innerHTML = detailsHtml(d);
 }
 </script>
 </body>
