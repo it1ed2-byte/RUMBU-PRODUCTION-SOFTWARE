@@ -166,6 +166,19 @@ const COMPANY = "Rumbu Industries Limited";
 const PROPOSE_HOURS_DEFAULT = 11;
 const MAX_HOURS = 11;      // hours worked can never exceed this; anything higher is reset to it
 function clampHours(v){ const n = Number(v); if(!isFinite(n)) return 0; return Math.min(MAX_HOURS, Math.max(0, n)); }
+
+// The 11-hour day includes a 1-hour break, so 10 hours on the floor is a full day.
+// Hours worked of 10 or 11 -> paid as a full day (11), i.e. the whole daily rate.
+// Anything below 10        -> paid for the actual hours worked.
+function payableHours(hoursWorked, proposeHours){
+  const full = Number(proposeHours) || MAX_HOURS;      // normally 11
+  const hw = Number(hoursWorked) || 0;
+  return (hw >= full - 1) ? full : hw;                 // 10 or 11 -> 11
+}
+function computeAmount(dailyRate, hoursWorked, proposeHours){
+  const full = Number(proposeHours) || MAX_HOURS;
+  return Math.round(((Number(dailyRate)||0) / full) * payableHours(hoursWorked, full) * 100) / 100;
+}
 const TO_REVIEW = ["awaiting_step4","rejected_to_step4"];
 
 function esc(s){
@@ -363,13 +376,14 @@ async function openEntry(entryId){
   }
 
   // Compute pay in the background: Daily Rate = Monthly × 7.6923% (≈ /13),
-  // Actual Amount = (Daily Rate / Propose Hours) × Hours Worked. These are
+  // Actual Amount = (Daily Rate / Propose Hours) x Payable Hours, where 10 or 11 hours
+  // worked counts as a full day (the 11 hours include a 1-hour break). These are
   // saved to the database but never displayed on this page.
   CURRENT_ROWS = (emps||[]).map(e=>{
     const monthlySalary = salaryMap[String(e.employee_id)] || 0;
     const dailyRate = Math.round(monthlySalary * 0.076923 * 100) / 100;
     const hoursWorked = clampHours(e.hours_worked != null ? e.hours_worked : CURRENT_PROPOSE);
-    const actualAmount = Math.round((dailyRate / CURRENT_PROPOSE) * hoursWorked * 100) / 100;
+    const actualAmount = computeAmount(dailyRate, hoursWorked, CURRENT_PROPOSE);
     return { ...e, monthly_salary: monthlySalary, daily_rate: dailyRate, hours_worked: hoursWorked, actual_amount: actualAmount };
   });
 
@@ -419,7 +433,7 @@ function onHoursChanged(rowId, newHours, inputEl){
     st.textContent = "Hours worked cannot be more than " + MAX_HOURS + " — the value was reset to " + MAX_HOURS + ".";
   }
   row.hours_worked = hw;
-  row.actual_amount = Math.round((row.daily_rate / CURRENT_PROPOSE) * hw * 100) / 100;
+  row.actual_amount = computeAmount(row.daily_rate, hw, CURRENT_PROPOSE);
 }
 
 // Writes each employee's Hours Worked + computed Daily Rate + Actual Amount.
@@ -430,7 +444,7 @@ async function persistRows(){
   for(const row of CURRENT_ROWS){
     // Final safety net: never save more than MAX_HOURS, and keep the amount in step with it
     row.hours_worked = clampHours(row.hours_worked);
-    row.actual_amount = Math.round((row.daily_rate / CURRENT_PROPOSE) * row.hours_worked * 100) / 100;
+    row.actual_amount = computeAmount(row.daily_rate, row.hours_worked, CURRENT_PROPOSE);
     const { error } = await sb.from("overtime_employees").update({
       hours_worked: row.hours_worked, daily_rate: row.daily_rate, actual_amount: row.actual_amount
     }).eq("id", row.id);
