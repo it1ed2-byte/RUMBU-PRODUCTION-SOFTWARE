@@ -33,11 +33,24 @@
     display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:14px;
     transition:transform .12s ease, box-shadow .12s ease;}
   .lot-card:hover{transform:translateY(-2px);box-shadow:0 6px 16px rgba(0,0,0,.12);}
-  .lot-card.has{border-color:#93c5fd;background:linear-gradient(135deg,#eff6ff,#dbeafe);}
-  .lot-card.free{border-color:#6ee7b7;background:linear-gradient(135deg,#ecfdf5,#d1fae5);}
-  .lot-card .lot-name{font-weight:800;font-size:14px;color:var(--heading);margin-bottom:8px;word-break:break-word;}
-  .lot-card .lot-kg{font-size:18px;font-weight:800;}
-  .lot-card .lot-hint{font-size:10.5px;color:var(--muted);margin-top:6px;}
+  /* Same colours and wording as the PET LOT Map: green = Free, red = Occupied */
+  .lot-card.free{background:#d1fae5;border:2px solid #6ee7b7;}
+  .lot-card.occupied{background:#fee2e2;border:2px solid #fca5a5;}
+  .lot-card .lot-name{font-weight:800;font-size:13px;color:#1f2430;word-break:break-word;}
+  .lot-card .lot-status{font-size:11px;font-weight:700;margin-top:3px;}
+  .lot-card.free .lot-status{color:#065f46;}
+  .lot-card.occupied .lot-status{color:#991b1b;}
+  .lot-card .lot-info{font-size:11px;color:#6b7280;margin-top:6px;line-height:1.4;}
+  .lot-card .lot-info b{color:#1f2430;font-size:13px;}
+  .legend{display:flex;gap:20px;align-items:center;flex-wrap:wrap;}
+  .legend-item{display:flex;align-items:center;gap:6px;font-size:13px;}
+  .legend-dot{width:16px;height:16px;border-radius:4px;display:inline-block;}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:16px;}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center;}
+  .stat .n{font-size:26px;font-weight:800;color:var(--heading);}
+  .stat .l{font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;margin-top:4px;}
+  .stat.free-s .n{color:#065f46;}
+  .stat.occ-s .n{color:#991b1b;}
   .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;justify-content:center;align-items:flex-start;padding:40px 16px;}
   .modal-overlay.open{display:flex;}
   .modal-box{background:var(--card);border-radius:12px;padding:20px;max-width:700px;width:100%;max-height:85vh;overflow-y:auto;}
@@ -51,7 +64,19 @@
   <p style="font-size:12.5px;color:var(--muted);">Kano material balance per LOT — how much has arrived, how much has been used in production, and how much is left. Click a LOT for its full history. See <a href="kano-material-intake.html">Kano Material Intake</a> to log a new arrival.</p>
 
   <div class="card-panel">
-    <h3 style="margin-top:0;">LOT Balances</h3>
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+      <h3 style="margin:0;">Kano LOT Occupancy Map</h3>
+      <div class="legend">
+        <div class="legend-item"><span class="legend-dot" style="background:#6ee7b7;border:2px solid #6ee7b7;"></span>Free</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#fca5a5;border:2px solid #fca5a5;"></span>Occupied</div>
+      </div>
+    </div>
+    <p style="font-size:12.5px;color:var(--muted);margin:8px 0 12px;">
+      These are the Kano LOTs (names starting <b>KANO LOT</b>) — they are kept separate from the PET LOT Map. A Kano LOT is
+      <b>Occupied</b> while it still holds Kano material (the kg left is shown) and <b>Free</b> when nothing is left in it.
+      Click any LOT for its arrivals and usage history.
+    </p>
+    <div class="stats" id="statsBar"></div>
     <div id="lotsWrap"><p style="color:var(--muted);font-size:12.5px;">Loading...</p></div>
   </div>
 
@@ -98,7 +123,7 @@ async function init(){
 }
 
 async function loadAll(){
-  const { data: lots } = await sb.from("pet_lots").select("id, lot_name").order("lot_name");
+  const { data: lots } = await sb.from("pet_lots").select("id, lot_name").ilike("lot_name","KANO%").order("lot_name");
   LOTS = lots || [];
   const { data: intake } = await sb.from("pet_kano_material_intake").select("*");
   INTAKE = intake || [];
@@ -119,18 +144,26 @@ function balanceFor(lotId){
 
 function renderLots(){
   const wrap = document.getElementById("lotsWrap");
-  // Only show LOTs that have ever had Kano activity — a LOT with zero
-  // Kano intake/usage is just an ordinary PET Collection lot, irrelevant here.
-  const relevant = LOTS.filter(l => INTAKE.some(r=>String(r.lot_id)===String(l.id)) || USAGE.some(r=>String(r.lot_id)===String(l.id)));
-  if(!relevant.length){ wrap.innerHTML = "<p style='color:var(--muted);font-size:12.5px;'>No Kano material logged into any LOT yet.</p>"; return; }
+  // Every Kano LOT is listed from the start (like the PET LOT Map lists every LOT):
+  // Occupied = still holds Kano material, Free = balance is zero.
+  if(!LOTS.length){ wrap.innerHTML = "<p style='color:var(--muted);font-size:12.5px;'>No Kano LOTs found. Kano LOTs are the LOTs whose name starts with “KANO”.</p>"; document.getElementById("statsBar").innerHTML = ""; return; }
+  const rows = LOTS.map(l=>({ lot:l, bal: balanceFor(l.id) }));
+  const occ  = rows.filter(r=>r.bal > 0).length;
+  const free = rows.length - occ;
+  const onHand = rows.reduce((s,r)=> s + Math.max(r.bal,0), 0);
+  document.getElementById("statsBar").innerHTML = `
+    <div class="stat"><div class="n">${rows.length}</div><div class="l">Total Kano LOTs</div></div>
+    <div class="stat free-s"><div class="n">${free}</div><div class="l">Free</div></div>
+    <div class="stat occ-s"><div class="n">${occ}</div><div class="l">Occupied</div></div>
+    <div class="stat"><div class="n">${Math.round(occ/rows.length*100)}%</div><div class="l">Utilisation</div></div>
+    <div class="stat"><div class="n">${onHand.toLocaleString()}</div><div class="l">Kg on hand</div></div>`;
   wrap.innerHTML = `<div class="lot-grid">
-    ${relevant.map(l=>{
-      const bal = balanceFor(l.id);
-      const state = bal > 0 ? "has" : "free";
+    ${rows.map(({lot:l,bal})=>{
+      const state = bal > 0 ? "occupied" : "free";
       return `<div class="lot-card ${state}" onclick="openLotModal(${l.id})">
         <div class="lot-name">${esc(l.lot_name)}</div>
-        <div class="lot-kg">${bal > 0 ? bal.toLocaleString()+" kg" : "Free"}</div>
-        <div class="lot-hint">Tap for history</div>
+        <div class="lot-status">${bal > 0 ? "Occupied" : "Free"}</div>
+        <div class="lot-info">${bal > 0 ? "<b>"+bal.toLocaleString()+" kg</b><br>" : ""}Tap for history</div>
       </div>`;
     }).join("")}
   </div>`;
