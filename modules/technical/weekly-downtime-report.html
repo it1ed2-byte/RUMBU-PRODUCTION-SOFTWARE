@@ -275,31 +275,6 @@ function deptLabelMatches(department, label){
   return (DEPT_LABELS[department] || [department]).map(x=>x.toUpperCase()).includes(l);
 }
 
-// Records that carry this department's NAME but whose job code is not in its list.
-// They are not counted, so they are reported instead of vanishing silently.
-function unlistedRows(range, department, shift, section){
-  if(department === "All") return [];
-  const listed = new Set(getJobCodesByDepartment(department).map(normalizeCode));
-  return CTRL_ROWS.filter(r=>{
-    if(!r.stop_time || !r.starting_time || !r.finish_time) return false;
-    const d = String(r.stop_time).slice(0,10);
-    if(d < range.startDate || d > range.endDate) return false;
-    if(!deptLabelMatches(department, r.department)) return false;
-    if(listed.has(normalizeCode(r.job_code))) return false;
-    if(shift !== "All" && (r.shift||"").trim().toUpperCase() !== shift.toUpperCase()) return false;
-    return sectionMatches(section, r.section);
-  });
-}
-function unlistedNote(rows, department){
-  if(!rows.length) return "";
-  const m = {}; rows.forEach(r => { const k = String(r.job_code||"(blank)").trim(); m[k] = (m[k]||0)+1; });
-  const codes = Object.entries(m).sort((a,b)=>b[1]-a[1]).map(([k,v]) => k+" ("+v+")").join(", ")
-    .replace(/&/g,"&amp;").replace(/</g,"&lt;");
-  return `<p style="max-width:760px;margin:14px auto 0;padding:8px 12px;border:1px solid #c98a00;border-radius:6px;font-size:12.5px;">
-    ⚠️ <b>${rows.length} record(s) are labelled ${department} in the Department column but are NOT counted above</b>, because their job codes are not in this report's ${department} list: ${codes}.
-    If these assets belong in ${department}, their codes need adding to the list.</p>`;
-}
-
 // When a report comes back empty, walk the same filters one at a time and show where the
 // records dropped out, so the cause is visible instead of just "No data found".
 function explainEmpty(range, department, shift, section, jobCode){
@@ -565,7 +540,6 @@ async function generate(){
       `<td>${Math.ceil(r.est)}</td><td>${r.eff.toFixed(1)}%</td></tr>`;
   });
   html += `<tr style="background:var(--heading);color:#fff"><td>TOTAL</td><td>${tC}</td><td>${tD}</td><td>${tR}</td><td>${tW}</td><td>${tE}</td><td>-</td></tr></table>`;
-  if(!isSpecificCode) html += unlistedNote(unlistedRows(range, department, shift, section), department);
 
   // ---- 5-period trailing summary ----
   if(summary5.length){
