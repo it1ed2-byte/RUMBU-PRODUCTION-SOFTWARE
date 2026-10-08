@@ -249,6 +249,57 @@ function togglePeriod(){
 
 function normalizeCode(c){ return String(c||"").trim().toUpperCase().replace(/\.0+$/,""); }
 
+// Section rule (matches the old AppScript LIKE logic, but tolerant of spelling):
+//   Rumbu side  = any record that is NOT Mama Sannu (this includes blank sections), so a
+//                 choice spelled "Rumbu", "Rumbu Mainmat" or "RUMBU MAINMAT" finds the same rows.
+//   Mama Sannu  = any record whose section contains MAMASANNU (also "Mama Sannu Extruder" etc.).
+//   Anything else = exact match.
+function sectionMatches(selected, rowSection){
+  const want = String(selected||"").toUpperCase().trim();
+  if(!want || want === "ALL") return true;
+  const sec = String(rowSection||"").toUpperCase().trim();
+  const isMama = sec.replace(/\s+/g,"").includes("MAMASANNU");
+  if(want.replace(/\s+/g,"").includes("MAMASANNU")) return isMama;
+  if(want.includes("RUMBU")) return !isMama;
+  return sec === want;
+}
+
+// When a report comes back empty, walk the same filters one at a time and show where the
+// records dropped out, so the cause is visible instead of just "No data found".
+function explainEmpty(range, department, shift, section, jobCode){
+  const jobCodes = (jobCode && jobCode !== "All") ? [jobCode] : getJobCodesByDepartment(department);
+  const jobSet = new Set(jobCodes.map(normalizeCode));
+  const dayOf = r => r.stop_time ? String(r.stop_time).slice(0,10) : r.date_col;
+  const esc = v => String(v==null?"":v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  const inRange   = CTRL_ROWS.filter(r => { const d = dayOf(r); return d && d >= range.startDate && d <= range.endDate; });
+  const complete  = inRange.filter(r => r.stop_time && r.starting_time && r.finish_time);
+  const byCode    = complete.filter(r => jobSet.has(normalizeCode(r.job_code)));
+  const byShift   = byCode.filter(r => shift === "All" || (r.shift||"").trim().toUpperCase() === shift.toUpperCase());
+  const bySection = byShift.filter(r => sectionMatches(section, r.section));
+  const tally = (rows, pick) => {
+    const m = {}; rows.forEach(r => { const k = pick(r) || "(blank)"; m[k] = (m[k]||0) + 1; });
+    return Object.entries(m).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([k,v]) => esc(k)+" ("+v+")").join(", ") || "none";
+  };
+  const labelled = (department === "All") ? [] :
+    complete.filter(r => String(r.department||"").trim().toUpperCase() === department.toUpperCase() && !jobSet.has(normalizeCode(r.job_code)));
+  const row = (label, n, note) => `<tr><td style="text-align:left;">${label}</td><td><b>${n}</b></td><td style="text-align:left;">${note||""}</td></tr>`;
+  let html = `<div style="max-width:760px;margin:0 auto;"><p style="text-align:center;font-size:15px;">⚠️ <b>No data found for the selected filters.</b></p>
+    <p style="text-align:center;font-size:12px;opacity:.85;">Here is where the records dropped out (${esc(range.startDate)} to ${esc(range.endDate)}):</p>
+    <table><tr><th>Step</th><th>Records left</th><th>Note</th></tr>` +
+    row("1. Records in these dates", inRange.length, inRange.length ? "" : "Nothing was loaded for these dates.") +
+    row("2. With stoppage, start and finish times", complete.length, (inRange.length - complete.length) ? (inRange.length - complete.length) + " record(s) are missing a time and are skipped." : "") +
+    row("3. In the chosen department / job code", byCode.length, "") +
+    row("4. In the chosen shift (" + esc(shift) + ")", byShift.length, "") +
+    row("5. In the chosen section (" + esc(section) + ")", bySection.length, byShift.length && !bySection.length ? "Sections found at step 4: " + tally(byShift, r=>r.section) : "") +
+    `</table>`;
+  if(byCode.length === 0 && labelled.length){
+    html += `<p style="font-size:12.5px;margin-top:12px;"><b>Likely cause:</b> ${labelled.length} record(s) are labelled <b>${esc(department)}</b> in the Department column,
+      but their job codes are not in this report's ${esc(department)} list, so they are left out. Job codes found: ${tally(labelled, r=>r.job_code)}.
+      If these assets belong here, their codes need adding to the list.</p>`;
+  }
+  return html + "</div>";
+}
+
 function filterRows(range, department, shift, section, jobCode){
   // If a specific job code is selected, filter to ONLY that code.
   // Otherwise use the full department allow-list (excludes unlisted codes like OPR01, BR01, etc.)
@@ -265,15 +316,9 @@ function filterRows(range, department, shift, section, jobCode){
     if(!jobSet.has(normalizeCode(r.job_code))) return false; // exclude codes not in any known department
     // Shift: case-insensitive
     if(shift !== "All" && (r.shift||"").trim().toUpperCase() !== shift.toUpperCase()) return false;
-    // Section: match old AppScript's LIKE logic exactly
-    // Rumbu Mainmat = NOT LIKE '%MAMASANNU%' (includes NULLs and other non-MamaSannu sections)
-    // MamaSannu = LIKE '%MAMASANNU%' (matches "MamaSannu Extruder" variants too)
-    if(section !== "All"){
-      const sec = (r.section||"").toUpperCase().trim();
-      if(section === "MamaSannu" && !sec.includes("MAMASANNU")) return false;
-      if(section === "Rumbu Mainmat" && sec.includes("MAMASANNU")) return false;
-      if(section !== "MamaSannu" && section !== "Rumbu Mainmat" && sec !== section.toUpperCase()) return false;
-    }
+    // Section: see sectionMatches() - "Rumbu", "Rumbu Mainmat" and "RUMBU MAINMAT" all mean
+    // the Rumbu Mainmat side.
+    if(!sectionMatches(section, r.section)) return false;
     return true;
   });
 }
@@ -447,7 +492,7 @@ async function generate(){
   const rows = filterRows(range, department, shift, section, jobCode);
 
   if(!rows.length){
-    document.getElementById("reportArea").innerHTML = "<p>⚠️ No data found for the selected filters.</p>";
+    document.getElementById("reportArea").innerHTML = explainEmpty(range, department, shift, section, jobCode);
     return;
   }
 
