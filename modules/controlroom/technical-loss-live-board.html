@@ -318,28 +318,37 @@ async function fetchLive(){
   try{
     const { shift, dateStr } = currentShiftAndDate();
 
-    // Server-side: filter job_code, order by id DESC, cap at 2000 rows.
-    // ilike used for case-insensitive match in case data has mixed casing.
-    const [tRes, trRes] = await Promise.all([
-      api("tracking_table?select=id,assets,shed,description,shift,mc_stoppage_time&job_code=ilike.Technical Loss&order=id.desc&limit=2000"),
-      api("treated_table?select=id_number")
-    ]);
-    if(!tRes.ok)  throw new Error("tracking_table HTTP "+tRes.status);
-    if(!trRes.ok) throw new Error("treated_table HTTP "+trRes.status);
+    // Step 1: fetch recent Technical Loss rows server-side (job_code filter, latest first)
+    const tRes = await api(
+      "tracking_table?select=id,assets,shed,description,shift,mc_stoppage_time" +
+      "&job_code=ilike.Technical Loss&order=id.desc&limit=2000"
+    );
+    if(!tRes.ok) throw new Error("tracking_table HTTP "+tRes.status);
+    const track = await tRes.json();
 
-    const track   = await tRes.json();
-    const treated = await trRes.json();
+    // Step 2: client-side — keep only today's date + current shift
+    // mc_stoppage_time is the reliable date source (date_col can be corrupt)
+    const candidates = (track||[]).filter(r =>
+      watDateFromTs(r.mc_stoppage_time) === dateStr &&
+      (r.shift||"").trim().toLowerCase() === shift.toLowerCase()
+    );
 
-    // Rebuild treated set — key is tracking_table.id (AppScript: t.ID = tr.ID)
-    TREATED_IDS = new Set((treated||[]).map(r=>String(r.id_number)));
+    // Step 3: fetch treated status for ONLY these candidate IDs (targeted query —
+    // avoids the 1000-row Supabase default limit that caused treated rows to reappear).
+    TREATED_IDS = new Set();
+    if(candidates.length > 0){
+      const ids = candidates.map(r => r.id).join(",");
+      const trRes = await api(
+        "treated_table?select=id_number&id_number=in.(" + ids + ")"
+      );
+      if(trRes.ok){
+        const treated = await trRes.json();
+        (treated||[]).forEach(r => TREATED_IDS.add(String(r.id_number)));
+      }
+    }
 
-    // Client-side: WAT date, shift, exclude treated (LEFT JOIN IS NULL equivalent)
-    LIVE_ROWS = (track||[]).filter(r=>{
-      if(watDateFromTs(r.mc_stoppage_time) !== dateStr) return false;
-      if((r.shift||"").trim().toLowerCase() !== shift.toLowerCase()) return false;
-      if(TREATED_IDS.has(String(r.id))) return false;
-      return true;
-    });
+    // Step 4: exclude treated rows (LEFT JOIN IS NULL equivalent)
+    LIVE_ROWS = candidates.filter(r => !TREATED_IDS.has(String(r.id)));
 
     setDot("liveDot","ok");
     setStatus("liveStatus",
