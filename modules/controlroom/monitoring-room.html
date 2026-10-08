@@ -18,6 +18,8 @@ h1{text-align:center;font-size:calc(2.2 * var(--scale));padding:1.2vh;color:#38b
 .controls button.active{background:#22c55e;}
 #status{ text-align:center; font-size:calc(0.9*var(--scale)); padding-bottom:6px; color:#94a3b8; }
 #status.bad{ color:#f87171; }
+#stamp{ text-align:center; font-size:calc(1.3*var(--scale)); color:#94a3b8; padding-bottom:0.8vh; }
+#stamp b{ color:#e2e8f0; }
 .dashboard{display:grid;grid-template-columns:1fr 1fr 1fr;grid-auto-rows:minmax(28vh, auto);gap:1vh;padding:1vh;}
 #kpi{grid-column:1/span 3;display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:1.2vh;}
 .card{background:#1e293b;border-radius:1.2vh;padding:2vh 1vh;text-align:center;display:flex;flex-direction:column;justify-content:center;min-height:15vh;box-shadow:0 2px 6px rgba(0,0,0,.25);}
@@ -56,13 +58,15 @@ body.tv-mode #exitHint{ display:block; }
 <div id="exitHint" onclick="toggleFullscreen()">✕ Exit TV View (Esc)</div>
 
 <h1>RUMBU INDUSTRIES GROUP — Monitoring Room (Live)</h1>
+<div id="stamp">Loading...</div>
 
 <div class="controls">
-  <button id="btnMorning" onclick="setShift('Morning')">Morning</button>
-  <button id="btnNight" onclick="setShift('Night')">Night</button>
-  <button id="btnAll" onclick="setShift('All')">All</button>
-  <input type="date" id="fromDate" onchange="loadDashboard()">
-  <input type="date" id="toDate" onchange="loadDashboard()">
+  <button id="btnMorning" onclick="manualShift('Morning')">Morning</button>
+  <button id="btnNight" onclick="manualShift('Night')">Night</button>
+  <button id="btnAll" onclick="manualShift('All')">All</button>
+  <input type="date" id="fromDate" onchange="onDateChanged()">
+  <input type="date" id="toDate" onchange="onDateChanged()">
+  <button id="btnRefresh" onclick="manualRefresh()" style="background:#0ea5e9;">↻ Refresh</button>
   <button id="btnFull" onclick="toggleFullscreen()" style="background:#7c3aed;">📺 TV Full Screen</button>
 </div>
 <div id="status">Connecting to Supabase...</div>
@@ -92,8 +96,7 @@ body.tv-mode #exitHint{ display:block; }
 <p style="text-align:center;font-size:12px;color:#64748b;padding:10px;">
   KPI, Department, Shed, and Nurse Ranking are read from "control" (maintenance_log).
   Machine Status and both No-Repair tables are read from "tracking_table", joined to
-  "treated_table" on tracking_table.asset_id = treated_table.id_number — matching the
-  original Apps Script exactly.
+  "treated_table" on tracking_table.id = treated_table.id_number.
 </p>
 
 <script>
@@ -118,6 +121,10 @@ const TRACKING_TABLE = "tracking_table";
 const TREATED_TABLE = "treated_table";
 
 let currentShift = "All";
+const REFRESH_SECONDS = 60;
+let AUTO_DAY = true;      // follow today's date (rolls over at midnight) until someone picks a date by hand
+let AUTO_SHIFT = true;    // follow the clock (Morning 07:00-18:59, Night otherwise) until someone picks a shift by hand
+let LOADING = false, LAST_OK = null, NEXT_IN = REFRESH_SECONDS;
 let CONTROL_ROWS = [];
 let TRACKING_ROWS = [];
 let TREATED_IDS = new Set();
@@ -135,6 +142,7 @@ function setShift(shift){
     document.getElementById("btn"+s).classList.toggle("active", s===shift);
   });
   render();
+  updateStamp();
 }
 
 function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
@@ -155,6 +163,23 @@ async function fetchAllRows(table, query){
   return all;
 }
 
+// Which of these tracking row ids have been treated? Asks Supabase only about the
+// ids given, a batch at a time, so the answer never depends on how big treated_table is.
+async function fetchTreatedIds(ids){
+  const out = new Set();
+  const clean = Array.from(new Set((ids||[]).filter(v => v !== null && v !== undefined && v !== ""))).map(String);
+  const BATCH = 150;
+  const batches = [];
+  for(let i=0; i<clean.length; i+=BATCH) batches.push(clean.slice(i, i+BATCH));
+  const results = await Promise.all(batches.map(async b => {
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + TREATED_TABLE + "?select=id_number&id_number=in.(" + b.join(",") + ")", { headers: authHeaders() });
+    if(!res.ok) throw new Error(TREATED_TABLE + ": HTTP " + res.status);
+    return res.json();
+  }));
+  results.forEach(rows => rows.forEach(r => out.add(String(r.id_number))));
+  return out;
+}
+
 function nigeriaDateISO(){
   const now = new Date();
   const utcMs = now.getTime() + now.getTimezoneOffset()*60000;
@@ -167,6 +192,52 @@ function nigeriaYesterdayISO(){
   const wat = new Date(utcMs + 1*3600000 - 86400000);
   return wat.getFullYear()+"-"+String(wat.getMonth()+1).padStart(2,"0")+"-"+String(wat.getDate()).padStart(2,"0");
 }
+function detectShift(){ const h = nigeriaNowHour(); return (h >= 7 && h < 19) ? "Morning" : "Night"; }
+
+function fmtDay(iso){
+  if(!iso) return "";
+  return new Date(iso + "T00:00:00Z").toLocaleDateString("en-GB", { weekday:"short", day:"2-digit", month:"short", year:"numeric", timeZone:"UTC" });
+}
+// The line under the title: exactly which day / shift is on screen, and how fresh it is.
+function updateStamp(){
+  const el = document.getElementById("stamp"); if(!el) return;
+  const from = document.getElementById("fromDate").value, to = document.getElementById("toDate").value;
+  const days = (from === to) ? fmtDay(from) : fmtDay(from) + " to " + fmtDay(to);
+  const shift = currentShift === "All" ? "All shifts" : currentShift + " shift";
+  const upd = LAST_OK ? LAST_OK.toLocaleTimeString("en-GB", { timeZone:"Africa/Lagos", hour12:false }) : "...";
+  el.innerHTML = "Showing jobs for <b>" + days + "</b> · <b>" + shift + "</b> · updated " + upd + " · refresh in " + Math.max(NEXT_IN,0) + "s";
+}
+
+async function refreshNow(){
+  NEXT_IN = REFRESH_SECONDS;
+  if(AUTO_DAY){                         // new day? move to it
+    const today = nigeriaDateISO();
+    const f = document.getElementById("fromDate"), t = document.getElementById("toDate");
+    if(f.value !== today || t.value !== today){ f.value = today; t.value = today; }
+  }
+  if(AUTO_SHIFT){                       // new shift? move to it
+    const sh = detectShift();
+    if(sh !== currentShift) setShift(sh);
+  }
+  await loadDashboard();
+  updateStamp();
+}
+function manualRefresh(){ refreshNow(); }
+function manualShift(shift){ AUTO_SHIFT = false; setShift(shift); }
+function onDateChanged(){
+  const today = nigeriaDateISO();
+  AUTO_DAY = (document.getElementById("fromDate").value === today && document.getElementById("toDate").value === today);
+  loadDashboard();
+}
+setInterval(function(){
+  if(document.hidden) return;           // a hidden tab does not refresh; it catches up when shown again
+  NEXT_IN--;
+  if(NEXT_IN <= 0) refreshNow(); else updateStamp();
+}, 1000);
+document.addEventListener("visibilitychange", function(){
+  if(!document.hidden && LAST_OK && (Date.now() - LAST_OK.getTime()) > REFRESH_SECONDS*1000) refreshNow();
+});
+
 function nigeriaNowHour(){
   const now = new Date();
   const utcMs = now.getTime() + now.getTimezoneOffset()*60000;
@@ -175,6 +246,8 @@ function nigeriaNowHour(){
 }
 
 async function loadDashboard(){
+  if(LOADING) return;                 // never run two loads at once (auto-refresh + a click)
+  LOADING = true;
   const status = document.getElementById("status");
   try{
     const me = await requireAuth("../../login.html");
@@ -216,21 +289,30 @@ async function loadDashboard(){
       yTrack.forEach(r => { if(!existingTIds.has(r.id)) TRACKING_ROWS.push(r); });
     }
 
-    // GAS has no date filter on treated_table — it fetches ALL treated records
-    // and joins on tracking_table.ID = treated_table.ID.
-    // In Supabase: treated_table key = id_number, tracking_table key = asset_id.
-    const tres = await fetch(SUPABASE_URL + "/rest/v1/" + TREATED_TABLE + "?select=id_number", { headers: authHeaders() });
-    if(tres.ok){
-      const trows = await tres.json();
-      TREATED_IDS = new Set(trows.map(r => String(r.id_number)));
-    } else {
+    // Treated status is looked up ONLY for the tracking rows loaded above
+    // (treated_table.id_number holds the tracking row's id).
+    // Reading the whole treated_table in one request hit Supabase's 1000-row
+    // cap, so the NEWEST treated records never arrived: "Repaired" stayed at 0
+    // and "Waiting" kept growing even after jobs were treated.
+    let treatedWarning = "";
+    try{
+      TREATED_IDS = await fetchTreatedIds(TRACKING_ROWS.map(r => r.id));
+    }catch(e){
       TREATED_IDS = new Set();
+      treatedWarning = " | WARNING: treated records could not be read (" + (e.message||e) + ") - Repaired may be understated";
     }
 
-    status.className=""; status.textContent = "Connected. control: " + CONTROL_ROWS.length + " rows | tracking: " + TRACKING_ROWS.length + " rows | treated: " + TREATED_IDS.size + " (from " + from + " to " + to + ")";
+    const undated = TRACKING_ROWS.filter(r => !dayOf(r)).length;
+    status.className = treatedWarning ? "bad" : "";
+    status.textContent = "Connected. control: " + CONTROL_ROWS.length + " rows | tracking: " + TRACKING_ROWS.length + " rows | treated: " + TREATED_IDS.size + " (from " + from + " to " + to + ")"
+      + (undated ? " | " + undated + " job(s) ignored: no readable date" : "") + treatedWarning;
+    LAST_OK = new Date();
     render();
+    updateStamp();
   }catch(e){
     status.className="bad"; status.textContent = "Could not read data: " + (e.message||e);
+  }finally{
+    LOADING = false;
   }
 }
 
@@ -309,10 +391,27 @@ function filteredControlRowsForShift(shiftValue){
     return inDateRange(r);
   });
 }
+// The day a job belongs to, as YYYY-MM-DD (null if it has no readable date).
+function dayOf(row){
+  const m = String(row.date || row.date_col || "").match(/^(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : null;
+}
+// Strict: a job with no readable date is NEVER counted as belonging to the chosen day
+// (the general inDateRange() lets undated rows through, which is fine for the
+// control table but would inflate the Waiting / Repaired job counts).
+function inDateRangeStrict(row){
+  const from = document.getElementById("fromDate").value;
+  const to = document.getElementById("toDate").value;
+  const d = dayOf(row);
+  if(!d) return false;
+  if(from && d < from) return false;
+  if(to && d > to) return false;
+  return true;
+}
 function filteredTrackingRowsForShift(shiftValue){
   return TRACKING_ROWS.filter(r=>{
     if(shiftValue !== "All" && r.shift !== shiftValue) return false;
-    return inDateRange(r);
+    return inDateRangeStrict(r);
   });
 }
 
@@ -488,8 +587,7 @@ function render(){
 document.getElementById("fromDate").value = nigeriaDateISO();
 document.getElementById("toDate").value = nigeriaDateISO();
 // Auto-detect shift on load — matches GAS getCurrentShift() behaviour
-const autoShift = (nigeriaNowHour() >= 7 && nigeriaNowHour() < 19) ? "Morning" : "Night";
-setShift(autoShift);
+setShift(detectShift());
 loadDashboard();
 </script>
 </body>
