@@ -145,6 +145,42 @@ async function fetchControlRange(fromDate, toDate){
   CTRL_ROWS.forEach(normalizeControlRow);
 }
 
+
+// ---- Department and section matching (shared rules, same as the Weekly Downtime Report) ----
+// People type department names in different ways in the Department column
+// (e.g. "RECYCLING MECH", "ELEC RECYCLING"). Each dropdown choice accepts these spellings,
+// ignoring capital letters and extra spaces.
+const DEPT_ALIASES = {
+  "RECYCLING": ["RECYCLING","RECYCLING MECH","RECYCLING MECHANICS","RECYCLING MECHANICAL"],
+  "ELECRICAL RECYCLING": ["ELECRICAL RECYCLING","ELEC RECYCLING","ELECTRICAL RECYCLING"]
+};
+function normLabel(v){ return String(v||"").trim().toUpperCase().replace(/\s+/g," "); }
+function deptMatches(selected, label){
+  if(selected === "All") return true;
+  return (DEPT_ALIASES[selected] || [selected]).map(normLabel).includes(normLabel(label));
+}
+// Rumbu side = anything that is NOT Mama Sannu (blank sections included), so "Rumbu",
+// "Rumbu Mainmat" and "RUMBU MAINMAT" all find the same records. Mama Sannu = contains MAMASANNU.
+function sectionMatches(selected, rowSection){
+  const want = String(selected||"").toUpperCase().trim();
+  if(!want || want === "ALL") return true;
+  const sec = String(rowSection||"").toUpperCase().trim();
+  const isMama = sec.replace(/\s+/g,"").includes("MAMASANNU");
+  if(want.replace(/\s+/g,"").includes("MAMASANNU")) return isMama;
+  if(want.includes("RUMBU")) return !isMama;
+  return sec === want;
+}
+// An empty report: show where the records dropped out instead of just "No data found".
+function emptyExplanation(steps, rowsForLabels, department){
+  const esc = v => String(v==null?"":v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  const m = {}; rowsForLabels.forEach(r => { const k = normLabel(r.department) || "(blank)"; m[k] = (m[k]||0)+1; });
+  const labels = Object.entries(m).sort((a,b)=>b[1]-a[1]).slice(0,14).map(([k,v]) => esc(k)+" ("+v+")").join(", ") || "none";
+  return `<div style="max-width:760px;margin:0 auto;"><p style="text-align:center;font-size:15px;">⚠️ <b>No data found for the selected filters.</b></p>
+    <p style="text-align:center;font-size:12px;opacity:.85;">Here is where the records dropped out:</p>
+    <table><tr><th>Step</th><th>Records left</th></tr>${steps.map(([l,n]) => `<tr><td style="text-align:left;">${esc(l)}</td><td><b>${n}</b></td></tr>`).join("")}</table>
+    <p style="font-size:12.5px;margin-top:12px;"><b>Department names found in these dates:</b> ${labels}</p></div>`;
+}
+
 async function generate(){
   const startDate = document.getElementById("startDate").value;
   const endDate = document.getElementById("endDate").value;
@@ -165,19 +201,24 @@ async function generate(){
     const stopDate = r.stop_time ? r.stop_time.slice(0,10) : r.date_col;
     if(stopDate < startDate || stopDate > endDate) return false;
     // Department: actual column — matches old script's AND Department=@dept
-    if(department !== "All" && (r.department||"").trim() !== department) return false;
+    if(!deptMatches(department, r.department)) return false;
     if(shift !== "All" && r.shift !== shift) return false;
-    // Section: LIKE logic matching old script behaviour
-    if(section !== "All"){
-      const sec = (r.section||"").toUpperCase().trim();
-      if(section === "MamaSannu" && !sec.includes("MAMASANNU")) return false;
-      if(section === "Rumbu Mainmat" && sec.includes("MAMASANNU")) return false;
-      if(section !== "MamaSannu" && section !== "Rumbu Mainmat" && sec !== section.toUpperCase()) return false;
-    }
+    // Section: see sectionMatches() above
+    if(!sectionMatches(section, r.section)) return false;
     return true;
   });
   if(!rows.length){
-    document.getElementById("reportArea").innerHTML = "<p>⚠️ No data found for selected filters.</p>";
+    const day = r => r.stop_time ? r.stop_time.slice(0,10) : r.date_col;
+    const inDates = CTRL_ROWS.filter(r => { const d = day(r); return d >= startDate && d <= endDate; });
+    const byDept  = inDates.filter(r => deptMatches(department, r.department));
+    const byShift = byDept.filter(r => shift === "All" || r.shift === shift);
+    const bySec   = byShift.filter(r => sectionMatches(section, r.section));
+    document.getElementById("reportArea").innerHTML = emptyExplanation([
+      ["1. Records in these dates", inDates.length],
+      ["2. In the chosen department (" + department + ")", byDept.length],
+      ["3. In the chosen shift (" + shift + ")", byShift.length],
+      ["4. In the chosen section (" + section + ")", bySec.length]
+    ], inDates, department);
     return;
   }
 
