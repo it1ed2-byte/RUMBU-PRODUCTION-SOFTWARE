@@ -98,7 +98,7 @@
       <li><b>Batch entry:</b> add a batch each time one is made: the grade (<b>AA</b> or <b>AB</b>), the weight of <b>each bag</b>, and the <b>supervisor(s)</b> and <b>shift leader</b> ID (their names appear by themselves). Keep adding batches until the material is finished.</li>
       <li>The lab (Stage 9) tests each batch as you add it. <b>Result approval:</b> when the lab submits a result, the result approver sees it <b>beside the company's limits</b>, then passes the batch or asks for a <b>retest</b> or a <b>rerun</b>.</li>
       <li><b>Labels:</b> once a batch is approved, the labels person generates, prints and downloads its QR labels.</li>
-      <li>When every batch is approved and the material is finished, the batch-entry person presses <b>Complete Production</b>. Waste is worked out automatically from Quality Control.</li>
+      <li>When every batch is approved and the material is finished, the batch-entry person presses <b>Complete Production</b>. Waste = Rumbu weight − total flake batched, distributed across categories proportionally.</li>
     </ol>
   </div>
 
@@ -121,7 +121,7 @@
         <div id="dutyNote" style="font-size:12.5px;color:var(--muted);margin:8px 0 0;"></div>
 
         <div class="sec-title">1 · Progress</div>
-        <p class="step-help">Material balance = Rumbu weight − waste (from the Stage 6 percentages) − every batch recorded so far. At about zero, the agent's material is finished.</p>
+        <p class="step-help">Material balance = Rumbu weight − total flake batched so far. At about zero, the agent's material is finished.</p>
         <div class="tiles" id="runTiles"></div>
 
         <div id="batchFormWrap">
@@ -159,7 +159,7 @@
         <div id="readyBanner"></div>
 
         <div class="sec-title">4 · Complete production — once, when the material is finished</div>
-        <p class="step-help">Nothing to type here. The end time is the time the last batch was recorded, totals come from the batches, and waste comes from Quality Control. You may add <b>Kano material used</b>, if any was used.</p>
+        <p class="step-help">Nothing to type here. The end time is the time the last batch was recorded, totals come from the batches, and waste = Rumbu weight − total production. You may add <b>Kano material used</b>, if any was used.</p>
 
         <div class="grid2">
           <div><label>Production Start (stamped at Stage 7)</label><input type="text" id="pfStart" readonly></div>
@@ -203,8 +203,8 @@
 
 
         <div class="sec-title">Waste Calculation — worked out at the end of production</div>
-        <p style="font-size:12px;color:var(--muted);margin:0 0 8px;">Worked out automatically from the <b>Stage 6 — Quality Control</b> percentages: each category's weight = its percentage &times; the Rumbu Weighbridge Weight, rounded to the nearest whole kg. Nothing to type here.</p>
-        <div id="pfNoQcWaste" style="display:none;" class="correction-note">The Stage 6 — Quality Control percentages are missing for this collection, so the waste cannot be calculated and Production cannot be completed yet.</div>
+        <p style="font-size:12px;color:var(--muted);margin:0 0 8px;">Waste = Rumbu Weighbridge Weight − Total Production (Option B). Category breakdown is distributed proportionally from Stage 6 QC data where available; all zeros if QC data is absent. Nothing to type here.</p>
+        <div id="pfNoQcWaste" style="display:none;" class="correction-note">Stage 6 QC data is missing — waste categories will all show zero, but production can still be completed.</div>
         <div class="grid4" id="pfKgGrid"></div>
         <div class="grid3" style="margin-top:6px;">
           <div><label>Total Waste Record (kg) — sum of the 8 categories</label><input type="number" id="pfTotalWaste" readonly></div>
@@ -343,16 +343,15 @@ async function loadFillQueue(sections){
     .order("updated_at",{ascending:false});
   return (data||[]).map(c=>{
     const qc=one(c.pet_stage2_qc), prod=one(c.pet_stage4_production), bs=c.pet_lab_batches||[];
-    const waste=wasteFromQc(qc,c.rumbu_weighbridge_weight);
     const produced=bs.reduce((s,b)=>s+bTotal(b),0);
-    const bal = waste==null ? null : num(c.rumbu_weighbridge_weight)-waste.total-produced;
+    const bal = num(c.rumbu_weighbridge_weight)-produced;
     const review=bs.filter(b=>bStatus(b)==="lab_done").length;
     return `<div class="queue-row">
     <div><b>${esc(c.form_number)}</b> <span style="font-size:12px;color:var(--muted);margin-left:8px;">${esc(c.agent_name)} (${esc(c.agent_code)}) — ${esc(c.section)}</span>
       ${c.status==="rejected_to_stage4"?`<span class="pill p-bad">Returned for correction</span>`:""}
       ${review?`<span class="pill p-info">${review} result${review===1?"":"s"} to review</span>`:""}
       ${prod.company_name?`<span class="pill p-info">${esc(prod.company_name)}</span>`:`<span class="pill p-bad">No company set</span>`}
-      <div class="meta">Started ${esc(fmtDT(prod.production_start))} · ${bs.length} batch${bs.length===1?"":"es"} · ${fmt(produced)} kg recorded · ${bal==null?"balance unknown":"balance "+fmt(bal)+" kg"}</div>
+      <div class="meta">Started ${esc(fmtDT(prod.production_start))} · ${bs.length} batch${bs.length===1?"":"es"} · ${fmt(produced)} kg recorded · ${"balance "+fmt(bal)+" kg"}</div>
     </div>
     <button onclick="openProdForm(${c.id})">Open Run</button>
   </div>`;
@@ -438,6 +437,20 @@ async function openProdReview(collectionId){
 const WASTE_KEYS = [["coloured","Coloured PET (kg)"],["labels","Labelled Bottles (kg)"],["caps_rings","Caps & Rings (kg)"],["non_food","Non-Food Contact (kg)"],
   ["non_pet","Non-PET Product (kg)"],["aged","Aged PET Bottles (kg)"],["oily","Oily PET Bottles (kg)"],["metal","Bottles with Metal Ring (kg)"]];
 
+// Distribute totalWasteKg proportionally across QC categories.
+// If no QC data, all categories are 0 (total still recorded).
+function distributeWaste(totalWasteKg, qcWaste){
+  const zero={coloured:0,labels:0,caps_rings:0,non_food:0,non_pet:0,aged:0,oily:0,metal:0};
+  if(!qcWaste || qcWaste.total===0) return zero;
+  const keys=Object.keys(zero);
+  const out={}; let assigned=0;
+  keys.forEach(k=>{ const share=Math.round(totalWasteKg*(qcWaste[k]||0)/qcWaste.total); out[k]=share; assigned+=share; });
+  // Assign rounding remainder to the largest category
+  const diff=Math.round(totalWasteKg)-assigned;
+  if(diff!==0){ const big=keys.reduce((a,b)=>out[a]>=out[b]?a:b); out[big]+=diff; }
+  return out;
+}
+
 // Waste, worked out from Stage 6's percentages x the Rumbu Weighbridge Weight. Null if Stage 6 is missing.
 function wasteFromQc(qc, rumbuW){
   if(!qc || WASTE_KEYS.some(([k])=>qc["qc_pct_"+k]==null)) return null;
@@ -452,10 +465,15 @@ function computeWaste(){
   if(!grid.children.length){
     grid.innerHTML=WASTE_KEYS.map(([k,l])=>`<div><label>${l}</label><input type="number" id="pfKg_${k}" readonly></div>`).join("");
   }
-  WASTE_KEYS.forEach(([k])=>{ document.getElementById("pfKg_"+k).value = QC_WASTE ? QC_WASTE[k] : ""; });
-  const totalWaste = QC_WASTE ? QC_WASTE.total : 0;
+  // Option B: estimate waste from actual batch output so far
+  const _produced=RUN_BATCHES.reduce((s,b)=>s+bTotal(b),0);
+  const _rumbuW=parseFloat(CURRENT_PROD?.rumbu_weighbridge_weight)||0;
+  const _estWaste=Math.max(0,_rumbuW-_produced);
+  const _dist=distributeWaste(_estWaste,QC_WASTE);
+  WASTE_KEYS.forEach(([k])=>{ document.getElementById("pfKg_"+k).value = _dist[k]||""; });
+  const totalWaste = _estWaste;
   document.getElementById("pfTotalWaste").value = totalWaste.toFixed(2);
-  document.getElementById("pfNoQcWaste").style.display = QC_WASTE ? "none" : "block";
+  document.getElementById("pfNoQcWaste").style.display = "none"; // Option B: QC not required for waste calc
   const rumbuW = parseFloat(CURRENT_PROD?.rumbu_weighbridge_weight)||0;
   const agentW = parseFloat(CURRENT_PROD?.agent_waybill_weight)||0;
   const accepted = rumbuW*0.03, unaccKg = totalWaste-accepted;
@@ -487,7 +505,6 @@ async function loadRunData(collectionId){
 // What still has to happen before Production can be completed.
 function runProblems(){
   const p=[];
-  if(!QC_WASTE) p.push("The Stage 6 — Quality Control percentages are missing, so the waste cannot be calculated.");
   if(!RUN_BATCHES.length) p.push("No batches have been recorded yet.");
   const label={produced:"waiting for the lab result",retest_requested:"retest in progress at the lab",lab_done:"lab result submitted, needs your review",rerun_requested:"rerun requested, edit and resubmit"};
   RUN_BATCHES.forEach(b=>{ const s=bStatus(b); if(s!=="approved") p.push("Batch "+b.batch_no+": "+(label[s]||s)+"."); });
@@ -498,16 +515,16 @@ function renderRunOverview(){
   const c=CURRENT_PROD;
   const produced=RUN_BATCHES.reduce((s,b)=>s+bTotal(b),0);
   const g=runGradeKg(RUN_BATCHES);
-  const available = QC_WASTE ? num(c.rumbu_weighbridge_weight)-QC_WASTE.total : null;
-  const balance = available==null ? null : available-produced;
-  const balClass = balance==null ? "" : (Math.abs(balance)<=tolerance(available) ? "good" : "warn");
+  const available = num(c.rumbu_weighbridge_weight);
+  const balance = available-produced;
+  const balClass = Math.abs(balance)<=tolerance(available) ? "good" : "warn";
   const approved=RUN_BATCHES.filter(b=>bStatus(b)==="approved").length;
   const review=RUN_BATCHES.filter(b=>bStatus(b)==="lab_done").length;
   document.getElementById("runTiles").innerHTML=`
     <div class="tile"><div class="v">${fmt(c.rumbu_weighbridge_weight)}</div><div class="l">Rumbu weight (kg)</div></div>
-    <div class="tile"><div class="v">${available==null?"—":fmt(available)}</div><div class="l">Available after waste (kg)</div></div>
+    <div class="tile"><div class="v">${fmt(available)}</div><div class="l">Available material (kg)</div></div>
     <div class="tile"><div class="v">${fmt(produced)}</div><div class="l">Recorded in batches (kg)</div></div>
-    <div class="tile ${balClass}"><div class="v">${balance==null?"—":fmt(balance)}</div><div class="l">Balance remaining (kg)</div></div>
+    <div class="tile ${balClass}"><div class="v">${fmt(balance)}</div><div class="l">Balance remaining (kg)</div></div>
     <div class="tile"><div class="v">${fmt(g.aa)}</div><div class="l">AA flake (kg)</div></div>
     <div class="tile"><div class="v">${fmt(g.ab)}</div><div class="l">AB flake (kg)</div></div>
     <div class="tile ${review?"warn":""}"><div class="v">${approved} / ${RUN_BATCHES.length}</div><div class="l">Batches approved</div></div>`;
@@ -736,8 +753,8 @@ async function saveBatch(){
   const total=parseFloat(weights.reduce((s,w)=>s+w,0).toFixed(2));
 
   const others=RUN_BATCHES.filter(b=>b.id!==EDITING).reduce((s,b)=>s+bTotal(b),0);
-  const available = QC_WASTE ? num(CURRENT_PROD.rumbu_weighbridge_weight)-QC_WASTE.total : null;
-  if(available!=null && others+total > available+tolerance(available)){
+  const available = num(CURRENT_PROD.rumbu_weighbridge_weight);
+  if(others+total > available+tolerance(available)){
     if(!confirm("With this batch the recorded flake ("+fmt(others+total)+" kg) is more than the material available ("+fmt(available)+" kg). Save it anyway?")) return;
   }
   st.textContent="Saving...";
@@ -1191,12 +1208,14 @@ async function completeProduction(){
   const rumbuW=num(CURRENT_PROD.rumbu_weighbridge_weight);
   const total=RUN_BATCHES.reduce((s,b)=>s+bTotal(b),0);
   const g=runGradeKg(RUN_BATCHES);
-  const available=rumbuW-QC_WASTE.total, balance=available-total;
-  const accepted=rumbuW*0.03, unacc=QC_WASTE.total-accepted;
+  // Option B: actual waste = Rumbu Weight minus what was batched
+  const actualWaste=parseFloat((rumbuW-total).toFixed(2));
+  const accepted=rumbuW*0.03;
+  const unacc=parseFloat((actualWaste-accepted).toFixed(2));
   const endIso=lastBatchTime();
 
-  if(balance > tolerance(available)){
-    if(!confirm("About "+fmt(balance)+" kg of this agent's material has not been recorded in any batch.\n\nIf more will still be produced, press Cancel and add the batch first.\n\nComplete production anyway?")) return;
+  if(actualWaste > tolerance(rumbuW)){
+    if(!confirm("About "+fmt(actualWaste)+" kg of this agent's material was not recorded in any batch.\n\nIf more will still be produced, press Cancel and add the batch first.\n\nComplete production anyway?")) return;
   }
   st.textContent="";
   showReviewModal({
@@ -1207,8 +1226,8 @@ async function completeProduction(){
       { heading: "Production Time", rows: [["Production Start", fmtDT(PROD_REC.production_start)],["Production End (last batch recorded)", fmtDT(endIso)]]},
       { heading: "Batches", rows: [["Number of Batches", RUN_BATCHES.length],["All batches approved", "Yes"]]},
       { heading: "Production Entry", rows: [["AA flake (kg)", g.aa.toFixed(2)],["AB flake (kg)", g.ab.toFixed(2)],["Total Production (kg)", total.toFixed(2)]]},
-      { heading: "Waste Calculation (from Quality Control)", rows: [["Total Waste Record (kg)", QC_WASTE.total.toFixed(2)],["Accepted Waste (kg)", accepted.toFixed(2)],["Unacceptable Waste (kg)", unacc.toFixed(2)]]},
-      { heading: "Material Balance", rows: [["Available after waste (kg)", available.toFixed(2)],["Recorded in batches (kg)", total.toFixed(2)],["Balance remaining (kg)", balance.toFixed(2)]]}
+      { heading: "Waste (Rumbu Weight − Total Batched)", rows: [["Total Waste (kg)", actualWaste.toFixed(2)],["Accepted Waste — 3% of Rumbu (kg)", accepted.toFixed(2)],["Unacceptable Waste (kg)", unacc.toFixed(2)]]},
+      { heading: "Material Balance", rows: [["Rumbu Weight (kg)", rumbuW.toFixed(2)],["Recorded in Batches (kg)", total.toFixed(2)],["Waste (kg)", actualWaste.toFixed(2)]]}
     ],
     onConfirm: proceedWithComplete
   });
@@ -1219,14 +1238,16 @@ async function proceedWithComplete(){
   st.style.color="var(--muted)"; st.textContent="Completing production...";
   try{
     const off=one(CURRENT_PROD.pet_stage4a_offloading);
-    const W=QC_WASTE;
     const g=runGradeKg(RUN_BATCHES);
     const totalProduction=parseFloat(RUN_BATCHES.reduce((s,b)=>s+bTotal(b),0).toFixed(2));
-    const totalWaste=parseFloat(W.total.toFixed(2));
     const rumbuW=num(CURRENT_PROD.rumbu_weighbridge_weight);
     const agentW=num(CURRENT_PROD.agent_waybill_weight);
+    // Option B: waste = what was not turned into flake
+    const totalWaste=parseFloat((rumbuW-totalProduction).toFixed(2));
     const accepted=parseFloat((rumbuW*0.03).toFixed(2));
     const unaccKg=parseFloat((totalWaste-accepted).toFixed(2));
+    // Distribute waste proportionally across QC categories if data available
+    const wDist=distributeWaste(totalWaste, QC_WASTE);
     const payload={
       agent_code:           CURRENT_PROD.agent_code,
       lot_id:               off.lot_id||PROD_REC.lot_id||null,
@@ -1238,8 +1259,8 @@ async function proceedWithComplete(){
       total_ab_kg:          parseFloat(g.ab.toFixed(2)),
       batch_count:          RUN_BATCHES.length,
       total_production_kg:  totalProduction,
-      waste_coloured_kg:    W.coloured, waste_labels_kg: W.labels, waste_caps_rings_kg: W.caps_rings, waste_non_food_kg: W.non_food,
-      waste_non_pet_kg:     W.non_pet,  waste_aged_kg:   W.aged,   waste_oily_kg:       W.oily,      waste_metal_kg:    W.metal,
+      waste_coloured_kg:    wDist.coloured, waste_labels_kg: wDist.labels, waste_caps_rings_kg: wDist.caps_rings, waste_non_food_kg: wDist.non_food,
+      waste_non_pet_kg:     wDist.non_pet,  waste_aged_kg:   wDist.aged,   waste_oily_kg:       wDist.oily,      waste_metal_kg:    wDist.metal,
       total_waste_kg:       totalWaste,
       accepted_waste_kg:    accepted,
       unacceptable_waste_kg: unaccKg,
