@@ -257,11 +257,13 @@ function paperHTML(r, items){
   });
   let stamp = "";
   if(st === "APPROVED"){
+    const appName = r._approved_by_full_name || r.approved_by || "—";
     stamp = "<div class='stamp'><b>✔ APPROVED ONLINE</b><br>This gate pass was approved on the system by <b>" +
-      esc(r.approved_by || "—") + "</b>" + (r.approved_at ? " on " + esc(new Date(r.approved_at).toLocaleString()) : "") +
+      esc(appName) + "</b>" + (r.approved_at ? " on " + esc(new Date(r.approved_at).toLocaleString()) : "") +
       ". It is valid without a physical signature.</div>";
   } else if(st === "REJECTED"){
-    stamp = "<div class='stamp rej'><b>✕ REJECTED</b><br>Rejected by <b>" + esc(r.approved_by || "—") + "</b>" +
+    const rejName = r._approved_by_full_name || r.approved_by || "—";
+    stamp = "<div class='stamp rej'><b>✕ REJECTED</b><br>Rejected by <b>" + esc(rejName) + "</b>" +
       (r.approved_at ? " on " + esc(new Date(r.approved_at).toLocaleString()) : "") +
       (r.reject_reason ? ".<br>Reason: " + esc(r.reject_reason) : ".") + "</div>";
   } else {
@@ -272,14 +274,15 @@ function paperHTML(r, items){
     "<table>" +
       row("Gatepass No.", r.gatepass_number) + row("Date", r.pass_date) + row("Branch", r.branch) +
       row("Gatepass Type", r.gatepass_type_name || "—") + row("Person (carrying out)", r.person_name) +
-      row("Raised By", r.created_by_username || "") + row("Description", r.description || "") +
+      row("Raised By", r._created_by_full_name || r.created_by_username || "") +
+      row("Description", r.description || "") +
     "</table>" +
     "<div style='margin-top:14px;font-weight:bold;font-size:13px;'>Items (" + list.length + ")</div>" +
     "<table class='items-tbl' style='margin-top:4px;'>" +
       "<tr><td class='k2' style='width:34px;'>#</td><td class='k' style='width:auto;'>Item / Part name</td><td class='k' style='width:22%;'>Quantity</td><td class='k' style='width:20%;'>Unit</td></tr>" +
       itemsRows +
     "</table>" + stamp +
-    "<div class='sign'><div>Issued By (" + esc(r.created_by_username || "") + ")</div><div>Security / Gate Officer</div></div>" +
+    "<div class='sign'><div>Issued By<br>" + esc(r._created_by_full_name||r.created_by_username||"") + "</div><div>Security / Gate Officer</div></div>" +
   "</div>";
 }
 
@@ -292,7 +295,23 @@ async function openDetail(id){
   document.getElementById("listView").style.display = "none";
   document.getElementById("detailView").style.display = "block";
   try{ window.scrollTo(0,0); }catch(e){}
-  CURRENT_ITEMS = await fetchItems(id);
+
+  // Fetch items and resolve full names in parallel
+  [CURRENT_ITEMS] = await Promise.all([
+    fetchItems(id),
+    (async()=>{
+      const usernames = [r.created_by_username, r.approved_by].filter(Boolean);
+      if(!usernames.length) return;
+      const { data: empRows } = await sb.from("employees")
+        .select("employee_id, full_name")
+        .in("employee_id", usernames);
+      const map = {};
+      (empRows||[]).forEach(e=>{ map[e.employee_id] = e.full_name; });
+      r._created_by_full_name  = map[r.created_by_username] || null;
+      r._approved_by_full_name = map[r.approved_by]        || null;
+    })()
+  ]);
+
   document.getElementById("paperWrap").innerHTML = paperHTML(r, CURRENT_ITEMS);
   renderActions(r);
 }
@@ -336,9 +355,15 @@ async function decide(decision){
     }).eq("id", r.id);
     if(error) throw error;
     await logActivity("gatepass_" + decision, ME.username + " " + decision + " gatepass " + r.gatepass_number + " (" + r.person_name + ")");
-    // reflect locally and re-render the stamp
+    // Reflect locally — also resolve approver's full name so stamp shows correctly
     r.status = decision; r.approved_by = ME.username; r.approved_at = new Date().toISOString();
     r.reject_reason = decision === "rejected" ? (reason || null) : null;
+    // Look up the approver's full name (ME.username = employee_id code)
+    if(!r._approved_by_full_name){
+      const { data: emp } = await sb.from("employees")
+        .select("full_name").eq("employee_id", ME.username).maybeSingle();
+      r._approved_by_full_name = emp?.full_name || null;
+    }
     document.getElementById("paperWrap").innerHTML = paperHTML(r, CURRENT_ITEMS);
     renderActions(r);
     status.className = "status ok";
