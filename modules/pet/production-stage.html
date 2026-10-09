@@ -51,6 +51,7 @@
   .kv{font-size:12.5px;line-height:1.8;} .kv b{color:var(--heading);}
   .bagchips{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 6px;}
   .bagchip{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12px;font-weight:700;}
+  .bag-seq-preview{display:block;font-size:11px;font-weight:700;color:#2E75B6;margin-top:3px;letter-spacing:.4px;}
   .note-box{background:#fef3c7;border:1px solid #d97706;border-radius:8px;padding:8px 12px;font-size:12.5px;margin:8px 0;}
   .empname{font-size:12px;font-weight:700;margin-top:4px;min-height:16px;color:var(--muted);}
   .wgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;}
@@ -131,7 +132,7 @@
         <div class="grid3">
           <div><label>Batch Date *</label><input type="date" id="bfDate"></div>
           <div><label>Grade *</label>
-            <select id="bfGrade"><option value="">— select —</option><option value="AA">AA</option><option value="AB">AB</option></select></div>
+            <select id="bfGrade" onchange="onGradeChange()"><option value="">— select —</option><option value="AA">AA</option><option value="AB">AB</option></select></div>
           <div><label>Number of bags *</label><input type="number" class="no-spinner" id="bfBags" min="1" max="30" step="1" value="3" inputmode="numeric" oninput="onBagCount()"></div>
         </div>
         <label>Weight of each bag (kg) *</label>
@@ -203,11 +204,12 @@
 
 
         <div class="sec-title">Waste Calculation — worked out at the end of production</div>
-        <p style="font-size:12px;color:var(--muted);margin:0 0 8px;">Waste = Rumbu Weighbridge Weight − Total Production (Option B). Category breakdown is distributed proportionally from Stage 6 QC data where available; all zeros if QC data is absent. Nothing to type here.</p>
+        <p style="font-size:12px;color:var(--muted);margin:0 0 8px;"><b>Fill in each waste category</b> — the total waste is the sum of all 8 fields. The reference line below shows what Rumbu Weight − Total Production gives; use it as a cross-check.</p>
         <div id="pfNoQcWaste" style="display:none;" class="correction-note">Stage 6 QC data is missing — waste categories will all show zero, but production can still be completed.</div>
         <div class="grid4" id="pfKgGrid"></div>
         <div class="grid3" style="margin-top:6px;">
           <div><label>Total Waste Record (kg) — sum of the 8 categories</label><input type="number" id="pfTotalWaste" readonly></div>
+          <div><label style="color:#2E75B6;">Reference: Rumbu Weight − Total Batched (kg)</label><input type="number" id="pfOptionBRef" readonly style="color:#2E75B6;background:var(--bg);"></div>
           <div><label>Accepted Waste (Rumbu Weighbridge Weight × 3%)</label><input type="number" id="pfAcceptedWaste" readonly></div>
           <div><label>Unacceptable Waste (kg)</label><input type="number" id="pfUnacceptableKg" readonly></div>
           <div><label>Unacceptable Waste Value (if &gt; 0)</label><input type="number" id="pfUnacceptableVal" readonly></div>
@@ -463,25 +465,39 @@ function wasteFromQc(qc, rumbuW){
 function computeWaste(){
   const grid=document.getElementById("pfKgGrid");
   if(!grid.children.length){
-    grid.innerHTML=WASTE_KEYS.map(([k,l])=>`<div><label>${l}</label><input type="number" id="pfKg_${k}" readonly></div>`).join("");
+    grid.innerHTML=WASTE_KEYS.map(([k,l])=>`<div><label>${l}</label><input type="number" class="no-spinner" min="0" step="0.01" inputmode="decimal" id="pfKg_${k}" oninput="onWasteCatInput()" placeholder="0"></div>`).join("");
+    WASTE_KEYS.forEach(([k])=>{ document.getElementById("pfKg_"+k).value=""; });
   }
-  // Option B: estimate waste from actual batch output so far
+  // Option B reference = Rumbu weight − total batched (shown in blue, not the saved total)
   const _produced=RUN_BATCHES.reduce((s,b)=>s+bTotal(b),0);
-  const _rumbuW=parseFloat(CURRENT_PROD?.rumbu_weighbridge_weight)||0;
-  const _estWaste=Math.max(0,_rumbuW-_produced);
-  const _dist=distributeWaste(_estWaste,QC_WASTE);
-  WASTE_KEYS.forEach(([k])=>{ document.getElementById("pfKg_"+k).value = _dist[k]||""; });
-  const totalWaste = _estWaste;
-  document.getElementById("pfTotalWaste").value = totalWaste.toFixed(2);
-  document.getElementById("pfNoQcWaste").style.display = "none"; // Option B: QC not required for waste calc
-  const rumbuW = parseFloat(CURRENT_PROD?.rumbu_weighbridge_weight)||0;
-  const agentW = parseFloat(CURRENT_PROD?.agent_waybill_weight)||0;
-  const accepted = rumbuW*0.03, unaccKg = totalWaste-accepted;
-  document.getElementById("pfAcceptedWaste").value  = accepted.toFixed(2);
-  document.getElementById("pfUnacceptableKg").value = unaccKg.toFixed(2);
-  document.getElementById("pfUnacceptableVal").value= (unaccKg>0?unaccKg:0).toFixed(2);
-  document.getElementById("pfWeightDiff").value      = (rumbuW-agentW).toFixed(2);
+  const rumbuW=parseFloat(CURRENT_PROD?.rumbu_weighbridge_weight)||0;
+  const agentW=parseFloat(CURRENT_PROD?.agent_waybill_weight)||0;
+  const optB=parseFloat(Math.max(0,rumbuW-_produced).toFixed(2));
+  const refEl=document.getElementById("pfOptionBRef");
+  if(refEl) refEl.value=optB.toFixed(2);
+  document.getElementById("pfNoQcWaste").style.display="none";
+  document.getElementById("pfWeightDiff").value=(rumbuW-agentW).toFixed(2);
+  onWasteCatInput(); // totalWaste, accepted, unaccKg all derived from category sum
+}
+// Runs on every category keystroke — totalWaste = sum of 8 categories
+function onWasteCatInput(){
+  const catSum=parseFloat(WASTE_KEYS.reduce((s,[k])=>s+(parseFloat(document.getElementById("pfKg_"+k)?.value)||0),0).toFixed(2));
+  document.getElementById("pfTotalWaste").value=catSum.toFixed(2);
+  const rumbuW=parseFloat(CURRENT_PROD?.rumbu_weighbridge_weight)||0;
+  const accepted=rumbuW*0.03, unaccKg=catSum-accepted;
+  document.getElementById("pfAcceptedWaste").value =accepted.toFixed(2);
+  document.getElementById("pfUnacceptableKg").value=unaccKg.toFixed(2);
+  document.getElementById("pfUnacceptableVal").value=(unaccKg>0?unaccKg:0).toFixed(2);
   computeProductionPlusWaste();
+  // Show cross-check vs Option B
+  const optB=parseFloat(document.getElementById("pfOptionBRef")?.value)||0;
+  let el=document.getElementById("pfCatSumNote");
+  if(!el){ el=document.createElement("p"); el.id="pfCatSumNote"; el.style.cssText="font-size:12px;margin:4px 0 0;font-weight:700;"; document.getElementById("pfKgGrid").after(el); }
+  if(catSum===0){ el.textContent=""; return; }
+  const diff=parseFloat((optB-catSum).toFixed(2));
+  if(Math.abs(diff)<0.5){ el.style.color="var(--ok)"; el.textContent="✅ Category total ("+catSum.toFixed(2)+" kg) matches the Option B reference."; }
+  else if(diff>0){ el.style.color="var(--muted)"; el.textContent="Category total: "+catSum.toFixed(2)+" kg — "+diff.toFixed(2)+" kg below the reference ("+optB.toFixed(2)+" kg)."; }
+  else { el.style.color="#b45309"; el.textContent="⚠ Category total "+catSum.toFixed(2)+" kg is "+Math.abs(diff).toFixed(2)+" kg above the reference ("+optB.toFixed(2)+" kg)."; }
 }
 function computeProductionPlusWaste(){
   const totalProd = parseFloat(document.getElementById("pfTotalProduction").value)||0;
@@ -602,6 +618,33 @@ function flash(id,msg,color){ const el=document.getElementById("bs_"+id); if(el)
 function onBagCount(){
   const old=Array.from(document.querySelectorAll("#bfWeights input")).map(i=>i.value);
   renderWeightInputs(parseInt(document.getElementById("bfBags").value)||0, old);
+  updateBagPreviews();
+}
+function onGradeChange(){ updateBagPreviews(); }
+// Query how many bags of this grade exist this year, then show predicted label numbers
+async function updateBagPreviews(){
+  const grade=document.getElementById("bfGrade").value;
+  const year=new Date().getFullYear();
+  const inputs=document.querySelectorAll("#bfWeights input");
+  // Clear previews if no grade selected or no bags
+  if(!grade||!inputs.length){
+    document.querySelectorAll(".bag-seq-preview").forEach(e=>e.remove());
+    return;
+  }
+  // Count already-labeled bags of this grade this year (reference_number starts with "AA-YYYY-" etc.)
+  const { count } = await sb.from("pet_bags")
+    .select("id",{ count:"exact", head:true })
+    .ilike("reference_number",`${grade}-${year}-%`);
+  const labeled=count||0;
+  // Count pending unlabeled bags of the same grade in this run (saved batches, labels not yet generated)
+  const pending=RUN_BATCHES.filter(b=>bGrade(b)===grade&&!(RUN_BAGS[b.id]?.length))
+                            .reduce((s,b)=>s+(b.bag_count||(Array.isArray(b.bag_weights)?b.bag_weights.length:0)),0);
+  const start=labeled+pending+1;
+  inputs.forEach((inp,i)=>{
+    let prev=inp.parentElement.querySelector(".bag-seq-preview");
+    if(!prev){ prev=document.createElement("span"); prev.className="bag-seq-preview"; inp.after(prev); }
+    prev.textContent=grade+"-"+year+"-"+String(start+i).padStart(5,"0");
+  });
 }
 function renderWeightInputs(n, values){
   n=Math.max(0,Math.min(30,n||0));
@@ -725,6 +768,7 @@ function editBatch(id){
     ? "<b>Rerun:</b> make the batch again, enter the new weights, and save. The old lab result is cleared and the lab will test it again."
     : "Editing Batch "+b.batch_no+". Changes are saved as you press <b>Save changes</b>.";
   document.getElementById("bfTitle").scrollIntoView({behavior:"smooth"});
+  updateBagPreviews();
 }
 
 async function logAct(action, note){
@@ -1208,8 +1252,8 @@ async function completeProduction(){
   const rumbuW=num(CURRENT_PROD.rumbu_weighbridge_weight);
   const total=RUN_BATCHES.reduce((s,b)=>s+bTotal(b),0);
   const g=runGradeKg(RUN_BATCHES);
-  // Option B: actual waste = Rumbu Weight minus what was batched
-  const actualWaste=parseFloat((rumbuW-total).toFixed(2));
+  // Waste = sum of what production entered in the 8 categories
+  const actualWaste=parseFloat(WASTE_KEYS.reduce((s,[k])=>s+(parseFloat(document.getElementById("pfKg_"+k)?.value)||0),0).toFixed(2));
   const accepted=rumbuW*0.03;
   const unacc=parseFloat((actualWaste-accepted).toFixed(2));
   const endIso=lastBatchTime();
@@ -1226,7 +1270,9 @@ async function completeProduction(){
       { heading: "Production Time", rows: [["Production Start", fmtDT(PROD_REC.production_start)],["Production End (last batch recorded)", fmtDT(endIso)]]},
       { heading: "Batches", rows: [["Number of Batches", RUN_BATCHES.length],["All batches approved", "Yes"]]},
       { heading: "Production Entry", rows: [["AA flake (kg)", g.aa.toFixed(2)],["AB flake (kg)", g.ab.toFixed(2)],["Total Production (kg)", total.toFixed(2)]]},
-      { heading: "Waste (Rumbu Weight − Total Batched)", rows: [["Total Waste (kg)", actualWaste.toFixed(2)],["Accepted Waste — 3% of Rumbu (kg)", accepted.toFixed(2)],["Unacceptable Waste (kg)", unacc.toFixed(2)]]},
+      { heading: "Waste (Rumbu Weight − Total Batched)", rows: [
+        ...WASTE_KEYS.map(([k,l])=>[l, (parseFloat(document.getElementById("pfKg_"+k)?.value)||0).toFixed(2)+" kg"]),
+        ["Total Waste (kg)", actualWaste.toFixed(2)],["Accepted Waste — 3% of Rumbu (kg)", accepted.toFixed(2)],["Unacceptable Waste (kg)", unacc.toFixed(2)]]},
       { heading: "Material Balance", rows: [["Rumbu Weight (kg)", rumbuW.toFixed(2)],["Recorded in Batches (kg)", total.toFixed(2)],["Waste (kg)", actualWaste.toFixed(2)]]}
     ],
     onConfirm: proceedWithComplete
@@ -1242,12 +1288,12 @@ async function proceedWithComplete(){
     const totalProduction=parseFloat(RUN_BATCHES.reduce((s,b)=>s+bTotal(b),0).toFixed(2));
     const rumbuW=num(CURRENT_PROD.rumbu_weighbridge_weight);
     const agentW=num(CURRENT_PROD.agent_waybill_weight);
-    // Option B: waste = what was not turned into flake
-    const totalWaste=parseFloat((rumbuW-totalProduction).toFixed(2));
+    // Waste = sum of the 8 categories entered by production person
+    const totalWaste=parseFloat(WASTE_KEYS.reduce((s,[k])=>s+(parseFloat(document.getElementById("pfKg_"+k)?.value)||0),0).toFixed(2));
     const accepted=parseFloat((rumbuW*0.03).toFixed(2));
     const unaccKg=parseFloat((totalWaste-accepted).toFixed(2));
-    // Distribute waste proportionally across QC categories if data available
-    const wDist=distributeWaste(totalWaste, QC_WASTE);
+    // Read waste categories from the editable form inputs — entered by the production person
+    const readCat=k=>parseFloat(document.getElementById("pfKg_"+k)?.value)||0;
     const payload={
       agent_code:           CURRENT_PROD.agent_code,
       lot_id:               off.lot_id||PROD_REC.lot_id||null,
@@ -1259,8 +1305,8 @@ async function proceedWithComplete(){
       total_ab_kg:          parseFloat(g.ab.toFixed(2)),
       batch_count:          RUN_BATCHES.length,
       total_production_kg:  totalProduction,
-      waste_coloured_kg:    wDist.coloured, waste_labels_kg: wDist.labels, waste_caps_rings_kg: wDist.caps_rings, waste_non_food_kg: wDist.non_food,
-      waste_non_pet_kg:     wDist.non_pet,  waste_aged_kg:   wDist.aged,   waste_oily_kg:       wDist.oily,      waste_metal_kg:    wDist.metal,
+      waste_coloured_kg:    readCat("coloured"), waste_labels_kg: readCat("labels"), waste_caps_rings_kg: readCat("caps_rings"), waste_non_food_kg: readCat("non_food"),
+      waste_non_pet_kg:     readCat("non_pet"),  waste_aged_kg:   readCat("aged"),   waste_oily_kg:       readCat("oily"),       waste_metal_kg:    readCat("metal"),
       total_waste_kg:       totalWaste,
       accepted_waste_kg:    accepted,
       unacceptable_waste_kg: unaccKg,
