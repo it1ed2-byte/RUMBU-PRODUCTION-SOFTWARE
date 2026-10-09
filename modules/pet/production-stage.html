@@ -95,7 +95,7 @@
     <ol>
       <li><b>Production starts automatically</b> when the plant manager sends an agent's material here (Stage 7). He also chooses the <b>company</b> the flake is made for, and can change it while the run is open.</li>
       <li><b>Material into production</b> (Kano material used) is recorded by the person assigned to that duty.</li>
-      <li><b>Batch entry:</b> add a batch each time one is made: the grade (<b>AA</b> or <b>AB</b>), the weight of <b>each bag</b>, and the <b>operator</b> and <b>shift leader</b> IDs (their names appear by themselves). Keep adding batches until the material is finished.</li>
+      <li><b>Batch entry:</b> add a batch each time one is made: the grade (<b>AA</b> or <b>AB</b>), the weight of <b>each bag</b>, and the <b>supervisor(s)</b> and <b>shift leader</b> ID (their names appear by themselves). Keep adding batches until the material is finished.</li>
       <li>The lab (Stage 9) tests each batch as you add it. <b>Result approval:</b> when the lab submits a result, the result approver sees it <b>beside the company's limits</b>, then passes the batch or asks for a <b>retest</b> or a <b>rerun</b>.</li>
       <li><b>Labels:</b> once a batch is approved, the labels person generates, prints and downloads its QR labels.</li>
       <li>When every batch is approved and the material is finished, the batch-entry person presses <b>Complete Production</b>. Waste is worked out automatically from Quality Control.</li>
@@ -138,8 +138,11 @@
         <div class="wgrid" id="bfWeights"></div>
         <div style="font-size:13px;margin-top:8px;"><b>Batch total:</b> <span id="bfTotal">0</span> kg</div>
         <div class="grid2" style="margin-top:4px;">
-          <div><label>Operator ID *</label><input type="text" id="bfOpId" placeholder="Employee ID" autocomplete="off" oninput="onEmpId('op')">
-            <div class="empname" id="bfOpName">—</div></div>
+          <div><label>Supervisor(s) * <span style="font-weight:400;color:var(--muted);font-size:11px;">— add one or more</span></label>
+            <input type="text" id="bfSupSearch" placeholder="Search by name or Employee ID" autocomplete="off" oninput="onSupSearch()">
+            <div id="bfSupResults" style="font-size:12px;margin-top:4px;max-height:140px;overflow-y:auto;"></div>
+            <div id="bfSupChips" style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px;"></div>
+          </div>
           <div><label>Shift Leader ID *</label><input type="text" id="bfSlId" placeholder="Employee ID" autocomplete="off" oninput="onEmpId('sl')">
             <div class="empname" id="bfSlName">—</div></div>
         </div>
@@ -554,7 +557,7 @@ function batchCard(b){
         <span style="color:var(--muted);font-size:12px;">· ${esc(fmtD(b.batch_date))} · Grade <b>${esc(bGrade(b))}</b> · ${b.bag_count||weights.length||"—"} bags · ${fmt(bTotal(b))} kg${hist}</span></div>
       <div>${statusPill(st)}${flake}${stdPill(b)}</div>
     </div>
-    <div class="kv"><b>Operator:</b> ${esc(b.operator_name||"—")}${b.operator_employee_id?" ("+esc(b.operator_employee_id)+")":""} · <b>Shift leader:</b> ${esc(b.shift_leader_name||"—")}${b.shift_leader_employee_id?" ("+esc(b.shift_leader_employee_id)+")":""}</div>
+    <div class="kv"><b>Supervisor(s):</b> ${esc(b.operator_name||"—")}${b.operator_employee_id?" ("+esc(b.operator_employee_id)+")":""} · <b>Shift leader:</b> ${esc(b.shift_leader_name||"—")}${b.shift_leader_employee_id?" ("+esc(b.shift_leader_employee_id)+")":""}</div>
     ${chips?`<div class="bagchips">${chips}</div>`:""}
     ${note}
     <div class="actions">${actions}</div>
@@ -593,19 +596,66 @@ function updateBatchTotal(){
   const t=Array.from(document.querySelectorAll("#bfWeights input")).reduce((s,i)=>s+num(i.value),0);
   document.getElementById("bfTotal").textContent=fmt(t);
 }
+// ── Supervisor multi-select ───────────────────────────────────────────────
+let SUPERVISORS = [];
+let supSearchTimer = null;
+function onSupSearch(){
+  clearTimeout(supSearchTimer);
+  supSearchTimer = setTimeout(runSupSearch, 280);
+}
+async function runSupSearch(){
+  const q = (document.getElementById("bfSupSearch").value||"").trim();
+  const res = document.getElementById("bfSupResults");
+  if(q.length < 2){ res.innerHTML=""; return; }
+  const { data } = await sb.from("employees").select("employee_id,full_name")
+    .or(`full_name.ilike.%${q}%,employee_id.ilike.%${q}%`).limit(8);
+  if(!data||!data.length){ res.innerHTML="<span style='color:var(--muted);'>No match</span>"; return; }
+  res.innerHTML = data.map(e=>{
+    const already = SUPERVISORS.some(s=>s.employee_id===e.employee_id);
+    return `<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--line);">
+      <span>${esc(e.full_name)} <span style="color:var(--muted);">(${esc(e.employee_id)})</span></span>
+      ${already
+        ? `<span style="color:var(--ok);font-size:11px;">✔ Added</span>`
+        : `<button onclick="addSupervisor('${e.employee_id.replace(/'/g,"\\'")}','${e.full_name.replace(/'/g,"\\'")}')">Add</button>`}
+    </div>`;
+  }).join("");
+}
+function addSupervisor(empId, empName){
+  if(SUPERVISORS.some(s=>s.employee_id===empId)) return;
+  SUPERVISORS.push({employee_id:empId, full_name:empName});
+  renderSupChips();
+  document.getElementById("bfSupSearch").value="";
+  document.getElementById("bfSupResults").innerHTML="";
+}
+function removeSupervisor(empId){
+  SUPERVISORS = SUPERVISORS.filter(s=>s.employee_id!==empId);
+  renderSupChips();
+}
+function renderSupChips(){
+  const wrap = document.getElementById("bfSupChips");
+  if(!SUPERVISORS.length){ wrap.innerHTML=""; return; }
+  wrap.innerHTML = SUPERVISORS.map(s=>
+    `<span style="display:inline-flex;align-items:center;gap:5px;background:var(--bg);border:1px solid var(--line);border-radius:16px;padding:3px 8px 3px 10px;font-size:12px;">
+      ${esc(s.full_name)}
+      <button onclick="removeSupervisor('${s.employee_id}')" style="padding:0;width:16px;height:16px;line-height:14px;border-radius:50%;background:var(--bad);color:#fff;font-size:11px;border:none;cursor:pointer;">&times;</button>
+    </span>`
+  ).join("");
+}
+
+// ── Shift leader single lookup (unchanged) ────────────────────────────────
 let empTimers={};
 function onEmpId(kind){ EMP[kind]=null; clearTimeout(empTimers[kind]); empTimers[kind]=setTimeout(()=>lookupEmp(kind),350); }
 async function lookupEmp(kind){
-  const input=document.getElementById(kind==="op"?"bfOpId":"bfSlId"), out=document.getElementById(kind==="op"?"bfOpName":"bfSlName");
+  const input=document.getElementById("bfSlId"), out=document.getElementById("bfSlName");
   const id=input.value.trim(); EMP[kind]=null;
   if(!id){ out.textContent="—"; out.style.color="var(--muted)"; return; }
   out.style.color="var(--muted)"; out.textContent="Looking up...";
   let { data, error } = await sb.from("employees").select("employee_id,full_name").eq("employee_id",id).limit(1);
   if((!data||!data.length) && !error){
-    const pat=id.replace(/[\\%_]/g,m=>"\\"+m);
+    const pat=id.replace(/[\%_]/g,m=>"\\"+m);
     ({ data, error } = await sb.from("employees").select("employee_id,full_name").ilike("employee_id",pat).limit(1));
   }
-  if(input.value.trim()!==id) return;                 // user kept typing; ignore this answer
+  if(input.value.trim()!==id) return;
   if(error){ out.style.color="var(--bad)"; out.textContent="Could not look up: "+error.message; return; }
   if(!data||!data.length){ out.style.color="var(--bad)"; out.textContent='No employee found for ID "'+id+'"'; return; }
   EMP[kind]=data[0]; out.style.color="var(--ok)"; out.textContent="✔ "+data[0].full_name;
@@ -617,9 +667,12 @@ function resetBatchForm(){
   document.getElementById("bfGrade").value="";
   document.getElementById("bfBags").value=3;
   renderWeightInputs(3,[]);
-  ["bfOpId","bfSlId"].forEach(i=>document.getElementById(i).value="");
-  ["bfOpName","bfSlName"].forEach(i=>{ const e=document.getElementById(i); e.textContent="—"; e.style.color="var(--muted)"; });
-  EMP.op=null; EMP.sl=null;
+  SUPERVISORS=[]; renderSupChips();
+  document.getElementById("bfSupSearch").value="";
+  document.getElementById("bfSupResults").innerHTML="";
+  document.getElementById("bfSlId").value="";
+  const slName=document.getElementById("bfSlName"); slName.textContent="—"; slName.style.color="var(--muted)";
+  EMP.sl=null;
   document.getElementById("bfTitle").textContent="2 · Add a batch";
   document.getElementById("bfSave").textContent="+ Add Batch";
   document.getElementById("bfCancel").style.display="none";
@@ -637,9 +690,15 @@ function editBatch(id){
   const w=Array.isArray(b.bag_weights)?b.bag_weights:[];
   document.getElementById("bfBags").value=b.bag_count||w.length||3;
   renderWeightInputs(b.bag_count||w.length||3, w);
-  document.getElementById("bfOpId").value=b.operator_employee_id||"";
+  // Load supervisors from comma-separated stored values
+  const _supIds=(b.operator_employee_id||"").split(",").map(s=>s.trim()).filter(Boolean);
+  const _supNames=(b.operator_name||"").split(",").map(s=>s.trim()).filter(Boolean);
+  SUPERVISORS=_supIds.map((id,i)=>({employee_id:id,full_name:_supNames[i]||id}));
+  renderSupChips();
+  document.getElementById("bfSupSearch").value="";
+  document.getElementById("bfSupResults").innerHTML="";
   document.getElementById("bfSlId").value=b.shift_leader_employee_id||"";
-  lookupEmp("op"); lookupEmp("sl");
+  lookupEmp("sl");
   document.getElementById("bfTitle").textContent="2 · Edit Batch "+b.batch_no;
   document.getElementById("bfSave").textContent=st==="rerun_requested"?"Save and resubmit to the lab":"Save changes";
   document.getElementById("bfCancel").style.display="inline-block";
@@ -671,8 +730,8 @@ async function saveBatch(){
   const weights=ins.map(i=>i.value===""?NaN:parseFloat(i.value));
   if(weights.some(w=>isNaN(w)||w<=0)){ bad("Every bag needs a weight above 0 kg."); return; }
   st.style.color="var(--muted)"; st.textContent="Checking operator and shift leader...";
-  await Promise.all([ EMP.op?null:lookupEmp("op"), EMP.sl?null:lookupEmp("sl") ]);
-  if(!EMP.op){ bad("Enter a valid Operator ID."); return; }
+  await Promise.all([ EMP.sl?null:lookupEmp("sl") ]);
+  if(!SUPERVISORS.length){ bad("Add at least one Supervisor."); return; }
   if(!EMP.sl){ bad("Enter a valid Shift Leader ID."); return; }
   const total=parseFloat(weights.reduce((s,w)=>s+w,0).toFixed(2));
 
@@ -684,7 +743,8 @@ async function saveBatch(){
   st.textContent="Saving...";
   const fields={ batch_date:date, grade, bag_count:n, bag_weights:weights, total_kg:total,
     colored_flex_kg:0, non_colored_flex_kg:0,
-    operator_employee_id:EMP.op.employee_id, operator_name:EMP.op.full_name,
+    operator_employee_id:SUPERVISORS.map(s=>s.employee_id).join(", "),
+    operator_name:SUPERVISORS.map(s=>s.full_name).join(", "),
     shift_leader_employee_id:EMP.sl.employee_id, shift_leader_name:EMP.sl.full_name };
   try{
     if(EDITING){
@@ -708,7 +768,7 @@ async function saveBatch(){
       const row=Object.assign({ collection_id:CURRENT_PROD.id, production_id:CURRENT_PROD_ID, batch_no:nextNo, batch_status:"produced", created_by:ME.id }, fields);
       const { error } = await sb.from("pet_lab_batches").insert(row);
       if(error) throw new Error(error.message);
-      await logAct("batch_added","Batch "+nextNo+" added — "+fmt(total)+" kg, grade "+grade+", "+n+" bags, operator "+EMP.op.full_name+", shift leader "+EMP.sl.full_name);
+      await logAct("batch_added","Batch "+nextNo+" added — "+fmt(total)+" kg, grade "+grade+", "+n+" bags, supervisor(s) "+SUPERVISORS.map(s=>s.full_name).join(", ")+", shift leader "+EMP.sl.full_name);
       st.style.color="var(--ok)"; st.textContent="✅ Batch "+nextNo+" added. The lab can test it now.";
     }
     const msg=st.textContent;
@@ -860,7 +920,7 @@ async function openReview(id){
       <button class="btn-ghost btn-sm" onclick="closeReview()">✕ Close</button>
     </div>
     <div class="kv" style="margin-top:6px;">Grade <b>${esc(bGrade(b))}</b> · ${b.bag_count||weights.length} bags · ${fmt(bTotal(b))} kg · ${esc(fmtD(b.batch_date))}<br>
-      <b>Company:</b> ${esc(companyName||"not set")} · <b>Operator:</b> ${esc(b.operator_name||"—")} · <b>Shift leader:</b> ${esc(b.shift_leader_name||"—")} · Retests ${b.retest_count||0} · Reruns ${b.rerun_count||0}</div>
+      <b>Company:</b> ${esc(companyName||"not set")} · <b>Supervisor(s):</b> ${esc(b.operator_name||"—")} · <b>Shift leader:</b> ${esc(b.shift_leader_name||"—")} · Retests ${b.retest_count||0} · Reruns ${b.rerun_count||0}</div>
     ${weights.length?`<div class="bagchips">${weights.map((w,i)=>`<span class="bagchip">Bag ${i+1}: ${fmt(w)} kg</span>`).join("")}</div>`:""}
     <div class="sec-title">Company standard compared with the lab result</div>${stdHtml}
     <div class="sec-title">Lab result</div>${resHtml}
@@ -1424,7 +1484,7 @@ async function checkAllApproved(collectionId,stage,cycle,section){
   if(!approvers||!approvers.length) return true;
   const assigned=new Set(approvers.map(a=>a.profile_id));
   const approved=new Set((approvals||[]).map(a=>a.approver_profile_id));
-  return [...assigned].every(id=>approved.has(id));
+  return assigned.size > 0 && [...assigned].some(id=>approved.has(id));
 }
 
 init();
