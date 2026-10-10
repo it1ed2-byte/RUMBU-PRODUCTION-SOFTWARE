@@ -27,7 +27,7 @@ async function guardPage() {
   const { data: profile, error } = await sb
     .from('cnt_profiles')
     .select(`
-      id, display_name, email, phone, status,
+      id, full_name, email, phone, status,
       org_id, branch_id, company_id,
       cnt_profile_roles(
         cnt_roles(
@@ -71,7 +71,7 @@ async function guardPortal() {
 
   const { data: profile } = await sb
     .from('cnt_profiles')
-    .select('id,display_name,status,company_id,org_id')
+    .select('id,full_name,status,company_id,org_id')
     .eq('id', user.id)
     .maybeSingle();
 
