@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>User Management</title>
+<script src="auth-contracts.js"></script>
+<style>
+:root{--primary:#1F3864;--accent:#2E75B6;--ok:#22c55e;--bad:#ef4444;--warn:#f59e0b;
+--bg:#f8fafc;--card:#fff;--line:#e2e8f0;--muted:#64748b;--heading:#0f172a;
+--th-bg:#f1f5f9;--th-fg:#374151;--shadow:0 1px 3px rgba(0,0,0,.08);--radius:8px}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;font-size:14px;background:var(--bg);color:var(--heading);padding:20px}
+/* ── Header ── */
+.page-hdr{display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:22px}
+.page-hdr h1{font-size:20px;font-weight:700;color:var(--primary)}
+.page-hdr p{font-size:13px;color:var(--muted);margin-top:2px}
+/* ── Info box ── */
+.info-box{background:#eff6ff;border:1px solid #bfdbfe;border-radius:var(--radius);padding:14px 16px;margin-bottom:20px;font-size:13px;color:#1e40af;line-height:1.6}
+.info-box strong{font-weight:700}
+/* ── Users table ── */
+.table-wrap{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;margin-bottom:22px}
+.table-scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th{background:var(--th-bg);color:var(--th-fg);font-size:12px;font-weight:600;text-align:left;padding:10px 12px;white-space:nowrap}
+td{padding:10px 12px;border-top:1px solid var(--line);vertical-align:middle}
+.avatar{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;
+  border-radius:50%;background:var(--accent);color:#fff;font-size:13px;font-weight:700;flex-shrink:0}
+.user-cell{display:flex;align-items:center;gap:10px}
+.user-name{font-weight:600;font-size:14px}
+.user-email{font-size:12px;color:var(--muted)}
+.status{display:inline-block;padding:2px 9px;border-radius:12px;font-size:11px;font-weight:600;background:var(--th-bg);color:var(--th-fg)}
+.status.ok{background:#dcfce7;color:#166534}
+.status.err{background:#fee2e2;color:#991b1b}
+.role-badge{display:inline-block;padding:2px 9px;border-radius:12px;font-size:11px;font-weight:600;background:#e0f2fe;color:#0369a1}
+.empty{text-align:center;padding:36px;color:var(--muted)}
+/* ── Buttons ── */
+.btn{display:inline-flex;align-items:center;gap:5px;padding:7px 14px;border:none;border-radius:var(--radius);font-size:13px;cursor:pointer;font-weight:500}
+.btn-accent{background:var(--accent);color:#fff}.btn-accent:hover{background:#1a5fa8}
+.btn-ok{background:var(--ok);color:#fff}
+.btn-bad{background:var(--bad);color:#fff}
+.btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--line)}.btn-ghost:hover{background:var(--th-bg)}
+.btn-sm{padding:4px 10px;font-size:12px}
+.btn-warn{background:var(--warn);color:#fff}
+/* ── Add user card ── */
+.add-card{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px 22px;margin-bottom:22px}
+.add-card-title{font-size:15px;font-weight:700;color:var(--primary);margin-bottom:4px}
+.add-card-sub{font-size:12px;color:var(--muted);margin-bottom:16px}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px}
+.form-row-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px}
+.field{display:flex;flex-direction:column;gap:4px}
+label{font-size:12px;font-weight:600;color:var(--th-fg)}
+input,select{border:1px solid var(--line);border-radius:var(--radius);padding:8px 10px;font-size:14px;background:var(--card);width:100%}
+input:focus,select:focus{outline:2px solid var(--accent);border-color:var(--accent)}
+.req{color:var(--bad)}
+.uuid-hint{font-size:11px;color:var(--muted);margin-top:3px;line-height:1.5}
+/* ── Modal ── */
+.overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:100;align-items:center;justify-content:center}
+.overlay.open{display:flex}
+.modal{background:var(--card);border-radius:var(--radius);box-shadow:0 8px 32px rgba(0,0,0,.18);padding:24px;width:440px;max-width:95vw}
+.modal-title{font-size:16px;font-weight:700;color:var(--primary);margin-bottom:16px}
+.modal-footer{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}
+#loading{text-align:center;padding:60px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div id="loading">Loading…</div>
+<div id="app" style="display:none">
+  <div class="page-hdr">
+    <div>
+      <h1>User Management</h1>
+      <p>Add, assign roles, and deactivate users for the Government Contracts module.</p>
+    </div>
+  </div>
+
+  <div class="info-box">
+    <strong>How to add a new user:</strong><br>
+    1. Go to <strong>Supabase Dashboard → Authentication → Users → Add user</strong> and create their account.<br>
+    2. Copy the UUID Supabase assigns to that user.<br>
+    3. Paste it in the form below, fill in their name, role, and save.<br>
+    The user can then log in to the main RumbuApp and will have access to the contract module.
+  </div>
+
+  <!-- Add user form -->
+  <div class="add-card">
+    <div class="add-card-title">Add New User</div>
+    <div class="add-card-sub">The user must already have a Supabase auth account. Get their UUID from the Supabase dashboard.</div>
+    <div class="form-row">
+      <div class="field">
+        <label>User UUID <span class="req">*</span></label>
+        <input id="f-uuid" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+        <span class="uuid-hint">Found in Supabase → Authentication → Users → click the user</span>
+      </div>
+      <div class="field">
+        <label>Full Name <span class="req">*</span></label>
+        <input id="f-name" placeholder="e.g. Musa Umar Danladi">
+      </div>
+    </div>
+    <div class="form-row-3">
+      <div class="field">
+        <label>Email <span class="req">*</span></label>
+        <input id="f-email" type="email" placeholder="user@rumbu.ng">
+      </div>
+      <div class="field">
+        <label>Phone</label>
+        <input id="f-phone" placeholder="+234…">
+      </div>
+      <div class="field">
+        <label>Role <span class="req">*</span></label>
+        <select id="f-role"><option value="">— Select Role —</option></select>
+      </div>
+    </div>
+    <button class="btn btn-accent" onclick="addUser()">Add User to Module</button>
+    <span id="add-msg" style="margin-left:12px;font-size:13px;display:none"></span>
+  </div>
+
+  <!-- Users table -->
+  <div class="table-wrap">
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr><th>User</th><th>Role</th><th>Status</th><th>Actions</th></tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Change role modal -->
+<div class="overlay" id="overlay" onclick="closeModal(event)">
+  <div class="modal">
+    <div class="modal-title">Change Role</div>
+    <input type="hidden" id="m-profile-id">
+    <input type="hidden" id="m-role-row-id">
+    <div class="field" style="margin-bottom:14px">
+      <label>New Role</label>
+      <select id="m-role"><option value="">— Select Role —</option></select>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-accent" onclick="changeRole()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let sb, users = [], roles = [], currentAuth;
+
+async function init() {
+  const auth = await guardPage();
+  if (!auth) return;
+
+  // This page is restricted to users.manage permission
+  if (!auth.permissions.has('users.manage')) {
+    document.body.innerHTML = `
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
+        height:100vh;text-align:center;font-family:system-ui;background:#f8fafc;padding:20px">
+        <div style="font-size:48px;margin-bottom:16px">🔒</div>
+        <h2 style="color:#1F3864;font-size:18px;font-weight:700;margin-bottom:10px">Access Restricted</h2>
+        <p style="color:#64748b;font-size:14px;max-width:320px;line-height:1.65">
+          Only the designated Contract Administrator can manage module users.
+        </p>
+      </div>`;
+    return;
+  }
+
+  sb = auth.sb;
+  currentAuth = auth;
+
+  const [uRes, rRes] = await Promise.all([
+    sb.from('cnt_profiles').select(`
+      id,full_name,email,phone,status,
+      cnt_profile_roles(id,cnt_roles(id,name))
+    `).order('full_name'),
+    sb.from('cnt_roles').select('id,name').eq('is_active',true).order('name')
+  ]);
+
+  users = uRes.data ?? [];
+  roles = rRes.data ?? [];
+
+  // Populate role dropdowns
+  ['f-role','m-role'].forEach(id => {
+    const sel = document.getElementById(id);
+    roles.forEach(r => {
+      const o = document.createElement('option');
+      o.value = r.id; o.textContent = r.name; sel.appendChild(o);
+    });
+  });
+
+  render();
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+}
+
+function render() {
+  const t = document.getElementById('tbody');
+  if (!users.length) {
+    t.innerHTML = '<tr><td colspan="4" class="empty">No users in module yet</td></tr>';
+    return;
+  }
+  t.innerHTML = users.map(u => {
+    const role = u.cnt_profile_roles?.[0]?.cnt_roles;
+    const roleRowId = u.cnt_profile_roles?.[0]?.id ?? '';
+    const initials = (u.full_name??'?').split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase();
+    const isAdmin = role?.name === 'ContractAdmin';
+    const isMe = u.id === currentAuth.user.id;
+    return `<tr>
+      <td>
+        <div class="user-cell">
+          <div class="avatar">${initials}</div>
+          <div>
+            <div class="user-name">${u.full_name??'—'}${isMe?' <span style="font-size:11px;font-weight:400;color:var(--muted)">(you)</span>':''}</div>
+            <div class="user-email">${u.email??'—'}</div>
+          </div>
+        </div>
+      </td>
+      <td>${role ? `<span class="role-badge">${role.name}</span>` : '<span style="color:var(--muted)">No role</span>'}</td>
+      <td><span class="status ${u.status==='active'?'ok':'err'}">${u.status==='active'?'Active':'Inactive'}</span></td>
+      <td style="display:flex;gap:6px;flex-wrap:wrap">
+        ${!isAdmin ? `<button class="btn btn-ghost btn-sm" onclick="openChangeRole('${u.id}','${roleRowId}','${role?.id??''}')">Change Role</button>` : ''}
+        ${!isMe && !isAdmin
+          ? u.status === 'active'
+            ? `<button class="btn btn-warn btn-sm" onclick="setStatus('${u.id}','inactive')">Deactivate</button>`
+            : `<button class="btn btn-ok btn-sm" onclick="setStatus('${u.id}','active')">Reactivate</button>`
+          : ''}
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+async function addUser() {
+  const uuid = document.getElementById('f-uuid').value.trim();
+  const name = document.getElementById('f-name').value.trim();
+  const email = document.getElementById('f-email').value.trim();
+  const phone = document.getElementById('f-phone').value.trim();
+  const roleId = document.getElementById('f-role').value;
+  const msg = document.getElementById('add-msg');
+
+  if (!uuid || !name || !email || !roleId) {
+    showAddMsg('Fill in UUID, name, email and role.', 'err'); return;
+  }
+  // Basic UUID format check
+  if (!/^[0-9a-f-]{36}$/i.test(uuid)) {
+    showAddMsg('UUID format is invalid. Check Supabase → Authentication → Users.', 'err'); return;
+  }
+  if (users.some(u => u.id === uuid)) {
+    showAddMsg('This user is already in the module.', 'err'); return;
+  }
+
+  const { error: pe } = await sb.from('cnt_profiles').insert({
+    id: uuid,
+    org_id: 'c0000000-0000-0000-0000-000000000001',
+    full_name: name,
+    email,
+    phone: phone || null,
+    status: 'active',
+  });
+  if (pe) { showAddMsg('Error adding profile: ' + pe.message, 'err'); return; }
+
+  const { error: re } = await sb.from('cnt_profile_roles').insert({
+    profile_id: uuid,
+    role_id: roleId,
+  });
+  if (re) { showAddMsg('Profile created but role assignment failed: ' + re.message, 'err'); return; }
+
+  showAddMsg(name + ' added successfully.', 'ok');
+  ['f-uuid','f-name','f-email','f-phone'].forEach(id => { document.getElementById(id).value = ''; });
+  document.getElementById('f-role').value = '';
+
+  // Refresh list
+  const { data } = await sb.from('cnt_profiles').select(`
+    id,full_name,email,phone,status,
+    cnt_profile_roles(id,cnt_roles(id,name))
+  `).order('full_name');
+  users = data ?? [];
+  render();
+}
+
+function showAddMsg(text, type) {
+  const el = document.getElementById('add-msg');
+  el.textContent = text;
+  el.style.color = type === 'ok' ? 'var(--ok)' : 'var(--bad)';
+  el.style.display = 'inline';
+  setTimeout(() => { el.style.display = 'none'; }, 4000);
+}
+
+function openChangeRole(profileId, roleRowId, currentRoleId) {
+  document.getElementById('m-profile-id').value = profileId;
+  document.getElementById('m-role-row-id').value = roleRowId;
+  document.getElementById('m-role').value = currentRoleId;
+  document.getElementById('overlay').classList.add('open');
+}
+function closeModal(e) {
+  if (!e || e.target === document.getElementById('overlay'))
+    document.getElementById('overlay').classList.remove('open');
+}
+
+async function changeRole() {
+  const profileId = document.getElementById('m-profile-id').value;
+  const roleRowId = document.getElementById('m-role-row-id').value;
+  const newRoleId = document.getElementById('m-role').value;
+  if (!newRoleId) return;
+
+  if (roleRowId) {
+    await sb.from('cnt_profile_roles').delete().eq('id', roleRowId);
+  }
+  await sb.from('cnt_profile_roles').insert({ profile_id: profileId, role_id: newRoleId });
+
+  closeModal();
+  const { data } = await sb.from('cnt_profiles').select(`
+    id,full_name,email,phone,status,
+    cnt_profile_roles(id,cnt_roles(id,name))
+  `).order('full_name');
+  users = data ?? [];
+  render();
+}
+
+async function setStatus(id, status) {
+  const user = users.find(u => u.id === id);
+  const label = status === 'active' ? 'reactivate' : 'deactivate';
+  if (!confirm(`${label.charAt(0).toUpperCase() + label.slice(1)} ${user?.full_name ?? 'this user'}?`)) return;
+  await sb.from('cnt_profiles').update({ status }).eq('id', id);
+  const u = users.find(x => x.id === id);
+  if (u) u.status = status;
+  render();
+}
+
+init();
+</script>
+</body>
+</html>
