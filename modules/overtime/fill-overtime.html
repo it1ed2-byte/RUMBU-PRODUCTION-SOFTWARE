@@ -74,6 +74,21 @@
   .flagbox{background:#fdecea;border:1px solid var(--red);border-radius:8px;padding:12px 14px;margin-top:12px;color:#7a1f1f;font-size:13px;line-height:1.6;}
   .flagbox ul{margin:6px 0 0 18px;padding:0;}
   .not-found{color:var(--red)!important;font-weight:700;}
+
+  /* ── Unit Tabs ── */
+  .unit-tab-bar{display:flex;gap:0;flex-wrap:wrap;border-bottom:2px solid var(--line);margin:14px 0 0;}
+  .unit-tab-btn{
+    padding:10px 16px;border:none;background:none;color:var(--muted);
+    font-weight:700;font-size:12.5px;cursor:pointer;border-bottom:3px solid transparent;
+    white-space:nowrap;display:flex;align-items:center;gap:6px;margin-bottom:-2px;
+  }
+  .unit-tab-btn:hover{background:var(--bg);color:var(--navy);}
+  .unit-tab-btn.active{color:var(--navy);border-bottom-color:var(--navy);}
+  .unit-dot{width:8px;height:8px;border-radius:50%;background:#d1d5db;flex-shrink:0;}
+  .unit-dot.filled{background:var(--green);}
+  .unit-dot.empty-warn{background:var(--red);}
+  .unit-tab-content{padding:14px 0;}
+  .unit-all-filled{background:#e8f8ee;border:1px solid #a7f3d0;border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:13px;font-weight:700;color:var(--green);}
 </style>
 </head>
 <body>
@@ -110,18 +125,24 @@
       <div id="rejBanner"></div>
       <div id="entryInfo"></div>
 
-      <h4>Employees on this request</h4>
-      <div id="employeesListWrap"></div>
+      <!-- Unit tab bar — built dynamically from DB -->
+      <div id="unitTabBar" class="unit-tab-bar"></div>
 
-      <h4>Add an Employee</h4>
-      <div class="row">
-        <div><label>Employee ID</label><input type="text" id="empIdInput" placeholder="Type employee ID" oninput="lookupEmployee()"></div>
-        <div><label>Name of Employee</label><input type="text" id="empNameDisplay" disabled></div>
+      <div class="unit-tab-content">
+        <h4>Employees on <span id="currentUnitLabel" style="color:var(--blue);"></span></h4>
+        <div id="unitAllFilledMsg" style="display:none;" class="unit-all-filled">✅ All units have at least one employee — ready to submit.</div>
+        <div id="employeesListWrap"></div>
+
+        <h4>Add an Employee</h4>
+        <div class="row">
+          <div><label>Employee ID</label><input type="text" id="empIdInput" placeholder="Type employee ID" oninput="lookupEmployee()"></div>
+          <div><label>Name of Employee</label><input type="text" id="empNameDisplay" disabled></div>
+        </div>
+        <label style="margin-top:10px;">Reason for Overtime</label>
+        <textarea id="reasonInput" placeholder="Why this employee is doing overtime"></textarea>
+        <button class="mini" style="margin-top:10px;" onclick="addEmployeeToEntry()">+ Add Employee</button>
+        <div class="status" id="addStatus"></div>
       </div>
-      <label style="margin-top:10px;">Reason for Overtime</label>
-      <textarea id="reasonInput" placeholder="Why this employee is doing overtime"></textarea>
-      <button class="mini" style="margin-top:10px;" onclick="addEmployeeToEntry()">+ Add Employee</button>
-      <div class="status" id="addStatus"></div>
 
       <h4>Overtime List (photo or PDF) <span style="color:var(--red);">*</span></h4>
       <p class="sub" style="margin:0 0 8px;"><b>Required.</b> You must attach a picture or PDF of the overtime list before you can submit (JPG, PNG, WEBP, HEIC or PDF, up to 10 MB each). Staff must still be added above. Every approver can see this file.</p>
@@ -186,6 +207,8 @@ let CURRENT_ENTRY = null;
 let CURRENT_EMPLOYEES = [];
 let COMPLETED_ROWS = [];
 let CURRENT_COMPLETED = null;
+let CURRENT_UNIT = null;   // active unit tab name
+let ENTRY_UNITS = [];      // units for the current entry's department
 const COMPANY = "Rumbu Industries Limited";
 const INCOMPLETE = ["awaiting_step2","rejected_to_step2"];
 
@@ -378,6 +401,79 @@ function empInEntryScope(emp){
   return true;
 }
 
+// ─────────── UNIT TABS ───────────
+async function fetchUnitsForEntry(entry){
+  try{
+    const { data: dept } = await sb.from("departments")
+      .select("id")
+      .eq("section", entry.section)
+      .eq("name", entry.department)
+      .maybeSingle();
+    if(!dept) return [];
+    const { data: units } = await sb.from("units")
+      .select("id, name")
+      .eq("department_id", dept.id)
+      .order("name");
+    return units || [];
+  }catch(e){
+    console.warn("fetchUnitsForEntry failed:", e.message);
+    return [];
+  }
+}
+
+function buildUnitTabs(units){
+  const bar = document.getElementById("unitTabBar");
+  if(!units.length){
+    bar.innerHTML = "";
+    bar.style.display = "none";
+    return;
+  }
+  bar.style.display = "flex";
+  bar.innerHTML = units.map(u =>
+    `<button class="unit-tab-btn" id="utab_${safeCss(u.name)}" onclick="switchUnitTab('${js(u.name)}')">
+      <span class="unit-dot" id="udot_${safeCss(u.name)}"></span>${esc(u.name)}
+    </button>`
+  ).join("");
+}
+
+async function switchUnitTab(unitName){
+  CURRENT_UNIT = unitName;
+  // Update active tab styling
+  document.querySelectorAll(".unit-tab-btn").forEach(b => b.classList.remove("active"));
+  const activeBtn = document.getElementById("utab_" + safeCss(unitName));
+  if(activeBtn) activeBtn.classList.add("active");
+  // Update label
+  document.getElementById("currentUnitLabel").textContent = unitName;
+  // Clear add-employee inputs
+  ["empIdInput","empNameDisplay","reasonInput"].forEach(id => { const el = document.getElementById(id); if(el){ el.value=""; el.className=""; } });
+  const addSt = document.getElementById("addStatus"); if(addSt) addSt.textContent = "";
+  // Load employees for this unit
+  await loadEntryEmployees(CURRENT_ENTRY.id);
+}
+
+async function refreshUnitTabStatus(){
+  if(!CURRENT_ENTRY || !ENTRY_UNITS.length) return;
+  // Count employees per unit
+  const { data } = await sb.from("overtime_employees")
+    .select("form_unit")
+    .eq("department_entry_id", CURRENT_ENTRY.id);
+  const counts = {};
+  (data||[]).forEach(e => { counts[e.form_unit] = (counts[e.form_unit]||0) + 1; });
+  ENTRY_UNITS.forEach(u => {
+    const dot = document.getElementById("udot_" + safeCss(u.name));
+    if(!dot) return;
+    const n = counts[u.name] || 0;
+    dot.className = "unit-dot" + (n > 0 ? " filled" : "");
+  });
+  // Show all-filled message
+  const allFilled = ENTRY_UNITS.every(u => (counts[u.name]||0) > 0);
+  const msg = document.getElementById("unitAllFilledMsg");
+  if(msg) msg.style.display = allFilled ? "block" : "none";
+}
+
+function safeCss(s){ return String(s||"").replace(/[^A-Za-z0-9]/g,"_"); }
+function js(s){ return String(s||"").replace(/\\/g,"\\\\").replace(/'/g,"\\'"); }
+
 async function loadMyScopes(){
   MY_SCOPES = [];
   if(ME.role === "super_admin"){ IS_SUPER_ADMIN_BLANKET = true; return; }
@@ -467,6 +563,8 @@ async function openEntry(entryId){
   if(error){ alert("Could not open entry: " + error.message); return; }
 
   CURRENT_ENTRY = entry;
+  CURRENT_UNIT = null;
+  ENTRY_UNITS = [];
   showView("fillView");
   document.getElementById("workTitle").textContent = "Fill " + (entry.overtime_initiations?.form_number||"") + " — " + entry.department;
   document.getElementById("entryInfo").innerHTML = "<div class=\"infobox\">" +
@@ -476,6 +574,17 @@ async function openEntry(entryId){
     "<b>Overtime Date:</b> " + fmtDate(entry.overtime_initiations?.overtime_date||"") + " &nbsp;|&nbsp; " +
     "<b>Propose Hours:</b> " + esc(entry.overtime_initiations?.propose_hours||"") +
   "</div>";
+
+  // Fetch units for this department and build tabs
+  ENTRY_UNITS = await fetchUnitsForEntry(entry);
+  buildUnitTabs(ENTRY_UNITS);
+  if(ENTRY_UNITS.length){
+    await switchUnitTab(ENTRY_UNITS[0].name);
+  } else {
+    // No units found — fallback to unitless mode
+    CURRENT_UNIT = null;
+    document.getElementById("currentUnitLabel").textContent = entry.department;
+  }
 
   const rejBanner = document.getElementById("rejBanner");
   const responseWrap = document.getElementById("responseNoteWrap");
@@ -503,15 +612,19 @@ async function openEntry(entryId){
 
 function backToQueue(){
   CURRENT_ENTRY = null;
+  CURRENT_UNIT = null;
+  ENTRY_UNITS = [];
   loadQueue();
 }
 
 async function loadEntryEmployees(entryId){
-  const { data, error } = await sb.from("overtime_employees").select("*").eq("department_entry_id", entryId).order("created_at");
   const wrap = document.getElementById("employeesListWrap");
+  let q = sb.from("overtime_employees").select("*").eq("department_entry_id", entryId);
+  if(CURRENT_UNIT) q = q.eq("form_unit", CURRENT_UNIT);
+  const { data, error } = await q.order("created_at");
   if(error){ wrap.innerHTML = "<p class='status err'>❌ " + esc(error.message) + "</p>"; return; }
   CURRENT_EMPLOYEES = data || [];
-  if(!CURRENT_EMPLOYEES.length){ wrap.innerHTML = "<p class='empty'>No employees added yet.</p>"; return; }
+  if(!CURRENT_EMPLOYEES.length){ wrap.innerHTML = "<p class='empty'>No employees added yet for this unit.</p>"; return; }
 
   let html = "<table><thead><tr><th>SN</th><th>ID</th><th>Name</th><th>Reason</th><th></th></tr></thead><tbody>";
   CURRENT_EMPLOYEES.forEach((e, i)=>{
@@ -521,8 +634,9 @@ async function loadEntryEmployees(entryId){
       "<button class=\"mini red\" onclick=\"removeEmployeeFromEntry(" + e.id + ")\">Remove</button></td></tr>";
   });
   html += "</tbody></table>";
-  html += "<p style=\"margin:10px 0 0;font-weight:700;color:var(--navy);\">Total Employees on this list: " + CURRENT_EMPLOYEES.length + "</p>";
+  html += "<p style=\"margin:10px 0 0;font-weight:700;color:var(--navy);\">Total: " + CURRENT_EMPLOYEES.length + " employee(s) in " + esc(CURRENT_UNIT || "this unit") + "</p>";
   wrap.innerHTML = html;
+  await refreshUnitTabStatus();
 }
 
 function editReason(rowId){
@@ -532,6 +646,7 @@ function editReason(rowId){
   cell.innerHTML = "<textarea id=\"reasonEdit_" + rowId + "\" style=\"min-height:50px;\">" + esc(emp.reason_for_overtime) + "</textarea>" +
     "<button class=\"mini green\" style=\"margin-top:6px;\" onclick=\"saveReason(" + rowId + ")\">Save</button> " +
     "<button class=\"mini grey\" style=\"margin-top:6px;\" onclick=\"loadEntryEmployees(CURRENT_ENTRY.id)\">Cancel</button>";
+
 }
 
 async function saveReason(rowId){
@@ -595,7 +710,8 @@ async function addEmployeeToEntry(){
     const { error } = await sb.from("overtime_employees").insert({
       department_entry_id: CURRENT_ENTRY.id,
       employee_id: match.id, employee_code: match.employee_id,
-      employee_name: match.full_name, reason_for_overtime: reason
+      employee_name: match.full_name, reason_for_overtime: reason,
+      form_unit: CURRENT_UNIT || null
     });
     if(error) throw error;
     status.className = "status ok"; status.textContent = "✅ Added.";
@@ -631,7 +747,29 @@ async function saveAndContinueLater(){
 async function submitEntry(){
   const status = document.getElementById("submitStatus");
   if(!CURRENT_ENTRY) return;
-  if(!CURRENT_EMPLOYEES.length){ status.className="status err"; status.textContent="Add at least one employee before submitting."; return; }
+
+  // Check all units have at least one employee
+  if(ENTRY_UNITS.length){
+    status.className="status"; status.textContent="Checking all units…";
+    const { data: allEmps } = await sb.from("overtime_employees")
+      .select("form_unit")
+      .eq("department_entry_id", CURRENT_ENTRY.id);
+    const filledUnits = new Set((allEmps||[]).map(e => e.form_unit).filter(Boolean));
+    const emptyUnits = ENTRY_UNITS.filter(u => !filledUnits.has(u.name));
+    if(emptyUnits.length){
+      status.className = "status err";
+      status.textContent = "❌ The following units have no employees added yet: " + emptyUnits.map(u => u.name).join(", ") + ". Fill all units before submitting.";
+      // Highlight empty unit tabs
+      ENTRY_UNITS.forEach(u => {
+        const dot = document.getElementById("udot_" + safeCss(u.name));
+        if(dot && !filledUnits.has(u.name)) dot.className = "unit-dot empty-warn";
+      });
+      return;
+    }
+    if(!allEmps || !allEmps.length){ status.className="status err"; status.textContent="Add at least one employee before submitting."; return; }
+  } else {
+    if(!CURRENT_EMPLOYEES.length){ status.className="status err"; status.textContent="Add at least one employee before submitting."; return; }
+  }
 
   const isCorrection = CURRENT_ENTRY.status === "rejected_to_step2";
   const responseNote = document.getElementById("responseNoteInput").value.trim();
