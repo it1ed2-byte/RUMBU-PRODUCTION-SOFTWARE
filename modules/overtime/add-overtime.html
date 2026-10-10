@@ -144,17 +144,18 @@ function fmtDate(iso){
 }
 
 // Blocks re-initiating the same Department (or overlapping Units) for the same
-// Date of Overtime + Branch. Returns a list of human messages, empty if clear.
-// A previously "All units" request blocks any further request for that
-// department that day; specific units only clash on overlap.
+// Date of Overtime + Branch — BUT only if the existing entry has NOT yet been
+// filled (status = awaiting_step2). If filling has already started the block
+// is lifted and a new initiation for the same date/dept is allowed.
 async function findDuplicateDepartments(section, overtimeDate, selection){
   const deptNames = selection.map(s => s.department);
   if(!deptNames.length) return [];
   const { data, error } = await sb.from("overtime_department_entries")
-    .select("department, units, overtime_initiations!inner(overtime_date)")
+    .select("department, units, status, overtime_initiations!inner(overtime_date)")
     .eq("section", section)
     .eq("overtime_initiations.overtime_date", overtimeDate)
-    .in("department", deptNames);
+    .in("department", deptNames)
+    .eq("status", "awaiting_step2");   // only unfilled entries can block
   if(error) throw error;
 
   const existByDept = {};
