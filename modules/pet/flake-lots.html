@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Flake LOTs (FLOT) — PET Collection</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme")||"navy"); }catch(e){} })();
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) document.documentElement.setAttribute("data-theme",e.data.rumbuTheme); });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1200px;margin:0 auto;}
+  label{font-size:12px;font-weight:700;display:block;margin:10px 0 4px;color:var(--muted);}
+  input,select,textarea{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);}
+  input:read-only{background:var(--bg);}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;}
+  @media(max-width:640px){.grid2,.grid3{grid-template-columns:1fr;}}
+  .badge{display:inline-block;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:700;}
+  .badge.open{background:#d1fae5;color:#065f46;}
+  .badge.closed{background:#e5e7eb;color:#374151;}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:16px;}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;text-align:center;}
+  .stat .n{font-size:24px;font-weight:800;color:var(--heading);}
+  .stat .l{font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;margin-top:4px;}
+  .stat.aa .n{color:#1e40af;}
+  .stat.ab .n{color:#6d28d9;}
+  .flot-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;margin-top:16px;}
+  .flot-card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;cursor:pointer;transition:transform .12s,box-shadow .12s;}
+  .flot-card:hover{transform:translateY(-2px);box-shadow:0 6px 20px rgba(0,0,0,.12);}
+  .flot-card.has-stock{border-color:#6ee7b7;}
+  .flot-card.no-stock{border-color:#e5e7eb;}
+  .flot-number{font-size:16px;font-weight:800;color:var(--heading);margin-bottom:6px;}
+  .flot-bal{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px;}
+  .flot-bal-cell{background:var(--bg);border-radius:8px;padding:8px 10px;text-align:center;}
+  .flot-bal-cell .grade{font-size:11px;font-weight:700;color:var(--muted);margin-bottom:2px;}
+  .flot-bal-cell .bags{font-size:18px;font-weight:800;color:var(--heading);}
+  .flot-bal-cell .bags.aa{color:#1e40af;}
+  .flot-bal-cell .bags.ab{color:#6d28d9;}
+  .flot-bal-cell .kg{font-size:11px;color:var(--muted);margin-top:2px;}
+  .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;justify-content:center;align-items:flex-start;padding:40px 16px;overflow-y:auto;}
+  .modal-overlay.open{display:flex;}
+  .modal{background:var(--card);border-radius:14px;padding:28px;width:100%;max-width:700px;box-shadow:0 8px 32px rgba(0,0,0,.2);}
+  .modal h3{color:var(--heading);margin:0 0 18px;}
+  .kv{font-size:13px;padding:6px 0;border-bottom:1px solid var(--line);}
+  .kv:last-child{border-bottom:none;}
+  .kv .lbl{font-size:11px;color:var(--muted);font-weight:700;}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;margin-top:8px;}
+  th{background:var(--th-bg);color:var(--th-fg);text-align:left;padding:7px;}
+  td{padding:6px 7px;border-bottom:1px solid var(--line);}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back</button>
+  <div id="connStatus" style="font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);">Loading...</div>
+
+  <div id="appArea" style="display:none;">
+
+    <div class="card-panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
+        <div>
+          <h3 style="margin:0;color:var(--heading);">Flake LOTs (FLOT)</h3>
+          <p style="font-size:12px;color:var(--muted);margin:4px 0 0;">After production is completed, flakes are assigned to a FLOT. Export deliveries take bags from a FLOT — the remaining count of AA and AB bags is shown here.</p>
+        </div>
+        <button onclick="openAddFlot()">+ New FLOT</button>
+      </div>
+
+      <div class="stats" id="statsBar"></div>
+
+      <input type="text" id="flotSearch" placeholder="Search FLOT number or notes..." oninput="renderFlots()" style="margin-bottom:14px;">
+
+      <div class="flot-grid" id="flotGrid">
+        <p style="color:var(--muted);">Loading...</p>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Add FLOT modal -->
+<div class="modal-overlay" id="addModal">
+  <div class="modal" style="max-width:420px;">
+    <h3>New Flake LOT</h3>
+    <label>FLOT Number <span style="color:var(--muted);font-weight:400;">(auto-generated, you can change it)</span></label>
+    <input type="text" id="mFlotNumber" placeholder="e.g. FLOT-2026-001">
+    <label>Notes (optional)</label>
+    <input type="text" id="mFlotNotes" placeholder="e.g. Kano run, October batch...">
+    <div style="display:flex;gap:10px;margin-top:18px;">
+      <button onclick="saveFlot()">Create FLOT</button>
+      <button class="btn-ghost" onclick="closeAddModal()">Cancel</button>
+    </div>
+    <div id="addStatus" style="margin-top:10px;font-size:13px;font-weight:700;min-height:16px;"></div>
+  </div>
+</div>
+
+<!-- FLOT detail modal -->
+<div class="modal-overlay" id="detailModal">
+  <div class="modal">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <h3 id="detailTitle" style="margin:0;"></h3>
+      <button class="btn-ghost" onclick="closeDetailModal()">Close</button>
+    </div>
+    <div id="detailBody" style="margin-top:16px;"></div>
+  </div>
+</div>
+
+<script>
+let ME=null, FLOTS=[], PRODS=[], EXPORTS=[];
+const esc=s=>String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+const fmt=v=>v==null?"—":(+v).toLocaleString(undefined,{maximumFractionDigits:2});
+
+async function init(){
+  const cs=document.getElementById("connStatus");
+  try{
+    ME=await requireAuth("../../login.html");
+    if(!ME) return;
+    cs.style.display="none";
+    document.getElementById("appArea").style.display="block";
+    await loadAll();
+  }catch(e){ cs.style.color="var(--bad)"; cs.textContent="Error: "+e.message; }
+}
+
+async function loadAll(){
+  const [{data:flots},{data:prods},{data:exps}] = await Promise.all([
+    sb.from("pet_flake_lots").select("*").order("id",{ascending:false}),
+    sb.from("pet_stage4_production").select("id,collection_id,flot_id,total_aa_kg,total_ab_kg,total_production_kg,pet_collections(form_number,agent_name,section)").not("flot_id","is",null),
+    sb.from("pet_export_deliveries").select("id,form_no,flot_id,aa_bags_taken,ab_bags_taken,aa_kg_taken,ab_kg_taken,status,delivery_date").not("flot_id","is",null)
+  ]);
+  FLOTS=flots||[]; PRODS=prods||[]; EXPORTS=exps||[];
+  renderStats();
+  renderFlots();
+}
+
+function flotBalance(flotId){
+  const ps=PRODS.filter(p=>String(p.flot_id)===String(flotId));
+  const es=EXPORTS.filter(e=>String(e.flot_id)===String(flotId));
+  const totalAaKg=ps.reduce((s,p)=>s+(+p.total_aa_kg||0),0);
+  const totalAbKg=ps.reduce((s,p)=>s+(+p.total_ab_kg||0),0);
+  const takenAaKg=es.reduce((s,e)=>s+(+e.aa_kg_taken||0),0);
+  const takenAbKg=es.reduce((s,e)=>s+(+e.ab_kg_taken||0),0);
+  const takenAaBags=es.reduce((s,e)=>s+(+e.aa_bags_taken||0),0);
+  const takenAbBags=es.reduce((s,e)=>s+(+e.ab_bags_taken||0),0);
+  // AA/AB bag totals come from pet_bags — loaded lazily per FLOT detail
+  // For the card view we show kg-based balance; bags loaded in detail
+  return {
+    totalAaKg, totalAbKg,
+    remAaKg: totalAaKg-takenAaKg,
+    remAbKg: totalAbKg-takenAbKg,
+    takenAaBags, takenAbBags,
+    prodCount: ps.length,
+    expCount: es.length
+  };
+}
+
+function renderStats(){
+  const totalFlots=FLOTS.length;
+  const openFlots=FLOTS.filter(f=>f.status==="open").length;
+  const totAaKg=PRODS.reduce((s,p)=>s+(+p.total_aa_kg||0),0);
+  const totAbKg=PRODS.reduce((s,p)=>s+(+p.total_ab_kg||0),0);
+  const takenAaKg=EXPORTS.reduce((s,e)=>s+(+e.aa_kg_taken||0),0);
+  const takenAbKg=EXPORTS.reduce((s,e)=>s+(+e.ab_kg_taken||0),0);
+  document.getElementById("statsBar").innerHTML=`
+    <div class="stat"><div class="n">${totalFlots}</div><div class="l">Total FLOTs</div></div>
+    <div class="stat"><div class="n">${openFlots}</div><div class="l">Open</div></div>
+    <div class="stat aa"><div class="n">${fmt(totAaKg-takenAaKg)}</div><div class="l">AA Remaining (kg)</div></div>
+    <div class="stat ab"><div class="n">${fmt(totAbKg-takenAbKg)}</div><div class="l">AB Remaining (kg)</div></div>`;
+}
+
+function renderFlots(){
+  const q=(document.getElementById("flotSearch").value||"").toLowerCase();
+  const grid=document.getElementById("flotGrid");
+  const rows=FLOTS.filter(f=>!q||(f.flot_number||"").toLowerCase().includes(q)||(f.notes||"").toLowerCase().includes(q));
+  if(!rows.length){ grid.innerHTML="<p style='color:var(--muted);'>No FLOTs yet. Create one to start.</p>"; return; }
+  grid.innerHTML=rows.map(f=>{
+    const b=flotBalance(f.id);
+    const hasStock=b.remAaKg>0||b.remAbKg>0;
+    return `<div class="flot-card ${hasStock?"has-stock":"no-stock"}" onclick="openDetail(${f.id})">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;">
+        <div class="flot-number">${esc(f.flot_number)}</div>
+        <span class="badge ${f.status||"open"}">${(f.status||"open").toUpperCase()}</span>
+      </div>
+      ${f.notes?`<div style="font-size:12px;color:var(--muted);margin-bottom:6px;">${esc(f.notes)}</div>`:""}
+      <div style="font-size:12px;color:var(--muted);">${b.prodCount} production${b.prodCount!==1?"s":""} · ${b.expCount} export${b.expCount!==1?"s":""}</div>
+      <div class="flot-bal">
+        <div class="flot-bal-cell">
+          <div class="grade">AA Grade</div>
+          <div class="bags aa">${fmt(b.remAaKg)} kg</div>
+          <div class="kg">of ${fmt(b.totalAaKg)} kg · ${b.takenAaBags} bags exported</div>
+        </div>
+        <div class="flot-bal-cell">
+          <div class="grade">AB Grade</div>
+          <div class="bags ab">${fmt(b.remAbKg)} kg</div>
+          <div class="kg">of ${fmt(b.totalAbKg)} kg · ${b.takenAbBags} bags exported</div>
+        </div>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+async function openDetail(flotId){
+  const f=FLOTS.find(x=>x.id===flotId); if(!f) return;
+  document.getElementById("detailTitle").textContent=f.flot_number;
+  document.getElementById("detailBody").innerHTML="<p style='color:var(--muted);'>Loading...</p>";
+  document.getElementById("detailModal").classList.add("open");
+
+  // Fetch bags for productions in this FLOT
+  const ps=PRODS.filter(p=>String(p.flot_id)===String(flotId));
+  const collIds=ps.map(p=>p.collection_id);
+  let aaBags=0,abBags=0;
+  if(collIds.length){
+    const {data:batches}=await sb.from("pet_lab_batches").select("id").in("collection_id",collIds);
+    const batchIds=(batches||[]).map(b=>b.id);
+    if(batchIds.length){
+      const {data:bags}=await sb.from("pet_bags").select("grade").in("batch_id",batchIds);
+      (bags||[]).forEach(b=>{ if(b.grade==="AA") aaBags++; else if(b.grade==="AB") abBags++; });
+    }
+  }
+
+  const es=EXPORTS.filter(e=>String(e.flot_id)===String(flotId));
+  const b=flotBalance(flotId);
+  const takenAaBags=es.reduce((s,e)=>s+(+e.aa_bags_taken||0),0);
+  const takenAbBags=es.reduce((s,e)=>s+(+e.ab_bags_taken||0),0);
+  const remAaBags=aaBags-takenAaBags;
+  const remAbBags=abBags-takenAbBags;
+
+  let html=`
+    <div class="flot-bal" style="margin-bottom:16px;">
+      <div class="flot-bal-cell">
+        <div class="grade">AA Grade</div>
+        <div class="bags aa">${remAaBags} bags · ${fmt(b.remAaKg)} kg remaining</div>
+        <div class="kg">${aaBags} total bags · ${fmt(b.totalAaKg)} kg total · ${takenAaBags} bags exported</div>
+      </div>
+      <div class="flot-bal-cell">
+        <div class="grade">AB Grade</div>
+        <div class="bags ab">${remAbBags} bags · ${fmt(b.remAbKg)} kg remaining</div>
+        <div class="kg">${abBags} total bags · ${fmt(b.totalAbKg)} kg total · ${takenAbBags} bags exported</div>
+      </div>
+    </div>`;
+
+  // Status toggle
+  html+=`<div style="margin-bottom:16px;">
+    <span class="badge ${f.status||"open"}" style="font-size:13px;padding:4px 14px;">${(f.status||"open").toUpperCase()}</span>
+    <button class="btn-ghost" style="margin-left:10px;font-size:12px;padding:4px 12px;" onclick="toggleFlotStatus(${f.id})">
+      ${f.status==="closed"?"Re-open FLOT":"Close FLOT"}
+    </button>
+  </div>`;
+
+  // Productions
+  html+=`<h4 style="margin:0 0 6px;color:var(--heading);">Productions in this FLOT</h4>`;
+  if(!ps.length){ html+="<p style='color:var(--muted);font-size:12px;'>None yet.</p>"; }
+  else{ html+=`<table><thead><tr><th>Form No</th><th>Agent</th><th>Branch</th><th>AA (kg)</th><th>AB (kg)</th></tr></thead><tbody>
+    ${ps.map(p=>{const col=p.pet_collections||{}; return `<tr><td><b>${esc(col.form_number||"—")}</b></td><td>${esc(col.agent_name||"—")}</td><td>${esc(col.section||"—")}</td><td style="color:#1e40af;font-weight:700;">${fmt(p.total_aa_kg)}</td><td style="color:#6d28d9;font-weight:700;">${fmt(p.total_ab_kg)}</td></tr>`; }).join("")}
+  </tbody></table>`; }
+
+  // Export deliveries
+  html+=`<h4 style="margin:16px 0 6px;color:var(--heading);">Export deliveries from this FLOT</h4>`;
+  if(!es.length){ html+="<p style='color:var(--muted);font-size:12px;'>None yet.</p>"; }
+  else{ html+=`<table><thead><tr><th>Form No</th><th>Date</th><th>AA Bags</th><th>AB Bags</th><th>AA Kg</th><th>AB Kg</th><th>Stage</th></tr></thead><tbody>
+    ${es.map(e=>`<tr><td><b>${esc(e.form_no||"—")}</b></td><td>${esc(e.delivery_date||"—")}</td><td>${e.aa_bags_taken||0}</td><td>${e.ab_bags_taken||0}</td><td>${fmt(e.aa_kg_taken)}</td><td>${fmt(e.ab_kg_taken)}</td><td>${esc(e.status||"—")}</td></tr>`).join("")}
+  </tbody></table>`; }
+
+  document.getElementById("detailBody").innerHTML=html;
+}
+
+async function toggleFlotStatus(flotId){
+  const f=FLOTS.find(x=>x.id===flotId); if(!f) return;
+  const newStatus=f.status==="closed"?"open":"closed";
+  const {error}=await sb.from("pet_flake_lots").update({status:newStatus}).eq("id",flotId);
+  if(error){ alert("Error: "+error.message); return; }
+  await loadAll();
+  closeDetailModal();
+}
+
+// ---- Add FLOT ----
+async function openAddFlot(){
+  document.getElementById("addStatus").textContent="";
+  document.getElementById("mFlotNotes").value="";
+  // Auto-generate next number
+  const year=new Date().getFullYear();
+  const existing=FLOTS.filter(f=>(f.flot_number||"").startsWith("FLOT-"+year+"-"));
+  const nums=existing.map(f=>parseInt((f.flot_number||"").split("-")[2]||"0")).filter(n=>!isNaN(n));
+  const next=nums.length ? Math.max(...nums)+1 : 1;
+  document.getElementById("mFlotNumber").value="FLOT-"+year+"-"+String(next).padStart(3,"0");
+  document.getElementById("addModal").classList.add("open");
+}
+function closeAddModal(){ document.getElementById("addModal").classList.remove("open"); }
+function closeDetailModal(){ document.getElementById("detailModal").classList.remove("open"); }
+
+async function saveFlot(){
+  const st=document.getElementById("addStatus");
+  const num=(document.getElementById("mFlotNumber").value||"").trim();
+  const notes=(document.getElementById("mFlotNotes").value||"").trim();
+  if(!num){ st.style.color="var(--bad)"; st.textContent="FLOT number is required."; return; }
+  st.style.color="var(--muted)"; st.textContent="Saving...";
+  const {error}=await sb.from("pet_flake_lots").insert({flot_number:num, notes:notes||null, created_by:ME.id});
+  if(error){ st.style.color="var(--bad)"; st.textContent="Error: "+error.message; return; }
+  st.style.color="var(--ok)"; st.textContent="✅ FLOT created.";
+  await loadAll();
+  setTimeout(closeAddModal, 700);
+}
+
+document.getElementById("addModal").addEventListener("click",function(e){ if(e.target===this) closeAddModal(); });
+document.getElementById("detailModal").addEventListener("click",function(e){ if(e.target===this) closeDetailModal(); });
+init();
+</script>
+</body>
+</html>

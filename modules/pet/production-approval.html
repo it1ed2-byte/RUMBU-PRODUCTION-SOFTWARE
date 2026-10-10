@@ -389,9 +389,9 @@ async function openReview(id){
     rejectLabel:  "✘ Return to Quality Control",
     noteLabel:    "Reason (required only if returning to Quality Control)",
     sections: [
-      { heading: "Company this production is for (required to send to Production)", rows: [
+      { heading: "Company this production is for (optional — can be set or changed while the run is open)", rows: [
         ["Company *", coSelect],
-        ["Why it matters", "The lab result is compared with this company's limits. You can change it later while the run is open."],
+        ["Note", "If set, the lab result is compared with this company's limits. Leave blank to skip the standard comparison. The plant manager can set or change this at any time while the run is open."],
       ]},
       { heading: "Collection", rows: [
         ["Agent", c.agent_name+" ("+c.agent_code+")"],
@@ -437,20 +437,15 @@ async function openReview(id){
     onApprove: ()=>decide(id,"approved",null),
     onReject:  (note)=>decide(id,"rejected",note)
   });
-  // The company is required to send to Production. Check it before the modal's own Approve handler runs.
+  // Company is optional — read PICK from selector if one is chosen, otherwise null
   const ovs=document.querySelectorAll(".rm-overlay"), ov=ovs[ovs.length-1];
   const btn=ov && ov.querySelector("#rmApprove");
   if(btn){
     const orig=btn.onclick;
     btn.onclick=function(ev){
       const sel=ov.querySelector("#pcSel");
-      if(!sel || !sel.value){
-        alert(COMPANIES.length ? "Choose the company this production is for." : "No company is set up yet. Add one under Company Standards first.");
-        return;
-      }
-      const co=COMPANIES.find(x=>String(x.id)===sel.value);
-      PICK=co?{id:co.id,name:co.name}:null;
-      if(!PICK){ alert("That company could not be found. Close this window and try again."); return; }
+      const co=sel && sel.value ? COMPANIES.find(x=>String(x.id)===sel.value) : null;
+      PICK=co ? {id:co.id,name:co.name} : null;
       return orig.call(btn,ev);
     };
   }
@@ -465,8 +460,7 @@ async function startRun(collectionId, company){
   const { data:ex, error:exErr } = await sb.from("pet_stage4_production").select("id,production_start").eq("collection_id",collectionId).maybeSingle();
   if(exErr) throw new Error("Could not check the production record: "+exErr.message);
   const now=new Date().toISOString();
-  if(!company || !company.id) throw new Error("Choose the company this production is for.");
-  const coFields={ company_id:company.id, company_name:company.name, company_set_by:ME.id, company_set_at:now };
+  const coFields=company && company.id ? { company_id:company.id, company_name:company.name, company_set_by:ME.id, company_set_at:now } : {};
   if(!ex){
     const { error } = await sb.from("pet_stage4_production").insert(Object.assign({
       collection_id:collectionId, agent_code:c.agent_code,
@@ -506,8 +500,7 @@ async function decide(collectionId, decision, note){
       if(logErr) console.warn("Activity log entry failed (non-fatal):", logErr.message);
     } else {
       const newStatus=NEXT_STATUS[stage];
-      if(!PICK) throw new Error("Choose the company this production is for.");
-      await startRun(collectionId, PICK);                 // if this fails the collection must not move on
+      await startRun(collectionId, PICK||null);                 // if this fails the collection must not move on
       const { error: updErr } = await sb.from("pet_collections").update({ status:newStatus, updated_at:new Date().toISOString() }).eq("id",collectionId);
       if(updErr) throw new Error("Could not send to Production: "+updErr.message);
       const { error: logErr } = await sb.from("pet_activity_log").insert({

@@ -103,7 +103,7 @@
 </div>
 
 <script>
-let ME=null, CLIENTS=[], DELIVERIES=[], CURRENT_RECORD=null, VIEW_STAGE="start", SELECTED_BATCH=null, SELECTED_BATCH_OBJ=null;
+let ME=null, CLIENTS=[], DELIVERIES=[], FLOTS=[], CURRENT_RECORD=null, VIEW_STAGE="start", SELECTED_BATCH=null, SELECTED_BATCH_OBJ=null, SELECTED_FLOT=null;
 let MY_ASSIGNMENTS = { start:new Set(), agbara_logistics:new Set(), shipping_info:new Set(), weight_issue:new Set() };
 
 const STAGE_ORDER = ["start","agbara_logistics","shipping_info","weight_issue","completed"];
@@ -120,6 +120,8 @@ async function init(){
 
     const { data: clients } = await sb.from("pet_export_clients").select("id,client_name").eq("is_active",true).order("client_name");
     CLIENTS = clients||[];
+    const { data: flots } = await sb.from("pet_flake_lots").select("id,flot_number,status").order("id",{ascending:false});
+    FLOTS = flots||[];
 
     // Load which (stage, branch) combinations I'm personally assigned to
     // fill — Super Admin bypasses this entirely, everyone else can only
@@ -136,8 +138,7 @@ async function init(){
 // Section (branch) a given record's linked production batch belongs to —
 // this is what stage assignments are actually scoped by.
 function recordSection(){
-  if(SELECTED_BATCH_OBJ) return (SELECTED_BATCH_OBJ.pet_collections||{}).section;
-  if(CURRENT_RECORD) return ((CURRENT_RECORD.pet_stage4_production||{}).pet_collections||{}).section;
+  // Section is no longer required for FLOT-based deliveries; return null to skip assignment check
   return null;
 }
 
@@ -150,7 +151,7 @@ function canFillStage(stage){
 
 async function loadDeliveries(){
   const { data, error } = await sb.from("pet_export_deliveries")
-    .select("*, pet_export_clients(client_name), pet_stage4_production(id,collection_id,pet_collections(form_number,agent_name,section))")
+    .select("*, pet_export_clients(client_name), pet_flake_lots(flot_number), pet_stage4_production(id,collection_id,pet_collections(form_number,agent_name,section))")
     .order("created_at",{ascending:false});
   if(error){ document.getElementById("listWrap").innerHTML = `<p style="color:var(--bad);font-size:13px;">Error: ${error.message}</p>`; return; }
   DELIVERIES = data||[];
@@ -175,19 +176,19 @@ function renderList(){
   }
 
   wrap.innerHTML = `<div class="table-wrap"><div class="table-scroll"><table>
-    <thead><tr><th>Form No</th><th>Date</th><th>Client</th><th>Linked Batch</th><th>Vehicle</th><th>Container</th><th>Weight Diff</th><th>Stage</th><th></th></tr></thead>
+    <thead><tr><th>Form No</th><th>Date</th><th>Client</th><th>FLOT</th><th>Vehicle</th><th>Container</th><th>AA Bags</th><th>AB Bags</th><th>Stage</th><th></th></tr></thead>
     <tbody>${rows.map(d=>{
       const client = d.pet_export_clients||{};
-      const prod = d.pet_stage4_production||{};
-      const batchForm = (prod.pet_collections||{}).form_number || "—";
+      const flot = d.pet_flake_lots||{};
       return `<tr>
         <td><b>${d.form_no}</b></td>
         <td>${d.delivery_date||"—"}</td>
         <td>${client.client_name||"—"}</td>
-        <td>${batchForm}</td>
+        <td>${flot.flot_number||"—"}</td>
         <td>${d.vehicle_number||"—"}</td>
         <td>${d.container_number||"—"}</td>
-        <td>${d.weight_diff!=null?d.weight_diff+" kg":"—"}</td>
+        <td>${d.aa_bags_taken||0}</td>
+        <td>${d.ab_bags_taken||0}</td>
         <td><span class="badge ${STATUS_CLASSES[d.status]||''}">${STATUS_LABELS[d.status]||d.status}</span></td>
         <td><button style="padding:5px 12px;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;background:#dbeafe;color:#1e40af;" onclick="openWizard(${d.id})">Open</button></td>
       </tr>`;
@@ -201,9 +202,10 @@ function openWizard(id){
   CURRENT_RECORD = id ? DELIVERIES.find(x=>x.id===id) : null;
   SELECTED_BATCH = null;
   SELECTED_BATCH_OBJ = null;
+  SELECTED_FLOT = null;
   VIEW_STAGE = CURRENT_RECORD ? CURRENT_RECORD.status : "start";
   document.getElementById("wizFormTitle").textContent = CURRENT_RECORD ? ("Export Delivery — " + CURRENT_RECORD.form_no) : "New Export Delivery";
-  document.getElementById("wizFormSub").textContent = CURRENT_RECORD ? "Linked to production batch " + ((CURRENT_RECORD.pet_stage4_production||{}).pet_collections||{}).form_number : "Search and link a completed production batch to begin.";
+  document.getElementById("wizFormSub").textContent = CURRENT_RECORD ? "FLOT: " + ((CURRENT_RECORD.pet_flake_lots||{}).flot_number||"not set") : "Select a FLOT and enter the bags being exported.";
   document.getElementById("wizardCard").style.display = "block";
   document.getElementById("wizardCard").scrollIntoView({behavior:"smooth"});
   renderStages();
@@ -255,17 +257,27 @@ async function renderStartStage(panel){
     <h3>Start</h3>
     <p class="sub">Link this delivery to a completed production batch, then enter the basic form details.</p>
 
-    <label>Search by Form Number or Agent Name *</label>
+    <label>Flake LOT (FLOT) *</label>
     <div class="search-box">
-      <input type="text" id="wStBatchSearch" placeholder="Type to search completed production batches..." oninput="searchBatch(this.value)" autocomplete="off">
-      <div class="search-results" id="wStBatchResults"></div>
+      <select id="wStFlotSel" onchange="pickFlot(this.value)" style="max-width:340px;">
+        <option value="">— select a FLOT —</option>
+        ${FLOTS.map(f=>`<option value="${f.id}">${f.flot_number}${f.status==="closed"?" (closed)":""}</option>`).join("")}
+      </select>
     </div>
-    <div id="wStLinkedBatchBox" class="linked-batch-box" style="display:none;"></div>
+    <div id="wStFlotBox" class="linked-batch-box" style="display:none;margin-top:8px;"></div>
 
     <div class="grid3" style="margin-top:14px;">
       <div><label>Date *</label><input type="date" id="wStDate"></div>
       <div><label>Form No <span style="color:var(--muted);font-weight:400;">(auto-generated)</span></label><input type="text" id="wStFormNo" readonly></div>
       <div><label>Client Name *</label><select id="wStClient"><option value="">-- Select Client --</option>${CLIENTS.map(c=>`<option value="${c.id}">${c.client_name}</option>`).join("")}</select></div>
+    </div>
+    <div class="grid2" style="margin-top:14px;">
+      <div><label>AA Bags Taken *</label><input type="number" class="no-spinner" min="0" step="1" id="wStAaBags" placeholder="0" oninput="updateTotalWeight()"></div>
+      <div><label>AB Bags Taken *</label><input type="number" class="no-spinner" min="0" step="1" id="wStAbBags" placeholder="0" oninput="updateTotalWeight()"></div>
+    </div>
+    <div class="grid2">
+      <div><label>AA Weight Taken (kg)</label><input type="number" class="no-spinner" min="0" step="0.01" id="wStAaKg" placeholder="0" oninput="updateTotalWeight()"></div>
+      <div><label>AB Weight Taken (kg)</label><input type="number" class="no-spinner" min="0" step="0.01" id="wStAbKg" placeholder="0" oninput="updateTotalWeight()"></div>
     </div>
     <div class="grid2">
       <div><label>Picking Slip No</label><input type="text" id="wStPickingSlip"></div>
@@ -282,15 +294,16 @@ async function renderStartStage(panel){
   `;
 
   if(r){
-    SELECTED_BATCH = r.production_id;
+    SELECTED_FLOT = r.flot_id || null;
     document.getElementById("wStDate").value = r.delivery_date||"";
     document.getElementById("wStFormNo").value = r.form_no||"";
     document.getElementById("wStClient").value = r.client_id||"";
     document.getElementById("wStPickingSlip").value = r.picking_slip_no||"";
-    const c = (r.pet_stage4_production||{}).pet_collections||{};
-    document.getElementById("wStBatchSearch").value = c.form_number||"";
-    document.getElementById("wStLinkedBatchBox").style.display="block";
-    document.getElementById("wStLinkedBatchBox").innerHTML = `<b>Form Number:</b> ${c.form_number||"—"} &nbsp; <b>Agent:</b> ${c.agent_name||"—"} &nbsp; <b>Branch:</b> ${c.section||"—"}`;
+    document.getElementById("wStAaBags").value = r.aa_bags_taken||"";
+    document.getElementById("wStAbBags").value = r.ab_bags_taken||"";
+    document.getElementById("wStAaKg").value = r.aa_kg_taken||"";
+    document.getElementById("wStAbKg").value = r.ab_kg_taken||"";
+    if(r.flot_id){ document.getElementById("wStFlotSel").value = r.flot_id; pickFlot(r.flot_id); }
     if(r.odoo_slip_attachment) document.getElementById("wStOdooExisting").innerHTML = `<a href="${r.odoo_slip_attachment}" target="_blank">View current file</a>`;
   } else {
     document.getElementById("wStFormNo").value = await generateFormNo();
@@ -298,40 +311,40 @@ async function renderStartStage(panel){
   }
 }
 
-async function searchBatch(q){
-  const box = document.getElementById("wStBatchResults");
-  if(!q || q.length < 2){ box.classList.remove("show"); return; }
-  const { data, error } = await sb.from("pet_stage4_production")
-    .select("id,collection_id,total_production_kg,production_start,pet_collections!inner(form_number,agent_name,section,status)")
-    .eq("pet_collections.status","completed")
-    .or(`form_number.ilike.%${q}%,agent_name.ilike.%${q}%`, { foreignTable: "pet_collections" })
-    .limit(10);
-  if(error){ box.innerHTML = `<div class="search-result-row" style="color:var(--bad);">Error: ${error.message}</div>`; box.classList.add("show"); return; }
-  const rows = data||[];
-  if(!rows.length){ box.innerHTML = `<div class="search-result-row" style="color:var(--muted);">No completed batches match.</div>`; box.classList.add("show"); return; }
-  box.innerHTML = rows.map(r=>{
-    const c = r.pet_collections||{};
-    return `<div class="search-result-row" onclick='pickBatch(${JSON.stringify(r).replace(/'/g,"&#39;")})'>
-      <b>${c.form_number}</b> — ${c.agent_name} (${c.section}) — ${r.total_production_kg||0} kg
-    </div>`;
-  }).join("");
-  box.classList.add("show");
+function updateTotalWeight(){
+  const aa=parseFloat(document.getElementById("wStAaKg")?.value)||0;
+  const ab=parseFloat(document.getElementById("wStAbKg")?.value)||0;
+  // delivery_slip_weight_net is updated automatically from aa+ab
+  const total=parseFloat((aa+ab).toFixed(2));
+  const el=document.getElementById("wStTotalKg");
+  if(el) el.textContent=total+" kg";
 }
 
-function pickBatch(batch){
-  SELECTED_BATCH = batch.id;
-  SELECTED_BATCH_OBJ = batch;
-  document.getElementById("wStBatchSearch").value = (batch.pet_collections||{}).form_number || "";
-  document.getElementById("wStBatchResults").classList.remove("show");
-  const c = batch.pet_collections||{};
-  document.getElementById("wStLinkedBatchBox").style.display = "block";
-  const permissionNote = canFillStage("start") ? "" :
-    `<div style="color:var(--bad);font-weight:700;margin-top:6px;">⚠ You are not assigned to fill the Start stage for ${c.section}. You can still search, but Save will be blocked — ask an admin to assign you in Manage Export Assignments.</div>`;
-  document.getElementById("wStLinkedBatchBox").innerHTML =
-    `<b>Form Number:</b> ${c.form_number} &nbsp; <b>Agent:</b> ${c.agent_name} &nbsp; <b>Branch:</b> ${c.section}<br>
-     <b>Total Production:</b> ${batch.total_production_kg||0} kg &nbsp; <b>Production Date:</b> ${batch.production_start?new Date(batch.production_start).toLocaleDateString("en-GB"):"—"}
-     ${permissionNote}`;
+async function pickFlot(flotId){
+  SELECTED_FLOT = flotId ? parseInt(flotId) : null;
+  const box=document.getElementById("wStFlotBox"); if(!box) return;
+  if(!flotId){ box.style.display="none"; return; }
+  // Fetch balance
+  const [{data:prods},{data:exps}]=await Promise.all([
+    sb.from("pet_stage4_production").select("total_aa_kg,total_ab_kg").eq("flot_id",flotId),
+    sb.from("pet_export_deliveries").select("aa_bags_taken,ab_bags_taken,aa_kg_taken,ab_kg_taken").eq("flot_id",flotId)
+  ]);
+  const totAaKg=(prods||[]).reduce((s,p)=>s+(+p.total_aa_kg||0),0);
+  const totAbKg=(prods||[]).reduce((s,p)=>s+(+p.total_ab_kg||0),0);
+  const takenAaKg=(exps||[]).reduce((s,e)=>s+(+e.aa_kg_taken||0),0);
+  const takenAbKg=(exps||[]).reduce((s,e)=>s+(+e.ab_kg_taken||0),0);
+  const takenAaBags=(exps||[]).reduce((s,e)=>s+(+e.aa_bags_taken||0),0);
+  const takenAbBags=(exps||[]).reduce((s,e)=>s+(+e.ab_bags_taken||0),0);
+  const flot=FLOTS.find(f=>String(f.id)===String(flotId))||{};
+  box.style.display="block";
+  box.innerHTML=`<b>${flot.flot_number||""}</b><br>
+    <b style="color:#1e40af;">AA:</b> ${(totAaKg-takenAaKg).toFixed(2)} kg remaining of ${totAaKg.toFixed(2)} kg (${takenAaBags} bags already exported) &nbsp;
+    <b style="color:#6d28d9;">AB:</b> ${(totAbKg-takenAbKg).toFixed(2)} kg remaining of ${totAbKg.toFixed(2)} kg (${takenAbBags} bags already exported)`;
 }
+
+
+
+
 document.addEventListener("click", function(e){
   const box = document.getElementById("wStBatchResults");
   if(box && !e.target.closest(".search-box")) box.classList.remove("show");
@@ -350,20 +363,30 @@ async function saveStartStage(){
   const st = document.getElementById("wizStatus");
   const date = document.getElementById("wStDate").value;
   const clientId = document.getElementById("wStClient").value;
-  if(!SELECTED_BATCH){ st.style.color="var(--bad)"; st.textContent="Search and select a linked production batch."; return; }
-  if(!canFillStage("start")){ st.style.color="var(--bad)"; st.textContent="You are not assigned to fill the Start stage for "+recordSection()+". Ask an admin to assign you in Manage Export Assignments."; return; }
+  if(!SELECTED_FLOT){ st.style.color="var(--bad)"; st.textContent="Select a FLOT before saving."; return; }
   if(!date){ st.style.color="var(--bad)"; st.textContent="Date is required."; return; }
   if(!clientId){ st.style.color="var(--bad)"; st.textContent="Select a client."; return; }
+  const aaBags=parseInt(document.getElementById("wStAaBags").value)||0;
+  const abBags=parseInt(document.getElementById("wStAbBags").value)||0;
+  if(aaBags===0 && abBags===0){ st.style.color="var(--bad)"; st.textContent="Enter the number of AA or AB bags being exported."; return; }
 
   st.style.color="var(--muted)"; st.textContent="Saving...";
   try{
     const odooFile = document.getElementById("wStOdooFile").files[0];
     const odooUrl = odooFile ? await uploadFile(odooFile, "odoo-slips") : undefined;
+    const aaKg=parseFloat(document.getElementById("wStAaKg").value)||0;
+    const abKg=parseFloat(document.getElementById("wStAbKg").value)||0;
 
     const payload = {
-      production_id: SELECTED_BATCH,
+      flot_id: SELECTED_FLOT,
       delivery_date: date,
       client_id: parseInt(clientId),
+      aa_bags_taken: aaBags,
+      ab_bags_taken: abBags,
+      aa_kg_taken: aaKg,
+      ab_kg_taken: abKg,
+      delivery_slip_weight_net: parseFloat((aaKg+abKg).toFixed(2)),
+      bag_quantity: aaBags+abBags,
       picking_slip_no: document.getElementById("wStPickingSlip").value.trim()||null,
       updated_by: ME.id,
       updated_at: new Date().toISOString()
@@ -541,17 +564,21 @@ async function saveWeightIssueStage(){
 // ---- Stage: Completed ----
 function renderCompletedStage(panel){
   const r = CURRENT_RECORD;
-  const c = (r.pet_stage4_production||{}).pet_collections||{};
+  const flot = r.pet_flake_lots||{};
   function row(l,v){ return `<div style="padding:6px 0;border-bottom:1px solid var(--line);font-size:13px;"><span style="color:var(--muted);font-size:11px;">${l}</span><br><b>${v||"—"}</b></div>`; }
   panel.innerHTML = `
     <h3>Completed</h3>
     <p class="sub">This export delivery is complete. Summary below.</p>
     <div class="grid3">
       ${row("Form No", r.form_no)}
-      ${row("Linked Batch", c.form_number)}
+      ${row("FLOT", flot.flot_number)}
       ${row("Client", (CLIENTS.find(x=>x.id===r.client_id)||{}).client_name)}
+      ${row("AA Bags Exported", r.aa_bags_taken)}
+      ${row("AB Bags Exported", r.ab_bags_taken)}
+      ${row("AA Weight (kg)", r.aa_kg_taken)}
+      ${row("AB Weight (kg)", r.ab_kg_taken)}
       ${row("Delivery Slip Weight (Net)", r.delivery_slip_weight_net+" kg")}
-      ${row("Bag(s) Quantity", r.bag_quantity)}
+      ${row("Total Bags", r.bag_quantity)}
       ${row("Vehicle Number", r.vehicle_number)}
       ${row("Container Number", r.container_number)}
       ${row("Rumbu Weighbridge Weight", r.rumbu_weighbridge_weight+" kg")}
@@ -565,7 +592,7 @@ function renderCompletedStage(panel){
 
 async function refreshCurrentRecord(){
   const { data, error } = await sb.from("pet_export_deliveries")
-    .select("*, pet_export_clients(client_name), pet_stage4_production(id,collection_id,pet_collections(form_number,agent_name,section))")
+    .select("*, pet_export_clients(client_name), pet_flake_lots(flot_number)")
     .eq("id", CURRENT_RECORD.id).single();
   if(!error) CURRENT_RECORD = data;
   await loadDeliveries();

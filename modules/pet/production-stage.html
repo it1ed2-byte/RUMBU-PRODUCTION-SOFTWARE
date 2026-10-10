@@ -217,7 +217,22 @@
           <div><label>Total Production + Total Waste (kg)</label><input type="number" id="pfProductionPlusWaste" readonly></div>
         </div>
 
-        <div style="margin-top:20px;display:flex;gap:10px;" id="prodSaveRow">
+        <div style="margin-top:20px;">
+          <label style="font-size:13px;font-weight:700;color:var(--heading);">Assign to FLOT (Flake LOT) *</label>
+          <p style="font-size:12px;color:var(--muted);margin:2px 0 8px;">Select the storage LOT this batch of flakes will go into before export. Required before completing production.</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+            <select id="pfFlotSel" style="max-width:300px;" onchange="onFlotSelChange()">
+              <option value="">— select a FLOT —</option>
+              <option value="__new__">+ Create a new FLOT now</option>
+            </select>
+            <div id="pfFlotNewWrap" style="display:none;flex:1;min-width:200px;">
+              <input type="text" id="pfFlotNewNum" placeholder="e.g. FLOT-2026-001" style="max-width:220px;">
+            </div>
+          </div>
+          <div id="pfFlotStatus" style="font-size:12px;font-weight:700;margin-top:4px;min-height:14px;"></div>
+        </div>
+
+        <div style="margin-top:16px;display:flex;gap:10px;" id="prodSaveRow">
           <button id="completeBtn" onclick="completeProduction()">Complete Production</button>
           <button class="btn-ghost" onclick="closeProdForm()">Close run</button>
         </div>
@@ -524,6 +539,9 @@ function runProblems(){
   if(!RUN_BATCHES.length) p.push("No batches have been recorded yet.");
   const label={produced:"waiting for the lab result",retest_requested:"retest in progress at the lab",lab_done:"lab result submitted, needs your review",rerun_requested:"rerun requested, edit and resubmit"};
   RUN_BATCHES.forEach(b=>{ const s=bStatus(b); if(s!=="approved") p.push("Batch "+b.batch_no+": "+(label[s]||s)+"."); });
+  const flotVal=(document.getElementById("pfFlotSel")||{}).value||"";
+  if(!flotVal) p.push("Select a FLOT (Flake LOT) before completing production.");
+  if(flotVal==="__new__" && !((document.getElementById("pfFlotNewNum")||{}).value||"").trim()) p.push("Enter the new FLOT number.");
   return p;
 }
 
@@ -938,7 +956,7 @@ async function openReview(id){
 
   let stdHtml;
   if(!companyId){
-    stdHtml=`<div class="correction-note"><b>No company is set for this run.</b> The plant manager must choose the company in Stage 7 (Production Approval, Live production) before a result can be passed. You can still ask for a retest or a rerun.</div>`;
+    stdHtml=`<div class="note-box"><b>No company set for this run.</b> Standard comparison is skipped. You can still pass or fail this batch below. The plant manager can set a company in Stage 7 at any time.</div>`;
   } else if(!lines.length){
     stdHtml=`<div class="note-box"><b>${esc(companyName)}</b> has no limits yet, so there is nothing to compare. Add them in Company Standards. You can still decide on the lab result below.</div>`;
   } else if(!r){
@@ -970,7 +988,7 @@ async function openReview(id){
     <label style="margin-top:0;">Note (required for a retest, a rerun, or to pass a result that is outside the standard)</label>
     <textarea id="rvNote" rows="2" placeholder="For example: sample looked contaminated, please retest / material mixed, make the batch again"></textarea>
     <div class="actions">
-      <button id="rvApprove" onclick="decideBatch(${id},'approve')" style="background:${overrule?"#b45309":"var(--ok)"};" ${companyId?"":"disabled"}>${overrule?"✔ Pass anyway (outside the standard)":"✔ Pass and approve"}</button>
+      <button id="rvApprove" onclick="decideBatch(${id},'approve')" style="background:${overrule?"#b45309":"var(--ok)"};" >${overrule?"✔ Pass anyway (outside the standard)":"✔ Pass and approve"}</button>
       <button onclick="decideBatch(${id},'retest')" style="background:#b45309;">↻ Fail: request retest</button>
       <button onclick="decideBatch(${id},'rerun')" style="background:var(--bad);">⟲ Fail: request rerun</button>
     </div>` : `<div class="note-box">${CAN.review?"This batch is not waiting for a decision.":"You can view this result. Only the result approver can pass or fail it."}</div>`;
@@ -1008,7 +1026,7 @@ async function decideBatch(id, kind){
   const verdict = ctx.lines.length && res ? ctx.sum.verdict : "no_standard";
   if(kind==="approve"){
     if(!res){ bad("There is no lab result on file, so this batch cannot be passed."); return; }
-    if(!ctx.companyId){ bad("No company is set for this run. Ask the plant manager to choose it in Stage 7."); return; }
+    // company is optional — if none, standard comparison was skipped, proceed
     if(verdict==="fail"){
       if(!note){ bad("This result is outside the company standard. Write a note saying why you are passing it."); return; }
       if(!confirm("This result is OUTSIDE the standard of "+ctx.companyName+" on "+ctx.sum.fails+" limit(s).\n\nPass it anyway? Your note will be kept with the batch.")) return;
@@ -1212,6 +1230,33 @@ async function openProdForm(id){
   document.getElementById("kanoUsageStandaloneRow").style.display="block";
   document.getElementById("prodForm").style.display="block";
   document.getElementById("prodForm").scrollIntoView({behavior:"smooth"});
+  await loadFlotSelector(prod.flot_id||null);
+}
+
+async function loadFlotSelector(currentFlotId){
+  const {data:flots}=await sb.from("pet_flake_lots").select("id,flot_number").eq("status","open").order("id",{ascending:false});
+  const sel=document.getElementById("pfFlotSel");
+  if(!sel) return;
+  sel.innerHTML='<option value="">— select a FLOT —</option>'+
+    (flots||[]).map(f=>`<option value="${f.id}" ${String(f.id)===String(currentFlotId)?"selected":""}>${esc(f.flot_number)}</option>`).join("")+
+    '<option value="__new__">+ Create a new FLOT now</option>';
+  onFlotSelChange();
+}
+function onFlotSelChange(){
+  const v=document.getElementById("pfFlotSel").value;
+  document.getElementById("pfFlotNewWrap").style.display=v==="__new__"?"flex":"none";
+}
+// Creates a new FLOT record and returns its id, or returns the selected existing id
+async function resolveFlot(){
+  const sel=document.getElementById("pfFlotSel");
+  const v=sel.value;
+  if(!v){ return null; }
+  if(v!=="__new__") return parseInt(v);
+  const num=(document.getElementById("pfFlotNewNum").value||"").trim();
+  if(!num){ alert("Enter a number for the new FLOT."); return null; }
+  const {data,error}=await sb.from("pet_flake_lots").insert({flot_number:num,created_by:ME.id}).select("id").single();
+  if(error){ alert("Could not create FLOT: "+error.message); return null; }
+  return data.id;
 }
 async function refreshRun(){
   if(!CURRENT_PROD) return;
@@ -1230,7 +1275,7 @@ function renderCompanyLine(){
   const el=document.getElementById("companyLine"); if(!el) return;
   el.innerHTML = PROD_REC.company_id
     ? `<b>Company:</b> ${esc(PROD_REC.company_name||"—")} <span style="color:var(--muted);font-size:12px;">(chosen by the plant manager at Stage 7; he can change it while the run is open)</span>`
-    : `<b style="color:var(--bad);">No company is set for this run.</b> Results cannot be passed until the plant manager chooses the company in Stage 7 (Production Approval, Live production).`;
+    : `<b>No company set.</b> Standard comparison is skipped — the result approver can still pass or fail batches. The plant manager can set a company in Stage 7 at any time.`;
 }
 
 function lastBatchTime(){
@@ -1283,6 +1328,9 @@ async function proceedWithComplete(){
   const st=document.getElementById("prodFormStatus");
   st.style.color="var(--muted)"; st.textContent="Completing production...";
   try{
+    // Resolve FLOT (create new if needed)
+    const flotId=await resolveFlot();
+    if(!flotId){ st.textContent=""; return; }
     const off=one(CURRENT_PROD.pet_stage4a_offloading);
     const g=runGradeKg(RUN_BATCHES);
     const totalProduction=parseFloat(RUN_BATCHES.reduce((s,b)=>s+bTotal(b),0).toFixed(2));
@@ -1313,6 +1361,7 @@ async function proceedWithComplete(){
       unacceptable_waste_value: unaccKg>0 ? unaccKg : 0,
       weight_difference_kg: parseFloat((rumbuW-agentW).toFixed(2)),
       total_production_plus_waste_kg: parseFloat((totalProduction+totalWaste).toFixed(2)),
+      flot_id:              flotId,
       filled_by_profile_id: ME.id,
       filled_at:            new Date().toISOString()
     };
