@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Contracts</title>
+<style>
+:root{--primary:#1F3864;--accent:#2E75B6;--ok:#22c55e;--bad:#ef4444;--warn:#f59e0b;
+--bg:#f8fafc;--card:#fff;--line:#e2e8f0;--muted:#64748b;--heading:#0f172a;
+--th-bg:#f1f5f9;--th-fg:#374151;--shadow:0 1px 3px rgba(0,0,0,.08);--radius:8px}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;font-size:14px;background:var(--bg);color:var(--heading);padding:20px}
+h1{font-size:20px;font-weight:700;color:var(--primary);margin-bottom:18px}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+.stat{background:var(--card);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow)}
+.stat-val{font-size:28px;font-weight:700;color:var(--primary)}
+.stat-lbl{font-size:12px;color:var(--muted);margin-top:2px}
+.stat.ok .stat-val{color:var(--ok)}
+.stat.warn .stat-val{color:var(--warn)}
+.stat.bad .stat-val{color:var(--bad)}
+.toolbar{display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center}
+.toolbar input,.toolbar select{border:1px solid var(--line);border-radius:var(--radius);
+  padding:7px 10px;font-size:13px;background:var(--card)}
+.toolbar input{flex:1;min-width:180px}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border:none;
+  border-radius:var(--radius);font-size:13px;cursor:pointer;font-weight:500}
+.btn-accent{background:var(--accent);color:#fff}
+.btn-accent:hover{background:#1a5fa8}
+.table-wrap{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
+.table-scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th{background:var(--th-bg);color:var(--th-fg);font-size:12px;font-weight:600;
+  text-align:left;padding:10px 12px;white-space:nowrap}
+td{padding:10px 12px;border-top:1px solid var(--line);vertical-align:middle}
+tr:hover td{background:#f8fafc;cursor:pointer}
+.status{display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;
+  background:var(--th-bg);color:var(--th-fg)}
+.status.ok{background:#dcfce7;color:#166534}
+.status.warn{background:#fef3c7;color:#92400e}
+.status.err{background:#fee2e2;color:#991b1b}
+.prog-wrap{min-width:80px}
+.prog-bar{height:5px;background:var(--line);border-radius:3px;margin-bottom:2px}
+.prog-fill{height:5px;border-radius:3px}
+.empty{text-align:center;padding:40px;color:var(--muted)}
+#loading{text-align:center;padding:60px;color:var(--muted)}
+</style>
+</head>
+<body>
+<div id="loading">Loading contracts…</div>
+<div id="app" style="display:none">
+  <h1>Government Contracts</h1>
+
+  <div class="stats">
+    <div class="stat"><div class="stat-val" id="s-total">—</div><div class="stat-lbl">Total Contracts</div></div>
+    <div class="stat ok"><div class="stat-val" id="s-active">—</div><div class="stat-lbl">Active</div></div>
+    <div class="stat"><div class="stat-val" id="s-completed">—</div><div class="stat-lbl">Completed</div></div>
+    <div class="stat warn"><div class="stat-val" id="s-pipeline">—</div><div class="stat-lbl">Pipeline / On Hold</div></div>
+  </div>
+
+  <div class="toolbar">
+    <input id="q" type="search" placeholder="Search by title or contract ID…" oninput="render()">
+    <select id="fStatus" onchange="render()">
+      <option value="">All Statuses</option>
+      <option value="pipeline">Pipeline</option>
+      <option value="awarded">Awarded</option>
+      <option value="active">Active</option>
+      <option value="on_hold">On Hold</option>
+      <option value="completed">Completed</option>
+      <option value="terminated">Terminated</option>
+      <option value="closeout">Closeout</option>
+    </select>
+    <select id="fAgency" onchange="render()"><option value="">All Agencies</option></select>
+    <button class="btn btn-accent" onclick="openNew()">+ New Contract</button>
+  </div>
+
+  <div class="table-wrap">
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Ref</th><th>Title</th><th>Agency</th><th>Company</th>
+            <th>Value (NGN)</th><th>Start</th><th>End</th>
+            <th>Physical</th><th>Financial</th><th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+let sb, rows = [], agencies = {};
+
+async function init() {
+  sb = window.parent?.sb;
+  if (!sb) { document.getElementById('loading').textContent = 'Error: app not ready'; return; }
+
+  const { data: { user } } = await sb.auth.getUser();
+  if (!user) { window.location.replace('/'); return; }
+
+  const [cRes, aRes] = await Promise.all([
+    sb.from('cnt_contracts').select(`
+      id,contract_id,title,status,contract_value,start_date,end_date,
+      physical_progress,financial_progress,
+      cnt_agencies(id,name),cnt_companies(id,name)
+    `).order('created_at', { ascending: false }),
+    sb.from('cnt_agencies').select('id,name').order('name')
+  ]);
+
+  rows = cRes.data ?? [];
+  agencies = {};
+  (aRes.data ?? []).forEach(a => {
+    agencies[a.id] = a.name;
+    const opt = document.createElement('option');
+    opt.value = a.id; opt.textContent = a.name;
+    document.getElementById('fAgency').appendChild(opt);
+  });
+
+  updateStats();
+  render();
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+}
+
+function updateStats() {
+  document.getElementById('s-total').textContent = rows.length;
+  document.getElementById('s-active').textContent = rows.filter(r => r.status === 'active').length;
+  document.getElementById('s-completed').textContent = rows.filter(r => r.status === 'completed').length;
+  document.getElementById('s-pipeline').textContent =
+    rows.filter(r => r.status === 'pipeline' || r.status === 'on_hold').length;
+}
+
+function render() {
+  const q = document.getElementById('q').value.toLowerCase();
+  const st = document.getElementById('fStatus').value;
+  const ag = document.getElementById('fAgency').value;
+
+  let data = rows.filter(r => {
+    if (q && !r.title?.toLowerCase().includes(q) && !r.contract_id?.toLowerCase().includes(q)) return false;
+    if (st && r.status !== st) return false;
+    if (ag && r.cnt_agencies?.id !== ag) return false;
+    return true;
+  });
+
+  const statusMap = {
+    pipeline:'warn',awarded:'ok',active:'ok',on_hold:'warn',
+    completed:'',terminated:'err',closeout:''
+  };
+  const statusLabel = {
+    pipeline:'Pipeline',awarded:'Awarded',active:'Active',on_hold:'On Hold',
+    completed:'Completed',terminated:'Terminated',closeout:'Closeout'
+  };
+
+  const tbody = document.getElementById('tbody');
+  if (!data.length) {
+    tbody.innerHTML = '<tr><td colspan="10" class="empty">No contracts found</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = data.map(r => {
+    const cls = statusMap[r.status] ?? '';
+    const lbl = statusLabel[r.status] ?? r.status;
+    const val = r.contract_value
+      ? 'NGN ' + Number(r.contract_value).toLocaleString('en-NG',{minimumFractionDigits:0})
+      : '—';
+    const sd = r.start_date ? new Date(r.start_date).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) : '—';
+    const ed = r.end_date   ? new Date(r.end_date).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) : '—';
+    const pp = Math.min(100, r.physical_progress ?? 0);
+    const fp = Math.min(100, r.financial_progress ?? 0);
+    const ppCol = pp>=80?'var(--ok)':pp>=40?'var(--accent)':'var(--warn)';
+    const fpCol = fp>=80?'var(--ok)':fp>=40?'var(--accent)':'var(--warn)';
+    return `<tr onclick="openDetail('${r.id}')">
+      <td><strong>${r.contract_id ?? '—'}</strong></td>
+      <td>${r.title ?? '—'}</td>
+      <td>${r.cnt_agencies?.name ?? '—'}</td>
+      <td>${r.cnt_companies?.name ?? '—'}</td>
+      <td style="white-space:nowrap">${val}</td>
+      <td>${sd}</td>
+      <td>${ed}</td>
+      <td class="prog-wrap">
+        <div class="prog-bar"><div class="prog-fill" style="width:${pp}%;background:${ppCol}"></div></div>
+        <small style="color:var(--muted)">${pp}%</small>
+      </td>
+      <td class="prog-wrap">
+        <div class="prog-bar"><div class="prog-fill" style="width:${fp}%;background:${fpCol}"></div></div>
+        <small style="color:var(--muted)">${fp}%</small>
+      </td>
+      <td><span class="status ${cls}">${lbl}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+function openDetail(id) {
+  if (window.parent?.navigate) {
+    window.parent.navigate('contracts/contract-detail.html?id=' + id);
+  } else {
+    location.href = 'contract-detail.html?id=' + id;
+  }
+}
+
+function openNew() {
+  if (window.parent?.navigate) {
+    window.parent.navigate('contracts/new-contract.html');
+  } else {
+    location.href = 'new-contract.html';
+  }
+}
+
+init();
+</script>
+</body>
+</html>

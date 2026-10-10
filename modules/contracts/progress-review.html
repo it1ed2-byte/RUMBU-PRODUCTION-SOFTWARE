@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Progress Review</title>
+<style>
+:root{--primary:#1F3864;--accent:#2E75B6;--ok:#22c55e;--bad:#ef4444;--warn:#f59e0b;
+--bg:#f8fafc;--card:#fff;--line:#e2e8f0;--muted:#64748b;--heading:#0f172a;
+--th-bg:#f1f5f9;--th-fg:#374151;--shadow:0 1px 3px rgba(0,0,0,.08);--radius:8px}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;font-size:14px;background:var(--bg);color:var(--heading);padding:20px}
+h1{font-size:20px;font-weight:700;color:var(--primary);margin-bottom:18px}
+.toolbar{display:flex;gap:10px;margin-bottom:14px;align-items:center;flex-wrap:wrap}
+.toolbar select,.toolbar input{border:1px solid var(--line);border-radius:var(--radius);padding:7px 10px;font-size:13px;background:var(--card)}
+.toolbar input{flex:1;min-width:160px}
+.btn{display:inline-flex;align-items:center;gap:5px;padding:7px 14px;border:none;border-radius:var(--radius);font-size:13px;cursor:pointer;font-weight:500}
+.btn-accent{background:var(--accent);color:#fff}.btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--line)}
+.btn-ok{background:var(--ok);color:#fff}.btn-bad{background:var(--bad);color:#fff}.btn-warn{background:var(--warn);color:#fff}
+.btn-sm{padding:4px 10px;font-size:12px}
+.table-wrap{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
+.table-scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th{background:var(--th-bg);color:var(--th-fg);font-size:12px;font-weight:600;text-align:left;padding:10px 12px}
+td{padding:10px 12px;border-top:1px solid var(--line);vertical-align:middle}
+.status{display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;background:var(--th-bg);color:var(--th-fg)}
+.status.ok{background:#dcfce7;color:#166534}
+.status.warn{background:#fef3c7;color:#92400e}
+.status.err{background:#fee2e2;color:#991b1b}
+.empty{text-align:center;padding:30px;color:var(--muted)}
+.prog-bar{height:5px;background:var(--line);border-radius:3px;margin-bottom:2px;min-width:60px}
+.prog-fill{height:5px;border-radius:3px}
+.overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:100;align-items:center;justify-content:center}
+.overlay.open{display:flex}
+.modal{background:var(--card);border-radius:var(--radius);box-shadow:0 8px 32px rgba(0,0,0,.18);padding:24px;width:560px;max-width:95vw;max-height:90vh;overflow-y:auto}
+.modal-title{font-size:16px;font-weight:700;color:var(--primary);margin-bottom:4px}
+.modal-sub{font-size:13px;color:var(--muted);margin-bottom:18px}
+.field{display:flex;flex-direction:column;gap:4px;margin-bottom:12px}
+label{font-size:12px;font-weight:600;color:var(--th-fg)}
+input,select,textarea{border:1px solid var(--line);border-radius:var(--radius);padding:8px 10px;font-size:14px;background:var(--card);width:100%}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);border-color:var(--accent)}
+.modal-footer{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+.info-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
+.info-item .lbl{font-size:11px;color:var(--muted);font-weight:600}
+.info-item .val{font-size:14px;font-weight:600}
+</style>
+</head>
+<body>
+<h1>Progress Reports</h1>
+<div class="toolbar">
+  <input id="q" type="search" placeholder="Search contract…" oninput="render()">
+  <select id="fStatus" onchange="render()">
+    <option value="">All Statuses</option>
+    <option value="pending">Pending Review</option>
+    <option value="approved">Approved</option>
+    <option value="returned">Returned</option>
+  </select>
+</div>
+<div class="table-wrap">
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Contract</th><th>Company</th><th>Period</th><th>Physical%</th><th>Financial%</th><th>Submitted</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="overlay" id="overlay" onclick="closeModal(event)">
+  <div class="modal">
+    <div class="modal-title" id="m-title">Review Report</div>
+    <div class="modal-sub" id="m-sub"></div>
+    <div class="info-row" id="m-info"></div>
+    <div class="field"><label>Reviewer Notes</label><textarea id="m-notes" rows="4" placeholder="Comments for the subcontractor…"></textarea></div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-bad" onclick="doReview('returned')">Return for Revision</button>
+      <button class="btn btn-ok" onclick="doReview('approved')">Approve</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let sb, rows = [], currentId = null;
+
+async function init() {
+  sb = window.parent?.sb;
+  if (!sb) return;
+  const { data } = await sb.from('cnt_progress_reports').select(`
+    id,report_period,physical_progress,financial_progress,submitted_at,review_status,
+    notes,reviewer_notes,
+    cnt_contracts(contract_id,title,cnt_companies(name))
+  `).order('submitted_at',{ascending:false});
+  rows = data ?? [];
+  render();
+}
+
+function render() {
+  const q = document.getElementById('q').value.toLowerCase();
+  const st = document.getElementById('fStatus').value;
+  const data = rows.filter(r => {
+    if (st && r.review_status !== st) return false;
+    if (q && !r.cnt_contracts?.title?.toLowerCase().includes(q) && !r.cnt_contracts?.contract_id?.toLowerCase().includes(q)) return false;
+    return true;
+  });
+  const t = document.getElementById('tbody');
+  if (!data.length) { t.innerHTML = '<tr><td colspan="8" class="empty">No reports found</td></tr>'; return; }
+  t.innerHTML = data.map(r => {
+    const pp = r.physical_progress ?? 0;
+    const fp = r.financial_progress ?? 0;
+    const st = r.review_status;
+    const stCls = st==='approved'?'ok':st==='returned'?'err':'warn';
+    const stLbl = st==='approved'?'Approved':st==='returned'?'Returned':'Pending';
+    return `<tr>
+      <td><strong>${r.cnt_contracts?.contract_id}</strong><br><small style="color:var(--muted)">${r.cnt_contracts?.title}</small></td>
+      <td>${r.cnt_contracts?.cnt_companies?.name ?? '—'}</td>
+      <td>${r.report_period ?? '—'}</td>
+      <td><div class="prog-bar"><div class="prog-fill" style="width:${pp}%;background:${pp>=80?'var(--ok)':pp>=40?'var(--accent)':'var(--warn)'}"></div></div><small>${pp}%</small></td>
+      <td><div class="prog-bar"><div class="prog-fill" style="width:${fp}%;background:${fp>=80?'var(--ok)':fp>=40?'var(--accent)':'var(--warn)'}"></div></div><small>${fp}%</small></td>
+      <td>${fmtDate(r.submitted_at)}</td>
+      <td><span class="status ${stCls}">${stLbl}</span></td>
+      <td><button class="btn btn-accent btn-sm" onclick="openModal('${r.id}')">Review</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function openModal(id) {
+  const r = rows.find(x => x.id === id);
+  if (!r) return;
+  currentId = id;
+  document.getElementById('m-title').textContent = 'Review: ' + (r.cnt_contracts?.contract_id ?? '');
+  document.getElementById('m-sub').textContent = (r.cnt_contracts?.title ?? '') + ' — ' + (r.report_period ?? '');
+  document.getElementById('m-info').innerHTML = [
+    ['Physical Progress', (r.physical_progress ?? 0) + '%'],
+    ['Financial Progress', (r.financial_progress ?? 0) + '%'],
+    ['Submitted', fmtDate(r.submitted_at)],
+    ['Current Status', r.review_status ?? 'pending'],
+  ].map(([l,v]) => `<div class="info-item"><div class="lbl">${l}</div><div class="val">${v}</div></div>`).join('');
+  document.getElementById('m-notes').value = r.reviewer_notes ?? '';
+  document.getElementById('overlay').classList.add('open');
+}
+
+function closeModal(e) {
+  if (!e || e.target === document.getElementById('overlay'))
+    document.getElementById('overlay').classList.remove('open');
+}
+
+async function doReview(status) {
+  if (!currentId) return;
+  const notes = document.getElementById('m-notes').value.trim();
+  const { error } = await sb.from('cnt_progress_reports').update({
+    review_status: status,
+    reviewer_notes: notes || null,
+    reviewed_at: new Date().toISOString()
+  }).eq('id', currentId);
+  if (error) { alert('Error: ' + error.message); return; }
+  const r = rows.find(x => x.id === currentId);
+  if (r) { r.review_status = status; r.reviewer_notes = notes; }
+  closeModal(); render();
+}
+
+function fmtDate(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
+}
+
+init();
+</script>
+</body>
+</html>

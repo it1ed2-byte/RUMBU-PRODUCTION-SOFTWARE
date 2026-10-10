@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>KPI Review</title>
+<style>
+:root{--primary:#1F3864;--accent:#2E75B6;--ok:#22c55e;--bad:#ef4444;--warn:#f59e0b;
+--bg:#f8fafc;--card:#fff;--line:#e2e8f0;--muted:#64748b;--heading:#0f172a;
+--th-bg:#f1f5f9;--th-fg:#374151;--shadow:0 1px 3px rgba(0,0,0,.08);--radius:8px}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;font-size:14px;background:var(--bg);color:var(--heading);padding:20px}
+h1{font-size:20px;font-weight:700;color:var(--primary);margin-bottom:18px}
+.toolbar{display:flex;gap:10px;margin-bottom:14px;align-items:center;flex-wrap:wrap}
+.toolbar select,.toolbar input{border:1px solid var(--line);border-radius:var(--radius);padding:7px 10px;font-size:13px;background:var(--card)}
+.toolbar input{flex:1;min-width:160px}
+.btn{display:inline-flex;align-items:center;padding:7px 14px;border:none;border-radius:var(--radius);font-size:13px;cursor:pointer;font-weight:500}
+.btn-accent{background:var(--accent);color:#fff}
+.btn-ok{background:var(--ok);color:#fff}
+.btn-bad{background:var(--bad);color:#fff}
+.btn-ghost{background:transparent;color:var(--muted);border:1px solid var(--line)}
+.btn-sm{padding:4px 10px;font-size:12px}
+.table-wrap{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
+.table-scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th{background:var(--th-bg);color:var(--th-fg);font-size:12px;font-weight:600;text-align:left;padding:10px 12px}
+td{padding:10px 12px;border-top:1px solid var(--line);vertical-align:middle}
+.status{display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600;background:var(--th-bg);color:var(--th-fg)}
+.status.ok{background:#dcfce7;color:#166534}.status.warn{background:#fef3c7;color:#92400e}.status.err{background:#fee2e2;color:#991b1b}
+.empty{text-align:center;padding:30px;color:var(--muted)}
+.overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:100;align-items:center;justify-content:center}
+.overlay.open{display:flex}
+.modal{background:var(--card);border-radius:var(--radius);box-shadow:0 8px 32px rgba(0,0,0,.18);padding:24px;width:520px;max-width:95vw;max-height:90vh;overflow-y:auto}
+.modal-title{font-size:16px;font-weight:700;color:var(--primary);margin-bottom:4px}
+.modal-sub{font-size:13px;color:var(--muted);margin-bottom:14px}
+.field{display:flex;flex-direction:column;gap:4px;margin-bottom:12px}
+label{font-size:12px;font-weight:600;color:var(--th-fg)}
+input,select,textarea{border:1px solid var(--line);border-radius:var(--radius);padding:8px 10px;font-size:14px;background:var(--card);width:100%}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);border-color:var(--accent)}
+.modal-footer{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+.kpi-detail{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px;
+  background:var(--th-bg);padding:12px;border-radius:var(--radius)}
+.kpi-detail .k{font-size:11px;color:var(--muted);font-weight:600}
+.kpi-detail .v{font-size:16px;font-weight:700;color:var(--heading)}
+.variance-pos{color:var(--ok)}.variance-neg{color:var(--bad)}
+</style>
+</head>
+<body>
+<h1>KPI Records Review</h1>
+<div class="toolbar">
+  <input id="q" type="search" placeholder="Search KPI or contract…" oninput="render()">
+  <select id="fStatus" onchange="render()">
+    <option value="">All Statuses</option>
+    <option value="pending">Pending</option>
+    <option value="approved">Approved</option>
+    <option value="returned">Returned</option>
+  </select>
+</div>
+<div class="table-wrap">
+  <div class="table-scroll">
+    <table>
+      <thead><tr><th>Contract</th><th>Company</th><th>KPI</th><th>Target</th><th>Actual</th><th>Variance</th><th>Period</th><th>Status</th><th></th></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="overlay" id="overlay" onclick="closeModal(event)">
+  <div class="modal">
+    <div class="modal-title" id="m-kpi-name">KPI Review</div>
+    <div class="modal-sub" id="m-kpi-sub"></div>
+    <div class="kpi-detail" id="m-kpi-detail"></div>
+    <div class="field"><label>Reviewer Notes</label><textarea id="m-notes" rows="3" placeholder="Comments…"></textarea></div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-bad" onclick="doReview('returned')">Return</button>
+      <button class="btn btn-ok" onclick="doReview('approved')">Approve</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let sb, rows = [], currentId = null;
+
+async function init() {
+  sb = window.parent?.sb;
+  if (!sb) return;
+  const { data } = await sb.from('cnt_kpi_records').select(`
+    id,kpi_name,target_value,actual_value,variance,report_period,review_status,notes,reviewer_notes,created_at,
+    cnt_contracts(contract_id,title,cnt_companies(name))
+  `).order('created_at',{ascending:false});
+  rows = data ?? [];
+  render();
+}
+
+function render() {
+  const q = document.getElementById('q').value.toLowerCase();
+  const st = document.getElementById('fStatus').value;
+  const data = rows.filter(r => {
+    if (st && r.review_status !== st) return false;
+    if (q && !r.kpi_name?.toLowerCase().includes(q) && !r.cnt_contracts?.title?.toLowerCase().includes(q)) return false;
+    return true;
+  });
+  const t = document.getElementById('tbody');
+  if (!data.length) { t.innerHTML = '<tr><td colspan="9" class="empty">No KPI records</td></tr>'; return; }
+  t.innerHTML = data.map(r => {
+    const v = r.variance ?? (r.actual_value != null && r.target_value != null ? r.actual_value - r.target_value : null);
+    const vCls = v != null ? (v >= 0 ? 'variance-pos' : 'variance-neg') : '';
+    const stCls = r.review_status==='approved'?'ok':r.review_status==='returned'?'err':'warn';
+    const stLbl = r.review_status==='approved'?'Approved':r.review_status==='returned'?'Returned':'Pending';
+    return `<tr>
+      <td><strong>${r.cnt_contracts?.contract_id}</strong></td>
+      <td>${r.cnt_contracts?.cnt_companies?.name ?? '—'}</td>
+      <td>${r.kpi_name ?? '—'}</td>
+      <td>${r.target_value ?? '—'}</td>
+      <td>${r.actual_value ?? '—'}</td>
+      <td class="${vCls}">${v != null ? (v >= 0 ? '+' : '') + v : '—'}</td>
+      <td>${r.report_period ?? '—'}</td>
+      <td><span class="status ${stCls}">${stLbl}</span></td>
+      <td><button class="btn btn-accent btn-sm" onclick="openModal('${r.id}')">Review</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function openModal(id) {
+  const r = rows.find(x => x.id === id);
+  if (!r) return;
+  currentId = id;
+  document.getElementById('m-kpi-name').textContent = r.kpi_name ?? 'KPI Review';
+  document.getElementById('m-kpi-sub').textContent =
+    (r.cnt_contracts?.contract_id ?? '') + ' — ' + (r.cnt_contracts?.title ?? '') +
+    (r.report_period ? ' · ' + r.report_period : '');
+  const v = r.variance ?? (r.actual_value != null && r.target_value != null ? r.actual_value - r.target_value : null);
+  document.getElementById('m-kpi-detail').innerHTML = [
+    ['Target', r.target_value ?? '—'],
+    ['Actual', r.actual_value ?? '—'],
+    ['Variance', v != null ? (v >= 0 ? '+' : '') + v : '—'],
+  ].map(([k,val]) => `<div><div class="k">${k}</div><div class="v">${val}</div></div>`).join('');
+  document.getElementById('m-notes').value = r.reviewer_notes ?? '';
+  document.getElementById('overlay').classList.add('open');
+}
+function closeModal(e) {
+  if (!e || e.target === document.getElementById('overlay'))
+    document.getElementById('overlay').classList.remove('open');
+}
+
+async function doReview(status) {
+  if (!currentId) return;
+  const notes = document.getElementById('m-notes').value.trim();
+  await sb.from('cnt_kpi_records').update({
+    review_status: status, reviewer_notes: notes||null, reviewed_at: new Date().toISOString()
+  }).eq('id', currentId);
+  const r = rows.find(x => x.id === currentId);
+  if (r) { r.review_status = status; r.reviewer_notes = notes; }
+  closeModal(); render();
+}
+
+init();
+</script>
+</body>
+</html>
