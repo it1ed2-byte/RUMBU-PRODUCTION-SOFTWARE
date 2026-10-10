@@ -338,13 +338,30 @@ async function openEntry(entryId){
   document.getElementById("responseNoteInput").value = "";
   document.getElementById("actionStatus").textContent = "";
 
-  const { data: emps } = await sb.from("overtime_employees").select("*").eq("department_entry_id", entryId).order("created_at");
+  const { data: emps } = await sb.from("overtime_employees").select("*").eq("department_entry_id", entryId).order("form_unit,created_at");
   const listWrap = document.getElementById("employeesListWrap");
   if(!emps || !emps.length){
     listWrap.innerHTML = "<p class='empty'>No employees on this request.</p>";
   } else {
-    let html = "<table><thead><tr><th>ID</th><th>Name</th><th>Reason for Overtime</th></tr></thead><tbody>";
-    emps.forEach(e=>{ html += "<tr><td>" + esc(e.employee_code) + "</td><td>" + esc(e.employee_name) + "</td><td>" + esc(e.reason_for_overtime) + "</td></tr>"; });
+    // ── Unit count summary ──
+    const unitCounts = {};
+    emps.forEach(e => {
+      const u = e.form_unit || "—";
+      unitCounts[u] = (unitCounts[u] || 0) + 1;
+    });
+    const unitKeys = Object.keys(unitCounts).sort();
+    let summary = "<div style=\"display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;\">";
+    unitKeys.forEach(u => {
+      summary += "<span style=\"background:var(--bg);border:1px solid var(--line);border-radius:20px;padding:4px 12px;font-size:12px;font-weight:700;color:var(--navy);\">" +
+        esc(u) + " &nbsp;<span style=\"color:var(--blue);\">" + unitCounts[u] + " staff</span></span>";
+    });
+    summary += "<span style=\"background:var(--bg);border:1px solid var(--line);border-radius:20px;padding:4px 12px;font-size:12px;font-weight:700;color:var(--navy);\">Total &nbsp;<span style=\"color:var(--green);\">" + emps.length + " staff</span></span>";
+    summary += "</div>";
+
+    // ── Employee table ──
+    let html = summary;
+    html += "<table><thead><tr><th>ID</th><th>Name</th><th>Unit</th><th>Reason for Overtime</th></tr></thead><tbody>";
+    emps.forEach(e=>{ html += "<tr><td>" + esc(e.employee_code) + "</td><td>" + esc(e.employee_name) + "</td><td>" + esc(e.form_unit || "—") + "</td><td>" + esc(e.reason_for_overtime) + "</td></tr>"; });
     html += "</tbody></table>";
     listWrap.innerHTML = html;
   }
@@ -576,8 +593,17 @@ async function openHistoryDetail(idx){
   if(!list.length){
     html += "<p class='empty'>No employees on this form.</p>";
   } else {
-    html += "<table><thead><tr><th>ID</th><th>Name</th><th>Reason</th></tr></thead><tbody>";
-    list.forEach(x=>{ html += "<tr><td>" + esc(x.employee_code) + "</td><td>" + esc(x.employee_name) + "</td><td>" + esc(x.reason_for_overtime) + "</td></tr>"; });
+    // Unit count summary
+    const uc = {};
+    list.forEach(x => { const u = x.form_unit || "—"; uc[u] = (uc[u]||0) + 1; });
+    html += "<div style=\"display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;\">";
+    Object.keys(uc).sort().forEach(u => {
+      html += "<span style=\"background:var(--bg);border:1px solid var(--line);border-radius:20px;padding:4px 12px;font-size:12px;font-weight:700;color:var(--navy);\">" +
+        esc(u) + " &nbsp;<span style=\"color:var(--blue);\">" + uc[u] + " staff</span></span>";
+    });
+    html += "<span style=\"background:var(--bg);border:1px solid var(--line);border-radius:20px;padding:4px 12px;font-size:12px;font-weight:700;color:var(--navy);\">Total &nbsp;<span style=\"color:var(--green);\">" + list.length + " staff</span></span></div>";
+    html += "<table><thead><tr><th>ID</th><th>Name</th><th>Unit</th><th>Reason</th></tr></thead><tbody>";
+    list.forEach(x=>{ html += "<tr><td>" + esc(x.employee_code) + "</td><td>" + esc(x.employee_name) + "</td><td>" + esc(x.form_unit||"—") + "</td><td>" + esc(x.reason_for_overtime) + "</td></tr>"; });
     html += "</tbody></table>";
   }
   body.innerHTML = html;
