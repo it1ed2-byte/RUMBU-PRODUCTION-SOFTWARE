@@ -95,7 +95,7 @@
     <b>How Stage 8 — Production works</b>
     <ol>
       <li><b>Production starts automatically</b> when the plant manager sends an agent's material here (Stage 7). He also chooses the <b>company</b> the flake is made for, and can change it while the run is open.</li>
-      <li><b>Material into production</b> (Kano material used) is recorded by the person assigned to that duty.</li>
+      <li><b>External material into production</b> — if material from an external source (e.g. Kano Wash Plant, Lagos) was used, the assigned person records the source, LOT, and quantity.</li>
       <li><b>Batch entry:</b> add a batch each time one is made: the grade (<b>AA</b> or <b>AB</b>), the weight of <b>each bag</b>, and the <b>supervisor(s)</b> and <b>shift leader</b> ID (their names appear by themselves). Keep adding batches until the material is finished.</li>
       <li>The lab (Stage 9) tests each batch as you add it. <b>Result approval:</b> when the lab submits a result, the result approver sees it <b>beside the company's limits</b>, then passes the batch or asks for a <b>retest</b> or a <b>rerun</b>.</li>
       <li><b>Labels:</b> once a batch is approved, the labels person generates, prints and downloads its QR labels.</li>
@@ -160,7 +160,7 @@
         <div id="readyBanner"></div>
 
         <div class="sec-title">4 · Complete production — once, when the material is finished</div>
-        <p class="step-help">Nothing to type here. The end time is the time the last batch was recorded, totals come from the batches, and waste = Rumbu weight − total production. You may add <b>Kano material used</b>, if any was used.</p>
+        <p class="step-help">Nothing to type here. The end time is the time the last batch was recorded, totals come from the batches, and waste = Rumbu weight − total production. You may record <b>external material used</b>, if any was used.</p>
 
         <div class="grid2">
           <div><label>Production Start (stamped at Stage 7)</label><input type="text" id="pfStart" readonly></div>
@@ -180,21 +180,21 @@
         <div id="materialWrap">
         <div id="kanoUsageCard" style="margin-top:10px;padding-top:20px;border-top:2px solid var(--line);">
           <div id="kanoUsagePrompt" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-            <span style="font-size:13px;">Do you want to record the weight of Kano material used for this production?</span>
-            <button class="btn-ghost" onclick="openKanoUsageSection()">Yes, add Kano material</button>
+            <span style="font-size:13px;">Was any external material (from Kano, Lagos, or another source) used for this production?</span>
+            <button class="btn-ghost" onclick="openKanoUsageSection()">Yes, record external material</button>
           </div>
           <div id="kanoUsageBody" style="display:none;">
-            <div class="sec-title">Kano Material Used</div>
+            <div class="sec-title">External Material Used</div>
             <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">
               Record how much was used and from which LOT. Splits across more than one LOT are fine — add a row for each.
               Need to log a new arrival first, or check a LOT's balance? See
-              <a href="kano-material-intake.html" target="_blank">Kano Material Intake</a> or
-              <a href="kano-lot-monitor.html" target="_blank">Kano Material LOT Monitor</a>.
+              <a href="external-material-intake.html" target="_blank">External Material Intake</a> or
+              <a href="external-material-monitor.html" target="_blank">External Material Monitor</a>.
             </p>
             <div id="kanoUsageRows"></div>
-            <button class="btn-ghost" onclick="addKanoUsageRow()" style="margin-top:8px;">+ Add Another LOT</button>
+            <button class="btn-ghost" onclick="addKanoUsageRow()" style="margin-top:8px;">+ Add Another Entry</button>
             <div id="kanoUsageStandaloneRow" style="margin-top:14px;display:none;">
-              <button onclick="saveKanoUsage()">Save Kano Material Used</button>
+              <button onclick="saveKanoUsage()">Save External Material Used</button>
             </div>
             <div class="status" id="kanoUsageStatus"></div>
           </div>
@@ -1400,14 +1400,16 @@ let KANO_EXISTING_KG_FOR_PROD = {}; // { lot_id: kg already used by THIS product
 // production record for this collection already exists.
 async function loadKanoLotsForUsage(collectionId){
   const { data: lots } = await sb.from("pet_lots").select("id, lot_name").order("lot_name");
-  const { data: intake } = await sb.from("pet_kano_material_intake").select("lot_id, total_kg");
+  const { data: intake } = await sb.from("pet_kano_material_intake").select("lot_id, total_kg, source_name");
   const { data: usage } = await sb.from("pet_kano_lot_usage").select("lot_id, quantity_used_kg");
-  const balances = {};
-  (intake||[]).forEach(r => { balances[r.lot_id] = (balances[r.lot_id]||0) + Number(r.total_kg); });
+  const balances = {}, sourcesPerLot = {};
+  (intake||[]).forEach(r => {
+    balances[r.lot_id] = (balances[r.lot_id]||0) + Number(r.total_kg);
+    if(r.source_name){ if(!sourcesPerLot[r.lot_id]) sourcesPerLot[r.lot_id]=[]; if(!sourcesPerLot[r.lot_id].includes(r.source_name)) sourcesPerLot[r.lot_id].push(r.source_name); }
+  });
   (usage||[]).forEach(r => { balances[r.lot_id] = (balances[r.lot_id]||0) - Number(r.quantity_used_kg); });
-  // Only LOTs that have ever held Kano material are worth offering here —
-  // an ordinary PET Collection lot with no Kano balance isn't relevant.
-  KANO_LOTS = (lots||[]).filter(l => /^\s*kano/i.test(l.lot_name||"") && balances[l.id] !== undefined).map(l => ({ id:l.id, name:l.lot_name, balance: balances[l.id] || 0 }));
+  // Show all LOTs that have had external material intake (not just KANO-named)
+  KANO_LOTS = (lots||[]).filter(l => balances[l.id] !== undefined).map(l => ({ id:l.id, name:l.lot_name, balance: balances[l.id]||0, sources: sourcesPerLot[l.id]||[] }));
 
   KANO_USAGE_ROW_COUNT = 0;
   KANO_EXISTING_KG_FOR_PROD = {};
@@ -1431,13 +1433,14 @@ async function loadKanoLotsForUsage(collectionId){
     row.style.marginTop = "8px"; row.dataset.existing = "true";
     row.innerHTML = `
       <div><label>LOT</label><input value="${esc(lotNameForUsage(r.lot_id))} (already saved)" disabled></div>
+      <div><label>Source / Origin</label><input value="${esc(r.source_name||'—')}" disabled></div>
       <div><label>Quantity Used (kg)</label><input value="${Number(r.quantity_used_kg).toLocaleString()}" disabled></div>
       <div></div>
     `;
     wrap.appendChild(row);
   });
 
-  if(!existingRows.length && KANO_LOTS.length) addKanoUsageRow();
+  if(!existingRows.length) addKanoUsageRow(); // always show one blank row to invite entry
 
   // Reset to the collapsed prompt by default (this function runs fresh
   // each time a collection is opened) — but if usage was already saved for
@@ -1464,18 +1467,29 @@ function addKanoUsageRow(){
   row.className = "form-row"; row.id = "kanoRow" + idx;
   row.style.marginTop = "8px";
   const lotOptions = KANO_LOTS.length
-    ? KANO_LOTS.map(l=>`<option value="${l.id}">${esc(l.name)} (${l.balance.toLocaleString()} kg available)</option>`).join("")
+    ? KANO_LOTS.map(l=>`<option value="${l.id}" data-sources="${esc(l.sources.join(','))}">${esc(l.name)} (${l.balance.toLocaleString()} kg left)</option>`).join("")
     : "";
   row.innerHTML = `
     <div><label>LOT</label>
       ${KANO_LOTS.length
-        ? `<select id="kanoRow${idx}_lot"><option value="">— select —</option>${lotOptions}</select>`
-        : `<input value="No LOT currently holds Kano material" disabled>`}
+        ? `<select id="kanoRow${idx}_lot" onchange="onExtMatLotChange('kanoRow${idx}')"><option value="">— select —</option>${lotOptions}</select>`
+        : `<input value="No LOT currently holds external material. Log an arrival first." disabled>`}
+    </div>
+    <div><label>Source / Origin</label>
+      <input type="text" id="kanoRow${idx}_src" placeholder="e.g. Kano Wash Plant, Lagos...">
     </div>
     <div><label>Quantity Used (kg)</label><input type="number" id="kanoRow${idx}_kg" min="0" step="0.01" inputmode="decimal"></div>
-    <div><button class="btn-ghost" onclick="document.getElementById('kanoRow${idx}').remove()">Remove</button></div>
+    <div style="align-self:flex-end;"><button class="btn-ghost" onclick="document.getElementById('kanoRow${idx}').remove()">Remove</button></div>
   `;
   wrap.appendChild(row);
+}
+function onExtMatLotChange(rowId){
+  const sel=document.getElementById(rowId+"_lot");
+  const srcInput=document.getElementById(rowId+"_src");
+  if(!sel||!srcInput) return;
+  const opt=sel.options[sel.selectedIndex];
+  const sources=(opt&&opt.dataset.sources||"").split(",").map(s=>s.trim()).filter(Boolean);
+  if(sources.length===1) srcInput.value=sources[0]; // auto-fill when only one source for this LOT
 }
 window.addKanoUsageRow = addKanoUsageRow;
 
@@ -1508,7 +1522,8 @@ function collectNewKanoUsagePayload(status){
       return null;
     }
     claimedThisSave[lotId] = alreadyClaimed + kg;
-    payload.push({ production_id: CURRENT_PROD_ID, lot_id: Number(lotId), quantity_used_kg: kg, used_by: ME.id });
+    const src = row.querySelector("input[id$='_src']")?.value.trim()||null;
+    payload.push({ production_id: CURRENT_PROD_ID, lot_id: Number(lotId), quantity_used_kg: kg, source_name: src||null, used_by: ME.id });
   }
   return payload;
 }
@@ -1521,11 +1536,11 @@ async function saveKanoUsageRows(){
   if(payload === null) return false;
   if(!payload.length) return true; // nothing new to save — perfectly valid
 
-  status.style.color="var(--muted)"; status.textContent="Saving Kano material used...";
+  status.style.color="var(--muted)"; status.textContent="Saving external material used...";
   try{
     const { error } = await sb.from("pet_kano_lot_usage").insert(payload);
     if(error) throw error;
-    status.style.color="var(--ok)"; status.textContent = "✅ Saved " + payload.length + " Kano LOT usage record(s).";
+    status.style.color="var(--ok)"; status.textContent = "✅ Saved " + payload.length + " external material record(s).";
     return true;
   }catch(e){
     status.style.color="var(--bad)"; status.textContent = "❌ Kano material: " + e.message;
