@@ -5,25 +5,79 @@
  * internal-staff page. Every page must then call guardPage() at the start
  * of its init() function and return early if it returns null.
  *
- * Access rule: the user must have an active row in cnt_profiles.
- * Any authenticated Rumbu user WITHOUT a cnt_profiles row is denied.
+ * Access rule: active cnt_profiles row required for regular users.
+ * Super admins bypass cnt_profiles and get full access automatically.
  */
 
 'use strict';
 
+const _CNT_URL = 'https://betfhunzmhtdzgvufmfk.supabase.co';
+const _CNT_KEY = 'sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp';
+
+/**
+ * Returns the best available Supabase client.
+ * Prefers the parent window's client (shares the live session when running
+ * inside the RumbuApp iframe). Falls back to creating a fresh client that
+ * reads the persisted session from localStorage.
+ *
+ * Root cause of original bug: the main app declares `const sb = ...` in
+ * auth.js, which does NOT become a window property (only `var` does), so
+ * window.parent.sb is always undefined from an iframe. The fallback below
+ * fixes this transparently without touching the main app.
+ */
+function _getSb() {
+  if (window.parent?.sb) return window.parent.sb;
+  // Fallback: create our own client. Supabase persists sessions in
+  // localStorage using a stable key, so getUser() will still return the
+  // signed-in user even from a freshly created client instance.
+  const { createClient } = window.supabase;
+  return createClient(_CNT_URL, _CNT_KEY);
+}
+
 /**
  * Check auth and cnt_profiles membership.
+ * Super admins are granted full synthetic access without a cnt_profiles row.
+ * Regular users must have an active cnt_profiles row.
  * Shows a lock screen and returns null for anyone not authorised.
  * @returns {Promise<{user, profile, permissions: Set<string>, sb} | null>}
  */
 async function guardPage() {
-  const sb = window.parent?.sb;
-  if (!sb) { _accessDenied(); return null; }
+  const sb = _getSb();
 
   const { data: { user } } = await sb.auth.getUser();
   if (!user) { _accessDenied(); return null; }
 
-  // Use maybeSingle() — returns null (not an error) when no row exists
+  // ── Super Admin bypass ──────────────────────────────────────────────────
+  // Super admins can administer any module, including Government Contracts,
+  // without needing a cnt_profiles row. They receive a synthetic profile
+  // with a full permission set so all UI branches render correctly.
+  const { data: mainProfile } = await sb
+    .from('profiles')
+    .select('role')
+    .eq('id', user.id)
+    .maybeSingle();
+
+  if (mainProfile?.role === 'super_admin') {
+    return {
+      user,
+      profile: {
+        id: user.id,
+        full_name: 'Super Admin',
+        status: 'active',
+        org_id: null,
+        branch_id: null,
+        company_id: null
+      },
+      permissions: new Set([
+        'contracts.read', 'contracts.write', 'contracts.delete',
+        'users.manage', 'reports.view', 'kpi.review', 'progress.review',
+        'corrective.manage', 'agencies.manage', 'companies.manage'
+      ]),
+      sb
+    };
+  }
+
+  // ── Regular user: must have active cnt_profiles row ─────────────────────
   const { data: profile, error } = await sb
     .from('cnt_profiles')
     .select(`
@@ -58,13 +112,7 @@ async function guardPage() {
  * Call at the start of portal sub-pages.
  */
 async function guardPortal() {
-  const sb = window.parent?.sb ?? (() => {
-    const { createClient } = window.supabase;
-    return createClient(
-      'https://betfhunzmhtdzgvufmfk.supabase.co',
-      'sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp'
-    );
-  })();
+  const sb = _getSb();
 
   const { data: { user } } = await sb.auth.getUser();
   if (!user) { window.location.href = '/portal.html'; return null; }
