@@ -26,12 +26,23 @@ const _CNT_KEY = 'sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp';
  * fixes this transparently without touching the main app.
  */
 function _getSb() {
+  // Prefer the parent window's live client (shares the active session).
   if (window.parent?.sb) return window.parent.sb;
-  // Fallback: create our own client. Supabase persists sessions in
-  // localStorage using a stable key, so getUser() will still return the
-  // signed-in user even from a freshly created client instance.
-  const { createClient } = window.supabase;
-  return createClient(_CNT_URL, _CNT_KEY);
+
+  // The contract module pages run in an iframe and do NOT load the
+  // Supabase library separately. The main app (index.html) already loads
+  // it as window.supabase, so we borrow that copy.
+  // Supabase persists sessions in localStorage with a stable key, so a
+  // freshly created client on the same origin picks up the active session
+  // automatically via getUser().
+  const lib = window.supabase ?? window.parent?.supabase;
+  if (!lib || !lib.createClient) {
+    throw new Error(
+      'Supabase library not available in this frame. ' +
+      'Ensure the main app loads @supabase/supabase-js before opening this module.'
+    );
+  }
+  return lib.createClient(_CNT_URL, _CNT_KEY);
 }
 
 /**
