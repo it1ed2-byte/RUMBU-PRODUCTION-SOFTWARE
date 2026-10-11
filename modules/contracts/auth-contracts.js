@@ -26,20 +26,33 @@ const _CNT_KEY = 'sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp';
  * fixes this transparently without touching the main app.
  */
 function _getSb() {
-  // Prefer the parent window's live client (shares the active session).
+  // ── Option 1: window.parent.sb ────────────────────────────────────
+  // Works if auth.js declares `var sb` or `window.sb = …` (var at
+  // script top-level DOES become a window property; const/let do NOT).
   if (window.parent?.sb) return window.parent.sb;
 
-  // The contract module pages run in an iframe and do NOT load the
-  // Supabase library separately. The main app (index.html) already loads
-  // it as window.supabase, so we borrow that copy.
-  // Supabase persists sessions in localStorage with a stable key, so a
-  // freshly created client on the same origin picks up the active session
-  // automatically via getUser().
+  // ── Option 2: window.parent.eval('sb') ───────────────────────────
+  // const/let are NOT window properties but ARE in the parent window's
+  // JavaScript execution scope. eval() runs in that scope on same-origin
+  // frames, so this reliably returns the exact authenticated client
+  // object the main app is already using — JWT, session and all.
+  try {
+    const parentSb = window.parent.eval(
+      'typeof sb !== "undefined" && sb'
+    );
+    if (parentSb) return parentSb;
+  } catch (_) { /* cross-origin or eval blocked — fall through */ }
+
+  // ── Option 3: create a fresh client from parent's library ─────────
+  // Same-origin frames share localStorage, so Supabase finds the active
+  // session token and subsequent getSession()/getUser() calls succeed.
+  // Use this only as a last resort because a new client needs one
+  // async round-trip before its JWT is applied to DB queries.
   const lib = window.supabase ?? window.parent?.supabase;
-  if (!lib || !lib.createClient) {
+  if (!lib?.createClient) {
     throw new Error(
-      'Supabase library not available in this frame. ' +
-      'Ensure the main app loads @supabase/supabase-js before opening this module.'
+      'Cannot reach Supabase from this frame. ' +
+      'Reload the app — if the problem persists, contact IT.'
     );
   }
   return lib.createClient(_CNT_URL, _CNT_KEY);
