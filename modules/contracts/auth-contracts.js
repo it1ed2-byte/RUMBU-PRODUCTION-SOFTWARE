@@ -68,8 +68,14 @@ function _getSb() {
 async function guardPage() {
   const sb = _getSb();
 
-  const { data: { user } } = await sb.auth.getUser();
-  if (!user) { _accessDenied(); return null; }
+  // getSession() loads the stored session into this client instance so the
+  // JWT is attached to every subsequent PostgREST request. getUser() makes
+  // a network call but does not guarantee the token is set on the client
+  // before the first DB query fires — causing auth.uid() / request.jwt.claim.sub
+  // to resolve as null in RLS policies even when the user is authenticated.
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) { _accessDenied(); return null; }
+  const user = session.user;
 
   // ── Super Admin bypass ──────────────────────────────────────────────────
   // Super admins can administer any module, including Government Contracts,
