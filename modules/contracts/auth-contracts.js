@@ -123,7 +123,12 @@ async function guardPage() {
     .eq('id', user.id)
     .maybeSingle();
 
-  if (error || !profile || profile.status !== 'active') {
+  if (error) {
+    // Surface the real DB error so future issues are immediately visible
+    _accessDenied(error.message + (error.code ? ' [' + error.code + ']' : ''));
+    return null;
+  }
+  if (!profile || profile.status !== 'active') {
     _accessDenied(); return null;
   }
 
@@ -168,8 +173,8 @@ async function guardPortal() {
   return { user, profile, company, sb };
 }
 
-/** Replace the page body with a lock screen. */
-function _accessDenied() {
+/** Replace the page body with a lock screen. Pass detail for a DB error hint. */
+function _accessDenied(detail) {
   document.body.innerHTML = `
     <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;
       height:100vh;text-align:center;font-family:system-ui,sans-serif;background:#f8fafc;
@@ -185,6 +190,9 @@ function _accessDenied() {
       <p style="color:#94a3b8;font-size:12px;margin-top:12px">
         Contact IT if you believe this is an error.
       </p>
+      ${detail ? `<p style="color:#ef4444;font-size:11px;margin-top:8px;max-width:400px;
+        font-family:monospace;background:#fee2e2;padding:6px 10px;border-radius:6px">
+        ${detail}</p>` : ''}
     </div>`;
 }
 
