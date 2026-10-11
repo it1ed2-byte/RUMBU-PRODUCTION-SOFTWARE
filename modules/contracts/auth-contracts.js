@@ -125,23 +125,18 @@ async function guardPage() {
     _accessDenied(); return null;
   }
 
-  // Fetch this user's role permissions in a separate query
-  const { data: roleRows, error: roleErr } = await sb
-    .from('cnt_profile_roles')
-    .select('cnt_roles(id, name, cnt_role_permissions(cnt_permissions(code)))')
-    .eq('profile_id', user.id);
+  // Build permissions via SECURITY DEFINER function — bypasses RLS so
+  // the join chain (cnt_profile_roles → cnt_role_permissions → cnt_permissions)
+  // never triggers recursive policies. Replaces the unreliable nested embed.
+  const { data: permRows, error: permErr } = await sb
+    .rpc('get_my_cnt_permissions');
 
-  if (roleErr) {
-    _accessDenied(roleErr.message + (roleErr.code ? ' [' + roleErr.code + ']' : ''));
+  if (permErr) {
+    _accessDenied(permErr.message + (permErr.code ? ' [' + permErr.code + ']' : ''));
     return null;
   }
 
-  const permissions = new Set();
-  (roleRows ?? []).forEach(pr =>
-    pr.cnt_roles?.cnt_role_permissions?.forEach(rp => {
-      if (rp.cnt_permissions?.code) permissions.add(rp.cnt_permissions.code);
-    })
-  );
+  const permissions = new Set((permRows ?? []).map(r => r.code));
 
   return { user, profile, permissions, sb };
 }
