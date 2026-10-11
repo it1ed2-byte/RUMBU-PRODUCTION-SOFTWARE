@@ -108,32 +108,36 @@ async function guardPage() {
   }
 
   // ── Regular user: must have active cnt_profiles row ─────────────────────
-  const { data: profile, error } = await sb
+  // Two separate queries instead of an embedded select — avoids PGRST201
+  // ("more than one relationship found") when PostgREST finds an ambiguous
+  // FK between cnt_profiles and cnt_profile_roles.
+  const { data: profile, error: profileErr } = await sb
     .from('cnt_profiles')
-    .select(`
-      id, full_name, email, phone, status,
-      org_id, branch_id, company_id,
-      cnt_profile_roles(
-        cnt_roles(
-          id, name,
-          cnt_role_permissions(cnt_permissions(code))
-        )
-      )
-    `)
+    .select('id, full_name, email, phone, status, org_id, branch_id, company_id')
     .eq('id', user.id)
     .maybeSingle();
 
-  if (error) {
-    // Surface the real DB error so future issues are immediately visible
-    _accessDenied(error.message + (error.code ? ' [' + error.code + ']' : ''));
+  if (profileErr) {
+    _accessDenied(profileErr.message + (profileErr.code ? ' [' + profileErr.code + ']' : ''));
     return null;
   }
   if (!profile || profile.status !== 'active') {
     _accessDenied(); return null;
   }
 
+  // Fetch this user's role permissions in a separate query
+  const { data: roleRows, error: roleErr } = await sb
+    .from('cnt_profile_roles')
+    .select('cnt_roles(id, name, cnt_role_permissions(cnt_permissions(code)))')
+    .eq('profile_id', user.id);
+
+  if (roleErr) {
+    _accessDenied(roleErr.message + (roleErr.code ? ' [' + roleErr.code + ']' : ''));
+    return null;
+  }
+
   const permissions = new Set();
-  profile.cnt_profile_roles?.forEach(pr =>
+  (roleRows ?? []).forEach(pr =>
     pr.cnt_roles?.cnt_role_permissions?.forEach(rp => {
       if (rp.cnt_permissions?.code) permissions.add(rp.cnt_permissions.code);
     })
