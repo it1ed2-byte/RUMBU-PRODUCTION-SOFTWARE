@@ -5,6 +5,31 @@
 <title>User Management</title>
 <script src="auth-contracts.js"></script>
 <link rel="stylesheet" href="contracts.css">
+<style>
+.user-picker{position:relative}
+.search-results{
+  position:absolute;top:100%;left:0;right:0;background:var(--card);
+  border:1.5px solid var(--accent);border-top:none;border-radius:0 0 8px 8px;
+  box-shadow:var(--sh-md);z-index:50;max-height:220px;overflow-y:auto;display:none
+}
+.search-results.show{display:block}
+.result-item{
+  padding:10px 14px;cursor:pointer;display:flex;align-items:center;
+  gap:10px;border-top:1px solid var(--border);transition:background .1s
+}
+.result-item:first-child{border-top:none}
+.result-item:hover{background:#f4f7ff}
+.result-item .r-name{font-weight:600;font-size:13.5px}
+.result-item .r-meta{font-size:12px;color:var(--muted)}
+.selected-user{
+  display:flex;align-items:center;gap:10px;padding:10px 12px;
+  background:#EFF6FF;border:1.5px solid var(--accent);border-radius:8px;
+  margin-top:6px
+}
+.selected-user .su-name{font-weight:600;font-size:13.5px;color:var(--primary)}
+.selected-user .su-meta{font-size:12px;color:var(--muted)}
+.no-results{padding:12px 14px;color:var(--muted);font-size:13px;text-align:center}
+</style>
 </head>
 <body>
 <div class="page-hdr">
@@ -12,7 +37,7 @@
     <div class="ph-icon">👥</div>
     <div>
       <div class="ph-title">User Management</div>
-      <div class="ph-sub">Add, assign roles, and manage module access</div>
+      <div class="ph-sub">Add existing RumbuApp users to the Contracts module</div>
     </div>
   </div>
   <div class="ph-right">
@@ -29,64 +54,75 @@
   <div id="app" style="display:none">
 
     <div class="alert alert-info">
-      <strong>How to add a new user:</strong><br>
-      1. Go to <strong>Supabase → Authentication → Users → Add user</strong> and create their account.<br>
-      2. Copy the UUID Supabase assigns to that user.<br>
-      3. Paste it below, fill in their name, role, and save. They can then log in immediately.
+      <strong>Workflow:</strong>
+      Users must have a RumbuApp account first (created by IT via
+      <strong>Manage Accounts → Create User</strong>).
+      Search for the person below, assign them a role, and save.
+      No Supabase dashboard access is needed.
     </div>
 
     <!-- Add user form -->
     <div class="sec-card" style="margin-bottom:22px">
       <div class="sec-hdr">
         <div>
-          <div class="sec-title">Add New User</div>
-          <div class="sec-sub">The user must already have a Supabase auth account</div>
+          <div class="sec-title">Grant Module Access</div>
+          <div class="sec-sub">Search for an existing RumbuApp user and assign a role</div>
         </div>
       </div>
       <div class="sec-body">
+
+        <!-- User search picker -->
         <div class="g2" style="margin-bottom:14px">
           <div class="field">
-            <label>User UUID <span class="req">*</span></label>
-            <input id="f-uuid" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
-            <span class="hint">Found in Supabase → Authentication → Users → click the user</span>
-          </div>
-          <div class="field">
-            <label>Full Name <span class="req">*</span></label>
-            <input id="f-name" placeholder="e.g. Musa Umar Danladi">
-          </div>
-        </div>
-        <div class="g3" style="margin-bottom:16px">
-          <div class="field">
-            <label>Email <span class="req">*</span></label>
-            <input id="f-email" type="email" placeholder="user@rumbu.ng">
-          </div>
-          <div class="field">
-            <label>Phone</label>
-            <input id="f-phone" placeholder="+234…">
+            <label>Find User <span class="req">*</span></label>
+            <div class="user-picker">
+              <input id="user-search" class="srch" placeholder="Type a name or username…"
+                autocomplete="off" oninput="onSearchInput()" onfocus="onSearchFocus()"
+                style="width:100%;border:1.5px solid var(--border);border-radius:8px">
+              <div class="search-results" id="search-results"></div>
+            </div>
+            <div id="selected-user-box" style="display:none"></div>
+            <input type="hidden" id="f-uuid">
+            <span class="hint">Only shows users not already in the module</span>
           </div>
           <div class="field">
             <label>Role <span class="req">*</span></label>
             <select id="f-role"><option value="">— Select Role —</option></select>
           </div>
         </div>
+
+        <!-- Optional override fields -->
+        <div class="g2" style="margin-bottom:16px" id="extra-fields" style="display:none">
+          <div class="field">
+            <label>Staff ID</label>
+            <input id="f-staffid" placeholder="Auto-generated (CM-XXXX)">
+            <span class="hint">Leave blank to auto-generate</span>
+          </div>
+          <div class="field">
+            <label>Phone</label>
+            <input id="f-phone" placeholder="+234…">
+          </div>
+        </div>
+
         <div style="display:flex;align-items:center;gap:12px">
-          <button class="btn btn-primary" onclick="addUser()">＋ Add User</button>
+          <button class="btn btn-primary" onclick="addUser()">＋ Grant Access</button>
           <span id="add-msg" style="font-size:13px;display:none"></span>
         </div>
       </div>
     </div>
 
-    <!-- Users table -->
+    <!-- Current module users table -->
     <div class="tbl-wrap">
       <div style="padding:16px 20px;border-bottom:1px solid var(--border);
           display:flex;align-items:center;justify-content:space-between">
-        <div class="sec-title">Module Users <span id="user-count" style="font-size:13px;
-          font-weight:400;color:var(--muted);margin-left:6px"></span></div>
+        <div class="sec-title">Module Users
+          <span id="user-count" style="font-size:13px;font-weight:400;color:var(--muted);margin-left:6px"></span>
+        </div>
       </div>
       <div class="tbl-scroll">
         <table>
           <thead>
-            <tr><th>User</th><th>Role</th><th>Status</th><th>Actions</th></tr>
+            <tr><th>User</th><th>Username</th><th>Role</th><th>Status</th><th>Actions</th></tr>
           </thead>
           <tbody id="tbody"></tbody>
         </table>
@@ -119,7 +155,8 @@
 </div>
 
 <script>
-let sb, users = [], roles = [], currentAuth;
+let sb, users = [], roles = [], allProfiles = [], currentAuth;
+let selectedProfile = null; // the chosen RumbuApp profile
 
 async function init() {
   try {
@@ -143,18 +180,21 @@ async function init() {
     sb = auth.sb;
     currentAuth = auth;
 
-    // NOTE: no is_active filter — just fetch all roles
-    const [uRes, rRes] = await Promise.all([
+    // Load roles, current module users, and all RumbuApp profiles in parallel
+    const [rRes, uRes, pRes] = await Promise.all([
+      sb.from('cnt_roles').select('id,name').order('name'),
       sb.from('cnt_profiles').select(`
         id,full_name,email,phone,status,
         cnt_profile_roles(id,cnt_roles(id,name))
       `).order('full_name'),
-      sb.from('cnt_roles').select('id,name').order('name')
+      sb.from('profiles').select('id,username,email').order('username')
     ]);
 
-    users = uRes.data ?? [];
     roles = rRes.data ?? [];
+    users = uRes.data ?? [];
+    allProfiles = pRes.data ?? [];
 
+    // Populate role dropdowns
     ['f-role','m-role'].forEach(selId => {
       const sel = document.getElementById(selId);
       roles.forEach(r => {
@@ -179,28 +219,166 @@ async function init() {
   }
 }
 
+/* ── User search picker ───────────────────────────────────────────── */
+
+function availableProfiles() {
+  // Profiles not already in cnt_profiles
+  const inModule = new Set(users.map(u => u.id));
+  return allProfiles.filter(p => !inModule.has(p.id));
+}
+
+function onSearchInput() {
+  selectedProfile = null;
+  document.getElementById('f-uuid').value = '';
+  document.getElementById('selected-user-box').style.display = 'none';
+  renderSearchResults();
+}
+
+function onSearchFocus() {
+  renderSearchResults();
+}
+
+function renderSearchResults() {
+  const q   = document.getElementById('user-search').value.trim().toLowerCase();
+  const box = document.getElementById('search-results');
+  const avail = availableProfiles();
+  const filtered = q
+    ? avail.filter(p =>
+        p.username?.toLowerCase().includes(q) ||
+        p.email?.toLowerCase().includes(q))
+    : avail;
+
+  if (!filtered.length) {
+    box.innerHTML = `<div class="no-results">${
+      avail.length ? 'No users match your search.' :
+      'All existing RumbuApp users are already in this module.'
+    }</div>`;
+    box.classList.add('show');
+    return;
+  }
+
+  box.innerHTML = filtered.slice(0,12).map(p => `
+    <div class="result-item" onclick="selectProfile('${p.id}')">
+      <div class="avatar" style="width:30px;height:30px;font-size:12px">
+        ${(p.username??'?')[0].toUpperCase()}
+      </div>
+      <div>
+        <div class="r-name">${p.username ?? '—'}</div>
+        <div class="r-meta">${p.email ?? ''}</div>
+      </div>
+    </div>`).join('');
+  box.classList.add('show');
+}
+
+function selectProfile(id) {
+  selectedProfile = allProfiles.find(p => p.id === id);
+  if (!selectedProfile) return;
+
+  document.getElementById('f-uuid').value = selectedProfile.id;
+  document.getElementById('user-search').value = '';
+  document.getElementById('search-results').classList.remove('show');
+
+  const initials = (selectedProfile.username ?? '?')[0].toUpperCase();
+  document.getElementById('selected-user-box').innerHTML = `
+    <div class="selected-user">
+      <div class="avatar" style="background:var(--ok)">${initials}</div>
+      <div style="flex:1">
+        <div class="su-name">${selectedProfile.username}</div>
+        <div class="su-meta">${selectedProfile.email ?? 'No email on record'}</div>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="clearSelection()">✕ Clear</button>
+    </div>`;
+  document.getElementById('selected-user-box').style.display = 'block';
+}
+
+function clearSelection() {
+  selectedProfile = null;
+  document.getElementById('f-uuid').value = '';
+  document.getElementById('selected-user-box').style.display = 'none';
+  document.getElementById('user-search').value = '';
+}
+
+// Close results when clicking outside
+document.addEventListener('click', e => {
+  if (!e.target.closest('.user-picker') && !e.target.closest('#selected-user-box')) {
+    document.getElementById('search-results').classList.remove('show');
+  }
+});
+
+/* ── Add user ─────────────────────────────────────────────────────── */
+
+async function addUser() {
+  const uuid   = document.getElementById('f-uuid').value.trim();
+  const roleId = document.getElementById('f-role').value;
+
+  if (!uuid)   return showAddMsg('Search and select a user first.', 'err');
+  if (!roleId) return showAddMsg('Select a role.', 'err');
+  if (users.some(u => u.id === uuid)) return showAddMsg('This user is already in the module.', 'err');
+
+  const profile = allProfiles.find(p => p.id === uuid);
+  const staffId = document.getElementById('f-staffid').value.trim()
+    || 'CM-' + String(Math.floor(Math.random() * 9000) + 1000);
+  const phone   = document.getElementById('f-phone').value.trim();
+
+  // full_name: use the username from profiles as fallback
+  const fullName = profile?.username ?? 'Unknown';
+  const email    = profile?.email ?? null;
+
+  const { error: pe } = await sb.from('cnt_profiles').insert({
+    id:        uuid,
+    org_id:   'c0000000-0000-0000-0000-000000000001',
+    full_name: fullName,
+    email,
+    phone:     phone || null,
+    staff_id:  staffId,
+    status:   'active',
+  });
+  if (pe) return showAddMsg('Error adding user: ' + pe.message, 'err');
+
+  const { error: re } = await sb.from('cnt_profile_roles').insert({
+    profile_id: uuid, role_id: roleId,
+  });
+  if (re) return showAddMsg('User added but role assignment failed: ' + re.message, 'err');
+
+  showAddMsg(fullName + ' granted access successfully.', 'ok');
+  clearSelection();
+  document.getElementById('f-role').value    = '';
+  document.getElementById('f-staffid').value = '';
+  document.getElementById('f-phone').value   = '';
+
+  // Refresh the list
+  const { data } = await sb.from('cnt_profiles').select(`
+    id,full_name,email,phone,status,
+    cnt_profile_roles(id,cnt_roles(id,name))
+  `).order('full_name');
+  users = data ?? [];
+  render();
+}
+
+/* ── Table render ─────────────────────────────────────────────────── */
+
 function render() {
   document.getElementById('user-count').textContent = '(' + users.length + ')';
   const tbody = document.getElementById('tbody');
   if (!users.length) {
-    tbody.innerHTML = `<tr><td colspan="4">
-      <div class="empty-state">
-        <span class="e-icon">👤</span>
-        <p>No users have been added to this module yet.</p>
-      </div></td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="5"><div class="empty-state">
+      <span class="e-icon">👤</span>
+      <p>No users have been granted access to this module yet.</p>
+    </div></td></tr>`;
     return;
   }
 
   tbody.innerHTML = users.map(u => {
-    const roleRow  = u.cnt_profile_roles?.[0];
-    const role     = roleRow?.cnt_roles;
+    const roleRow   = u.cnt_profile_roles?.[0];
+    const role      = roleRow?.cnt_roles;
     const roleRowId = roleRow?.id ?? '';
-    const initials = (u.full_name ?? '?').split(' ').map(w => w[0]).slice(0,2).join('').toUpperCase();
-    const isAdmin  = role?.name === 'ContractAdmin';
-    const isMe     = u.id === currentAuth.user.id;
-    const stBadge  = u.status === 'active'
-      ? '<span class="badge b-ok">Active</span>'
-      : '<span class="badge b-bad">Inactive</span>';
+    const initials  = (u.full_name ?? '?').split(' ').map(w => w[0]).slice(0,2).join('').toUpperCase();
+    const isAdmin   = role?.name === 'ContractAdmin';
+    const isMe      = u.id === currentAuth.user.id;
+
+    // Match back to main profiles table for username
+    const mainProfile = allProfiles.find(p => p.id === u.id);
+    const username    = mainProfile?.username ?? '—';
 
     return `<tr>
       <td>
@@ -210,27 +388,30 @@ function render() {
             <div class="user-name">${u.full_name ?? '—'}
               ${isMe ? ' <span style="font-size:11px;font-weight:400;color:var(--muted)">(you)</span>' : ''}
             </div>
-            <div class="user-meta">${u.email ?? '—'} ${u.phone ? '· ' + u.phone : ''}</div>
+            <div class="user-meta">${u.email ?? '—'}</div>
           </div>
         </div>
       </td>
+      <td style="font-size:13px;color:var(--muted)">${username}</td>
       <td>${role
         ? `<span class="badge b-navy">${role.name}</span>`
         : '<span style="color:var(--muted);font-size:13px">No role</span>'
       }</td>
-      <td>${stBadge}</td>
+      <td><span class="badge ${u.status === 'active' ? 'b-ok' : 'b-bad'}">
+        ${u.status === 'active' ? 'Active' : 'Inactive'}
+      </span></td>
       <td>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
-          ${!isAdmin
-            ? `<button class="btn btn-ghost btn-sm"
-                onclick="openChangeRole('${u.id}','${roleRowId}','${role?.id ?? ''}')">
-                Change Role</button>` : ''}
+          ${!isAdmin ? `<button class="btn btn-ghost btn-sm"
+            onclick="openChangeRole('${u.id}','${roleRowId}','${role?.id ?? ''}')">
+            Change Role</button>` : ''}
           ${!isMe && !isAdmin
             ? u.status === 'active'
-              ? `<button class="btn btn-warn btn-sm"
-                  onclick="setStatus('${u.id}','inactive')">Deactivate</button>`
-              : `<button class="btn btn-ok btn-sm"
-                  onclick="setStatus('${u.id}','active')">Reactivate</button>`
+              ? `<button class="btn btn-warn btn-sm" onclick="setStatus('${u.id}','inactive')">Deactivate</button>`
+              : `<button class="btn btn-ok btn-sm"   onclick="setStatus('${u.id}','active')">Reactivate</button>`
+            : ''}
+          ${!isMe && !isAdmin
+            ? `<button class="btn btn-bad btn-sm" onclick="revokeAccess('${u.id}','${u.full_name ?? u.id}')">Revoke</button>`
             : ''}
         </div>
       </td>
@@ -238,58 +419,20 @@ function render() {
   }).join('');
 }
 
-async function addUser() {
-  const uuid  = document.getElementById('f-uuid').value.trim();
-  const name  = document.getElementById('f-name').value.trim();
-  const email = document.getElementById('f-email').value.trim();
-  const phone = document.getElementById('f-phone').value.trim();
-  const roleId = document.getElementById('f-role').value;
-
-  if (!uuid || !name || !email || !roleId) {
-    return showAddMsg('Fill in UUID, name, email and role.', 'err');
-  }
-  if (!/^[0-9a-f-]{36}$/i.test(uuid)) {
-    return showAddMsg('UUID format is invalid. Check Supabase → Authentication → Users.', 'err');
-  }
-  if (users.some(u => u.id === uuid)) {
-    return showAddMsg('This user is already in the module.', 'err');
-  }
-
-  const { error: pe } = await sb.from('cnt_profiles').insert({
-    id: uuid,
-    org_id: 'c0000000-0000-0000-0000-000000000001',
-    full_name: name, email, phone: phone || null, status: 'active',
-    staff_id: 'CM-' + String(Math.floor(Math.random()*9000)+1000)
-  });
-  if (pe) return showAddMsg('Error: ' + pe.message, 'err');
-
-  const { error: re } = await sb.from('cnt_profile_roles').insert({ profile_id: uuid, role_id: roleId });
-  if (re) return showAddMsg('Profile created but role failed: ' + re.message, 'err');
-
-  showAddMsg(name + ' added successfully.', 'ok');
-  ['f-uuid','f-name','f-email','f-phone'].forEach(id => { document.getElementById(id).value = ''; });
-  document.getElementById('f-role').value = '';
-
-  const { data } = await sb.from('cnt_profiles').select(`
-    id,full_name,email,phone,status,
-    cnt_profile_roles(id,cnt_roles(id,name))
-  `).order('full_name');
-  users = data ?? [];
-  render();
-}
-
 function showAddMsg(text, type) {
   const el = document.getElementById('add-msg');
   el.textContent = text;
   el.style.color = type === 'ok' ? 'var(--ok)' : 'var(--bad)';
   el.style.display = 'inline';
-  setTimeout(() => { el.style.display = 'none'; }, 4000);
+  setTimeout(() => { el.style.display = 'none'; }, 5000);
 }
 
+/* ── Change role modal ────────────────────────────────────────────── */
+
 function openChangeRole(profileId, roleRowId, currentRoleId) {
-  document.getElementById('m-profile-id').value = profileId;
+  document.getElementById('m-profile-id').value  = profileId;
   document.getElementById('m-role-row-id').value = roleRowId;
-  document.getElementById('m-role').value = currentRoleId;
+  document.getElementById('m-role').value        = currentRoleId;
   document.getElementById('overlay').classList.add('open');
 }
 function closeModal(e) {
@@ -314,13 +457,22 @@ async function changeRole() {
   render();
 }
 
+/* ── Status / Revoke ──────────────────────────────────────────────── */
+
 async function setStatus(id, status) {
   const u = users.find(u => u.id === id);
-  const label = status === 'active' ? 'Reactivate' : 'Deactivate';
-  if (!confirm(label + ' ' + (u?.full_name ?? 'this user') + '?')) return;
+  if (!confirm((status === 'active' ? 'Reactivate' : 'Deactivate') + ' ' + (u?.full_name ?? 'this user') + '?')) return;
   await sb.from('cnt_profiles').update({ status }).eq('id', id);
   const ux = users.find(x => x.id === id);
   if (ux) ux.status = status;
+  render();
+}
+
+async function revokeAccess(id, name) {
+  if (!confirm('Revoke ' + name + '\'s access to the Contracts module entirely? This removes their profile row.')) return;
+  await sb.from('cnt_profile_roles').delete().eq('profile_id', id);
+  await sb.from('cnt_profiles').delete().eq('id', id);
+  users = users.filter(u => u.id !== id);
   render();
 }
 
