@@ -12,6 +12,20 @@
     try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
   })();
 </script>
+<!-- Empty units confirmation modal -->
+<div id="confirmModal">
+  <div class="confirm-box">
+    <h4>⚠️ Empty Units Detected</h4>
+    <p>The following units have <b>no staff added</b> for overtime:</p>
+    <ul id="emptyUnitsList"></ul>
+    <p>Are you sure you want to submit without adding staff to these units?</p>
+    <div class="modal-btns">
+      <button class="btn-cancel" onclick="closeConfirmModal()">Cancel</button>
+      <button class="btn-proceed" onclick="proceedSubmit()">Yes, Submit Anyway</button>
+    </div>
+  </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="../../auth.js"></script>
 <style>
@@ -74,6 +88,24 @@
   .flagbox{background:#fdecea;border:1px solid var(--red);border-radius:8px;padding:12px 14px;margin-top:12px;color:#7a1f1f;font-size:13px;line-height:1.6;}
   .flagbox ul{margin:6px 0 0 18px;padding:0;}
   .not-found{color:var(--red)!important;font-weight:700;}
+
+  /* ── Confirmation Modal ── */
+  #confirmModal{
+    display:none;position:fixed;inset:0;z-index:9999;
+    background:rgba(0,0,0,.45);align-items:center;justify-content:center;
+  }
+  #confirmModal.open{ display:flex; }
+  .confirm-box{
+    background:var(--card);border-radius:14px;padding:28px 24px;
+    max-width:440px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.22);
+  }
+  .confirm-box h4{ margin:0 0 10px;color:var(--navy);font-size:16px; }
+  .confirm-box p{ margin:0 0 14px;font-size:13px;color:var(--text);line-height:1.6; }
+  .confirm-box ul{ margin:0 0 18px;padding-left:18px;font-size:13px;color:var(--red);font-weight:700; }
+  .confirm-box .modal-btns{ display:flex;gap:10px;justify-content:flex-end; }
+  .confirm-box .modal-btns button{ padding:9px 20px;font-size:13px;font-weight:700;border:none;border-radius:8px;cursor:pointer; }
+  .confirm-box .modal-btns .btn-cancel{ background:var(--bg);color:var(--text);border:1px solid var(--line); }
+  .confirm-box .modal-btns .btn-proceed{ background:var(--gold,#b8860b);color:#fff; }
 
   /* ── Unit Tabs ── */
   .unit-tab-bar{display:flex;gap:0;flex-wrap:wrap;border-bottom:2px solid var(--line);margin:14px 0 0;}
@@ -474,6 +506,16 @@ async function refreshUnitTabStatus(){
 function safeCss(s){ return String(s||"").replace(/[^A-Za-z0-9]/g,"_"); }
 function js(s){ return String(s||"").replace(/\\/g,"\\\\").replace(/'/g,"\\'"); }
 
+function closeConfirmModal(){
+  document.getElementById("confirmModal").classList.remove("open");
+}
+
+async function proceedSubmit(){
+  closeConfirmModal();
+  // Skip the unit check and go straight to the next validations
+  await submitEntry(true);
+}
+
 async function loadMyScopes(){
   MY_SCOPES = [];
   if(ME.role === "super_admin"){ IS_SUPER_ADMIN_BLANKET = true; return; }
@@ -744,12 +786,12 @@ async function saveAndContinueLater(){
   setTimeout(backToQueue, 700);
 }
 
-async function submitEntry(){
+async function submitEntry(skipUnitCheck){
   const status = document.getElementById("submitStatus");
   if(!CURRENT_ENTRY) return;
 
   // Check all units have at least one employee
-  if(ENTRY_UNITS.length){
+  if(!skipUnitCheck && ENTRY_UNITS.length){
     status.className="status"; status.textContent="Checking all units…";
     const { data: allEmps } = await sb.from("overtime_employees")
       .select("form_unit")
@@ -757,13 +799,16 @@ async function submitEntry(){
     const filledUnits = new Set((allEmps||[]).map(e => e.form_unit).filter(Boolean));
     const emptyUnits = ENTRY_UNITS.filter(u => !filledUnits.has(u.name));
     if(emptyUnits.length){
-      status.className = "status err";
-      status.textContent = "❌ The following units have no employees added yet: " + emptyUnits.map(u => u.name).join(", ") + ". Fill all units before submitting.";
       // Highlight empty unit tabs
       ENTRY_UNITS.forEach(u => {
         const dot = document.getElementById("udot_" + safeCss(u.name));
         if(dot && !filledUnits.has(u.name)) dot.className = "unit-dot empty-warn";
       });
+      // Show confirmation modal instead of hard blocking
+      const list = document.getElementById("emptyUnitsList");
+      list.innerHTML = emptyUnits.map(u => "<li>" + esc(u.name) + "</li>").join("");
+      document.getElementById("confirmModal").classList.add("open");
+      status.textContent = "";
       return;
     }
     if(!allEmps || !allEmps.length){ status.className="status err"; status.textContent="Add at least one employee before submitting."; return; }
