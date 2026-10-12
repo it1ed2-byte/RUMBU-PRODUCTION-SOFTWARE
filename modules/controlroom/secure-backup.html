@@ -19,7 +19,9 @@ body { font-family:var(--sans); padding: 20px; background:var(--bg); margin:0; }
 input, select, button { width: 100%; padding: 12px; margin-top: 10px; font-size: 16px; box-sizing:border-box; }
 button { background:var(--primary); color: white; border: none; cursor: pointer; border-radius:6px; }
 button:hover { background:var(--primary-2); }
+button:disabled { opacity:.6; cursor:wait; }
 #status { font-size:13px; font-weight:bold; margin-top:10px; }
+.hint { font-size:12px; color:var(--muted); margin:12px 0 0; line-height:1.5; text-align:left; }
 </style>
 </head>
 <body>
@@ -36,8 +38,13 @@ button:hover { background:var(--primary-2); }
     <option value="control">Maintenance_Log</option>
   </select>
 
+  <button id="btn" onclick="download()">Download CSV</button>
 
-  <button onclick="download()">Download CSV</button>
+  <p class="hint">
+    Choose a table and a date, then press <b>Download CSV</b>. Only that day's records are fetched, so it is fast,
+    and the file uses the same layout as the BigQuery report (same columns, order, number and time formats;
+    times are in Nigerian time).
+  </p>
 </div>
 
 <script>
@@ -45,77 +52,187 @@ const SUPABASE_URL = "https://betfhunzmhtdzgvufmfk.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp";
 function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
 
-let MW_ROWS = [], CTRL_ROWS = [];
-let MW_TABLE = "mat_weaving"; // resolved properly in init() below
+const PAGE_SIZE = 1000;          // Supabase returns at most 1000 rows per request
+let MW_TABLE = "mat_weaving";    // confirmed by table-resolver.js in init(); re-checked only if a request fails
+let BUSY = false;
 
-async function fetchAllRows(table){
-  const pageSize = 1000; let all = [], offset = 0;
-  while(true){
-    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=*&limit=" + pageSize + "&offset=" + offset, { headers: authHeaders() });
-    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
-    const page = await res.json();
-    all = all.concat(page);
-    if(page.length < pageSize) break;
-    offset += pageSize;
+// ---------------------------------------------------------------------------
+// The exact layout of the BigQuery reports (column names, order and value formats).
+//   [ CSV heading, database column(s), kind ]
+//   kinds:  text  = missing value is written as the word NULL (as BigQuery did)
+//           int   = whole number, blank when missing
+//           float = always with a decimal (6 -> 6.0), blank when missing
+//           date  = YYYY-MM-DD
+//           ts    = M/D/YYYY, h:mm:ss AM/PM in Nigerian time, blank when missing
+// A list of database columns means "the first one that has a value".
+// ---------------------------------------------------------------------------
+const LAYOUTS = {
+  matweaving: {
+    label: "Mat_Weaving", file: "Mat_Weaving", dateCol: "date_col",
+    cols: [
+      ["Date","date_col","date"], ["Work_Type","work_type","text"], ["Shift","shift","text"], ["Mat_Type","mat_type","text"],
+      ["Customize","customize","text"], ["Group_Name","group_name","text"], ["Assets","assets","text"],
+      ["A_Double","a_double","float"], ["A_Single","a_single","float"], ["B","b","float"], ["C","c","float"], ["Total","total","float"],
+      ["B_Grade_Type","b_grade_type","text"], ["Target","target","float"],
+      ["Shed","shed","text"], ["Units","units","text"], ["Section","section","text"],
+      ["Operator_Name","operator_name","text"], ["Operator_ID","operator_id","text"], ["Rank","rank","text"],
+      ["Description","description","text"], ["Recorded_At","recorded_at","text"]
+    ]
+  },
+  control: {
+    label: "Maintenance_Log", file: "maintenance_log", dateCol: "date",
+    cols: [
+      ["Work_Order","work_order","int"], ["Assets","assets","text"], ["Nurse_Name","nurse_name","text"], ["Date","date","date"],
+      ["Duration","duration","float"], ["Job_Code","job_code","text"],
+      ["MC_Stoppage_Time","mc_stoppage_time","ts"], ["Starting_Time","starting_time","ts"], ["Finish_Time","finish_time","ts"],
+      ["Part_Needed","part_needed","text"], ["Description","description","text"], ["Shift","shift","text"],
+      ["Department","department","text"], ["Shed","shed","text"], ["Unit","unit","text"], ["Section","section","text"],
+      ["Estimated_Duration","estimated_duration","float"], ["Nozzles",["nozzles","nozzle"],"int"],
+      ["Type","type","float"], ["Denier","denier","float"]
+    ]
   }
-  return all;
+};
+
+// ---- value formatting -------------------------------------------------------
+function isMissing(v){ return v === null || v === undefined || String(v).trim() === ""; }
+function fmtText(v){ return (v === null || v === undefined || v === "") ? "NULL" : String(v); }
+function fmtInt(v){
+  if(isMissing(v)) return "";
+  const n = Number(v);
+  return Number.isFinite(n) ? String(Math.trunc(n)) : String(v);
+}
+function fmtFloat(v){
+  if(isMissing(v)) return "";
+  const n = Number(v);
+  if(!Number.isFinite(n)) return String(v);
+  return Number.isInteger(n) ? n.toFixed(1) : String(n);
+}
+function fmtDate(v){ return isMissing(v) ? "" : String(v).slice(0,10); }
+// 2026-10-11T07:01:55+00:00  ->  10/11/2026, 8:01:55 AM   (Africa/Lagos, always a plain space before AM/PM)
+const TS_FMT = new Intl.DateTimeFormat("en-US", { timeZone:"Africa/Lagos", year:"numeric", month:"numeric", day:"numeric",
+  hour:"numeric", minute:"2-digit", second:"2-digit", hourCycle:"h12" });
+function fmtTs(v){
+  if(isMissing(v)) return "";
+  const d = new Date(v);
+  if(isNaN(d.getTime())) return String(v);
+  const p = {}; TS_FMT.formatToParts(d).forEach(x => { p[x.type] = x.value; });
+  return p.month + "/" + p.day + "/" + p.year + ", " + p.hour + ":" + p.minute + ":" + p.second + " " + String(p.dayPeriod).toUpperCase();
+}
+const FORMATTERS = { text:fmtText, int:fmtInt, float:fmtFloat, date:fmtDate, ts:fmtTs };
+
+function pick(row, cols){
+  const list = Array.isArray(cols) ? cols : [cols];
+  for(const c of list){ if(!isMissing(row[c])) return row[c]; }
+  return row[list[0]];
+}
+function csvCell(v){
+  const s = String(v);
+  return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function toCSV(layout, rows){
+  let csv = layout.cols.map(c => c[0]).join(",") + "\n";
+  rows.forEach(r => {
+    csv += layout.cols.map(([, dbCols, kind]) => csvCell(FORMATTERS[kind](pick(r, dbCols)))).join(",") + "\n";
+  });
+  return csv;
+}
+
+// ---- fetching: one targeted query for the chosen day -------------------------
+async function api(url){
+  const res = await fetch(url, { headers: authHeaders() });
+  if(!res.ok){
+    let detail = ""; try{ detail = (await res.json()).message || ""; }catch(e){}
+    const err = new Error("HTTP " + res.status + (detail ? " - " + detail : "")); err.status = res.status; throw err;
+  }
+  return res.json();
+}
+// Only the columns the report needs, only that day, in id order. Paging uses "id greater than the last one seen"
+// instead of an offset, so every page costs the same however many rows the day has.
+async function fetchDay(layout, tableName, date){
+  const dbCols = Array.from(new Set(["id"].concat(layout.cols.flatMap(c => Array.isArray(c[1]) ? c[1] : [c[1]]))));
+  let rows = [], lastId = 0;
+  while(true){
+    const url = SUPABASE_URL + "/rest/v1/" + tableName + "?select=" + dbCols.join(",") +
+      "&" + layout.dateCol + "=eq." + encodeURIComponent(date) + "&id=gt." + lastId + "&order=id.asc&limit=" + PAGE_SIZE;
+    const page = await api(url);
+    rows = rows.concat(page);
+    if(page.length < PAGE_SIZE) break;
+    lastId = page[page.length - 1].id;
+  }
+  return rows;
 }
 
 async function init(){
   const status = document.getElementById("status");
   try{
-    MW_TABLE = await resolveWeavingTable();
-    const [mw, ctrl] = await Promise.all([fetchAllRows(MW_TABLE), fetchAllRows("control")]);
-    MW_ROWS = mw; CTRL_ROWS = ctrl;
+    // two tiny checks in parallel (1 row each); nothing else is loaded until a day is chosen
+    const [name] = await Promise.all([
+      resolveWeavingTable(),
+      api(SUPABASE_URL + "/rest/v1/control?select=id&limit=1")
+    ]);
+    MW_TABLE = name;
     status.style.color = "#1d8a4e";
-    status.textContent = "Connected. Mat_Weaving: " + MW_ROWS.length + " rows, Maintenance_Log: " + CTRL_ROWS.length + " rows.";
+    status.textContent = "Connected. Choose a table and a date.";
   }catch(e){
     status.style.color = "#c0392b";
-    status.textContent = "Could not read data: " + (e.message||e);
+    status.textContent = "Could not connect: " + (e.message || e);
   }
 }
 
-function toCSV(rows){
-  if(!rows.length) return "";
-  const headers = Object.keys(rows[0]);
-  let csv = headers.join(",") + "\n";
-  rows.forEach(row=>{
-    const values = headers.map(h=>{
-      let val = row[h];
-      if(val === null || val === undefined) val = "";
-      val = String(val);
-      if(val.includes(",") || val.includes('"') || val.includes("\n")){
-        val = '"' + val.replace(/"/g, '""') + '"';
-      }
-      return val;
-    });
-    csv += values.join(",") + "\n";
-  });
-  return csv;
-}
-
-function download(){
+async function download(){
+  if(BUSY) return;
   const date = document.getElementById("date").value;
-  const table = document.getElementById("table").value;
+  const key = document.getElementById("table").value;
+  if(!date || !key){ alert("Please select a date and table."); return; }
 
-  if(!date || !table){ alert("Please select a date and table."); return; }
+  const layout = LAYOUTS[key];
+  const status = document.getElementById("status"), btn = document.getElementById("btn");
+  BUSY = true; btn.disabled = true; btn.textContent = "Preparing...";
+  status.style.color = "var(--muted)"; status.textContent = "Fetching " + layout.label + " for " + date + "...";
+  const t0 = performance.now();
+  try{
+    let table = key === "matweaving" ? MW_TABLE : "control";
+    let rows;
+    try{
+      rows = await fetchDay(layout, table, date);
+    }catch(e){
+      // the Mat Weaving table has been renamed before: look it up again once, then retry
+      if(key === "matweaving" && (e.status === 404 || e.status === 400)){
+        sessionStorage.removeItem("mw_table_name_v1");
+        MW_TABLE = table = await resolveWeavingTable();
+        rows = await fetchDay(layout, table, date);
+      }else{ throw e; }
+    }
 
-  const sourceRows = table === "matweaving" ? MW_ROWS : CTRL_ROWS;
-  if(!sourceRows.length){ alert("Table not loaded yet — please wait for the connection status above."); return; }
+    if(!rows.length){
+      status.style.color = "#c0392b"; status.textContent = "No " + layout.label + " records found for " + date + ".";
+      alert("No data found");
+      return;
+    }
+    if(key === "control"){      // BigQuery report order: by Work_Order
+      rows.sort((a,b) => {
+        const x = Number(a.work_order), y = Number(b.work_order);
+        return (Number.isFinite(x) && Number.isFinite(y) && x !== y) ? x - y : a.id - b.id;
+      });
+    }
 
-  const rows = sourceRows.filter(r => r.date_col === date);
-  const csv = toCSV(rows);
+    const blob = new Blob([toCSV(layout, rows)], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const fileName = layout.file + "_" + date + ".csv";
+    a.href = url; a.download = fileName;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
 
-  if(!csv){ alert("No data found"); return; }
-
-  const label = table === "matweaving" ? "Mat_Weaving" : "Maintenance_Log";
-  const blob = new Blob([csv], { type: "text/csv" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = label + "_" + date + ".csv";
-  a.click();
-  URL.revokeObjectURL(url);
+    status.style.color = "#1d8a4e";
+    status.textContent = "Downloaded " + fileName + " - " + rows.length + " row" + (rows.length === 1 ? "" : "s") +
+      " in " + ((performance.now() - t0) / 1000).toFixed(1) + " s.";
+  }catch(e){
+    status.style.color = "#c0392b";
+    status.textContent = "Could not read data: " + (e.message || e);
+  }finally{
+    BUSY = false; btn.disabled = false; btn.textContent = "Download CSV";
+  }
 }
 
 init();
