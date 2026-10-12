@@ -199,7 +199,18 @@ async function saveRequest(status){
 
     let req;
     if(EDIT_ID){
-      // Updating an existing draft: keep its number, refresh its content
+      // 1) Clear the old item list FIRST, while the request is still a draft.
+      //    The delete permission only allows removing items from drafts, so
+      //    this must happen before the status changes to "submitted".
+      const delRes = await fetch(SUPABASE_URL+"/rest/v1/request_items?request_id=eq."+EDIT_ID, {
+        method:"DELETE", headers: Object.assign({},authHeaders(),{"Prefer":"return=representation"})
+      });
+      if(!delRes.ok) throw new Error("Clearing old items: HTTP "+delRes.status+" — "+await delRes.text());
+      // Confirm the old items are really gone (security rules skip rows silently)
+      const left = await fetch(SUPABASE_URL+"/rest/v1/request_items?request_id=eq."+EDIT_ID+"&select=id", { headers:authHeaders() }).then(r=>r.json());
+      if(left.length) throw new Error("Old items could not be cleared, so nothing was saved. Check the delete permission on request_items.");
+
+      // 2) Then update the request itself (this may change status to submitted)
       const res = await fetch(SUPABASE_URL+"/rest/v1/requests?id=eq."+EDIT_ID+"&status=eq.draft", {
         method:"PATCH",
         headers: Object.assign({},authHeaders(),{"Prefer":"return=representation"}),
@@ -209,9 +220,6 @@ async function saveRequest(status){
       const rows = await res.json();
       if(!rows.length) throw new Error("This draft could not be updated. It may already have been submitted.");
       req = rows[0];
-      // Replace the old item list with the current one
-      const delRes = await fetch(SUPABASE_URL+"/rest/v1/request_items?request_id=eq."+EDIT_ID, { method:"DELETE", headers:authHeaders() });
-      if(!delRes.ok) throw new Error("Clearing old items: HTTP "+delRes.status+" — "+await delRes.text());
     } else {
       const res = await fetch(SUPABASE_URL+"/rest/v1/requests", {
         method:"POST",
