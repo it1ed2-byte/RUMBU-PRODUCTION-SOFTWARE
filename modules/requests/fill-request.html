@@ -62,6 +62,10 @@
 <div class="card">
   <h2>📋 Fill Request</h2>
   <div id="connStatus">Connecting...</div>
+  <div id="draftBanner" style="display:none;background:#fffbeb;border:1px solid #fcd34d;color:#92400e;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px;font-weight:600;">
+    ✏️ Editing draft <b id="draftNo"></b>. Saving updates this draft. Submitting sends it to the store.
+    <a href="fill-request.html" style="float:right;color:#92400e;font-weight:700;">+ Start a new request instead</a>
+  </div>
 
   <div class="form-grid">
     <div class="form-group">
@@ -120,6 +124,7 @@
 let ACCESS_TOKEN=null;
 let ME = null;
 let PRIORITY = 'Normal';
+let EDIT_ID = new URLSearchParams(window.location.search).get("draft");
 let ITEM_COUNT = 0;
 const UNITS = ['pcs','kg','litres','rolls','metres','bags','boxes','sets','pairs','sheets','bottles','cartons'];
 
@@ -192,13 +197,30 @@ async function saveRequest(status){
       updated_at: new Date().toISOString()
     };
 
-    const res = await fetch(SUPABASE_URL+"/rest/v1/requests", {
-      method:"POST",
-      headers: Object.assign({},authHeaders(),{"Prefer":"return=representation"}),
-      body: JSON.stringify(payload)
-    });
-    if(!res.ok) throw new Error("HTTP "+res.status+" — "+await res.text());
-    const [req] = await res.json();
+    let req;
+    if(EDIT_ID){
+      // Updating an existing draft: keep its number, refresh its content
+      const res = await fetch(SUPABASE_URL+"/rest/v1/requests?id=eq."+EDIT_ID+"&status=eq.draft", {
+        method:"PATCH",
+        headers: Object.assign({},authHeaders(),{"Prefer":"return=representation"}),
+        body: JSON.stringify(payload)
+      });
+      if(!res.ok) throw new Error("HTTP "+res.status+" — "+await res.text());
+      const rows = await res.json();
+      if(!rows.length) throw new Error("This draft could not be updated. It may already have been submitted.");
+      req = rows[0];
+      // Replace the old item list with the current one
+      const delRes = await fetch(SUPABASE_URL+"/rest/v1/request_items?request_id=eq."+EDIT_ID, { method:"DELETE", headers:authHeaders() });
+      if(!delRes.ok) throw new Error("Clearing old items: HTTP "+delRes.status+" — "+await delRes.text());
+    } else {
+      const res = await fetch(SUPABASE_URL+"/rest/v1/requests", {
+        method:"POST",
+        headers: Object.assign({},authHeaders(),{"Prefer":"return=representation"}),
+        body: JSON.stringify(payload)
+      });
+      if(!res.ok) throw new Error("HTTP "+res.status+" — "+await res.text());
+      [req] = await res.json();
+    }
 
     // Insert line items
     const itemPayload = items.map(i=>Object.assign({},i,{ request_id: req.id }));
@@ -211,7 +233,7 @@ async function saveRequest(status){
     await fetch(SUPABASE_URL+"/rest/v1/request_activity_log", {
       method:"POST", headers:authHeaders(),
       body: JSON.stringify({ request_id:req.id, actor_username:ME.username,
-        action: status==='submitted'?"Submitted":"Saved as Draft",
+        action: status==='submitted'?"Submitted":(EDIT_ID?"Draft Updated":"Saved as Draft"),
         note: `Request "${title}" ${status==='submitted'?"submitted for processing":"saved as draft"}.` })
     });
 
@@ -228,9 +250,40 @@ async function saveRequest(status){
       document.getElementById("itemsBody").innerHTML="";
       ITEM_COUNT=0; PRIORITY='Normal'; setPriority('Normal');
       msg.textContent="";
+      if(EDIT_ID){
+        EDIT_ID=null;
+        history.replaceState(null,"","fill-request.html");
+        document.getElementById("draftBanner").style.display="none";
+      }
+      addItemRow();
     },2500);
 
   }catch(e){ msg.className="msg err"; msg.textContent="❌ "+e.message; }
+}
+
+async function loadDraft(id){
+  const s = document.getElementById("connStatus");
+  const res = await fetch(SUPABASE_URL+"/rest/v1/requests?id=eq."+id+"&select=*", { headers:authHeaders() });
+  const rows = res.ok ? await res.json() : [];
+  const r = rows[0];
+  if(!r || r.requester_id !== ME.id){
+    s.style.color="#dc2626"; s.textContent="Draft not found, or it belongs to another user. Starting a new request.";
+    EDIT_ID=null; history.replaceState(null,"","fill-request.html"); addItemRow(); return;
+  }
+  if(r.status !== "draft"){
+    s.style.color="#dc2626"; s.textContent=r.request_number+" has already been submitted and can no longer be edited. Starting a new request.";
+    EDIT_ID=null; history.replaceState(null,"","fill-request.html"); addItemRow(); return;
+  }
+  document.getElementById("f_title").value = r.title || "";
+  document.getElementById("f_desc").value = r.description || "";
+  document.getElementById("f_reqno").value = r.request_number || "";
+  setPriority(r.priority || "Normal");
+  const items = await fetch(SUPABASE_URL+"/rest/v1/request_items?request_id=eq."+id+"&order=created_at", { headers:authHeaders() }).then(x=>x.json());
+  document.getElementById("itemsBody").innerHTML=""; ITEM_COUNT=0;
+  (items||[]).forEach(i=>addItemRow(i.item_name, i.quantity, i.unit, i.remarks||""));
+  if(!items || !items.length) addItemRow();
+  document.getElementById("draftNo").textContent = r.request_number;
+  document.getElementById("draftBanner").style.display="block";
 }
 
 async function init(){
@@ -244,7 +297,8 @@ async function init(){
     document.getElementById("f_userid").value = ME.username;
     document.getElementById("f_dept").value = ME.departmentNames?.[0] || ME.sectionName || "—";
     s.style.color="#1e7a34"; s.textContent="Connected as "+ME.username;
-    addItemRow(); // start with one empty row
+    if(EDIT_ID) await loadDraft(EDIT_ID);
+    else addItemRow(); // start with one empty row
   }catch(e){ s.style.color="#dc2626"; s.textContent="Error: "+e.message; }
 }
 init();
