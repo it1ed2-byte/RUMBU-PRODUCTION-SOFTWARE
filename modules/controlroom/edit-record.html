@@ -11,38 +11,6 @@
   #status{ text-align:center; font-size:13px; font-weight:700; }
   .msg{ margin-top:10px; font-weight:700; }
 
-  /* ── Password gate ── */
-  #gateWrap{
-    display:flex; align-items:center; justify-content:center;
-    min-height:70vh;
-  }
-  #gateCard{
-    background:var(--card); border-radius:14px;
-    box-shadow:0 6px 20px rgba(0,0,0,.14);
-    padding:32px 28px; width:100%; max-width:380px; text-align:center;
-  }
-  #gateCard h2{ color:var(--heading); margin:0 0 6px; font-size:18px; }
-  #gateCard p{ color:#666; font-size:13px; margin:0 0 20px; }
-  .pw-wrap{ position:relative; margin-bottom:14px; }
-  .pw-wrap input{
-    width:100%; padding:11px 44px 11px 14px; border-radius:8px;
-    border:1px solid var(--line); font-size:14px; outline:none;
-    background:var(--card); color:var(--text); box-sizing:border-box;
-    transition:border-color .2s;
-  }
-  .pw-wrap input:focus{ border-color:var(--accent); }
-  .pw-toggle{
-    position:absolute; right:10px; top:50%; transform:translateY(-50%);
-    background:none; border:none; color:var(--accent); font-size:12px;
-    font-weight:700; cursor:pointer; padding:4px 6px; width:auto;
-  }
-  #gateBtn{
-    width:100%; padding:11px; background:var(--heading); color:#fff;
-    border:none; border-radius:8px; font-size:14px; font-weight:700;
-    cursor:pointer; transition:opacity .2s;
-  }
-  #gateBtn:hover{ opacity:.85; }
-  #gateMsg{ margin-top:10px; font-size:13px; font-weight:600; min-height:18px; }
   .rec-grid{ display:grid; grid-template-columns:1fr 1fr; gap:14px; }
   @media(max-width:720px){ .rec-grid{ grid-template-columns:1fr; } }
   .locked-note{ background:rgba(154,107,0,.12); color:var(--warn); padding:10px 14px; border-radius:8px; font-size:13px; font-weight:600; margin-bottom:14px; }
@@ -61,22 +29,7 @@
 </head>
 <body>
 
-<!-- ── Password Gate ── -->
-<div id="gateWrap">
-  <div id="gateCard">
-    <h2>🔒 Restricted Access</h2>
-    <p>Enter the passcode to access the Edit Record page.</p>
-    <div class="pw-wrap">
-      <input type="password" id="gateInput" placeholder="Enter passcode" onkeydown="if(event.key==='Enter') unlockGate()">
-      <button class="pw-toggle" onclick="toggleGatePw()">Show</button>
-    </div>
-    <button id="gateBtn" onclick="unlockGate()">Unlock</button>
-    <div id="gateMsg"></div>
-  </div>
-</div>
-
-<!-- ── Main App (hidden until unlocked) ── -->
-<div class="container" id="mainContainer" style="display:none;">
+<div class="container" id="mainContainer">
 
   <div id="statusBox" class="card-panel">
     <div id="status">Checking your session...</div>
@@ -87,7 +40,7 @@
     <!-- SEARCH -->
     <div class="card-panel">
       <h2>Edit Record</h2>
-      <p class="sub">Search a record by Work Order to view, edit, or delete it. Records older than 1 day can only be changed by a Super Admin.</p>
+      <p class="sub">Search a record by Work Order to view, edit, or delete it. Only the fields you change are saved. Times are shown and saved in Nigerian time. Records older than 1 day can only be changed by a Super Admin.</p>
       <div class="form-row">
         <div class="field"><label>Work Order</label><input type="text" id="woInput" placeholder="Enter Work Order number"></div>
         <div class="field" style="align-self:end;"><button onclick="searchWO()">Search</button></div>
@@ -120,32 +73,6 @@
 </div><!-- end mainContainer -->
 
 <script>
-// ── Change this passcode anytime ──
-const EDIT_PASSCODE = "controlroom@2026";
-
-function toggleGatePw(){
-  const inp = document.getElementById("gateInput");
-  const btn = inp.nextElementSibling;
-  const showing = inp.type === "text";
-  inp.type = showing ? "password" : "text";
-  btn.textContent = showing ? "Show" : "Hide";
-}
-
-function unlockGate(){
-  const val = document.getElementById("gateInput").value;
-  const msg = document.getElementById("gateMsg");
-  if(val === EDIT_PASSCODE){
-    document.getElementById("gateWrap").style.display = "none";
-    document.getElementById("mainContainer").style.display = "block";
-    init();
-  } else {
-    msg.style.color = "#c0392b";
-    msg.textContent = "❌ Incorrect passcode. Try again.";
-    document.getElementById("gateInput").value = "";
-    document.getElementById("gateInput").focus();
-  }
-}
-
 function authHeaders(extra){ return Object.assign({ "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY, "Content-Type": "application/json" }, extra||{}); }
 
 let ME = null, CURRENT = null;
@@ -169,9 +96,10 @@ const FIELDS = [
   { label:"Unit",              col:"unit",               type:"text" },
   { label:"Section",           col:"section",            type:"text" },
   { label:"Estimated Duration",col:"estimated_duration", type:"text" },
-  { label:"Nozzles",           col:"nozzles",            type:"text" },
-  { label:"Type",              col:"type",               type:"text" },
-  { label:"Denier",            col:"denier",             type:"number" }
+  { label:"Nozzles",           col:"nozzles",            type:"text",   rule:"integer" },
+  { label:"Type",              col:"type",               type:"text",   rule:"number" },
+  { label:"Denier",            col:"denier",             type:"number", rule:"number" },
+  { label:"Inserted Timestamp",col:"inserted_timestamp", type:"datetime-local", editable:false }   // when the record was created (read-only)
 ];
 
 async function init(){
@@ -193,13 +121,23 @@ function isLocked(row){
   return diffDays > 1;
 }
 
-// datetime-local needs "YYYY-MM-DDTHH:MM"; DB gives ISO with seconds/zone.
+// Times are shown and saved in Nigerian time (Africa/Lagos, UTC+1, no daylight saving), whatever the device's own time zone is.
+const WAT_FMT = new Intl.DateTimeFormat("en-CA", { timeZone:"Africa/Lagos", year:"numeric", month:"2-digit", day:"2-digit",
+  hour:"2-digit", minute:"2-digit", second:"2-digit", hourCycle:"h23" });
+// database instant -> "YYYY-MM-DDTHH:MM:SS" for the time box (seconds kept)
 function toLocalInput(v){
   if(!v) return "";
   const d = new Date(v);
   if(isNaN(d)) return "";
-  const pad=n=>String(n).padStart(2,"0");
-  return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate())+"T"+pad(d.getHours())+":"+pad(d.getMinutes());
+  const p = {}; WAT_FMT.formatToParts(d).forEach(x => { p[x.type] = x.value; });
+  return p.year + "-" + p.month + "-" + p.day + "T" + p.hour + ":" + p.minute + ":" + p.second;
+}
+// time box value (Nigerian time) -> ISO instant for the database; null if it is not a valid time
+function fromLocalInput(v){
+  const m = String(v).match(/^(\d{4}-\d{2}-\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if(!m) return null;
+  const d = new Date(m[1] + "T" + m[2] + ":" + m[3] + ":" + (m[4] || "00") + "+01:00");
+  return isNaN(d) ? null : d.toISOString();
 }
 
 async function searchWO(){
@@ -232,9 +170,15 @@ function renderEdit(row){
     if(f.type === "datetime-local") val = toLocalInput(val);
     else if(val === null || val === undefined) val = "";
     const dis = (f.editable === false || locked) ? "disabled" : "";
+    const extra = f.type === "datetime-local" ? ' step="1"' : (f.type === "number" ? ' step="any"' : "");
+    const shown = String(val).replace(/"/g,'&quot;');
     return `<div class="field"><label>${f.label}</label>`
-         + `<input type="${f.type}" data-col="${f.col}" value="${String(val).replace(/"/g,'&quot;')}" ${dis}></div>`;
+         + `<input type="${f.type}" data-col="${f.col}" data-orig="${shown}" value="${shown}"${extra} ${dis}></div>`;
   }).join("");
+
+  // Remember what every box shows AFTER the browser has tidied it (e.g. "19:19:00" becomes "19:19"),
+  // so only boxes the user really changed are saved.
+  document.querySelectorAll("#editFields input[data-col]").forEach(el => el.setAttribute("data-orig", el.value));
 
   document.getElementById("saveBtn").style.display = locked ? "none" : "";
   document.getElementById("delBtn").style.display  = locked ? "none" : "";
@@ -247,16 +191,29 @@ async function saveRecord(){
   if(!CURRENT){ return; }
   if(isLocked(CURRENT)){ msg.style.color="var(--bad)"; msg.innerText="Locked: only a Super Admin can edit records older than 1 day."; return; }
 
+  // Only the fields that were actually changed are sent (like the original Apps Script, which updated one
+  // field at a time). Untouched fields - including the exact seconds on the times - are never rewritten.
   const payload = {};
+  let problem = "";
   document.querySelectorAll("#editFields input[data-col]").forEach(el=>{
     const f = FIELDS.find(x=>x.col === el.getAttribute("data-col"));
-    if(!f || f.editable === false) return;
-    let v = el.value;
-    if(v === "") { payload[f.col] = null; return; }
-    if(f.type === "number") v = parseFloat(v);
-    if(f.type === "datetime-local") v = new Date(v).toISOString();
-    payload[f.col] = v;
+    if(!f || f.editable === false || problem) return;
+    const v = el.value;
+    if(v === el.getAttribute("data-orig")) return;                 // not changed
+    if(v === ""){ payload[f.col] = null; return; }                 // cleared -> empty in the database
+    if(f.rule === "integer" && !/^-?\d+$/.test(v.trim())){ problem = f.label + " must be a whole number."; return; }
+    if(f.rule === "number" && !Number.isFinite(Number(v))){ problem = f.label + " must be a number."; return; }
+    if(f.type === "number"){ payload[f.col] = parseFloat(v); return; }
+    if(f.type === "datetime-local"){
+      const iso = fromLocalInput(v);
+      if(!iso){ problem = f.label + " is not a valid date and time."; return; }
+      payload[f.col] = iso; return;
+    }
+    payload[f.col] = (f.rule ? v.trim() : v);
   });
+
+  if(problem){ msg.style.color="var(--bad)"; msg.innerText="❌ " + problem; return; }
+  if(!Object.keys(payload).length){ msg.style.color="var(--muted)"; msg.innerText="No changes to save."; return; }
 
   try{
     const res = await fetch(SUPABASE_URL + "/rest/v1/control?id=eq." + CURRENT.id, {
@@ -264,8 +221,11 @@ async function saveRecord(){
     });
     if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
     const updated = await res.json();
-    if(updated && updated.length) CURRENT = updated[0];
-    msg.style.color="var(--ok)"; msg.innerText="✅ Record updated.";
+    if(!updated || !updated.length) throw new Error("No row was updated. Check the record still exists and that you are allowed to change it.");
+    CURRENT = updated[0];
+    renderEdit(CURRENT);                                           // show what is really stored now
+    const n = Object.keys(payload).length;
+    msg.style.color="var(--ok)"; msg.innerText="✅ Record updated (" + n + " field" + (n === 1 ? "" : "s") + " changed).";
   }catch(e){ msg.style.color="var(--bad)"; msg.innerText="❌ "+e.message; }
 }
 
@@ -277,9 +237,12 @@ async function deleteRecord(){
 
   try{
     const res = await fetch(SUPABASE_URL + "/rest/v1/control?id=eq." + CURRENT.id, {
-      method:"DELETE", headers: authHeaders()
+      method:"DELETE", headers: authHeaders({ "Prefer":"return=representation" })
     });
     if(!res.ok) throw new Error("HTTP " + res.status + " - " + await res.text());
+    const removed = await res.json();
+    if(!removed || removed.length === 0) throw new Error("No matching row was deleted. It may already be gone, or you are not allowed to delete it.");
+    if(removed.length > 1) throw new Error("Warning: " + removed.length + " rows were deleted. Please check the data for Work Order " + CURRENT.work_order + ".");
     msg.style.color="var(--ok)"; msg.innerText="✅ Record deleted.";
     CURRENT = null;
     document.getElementById("editCard").style.display = "none";
@@ -308,7 +271,7 @@ async function findDuplicates(){
     out.innerHTML = dupes.map(wo=>{
       const list = groups[wo].map(r=>{
         const when = r.inserted_timestamp ? new Date(r.inserted_timestamp).toLocaleString() : "—";
-        return `<tr><td>${r.id}</td><td>${r.assets||""}</td><td>${r.names||""}</td><td>${r.shift||""}</td><td>${when}</td>`
+        return `<tr><td>${r.id}</td><td>${r.assets||""}</td><td>${r.nurse_name||""}</td><td>${r.shift||""}</td><td>${when}</td>`
              + `<td><button class="btn-sm btn-ghost" onclick="loadById(${r.id})">Open</button></td></tr>`;
       }).join("");
       return `<div class="dupe-group"><h4>Work Order: ${wo} (${groups[wo].length} rows)</h4>`
@@ -333,7 +296,7 @@ async function loadById(id){
   }catch(e){ alert("Error: "+e.message); }
 }
 
-// init() is called by unlockGate() — not on page load.
+init();
 </script>
 </body>
 </html>
