@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Performance Evaluation</title>
+<script src="auth-contracts.js"></script>
+<link rel="stylesheet" href="contracts.css">
+<style>
+/* Scorecard table */
+.sc-tbl{width:100%;border-collapse:collapse}
+.sc-tbl th{background:#f1f5f9;padding:10px 12px;font-size:11px;
+  font-weight:700;text-transform:uppercase;color:var(--muted);
+  text-align:left;border-bottom:2px solid var(--border)}
+.sc-tbl td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:top}
+.sc-tbl tfoot td{background:#f8fafc;font-weight:700;border-top:2px solid var(--border);
+  border-bottom:none;padding:12px}
+.sc-tbl input[type=number]{width:64px;text-align:center;border:1.5px solid var(--border);
+  border-radius:6px;padding:6px 4px;font-size:14px;font-weight:600}
+.sc-tbl input[type=number]:focus{outline:2px solid var(--accent);border-color:var(--accent)}
+.sc-tbl textarea{border:1.5px solid var(--border);border-radius:6px;padding:6px 8px;
+  font-size:13px;width:100%;min-width:180px;resize:vertical;font-family:inherit}
+.sc-tbl textarea:focus{outline:2px solid var(--accent);border-color:var(--accent)}
+.weighted-score{font-weight:700;font-size:15px;color:var(--primary);text-align:center}
+.weight-input{text-align:center}
+.cat-name{font-weight:600;font-size:13.5px;margin-bottom:2px}
+.cat-ref{font-size:11px;color:var(--muted)}
+
+/* Rating card */
+.rating-card{border-radius:10px;padding:20px 22px;margin-bottom:0}
+.rating-card.meets{background:#f0fdf4;border:2px solid #22c55e}
+.rating-card.improve{background:#fffbeb;border:2px solid #f59e0b}
+.rating-card.unsat{background:#fef2f2;border:2px solid #ef4444}
+.rating-title{font-size:17px;font-weight:800;margin-bottom:6px}
+.rating-card.meets .rating-title{color:#166534}
+.rating-card.improve .rating-title{color:#92400e}
+.rating-card.unsat .rating-title{color:#991b1b}
+.rating-action{font-size:13px;line-height:1.6;margin-bottom:0}
+.rating-card.meets .rating-action{color:#166534}
+.rating-card.improve .rating-action{color:#92400e}
+.rating-card.unsat .rating-action{color:#991b1b}
+.score-display{font-size:36px;font-weight:900;margin-bottom:4px;line-height:1}
+
+/* Weight warning */
+.weight-warn{color:var(--err);font-size:12px;display:none;margin-top:4px}
+
+/* History row rating badges */
+.rbadge{display:inline-block;padding:2px 10px;border-radius:10px;
+  font-size:11px;font-weight:700}
+.rbadge.meets{background:#dcfce7;color:#166534}
+.rbadge.improve{background:#fef3c7;color:#92400e}
+.rbadge.unsat{background:#fee2e2;color:#991b1b}
+.rbadge.draft{background:#e2e8f0;color:#374151}
+
+/* Score labels */
+.score-lbl{font-size:11px;color:var(--muted);margin-top:3px;text-align:center;min-width:64px}
+</style>
+</head>
+<body>
+
+<div class="page-hdr">
+  <div class="ph-left">
+    <div class="ph-icon">📋</div>
+    <div>
+      <div class="ph-title">Performance Evaluation</div>
+      <div class="ph-sub">Subcontractor Performance Scorecard — Section 6, Rumbu Monitoring Framework</div>
+    </div>
+  </div>
+  <div class="ph-right">
+    <button class="btn btn-hdr" onclick="location.href='contracts.html'">← Dashboard</button>
+  </div>
+</div>
+
+<div class="content">
+  <div id="loading" class="loading-wrap">
+    <div class="spinner"></div>
+    <div class="loading-txt">Loading…</div>
+  </div>
+
+  <div id="app" style="display:none">
+
+    <!-- Contract selector -->
+    <div class="sec-card" style="margin-bottom:18px">
+      <div class="sec-body" style="padding:16px 20px">
+        <div class="g2">
+          <div class="field" style="margin-bottom:0">
+            <label>Contract</label>
+            <select id="contract-select" class="srch" onchange="onContractChange()">
+              <option value="">— Select a contract to evaluate —</option>
+            </select>
+          </div>
+          <div class="field" style="margin-bottom:0">
+            <label>Review Period <span class="req">*</span></label>
+            <select id="eval-period" class="srch">
+              <option value="daily">Daily — Operational / site monitoring</option>
+              <option value="weekly">Weekly — Progress and performance review</option>
+              <option value="monthly" selected>Monthly — Formal KPI review</option>
+              <option value="quarterly">Quarterly — Management-level performance review</option>
+              <option value="completion">Contract Completion — Final performance evaluation</option>
+            </select>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Past evaluations (shown after contract is selected) -->
+    <div id="history-card" class="sec-card" style="display:none;margin-bottom:22px">
+      <div class="sec-hdr">
+        <div class="sec-title">
+          Evaluation History
+          <span id="history-count" style="font-weight:400;color:var(--muted);font-size:13px"></span>
+        </div>
+      </div>
+      <div id="history-table" style="overflow-x:auto"></div>
+    </div>
+
+    <!-- New evaluation form -->
+    <div id="eval-form" class="sec-card" style="display:none">
+      <div class="sec-hdr">
+        <div>
+          <div class="sec-title">New Performance Evaluation</div>
+          <div class="sec-sub" id="form-sub"></div>
+        </div>
+        <div>
+          <label style="font-size:12px;font-weight:600;color:var(--muted);display:block;margin-bottom:4px">
+            Evaluation Date
+          </label>
+          <input type="date" id="eval-date" class="srch" style="width:160px">
+        </div>
+      </div>
+      <div class="sec-body">
+
+        <div class="alert alert-info" style="margin-bottom:18px">
+          <strong>Framework reference — Section 6.1:</strong>
+          Indicative weights are shown below. Adjust weights to reflect the nature and risk profile
+          of this contract. Total must equal 100%.
+          Scores: <strong>5</strong> Excellent · <strong>4</strong> Good ·
+          <strong>3</strong> Satisfactory · <strong>2</strong> Requires improvement ·
+          <strong>1</strong> Unsatisfactory.
+        </div>
+
+        <!-- Scorecard table -->
+        <div style="overflow-x:auto;margin-bottom:6px">
+          <table class="sc-tbl">
+            <thead>
+              <tr>
+                <th style="min-width:200px">Category</th>
+                <th style="width:90px;text-align:center">Weight (%)</th>
+                <th style="width:80px;text-align:center">Score (1–5)</th>
+                <th style="width:110px;text-align:center">Weighted Score</th>
+                <th>Notes / Observations</th>
+              </tr>
+            </thead>
+            <tbody id="scorecard-body"></tbody>
+            <tfoot>
+              <tr>
+                <td>Total</td>
+                <td style="text-align:center">
+                  <span id="total-weight">100</span>%
+                  <div class="weight-warn" id="weight-warn">⚠ Must equal 100%</div>
+                </td>
+                <td></td>
+                <td class="weighted-score" id="total-ws">—</td>
+                <td></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+
+        <!-- Rating thresholds reference -->
+        <div style="font-size:11px;color:var(--muted);margin-bottom:20px;line-height:1.7">
+          <strong>Rating thresholds (Section 6.2):</strong>
+          ≥ 80% → Meets requirements &nbsp;·&nbsp;
+          60–79% → Requires improvement &nbsp;·&nbsp;
+          &lt; 60% → Unsatisfactory
+        </div>
+
+        <!-- Live rating display -->
+        <div id="rating-display" style="display:none;margin-bottom:22px"></div>
+
+        <!-- Overall remarks -->
+        <div class="field" style="margin-bottom:20px">
+          <label>Overall Remarks</label>
+          <textarea id="eval-remarks" class="srch" rows="3"
+            placeholder="Key observations, issues noted, management attention required…"></textarea>
+        </div>
+
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn btn-primary" onclick="submitEval('submitted')">Submit Evaluation</button>
+          <button class="btn" onclick="submitEval('draft')">Save as Draft</button>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Prompt when no contract selected -->
+    <div id="no-contract" class="sec-card" style="text-align:center;padding:40px">
+      <div style="font-size:40px;margin-bottom:12px">📋</div>
+      <div style="font-weight:700;color:var(--primary);font-size:16px;margin-bottom:6px">
+        Select a contract above
+      </div>
+      <div style="color:var(--muted);font-size:13px">
+        Choose a contract to view past evaluations and submit a new one.
+      </div>
+    </div>
+
+  </div><!-- /#app -->
+</div>
+
+<script>
+// ── Scorecard category definitions — Section 6.1 ─────────────────
+const CATEGORIES = [
+  { key:'safety',          name:'Safety and Compliance',     ref:'§6.1',  defaultWeight:20 },
+  { key:'quality',         name:'Quality',                   ref:'§6.1',  defaultWeight:20 },
+  { key:'schedule',        name:'Schedule Performance',      ref:'§6.1',  defaultWeight:20 },
+  { key:'technical',       name:'Technical Performance',     ref:'§6.1',  defaultWeight:15 },
+  { key:'commercial',      name:'Commercial Performance',    ref:'§6.1',  defaultWeight:10 },
+  { key:'resource',        name:'Resource Adequacy',         ref:'§6.1',  defaultWeight:5  },
+  { key:'reporting',       name:'Reporting / Documentation', ref:'§6.1',  defaultWeight:5  },
+  { key:'responsiveness',  name:'Responsiveness',            ref:'§6.1',  defaultWeight:5  }
+];
+
+const SCORE_LABELS = {
+  5:'Excellent — consistently exceeds requirements',
+  4:'Good — fully meets all requirements',
+  3:'Satisfactory — generally meets requirements',
+  2:'Requires improvement — below requirements in key areas',
+  1:'Unsatisfactory — consistently fails to meet requirements'
+};
+
+// Rating thresholds and text — strictly from Section 6.2
+const RATINGS = [
+  {
+    min:80, key:'meets', cls:'meets',
+    title:'✅ Meets Requirements',
+    action:'Continue normal monitoring (§6.2).'
+  },
+  {
+    min:60, key:'improve', cls:'improve',
+    title:'⚠ Requires Improvement',
+    action:'Implement a corrective-action plan and increase monitoring frequency (§6.2). ' +
+           'Raise a corrective action using the Corrective Actions register.'
+  },
+  {
+    min:0, key:'unsat', cls:'unsat',
+    title:'🔴 Unsatisfactory',
+    action:'Formal management intervention required. Review applicable contractual remedies (§6.2). ' +
+           'Escalate immediately per Section 5.4 escalation triggers.'
+  }
+];
+
+let sb, auth, contracts = [], selectedContractId = null;
+
+async function init() {
+  try {
+    auth = await guardPage();
+    if (!auth) return;
+    sb = auth.sb;
+
+    // Today's date as default
+    document.getElementById('eval-date').value =
+      new Date().toISOString().slice(0,10);
+
+    // Load contracts
+    const { data, error } = await sb.from('cnt_contracts')
+      .select('id,contract_id,title,assigned_company_id,cnt_companies(name)')
+      .order('contract_id');
+    if (error) throw error;
+    contracts = data ?? [];
+
+    const sel = document.getElementById('contract-select');
+    contracts.forEach(c => {
+      const company = c.cnt_companies?.name ?? 'No company assigned';
+      sel.insertAdjacentHTML('beforeend',
+        `<option value="${c.id}">${c.contract_id} — ${esc(c.title)} (${esc(company)})</option>`);
+    });
+
+    renderScorecardRows();
+
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+
+  } catch (e) {
+    document.getElementById('loading').innerHTML =
+      `<p style="color:var(--err);text-align:center">${e.message}</p>`;
+  }
+}
+
+// ── Scorecard rows ───────────────────────────────────────────────
+function renderScorecardRows() {
+  const tbody = document.getElementById('scorecard-body');
+  tbody.innerHTML = CATEGORIES.map(cat => `
+    <tr id="row-${cat.key}">
+      <td>
+        <div class="cat-name">${cat.name}</div>
+        <div class="cat-ref">${cat.ref} · Indicative: ${cat.defaultWeight}%</div>
+      </td>
+      <td class="weight-input">
+        <input type="number" id="w-${cat.key}" min="0" max="100" step="1"
+          value="${cat.defaultWeight}"
+          oninput="onWeightChange()"
+          style="width:60px">
+      </td>
+      <td style="text-align:center">
+        <input type="number" id="s-${cat.key}" min="1" max="5" step="1"
+          placeholder="—" oninput="onScoreChange()"
+          style="width:60px">
+        <div class="score-lbl" id="lbl-${cat.key}"></div>
+      </td>
+      <td class="weighted-score" id="ws-${cat.key}">—</td>
+      <td>
+        <textarea id="n-${cat.key}" rows="2"
+          placeholder="Observations for ${cat.name.toLowerCase()}…"></textarea>
+      </td>
+    </tr>`).join('');
+}
+
+// ── Weight / score change handlers ───────────────────────────────
+function onWeightChange() {
+  const total = CATEGORIES.reduce((s, c) => {
+    const v = parseFloat(document.getElementById('w-' + c.key).value) || 0;
+    return s + v;
+  }, 0);
+  document.getElementById('total-weight').textContent = total.toFixed(0);
+  const warn = document.getElementById('weight-warn');
+  warn.style.display = Math.abs(total - 100) > 0.01 ? 'block' : 'none';
+  onScoreChange();
+}
+
+function onScoreChange() {
+  let totalWS = 0, allScored = true;
+
+  CATEGORIES.forEach(cat => {
+    const w  = parseFloat(document.getElementById('w-' + cat.key).value) || 0;
+    const sv = document.getElementById('s-' + cat.key).value;
+    const s  = parseFloat(sv);
+    const lbl = document.getElementById('lbl-' + cat.key);
+
+    if (!sv || isNaN(s)) {
+      document.getElementById('ws-' + cat.key).textContent = '—';
+      lbl.textContent = '';
+      allScored = false;
+      return;
+    }
+    const ws = (s / 5) * w;
+    document.getElementById('ws-' + cat.key).textContent = ws.toFixed(1) + '%';
+    lbl.textContent = SCORE_LABELS[Math.round(s)] ?? '';
+    totalWS += ws;
+  });
+
+  const display = document.getElementById('total-ws');
+  const ratingEl = document.getElementById('rating-display');
+
+  if (!allScored) {
+    display.textContent = '—';
+    ratingEl.style.display = 'none';
+    return;
+  }
+
+  display.textContent = totalWS.toFixed(1) + '%';
+
+  const rating = RATINGS.find(r => totalWS >= r.min);
+  ratingEl.style.display = 'block';
+
+  let caLink = '';
+  if (rating.key === 'improve' || rating.key === 'unsat') {
+    caLink = `<div style="margin-top:12px">
+      <a href="corrective-actions.html" style="font-size:13px;font-weight:600;
+        color:inherit;text-decoration:underline">
+        → Open Corrective Actions register
+      </a>
+    </div>`;
+  }
+
+  ratingEl.innerHTML = `
+    <div class="rating-card ${rating.cls}">
+      <div class="score-display">${totalWS.toFixed(1)}%</div>
+      <div class="rating-title">${rating.title}</div>
+      <div class="rating-action">${rating.action}${caLink}</div>
+    </div>`;
+}
+
+// ── Contract change ───────────────────────────────────────────────
+async function onContractChange() {
+  const cid = document.getElementById('contract-select').value;
+  selectedContractId = cid || null;
+
+  document.getElementById('no-contract').style.display  = cid ? 'none'  : 'block';
+  document.getElementById('eval-form').style.display    = cid ? 'block' : 'none';
+  document.getElementById('history-card').style.display = cid ? 'block' : 'none';
+
+  if (!cid) return;
+
+  const c = contracts.find(x => x.id === cid);
+  document.getElementById('form-sub').textContent =
+    `${c?.contract_id ?? ''} — ${c?.title ?? ''} · ${c?.cnt_companies?.name ?? ''}`;
+
+  await loadHistory(cid);
+}
+
+// ── Load evaluation history ───────────────────────────────────────
+async function loadHistory(contractId) {
+  const { data, error } = await sb.from('cnt_performance_evaluations')
+    .select('id,evaluation_date,review_period,total_weighted_score,rating,status,evaluator_id,overall_remarks')
+    .eq('contract_id', contractId)
+    .order('evaluation_date', { ascending: false });
+
+  const rows = data ?? [];
+  document.getElementById('history-count').textContent = `(${rows.length})`;
+
+  const el = document.getElementById('history-table');
+  if (!rows.length) {
+    el.innerHTML = `<div style="padding:24px;text-align:center;color:var(--muted)">
+      No evaluations recorded yet for this contract.</div>`;
+    return;
+  }
+
+  const periodLabel = {
+    daily:'Daily', weekly:'Weekly', monthly:'Monthly',
+    quarterly:'Quarterly', completion:'Contract Completion'
+  };
+  const ratingLabel = {
+    meets_requirements:'Meets Requirements',
+    requires_improvement:'Requires Improvement',
+    unsatisfactory:'Unsatisfactory',
+    null:'Draft'
+  };
+  const ratingCls = {
+    meets_requirements:'meets', requires_improvement:'improve',
+    unsatisfactory:'unsat'
+  };
+
+  el.innerHTML = `<table class="tbl">
+    <thead><tr>
+      <th>Date</th><th>Period</th><th>Score</th><th>Rating</th><th>Status</th><th>Remarks</th>
+    </tr></thead>
+    <tbody>
+    ${rows.map(r => {
+      const rc = r.rating ? ratingCls[r.rating] : 'draft';
+      const rl = r.rating ? ratingLabel[r.rating] : 'Draft';
+      return `<tr>
+        <td style="white-space:nowrap">${fmtDate(r.evaluation_date)}</td>
+        <td>${periodLabel[r.review_period] ?? r.review_period}</td>
+        <td style="font-weight:700;font-size:15px">
+          ${r.total_weighted_score != null ? r.total_weighted_score.toFixed(1) + '%' : '—'}
+        </td>
+        <td><span class="rbadge ${rc}">${rl}</span></td>
+        <td><span class="status ${r.status === 'submitted' ? 'ok' : ''}">${
+          r.status === 'submitted' ? 'Submitted' : 'Draft'
+        }</span></td>
+        <td style="font-size:12px;color:var(--muted);max-width:240px">
+          ${esc(r.overall_remarks ?? '—')}
+        </td>
+      </tr>`;
+    }).join('')}
+    </tbody>
+  </table>`;
+}
+
+// ── Submit evaluation ─────────────────────────────────────────────
+async function submitEval(status) {
+  if (!selectedContractId) { toast('Select a contract first', 'warn'); return; }
+
+  const evalDate = document.getElementById('eval-date').value;
+  if (!evalDate) { toast('Enter an evaluation date', 'warn'); return; }
+
+  const period = document.getElementById('eval-period').value;
+  const remarks = document.getElementById('eval-remarks').value.trim();
+
+  // Validate weights
+  const totalW = CATEGORIES.reduce((s, c) =>
+    s + (parseFloat(document.getElementById('w-' + c.key).value) || 0), 0);
+  if (Math.abs(totalW - 100) > 0.01) {
+    toast('Weights must sum to 100%', 'warn'); return;
+  }
+
+  // Collect category data
+  let allScored = true;
+  const categories = CATEGORIES.map(cat => {
+    const weight = parseFloat(document.getElementById('w-' + cat.key).value) || 0;
+    const scoreVal = document.getElementById('s-' + cat.key).value;
+    const score = scoreVal ? parseFloat(scoreVal) : null;
+    const notes = document.getElementById('n-' + cat.key).value.trim();
+    if (score === null) allScored = false;
+    return { key: cat.key, name: cat.name, weight, score, notes };
+  });
+
+  if (status === 'submitted' && !allScored) {
+    toast('Enter scores for all 8 categories before submitting', 'warn'); return;
+  }
+
+  // Compute weighted score and rating
+  let totalWS = null, rating = null;
+  if (allScored) {
+    totalWS = categories.reduce((s, c) => s + (c.score / 5) * c.weight, 0);
+    const r = RATINGS.find(r => totalWS >= r.min);
+    rating = { meets:'meets_requirements', improve:'requires_improvement',
+               unsat:'unsatisfactory' }[r.key];
+  }
+
+  const { error } = await sb.from('cnt_performance_evaluations').insert({
+    contract_id:          selectedContractId,
+    evaluator_id:         auth.user.id,
+    evaluation_date:      evalDate,
+    review_period:        period,
+    categories,
+    total_weighted_score: totalWS != null ? parseFloat(totalWS.toFixed(2)) : null,
+    rating,
+    overall_remarks:      remarks || null,
+    status
+  });
+
+  if (error) { toast(error.message, 'err'); return; }
+
+  toast(status === 'submitted' ? 'Evaluation submitted' : 'Draft saved', 'ok');
+
+  // Reset form scores and notes (keep contract and weights)
+  CATEGORIES.forEach(cat => {
+    document.getElementById('s-' + cat.key).value = '';
+    document.getElementById('n-' + cat.key).value = '';
+    document.getElementById('ws-' + cat.key).textContent = '—';
+    document.getElementById('lbl-' + cat.key).textContent = '';
+  });
+  document.getElementById('total-ws').textContent = '—';
+  document.getElementById('rating-display').style.display = 'none';
+  document.getElementById('eval-remarks').value = '';
+  document.getElementById('eval-date').value = new Date().toISOString().slice(0,10);
+
+  await loadHistory(selectedContractId);
+}
+
+// ── Utility ────────────────────────────────────────────────────
+function esc(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+init();
+</script>
+</body>
+</html>
