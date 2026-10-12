@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Fill Request</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme",t); }
+    window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+  *{ box-sizing:border-box; }
+  body{ font-family:var(--sans); background:var(--bg); margin:0; padding:16px; }
+  .card{ background:var(--card); width:100%; max-width:900px; margin:0 auto 16px; padding:24px; border-radius:12px; box-shadow:0 4px 14px rgba(0,0,0,.11); }
+  h2{ text-align:center; color:var(--heading); border-bottom:2px solid var(--heading); padding-bottom:10px; margin:0 0 18px; font-size:18px; }
+  h3{ color:var(--heading); font-size:14px; margin:0 0 12px; }
+  #connStatus{ font-size:11px; text-align:center; color:#666; margin-bottom:10px; }
+  .form-grid{ display:grid; grid-template-columns:1fr 1fr; gap:12px 20px; }
+  .form-group{ display:flex; flex-direction:column; }
+  .form-group.full{ grid-column:1/-1; }
+  label{ font-size:12px; font-weight:600; color:#555; margin-bottom:4px; }
+  input,select,textarea{ width:100%; padding:9px 12px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:13px; outline:none; transition:border-color .2s; }
+  input:focus,select:focus,textarea:focus{ border-color:var(--accent); }
+  textarea{ min-height:80px; resize:vertical; }
+  .readonly{ background:var(--bg)!important; color:#666; }
+
+  /* Priority badge */
+  .priority-row{ display:flex; gap:10px; flex-wrap:wrap; }
+  .p-btn{ flex:1; min-width:90px; padding:9px 6px; border:2px solid var(--line); border-radius:8px; background:var(--bg); color:var(--text); font-weight:700; font-size:12px; cursor:pointer; text-align:center; transition:all .2s; }
+  .p-btn.sel-Normal{ border-color:#2563eb; background:#eff6ff; color:#2563eb; }
+  .p-btn.sel-Urgent{ border-color:#d97706; background:#fffbeb; color:#d97706; }
+  .p-btn.sel-Critical{ border-color:#dc2626; background:#fef2f2; color:#dc2626; }
+
+  /* Line items */
+  .items-table{ width:100%; border-collapse:collapse; font-size:13px; margin-bottom:10px; }
+  .items-table th{ background:var(--heading); color:#fff; padding:8px 6px; text-align:left; font-size:12px; }
+  .items-table td{ padding:6px; border-bottom:1px solid var(--line); vertical-align:middle; }
+  .items-table input,
+  .items-table select{ padding:7px 8px; font-size:12px; }
+  .rm-btn{ padding:5px 10px; background:#dc2626; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:12px; font-weight:700; width:auto; margin:0; }
+  .add-item-btn{ padding:8px 16px; background:var(--accent); color:#fff; border:none; border-radius:8px; cursor:pointer; font-size:13px; font-weight:600; width:auto; margin:0; }
+
+  /* Action buttons */
+  .btn-row{ display:flex; gap:10px; margin-top:18px; flex-wrap:wrap; }
+  .btn-row button{ flex:1; padding:11px; font-size:14px; font-weight:700; border:none; border-radius:8px; cursor:pointer; transition:opacity .2s; }
+  .btn-row button:hover{ opacity:.85; }
+  .btn-draft{ background:var(--bg); color:var(--heading); border:2px solid var(--heading)!important; }
+  .btn-submit{ background:var(--heading); color:#fff; }
+  .msg{ text-align:center; margin-top:10px; font-size:13px; font-weight:600; min-height:18px; }
+  .msg.ok{ color:#1e7a34; } .msg.err{ color:#dc2626; }
+
+  @media(max-width:580px){ .form-grid{ grid-template-columns:1fr; } .form-group.full{ grid-column:1; } }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+</head>
+<body>
+<div class="card">
+  <h2>📋 Fill Request</h2>
+  <div id="connStatus">Connecting...</div>
+
+  <div class="form-grid">
+    <div class="form-group">
+      <label>Date</label>
+      <input type="date" id="f_date" class="readonly" readonly>
+    </div>
+    <div class="form-group">
+      <label>Request Number</label>
+      <input type="text" id="f_reqno" class="readonly" readonly placeholder="Auto-generated on submit">
+    </div>
+    <div class="form-group">
+      <label>Your ID</label>
+      <input type="text" id="f_userid" class="readonly" readonly>
+    </div>
+    <div class="form-group">
+      <label>Department</label>
+      <input type="text" id="f_dept" class="readonly" readonly>
+    </div>
+    <div class="form-group full">
+      <label>Request Title</label>
+      <input type="text" id="f_title" placeholder="e.g. Workshop Consumables Request">
+    </div>
+    <div class="form-group full">
+      <label>Description / Additional Notes</label>
+      <textarea id="f_desc" placeholder="Any additional information about this request (optional)"></textarea>
+    </div>
+    <div class="form-group full">
+      <label>Priority</label>
+      <div class="priority-row">
+        <button type="button" class="p-btn sel-Normal" id="pri_Normal" onclick="setPriority('Normal')">🔵 Normal</button>
+        <button type="button" class="p-btn" id="pri_Urgent" onclick="setPriority('Urgent')">🟡 Urgent</button>
+        <button type="button" class="p-btn" id="pri_Critical" onclick="setPriority('Critical')">🔴 Critical</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h3>📦 Items Requested</h3>
+  <table class="items-table">
+    <thead>
+      <tr><th>#</th><th>Item Name</th><th>Quantity</th><th>Unit</th><th>Remarks</th><th></th></tr>
+    </thead>
+    <tbody id="itemsBody"></tbody>
+  </table>
+  <button type="button" class="add-item-btn" onclick="addItemRow()">+ Add Item</button>
+
+  <div class="btn-row">
+    <button class="btn-draft" onclick="saveRequest('draft')">💾 Save as Draft</button>
+    <button class="btn-submit" onclick="saveRequest('submitted')">📤 Submit Request</button>
+  </div>
+  <div class="msg" id="msg"></div>
+</div>
+
+<script>
+let ME = null;
+let PRIORITY = 'Normal';
+let ITEM_COUNT = 0;
+const UNITS = ['pcs','kg','litres','rolls','metres','bags','boxes','sets','pairs','sheets','bottles','cartons'];
+
+function authHeaders(){ return { "apikey":SUPABASE_ANON_KEY,"Authorization":"Bearer "+SUPABASE_ANON_KEY,"Content-Type":"application/json" }; }
+function esc(s){ return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+function setPriority(p){
+  PRIORITY = p;
+  ['Normal','Urgent','Critical'].forEach(x=>{
+    const b = document.getElementById("pri_"+x);
+    b.className = "p-btn" + (x===p ? " sel-"+p : "");
+  });
+}
+
+function addItemRow(name='',qty=1,unit='pcs',remarks=''){
+  ITEM_COUNT++;
+  const id = ITEM_COUNT;
+  const body = document.getElementById("itemsBody");
+  const tr = document.createElement("tr");
+  tr.id = "irow_"+id;
+  const unitOpts = UNITS.map(u=>`<option value="${u}" ${u===unit?"selected":""}>${u}</option>`).join("");
+  tr.innerHTML = `
+    <td style="color:#888;font-size:12px;">${id}</td>
+    <td><input type="text" id="iname_${id}" value="${esc(name)}" placeholder="Item name"></td>
+    <td><input type="number" id="iqty_${id}" value="${qty}" min="0.01" step="0.01" style="width:80px;"></td>
+    <td><select id="iunit_${id}">${unitOpts}</select></td>
+    <td><input type="text" id="iremark_${id}" value="${esc(remarks)}" placeholder="Optional"></td>
+    <td><button class="rm-btn" onclick="removeItemRow(${id})">✕</button></td>`;
+  body.appendChild(tr);
+}
+
+function removeItemRow(id){
+  const row = document.getElementById("irow_"+id);
+  if(row) row.remove();
+}
+
+function getItems(){
+  const rows = document.querySelectorAll("#itemsBody tr");
+  const items = [];
+  rows.forEach(row=>{
+    const id = row.id.replace("irow_","");
+    const name = document.getElementById("iname_"+id)?.value.trim();
+    const qty  = parseFloat(document.getElementById("iqty_"+id)?.value) || 0;
+    const unit = document.getElementById("iunit_"+id)?.value;
+    const rem  = document.getElementById("iremark_"+id)?.value.trim();
+    if(name) items.push({ item_name:name, quantity:qty, unit, remarks:rem||null, qty_released:0, item_status:'pending' });
+  });
+  return items;
+}
+
+async function saveRequest(status){
+  const msg = document.getElementById("msg");
+  const title = document.getElementById("f_title").value.trim();
+  if(!title){ msg.className="msg err"; msg.textContent="❌ Request title is required."; return; }
+  const items = getItems();
+  if(!items.length){ msg.className="msg err"; msg.textContent="❌ Add at least one item."; return; }
+
+  msg.className="msg"; msg.textContent="Saving...";
+  try{
+    const payload = {
+      title,
+      description: document.getElementById("f_desc").value.trim() || null,
+      priority: PRIORITY,
+      status,
+      requester_id: ME.id,
+      requester_username: ME.username,
+      department: ME.departmentNames?.[0] || null,
+      section: ME.sectionName || null,
+      submitted_at: status==='submitted' ? new Date().toISOString() : null,
+      updated_at: new Date().toISOString()
+    };
+
+    const res = await fetch(SUPABASE_URL+"/rest/v1/requests", {
+      method:"POST",
+      headers: Object.assign({},authHeaders(),{"Prefer":"return=representation"}),
+      body: JSON.stringify(payload)
+    });
+    if(!res.ok) throw new Error("HTTP "+res.status+" — "+await res.text());
+    const [req] = await res.json();
+
+    // Insert line items
+    const itemPayload = items.map(i=>Object.assign({},i,{ request_id: req.id }));
+    const itemRes = await fetch(SUPABASE_URL+"/rest/v1/request_items", {
+      method:"POST", headers:authHeaders(), body:JSON.stringify(itemPayload)
+    });
+    if(!itemRes.ok) throw new Error("Items: HTTP "+itemRes.status);
+
+    // Log activity
+    await fetch(SUPABASE_URL+"/rest/v1/request_activity_log", {
+      method:"POST", headers:authHeaders(),
+      body: JSON.stringify({ request_id:req.id, actor_username:ME.username,
+        action: status==='submitted'?"Submitted":"Saved as Draft",
+        note: `Request "${title}" ${status==='submitted'?"submitted for processing":"saved as draft"}.` })
+    });
+
+    msg.className="msg ok";
+    msg.textContent = status==='submitted'
+      ? "✅ Request submitted successfully! Number: "+req.request_number
+      : "✅ Draft saved! Number: "+req.request_number;
+
+    // Reset form after 2s
+    setTimeout(()=>{
+      document.getElementById("f_title").value="";
+      document.getElementById("f_desc").value="";
+      document.getElementById("f_reqno").value="";
+      document.getElementById("itemsBody").innerHTML="";
+      ITEM_COUNT=0; PRIORITY='Normal'; setPriority('Normal');
+      msg.textContent="";
+    },2500);
+
+  }catch(e){ msg.className="msg err"; msg.textContent="❌ "+e.message; }
+}
+
+async function init(){
+  const s = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    document.getElementById("f_date").value = new Date().toISOString().slice(0,10);
+    document.getElementById("f_userid").value = ME.username;
+    document.getElementById("f_dept").value = ME.departmentNames?.[0] || ME.sectionName || "—";
+    s.style.color="#1e7a34"; s.textContent="Connected as "+ME.username;
+    addItemRow(); // start with one empty row
+  }catch(e){ s.style.color="#dc2626"; s.textContent="Error: "+e.message; }
+}
+init();
+</script>
+</body>
+</html>
