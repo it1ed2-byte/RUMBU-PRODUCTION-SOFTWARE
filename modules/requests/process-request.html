@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Process Request</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme",t); }
+    window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+  *{ box-sizing:border-box; }
+  body{ font-family:var(--sans); background:var(--bg); margin:0; padding:16px; }
+  .card{ background:var(--card); width:100%; max-width:950px; margin:0 auto 16px; padding:22px; border-radius:12px; box-shadow:0 4px 12px rgba(0,0,0,.11); }
+  h2{ text-align:center; color:var(--heading); border-bottom:2px solid var(--heading); padding-bottom:10px; margin:0 0 16px; font-size:18px; }
+  h3{ color:var(--heading); font-size:14px; margin:0 0 12px; }
+  #connStatus{ font-size:11px; text-align:center; color:#666; margin-bottom:10px; }
+  .info-grid{ display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px 20px; background:var(--bg); border-radius:10px; padding:14px; margin-bottom:16px; }
+  .info-item label{ font-size:11px; color:#888; font-weight:700; display:block; margin-bottom:2px; }
+  .info-item span{ font-size:13px; font-weight:700; color:var(--text); }
+  .badge{ display:inline-block; padding:3px 10px; border-radius:20px; font-size:11px; font-weight:700; }
+  .badge-submitted{ background:#dbeafe; color:#1d4ed8; }
+  .badge-acknowledged{ background:#e0f2fe; color:#0369a1; }
+  .badge-in_progress{ background:#fef9c3; color:#92400e; }
+  .badge-partially_released{ background:#fff7ed; color:#c2410c; }
+  .badge-released{ background:#dcfce7; color:#15803d; }
+  .badge-rejected{ background:#fee2e2; color:#dc2626; }
+  .badge-closed{ background:#f3f4f6; color:#374151; }
+  .pri-Critical{ color:#dc2626; font-weight:700; }
+  .pri-Urgent{ color:#d97706; font-weight:700; }
+  .pri-Normal{ color:#2563eb; font-weight:700; }
+
+  /* Items table */
+  .items-tbl{ width:100%; border-collapse:collapse; font-size:13px; margin-bottom:16px; }
+  .items-tbl th{ background:var(--heading); color:#fff; padding:9px 8px; text-align:left; }
+  .items-tbl td{ padding:8px; border-bottom:1px solid var(--line); vertical-align:middle; }
+  .items-tbl input[type="number"]{ width:80px; padding:6px 8px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:13px; }
+  .items-tbl select{ width:140px; padding:6px 8px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:13px; }
+  .item-pend{ background:#fef9c3; }
+  .item-rel{ background:#f0fdf4; }
+  .item-unav{ background:#fef2f2; }
+  .item-part{ background:#fff7ed; }
+
+  /* Store remark + status change */
+  label{ font-size:12px; font-weight:600; color:#555; margin-bottom:4px; display:block; }
+  textarea,input[type="text"]{ width:100%; padding:9px 12px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:13px; outline:none; }
+  textarea{ min-height:70px; resize:vertical; }
+
+  .action-grid{ display:grid; grid-template-columns:1fr 1fr; gap:12px 20px; margin-bottom:14px; }
+  .form-group{ display:flex; flex-direction:column; }
+  .form-group.full{ grid-column:1/-1; }
+
+  .btn-row{ display:flex; gap:10px; flex-wrap:wrap; margin-top:14px; }
+  .btn-row button{ flex:1; min-width:120px; padding:11px; font-size:13px; font-weight:700; border:none; border-radius:8px; cursor:pointer; transition:opacity .2s; }
+  .btn-row button:hover{ opacity:.85; }
+  .btn-ack{ background:#0369a1; color:#fff; }
+  .btn-progress{ background:#d97706; color:#fff; }
+  .btn-release{ background:#15803d; color:#fff; }
+  .btn-reject{ background:#dc2626; color:#fff; }
+  .btn-back{ background:var(--bg); color:var(--heading); border:2px solid var(--heading)!important; }
+  .msg{ text-align:center; margin-top:10px; font-size:13px; font-weight:600; min-height:18px; }
+  .msg.ok{ color:#15803d; } .msg.err{ color:#dc2626; }
+
+  /* Activity log */
+  .log-list{ list-style:none; margin:0; padding:0; }
+  .log-list li{ padding:8px 0; border-bottom:1px solid var(--line); font-size:12px; color:#555; }
+  .log-list li b{ color:var(--heading); }
+
+  @media(max-width:600px){ .info-grid{ grid-template-columns:1fr 1fr; } .action-grid{ grid-template-columns:1fr; } }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+</head>
+<body>
+<div class="card" id="loadingCard">
+  <h2>⚙️ Process Request</h2>
+  <div id="connStatus">Loading request...</div>
+</div>
+
+<div id="mainContent" style="display:none;">
+<div class="card">
+  <h2>⚙️ Process Request — <span id="reqTitle"></span></h2>
+  <div class="info-grid" id="reqInfo"></div>
+  <div id="descBox" style="display:none;background:var(--bg);border-radius:8px;padding:12px;margin-bottom:14px;font-size:13px;color:var(--text);"></div>
+</div>
+
+<div class="card">
+  <h3>📦 Items — Update Release Status</h3>
+  <table class="items-tbl">
+    <thead><tr><th>#</th><th>Item</th><th>Qty Requested</th><th>Unit</th><th>Qty to Release</th><th>Item Status</th><th>Remarks</th></tr></thead>
+    <tbody id="itemsBody"></tbody>
+  </table>
+
+  <div class="action-grid">
+    <div class="form-group full">
+      <label>Store Remark (visible to requester)</label>
+      <textarea id="storeRemark" placeholder="e.g. Released 3 of 5 litres — balance unavailable. Will update when restocked."></textarea>
+    </div>
+    <div class="form-group" id="rejectReasonWrap" style="display:none;">
+      <label>Rejection Reason <span style="color:#dc2626;">*</span></label>
+      <input type="text" id="rejectReason" placeholder="State why this request cannot be fulfilled">
+    </div>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn-back" onclick="goBack()">← Back</button>
+    <button class="btn-ack" onclick="updateStatus('acknowledged')">👁️ Acknowledge</button>
+    <button class="btn-progress" onclick="updateStatus('in_progress')">⚙️ Mark In Progress</button>
+    <button class="btn-release" onclick="releaseRequest()">✅ Release</button>
+    <button class="btn-reject" onclick="toggleReject()">❌ Reject</button>
+  </div>
+  <div id="rejectConfirmRow" style="display:none;margin-top:10px;">
+    <button style="background:#dc2626;color:#fff;border:none;border-radius:8px;padding:10px 20px;font-weight:700;font-size:13px;cursor:pointer;" onclick="confirmReject()">Confirm Rejection</button>
+  </div>
+  <div class="msg" id="actionMsg"></div>
+</div>
+
+<div class="card">
+  <h3>📜 Activity Log</h3>
+  <ul class="log-list" id="activityLog"></ul>
+</div>
+</div>
+
+<script>
+let ME=null, REQUEST=null, ITEMS=[];
+function esc(s){ return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+function authHeaders(e){ return Object.assign({"apikey":SUPABASE_ANON_KEY,"Authorization":"Bearer "+SUPABASE_ANON_KEY,"Content-Type":"application/json"},e||{}); }
+function fmtDate(d){ return d?d.slice(0,10):"—"; }
+function fmtDT(d){ return d?(d.slice(0,10)+" "+d.slice(11,16)):"—"; }
+function statusBadge(s){ return `<span class="badge badge-${s}">${esc(s.replace(/_/g," "))}</span>`; }
+
+function getRequestId(){
+  const p=new URLSearchParams(window.location.search);
+  return p.get("id") || sessionStorage.getItem("process_request_id");
+}
+
+async function loadRequest(){
+  const id=getRequestId();
+  if(!id){ document.getElementById("connStatus").textContent="No request ID found."; return; }
+  try{
+    const [reqRes,itemsRes,logRes]=await Promise.all([
+      fetch(SUPABASE_URL+"/rest/v1/requests?id=eq."+id+"&select=*",{headers:authHeaders()}).then(r=>r.json()),
+      fetch(SUPABASE_URL+"/rest/v1/request_items?request_id=eq."+id+"&order=created_at",{headers:authHeaders()}).then(r=>r.json()),
+      fetch(SUPABASE_URL+"/rest/v1/request_activity_log?request_id=eq."+id+"&order=created_at.desc",{headers:authHeaders()}).then(r=>r.json())
+    ]);
+    REQUEST=reqRes[0]; ITEMS=itemsRes;
+    if(!REQUEST){ document.getElementById("connStatus").textContent="Request not found."; return; }
+
+    document.getElementById("reqTitle").textContent=REQUEST.request_number;
+    document.getElementById("reqInfo").innerHTML=`
+      <div class="info-item"><label>Department</label><span>${esc(REQUEST.department)}</span></div>
+      <div class="info-item"><label>Requester</label><span>${esc(REQUEST.requester_username)}</span></div>
+      <div class="info-item"><label>Priority</label><span class="pri-${REQUEST.priority}">${REQUEST.priority==="Critical"?"🔴":REQUEST.priority==="Urgent"?"🟡":"🔵"} ${REQUEST.priority}</span></div>
+      <div class="info-item"><label>Status</label><span>${statusBadge(REQUEST.status)}</span></div>
+      <div class="info-item"><label>Date Submitted</label><span>${fmtDate(REQUEST.submitted_at||REQUEST.created_at)}</span></div>
+      <div class="info-item"><label>Title</label><span>${esc(REQUEST.title)}</span></div>`;
+
+    if(REQUEST.description){
+      const d=document.getElementById("descBox");
+      d.style.display="block";
+      d.innerHTML=`<b>Notes:</b> ${esc(REQUEST.description)}`;
+    }
+
+    // Render items
+    const body=document.getElementById("itemsBody");
+    body.innerHTML=ITEMS.map((item,i)=>{
+      const rowCls=item.item_status==="released"?"item-rel":item.item_status==="unavailable"?"item-unav":item.item_status==="partial"?"item-part":"item-pend";
+      const statusOpts=["pending","released","partial","unavailable"].map(s=>`<option value="${s}" ${s===item.item_status?"selected":""}>${s}</option>`).join("");
+      return `<tr class="${rowCls}" id="irow_${item.id}">
+        <td>${i+1}</td>
+        <td><b>${esc(item.item_name)}</b></td>
+        <td>${item.quantity} ${esc(item.unit)}</td>
+        <td>${esc(item.unit)}</td>
+        <td><input type="number" id="irel_${item.id}" value="${item.qty_released||0}" min="0" step="0.01" max="${item.quantity}" oninput="autoItemStatus('${item.id}',${item.quantity})"></td>
+        <td><select id="istat_${item.id}" onchange="updateItemRowColor('${item.id}')">${statusOpts}</select></td>
+        <td><input type="text" id="irem_${item.id}" value="${esc(item.remarks||"")}" placeholder="Optional"></td>
+      </tr>`;
+    }).join("");
+
+    // Render log
+    document.getElementById("activityLog").innerHTML=logRes.map(l=>`<li><b>${esc(l.actor_username)}</b> · ${esc(l.action)} · <span style="color:#888;">${fmtDT(l.created_at)}</span><br>${esc(l.note)}</li>`).join("") || "<li style='color:#888;'>No activity yet.</li>";
+
+    if(REQUEST.store_remark) document.getElementById("storeRemark").value=REQUEST.store_remark;
+    document.getElementById("loadingCard").style.display="none";
+    document.getElementById("mainContent").style.display="block";
+  }catch(e){ document.getElementById("connStatus").textContent="Error: "+e.message; }
+}
+
+function autoItemStatus(id,maxQty){
+  const rel=parseFloat(document.getElementById("irel_"+id).value)||0;
+  const sel=document.getElementById("istat_"+id);
+  if(rel<=0) sel.value="pending";
+  else if(rel>=maxQty) sel.value="released";
+  else sel.value="partial";
+  updateItemRowColor(id);
+}
+
+function updateItemRowColor(id){
+  const stat=document.getElementById("istat_"+id).value;
+  const row=document.getElementById("irow_"+id);
+  row.className=stat==="released"?"item-rel":stat==="unavailable"?"item-unav":stat==="partial"?"item-part":"item-pend";
+}
+
+async function saveItems(){
+  for(const item of ITEMS){
+    const rel=parseFloat(document.getElementById("irel_"+item.id).value)||0;
+    const stat=document.getElementById("istat_"+item.id).value;
+    const rem=document.getElementById("irem_"+item.id).value.trim();
+    await fetch(SUPABASE_URL+"/rest/v1/request_items?id=eq."+item.id,{
+      method:"PATCH", headers:authHeaders(),
+      body:JSON.stringify({ qty_released:rel, item_status:stat, remarks:rem||null })
+    });
+  }
+}
+
+async function logActivity(action,note){
+  await fetch(SUPABASE_URL+"/rest/v1/request_activity_log",{
+    method:"POST", headers:authHeaders(),
+    body:JSON.stringify({ request_id:REQUEST.id, actor_username:ME.username, action, note })
+  });
+}
+
+async function updateStatus(newStatus){
+  const msg=document.getElementById("actionMsg");
+  msg.className="msg"; msg.textContent="Updating...";
+  try{
+    await saveItems();
+    const remark=document.getElementById("storeRemark").value.trim();
+    await fetch(SUPABASE_URL+"/rest/v1/requests?id=eq."+REQUEST.id,{
+      method:"PATCH", headers:authHeaders(),
+      body:JSON.stringify({ status:newStatus, store_remark:remark||null, updated_at:new Date().toISOString() })
+    });
+    await logActivity("Status Updated","Status changed to: "+newStatus+(remark?" | Remark: "+remark:""));
+    msg.className="msg ok"; msg.textContent="✅ Status updated to: "+newStatus.replace(/_/g," ");
+    setTimeout(()=>loadRequest(),1200);
+  }catch(e){ msg.className="msg err"; msg.textContent="❌ "+e.message; }
+}
+
+async function releaseRequest(){
+  const msg=document.getElementById("actionMsg");
+  msg.className="msg"; msg.textContent="Processing release...";
+  try{
+    await saveItems();
+    // Check if all items are released or unavailable
+    const anyPartial=ITEMS.some(item=>{
+      const stat=document.getElementById("istat_"+item.id).value;
+      return stat==="pending"||stat==="partial";
+    });
+    const finalStatus=anyPartial?"partially_released":"released";
+    const remark=document.getElementById("storeRemark").value.trim();
+    await fetch(SUPABASE_URL+"/rest/v1/requests?id=eq."+REQUEST.id,{
+      method:"PATCH", headers:authHeaders(),
+      body:JSON.stringify({ status:finalStatus, store_remark:remark||null,
+        released_at:finalStatus==="released"?new Date().toISOString():null,
+        updated_at:new Date().toISOString() })
+    });
+    await logActivity("Items Released", finalStatus==="released"?"All items fully released."+"":("Partially released. "+ITEMS.filter(i=>document.getElementById("istat_"+i.id).value==="pending").map(i=>i.item_name).join(", ")+" still pending.")+(remark?" | Remark: "+remark:""));
+    msg.className="msg ok"; msg.textContent="✅ "+(finalStatus==="released"?"Fully Released!":"Partially Released — some items still pending.");
+    setTimeout(()=>loadRequest(),1500);
+  }catch(e){ msg.className="msg err"; msg.textContent="❌ "+e.message; }
+}
+
+function toggleReject(){
+  const w=document.getElementById("rejectReasonWrap"), r=document.getElementById("rejectConfirmRow");
+  const visible=w.style.display!=="none";
+  w.style.display=visible?"none":"flex";
+  r.style.display=visible?"none":"block";
+  document.getElementById("actionMsg").textContent="";
+}
+
+async function confirmReject(){
+  const reason=document.getElementById("rejectReason").value.trim();
+  const msg=document.getElementById("actionMsg");
+  if(!reason){ msg.className="msg err"; msg.textContent="❌ Please state a rejection reason."; return; }
+  msg.className="msg"; msg.textContent="Rejecting...";
+  try{
+    const remark=document.getElementById("storeRemark").value.trim();
+    await fetch(SUPABASE_URL+"/rest/v1/requests?id=eq."+REQUEST.id,{
+      method:"PATCH", headers:authHeaders(),
+      body:JSON.stringify({ status:"rejected", rejected_reason:reason, store_remark:remark||null, updated_at:new Date().toISOString() })
+    });
+    await logActivity("Request Rejected","Reason: "+reason+(remark?" | Remark: "+remark:""));
+    msg.className="msg ok"; msg.textContent="✅ Request rejected.";
+    setTimeout(()=>window.history.back(),1500);
+  }catch(e){ msg.className="msg err"; msg.textContent="❌ "+e.message; }
+}
+
+function goBack(){ window.history.back(); }
+
+async function init(){
+  const s=document.getElementById("connStatus");
+  try{
+    ME=await requireAuth("../../login.html");
+    if(!ME) return;
+    await loadRequest();
+  }catch(e){ s.style.color="#dc2626"; s.textContent="Error: "+e.message; }
+}
+init();
+</script>
+</body>
+</html>

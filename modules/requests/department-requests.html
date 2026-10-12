@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Department Requests</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme",t); }
+    window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+  *{ box-sizing:border-box; }
+  body{ font-family:var(--sans); background:var(--bg); margin:0; padding:16px; }
+  .card{ background:var(--card); width:100%; max-width:1100px; margin:0 auto 16px; padding:20px; border-radius:12px; box-shadow:0 4px 12px rgba(0,0,0,.11); }
+  h2{ text-align:center; color:var(--heading); border-bottom:2px solid var(--heading); padding-bottom:10px; margin:0 0 16px; font-size:18px; }
+  #connStatus{ font-size:11px; text-align:center; color:#666; margin-bottom:10px; }
+  .summary-row{ display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px; }
+  .chip{ padding:7px 16px; border-radius:20px; font-size:12px; font-weight:700; white-space:nowrap; }
+  .chip-total{ background:#e8f0fb; color:#1F3864; }
+  .chip-pending{ background:#dbeafe; color:#1d4ed8; }
+  .chip-progress{ background:#fef9c3; color:#92400e; }
+  .chip-released{ background:#dcfce7; color:#15803d; }
+  .toolbar{ display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; align-items:center; }
+  .toolbar input,.toolbar select{ padding:9px 12px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:13px; outline:none; }
+  .toolbar input{ flex:1; min-width:180px; }
+  .toolbar select{ width:auto; }
+  .count-label{ font-size:12px; color:#666; }
+  .table-wrap{ overflow-x:auto; }
+  table{ border-collapse:collapse; width:100%; font-size:13px; }
+  th{ background:var(--heading); color:#fff; padding:10px 8px; text-align:left; white-space:nowrap; }
+  td{ padding:9px 8px; border-bottom:1px solid var(--line); vertical-align:middle; }
+  tr:hover td{ background:var(--bg); }
+  .badge{ display:inline-block; padding:3px 10px; border-radius:20px; font-size:11px; font-weight:700; white-space:nowrap; }
+  .badge-draft{ background:#f3f4f6; color:#6b7280; }
+  .badge-submitted{ background:#dbeafe; color:#1d4ed8; }
+  .badge-acknowledged{ background:#e0f2fe; color:#0369a1; }
+  .badge-in_progress{ background:#fef9c3; color:#92400e; }
+  .badge-partially_released{ background:#fff7ed; color:#c2410c; }
+  .badge-released{ background:#dcfce7; color:#15803d; }
+  .badge-rejected{ background:#fee2e2; color:#dc2626; }
+  .badge-closed{ background:#f3f4f6; color:#374151; }
+  .pri-Normal{ color:#2563eb; font-weight:700; }
+  .pri-Urgent{ color:#d97706; font-weight:700; }
+  .pri-Critical{ color:#dc2626; font-weight:700; }
+  .view-btn{ padding:5px 12px; background:var(--accent); color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:12px; font-weight:600; }
+  .pagination{ display:flex; align-items:center; justify-content:center; gap:6px; margin-top:14px; flex-wrap:wrap; }
+  .pagination button{ padding:6px 12px; font-size:12px; background:var(--bg); color:var(--heading); border:1px solid var(--line); border-radius:6px; font-weight:600; cursor:pointer; }
+  .pagination button.active{ background:var(--heading); color:#fff; border-color:var(--heading); }
+  .pagination button:disabled{ opacity:.4; cursor:default; }
+  .page-info{ font-size:12px; color:#666; }
+  #detailModal{ display:none; position:fixed; inset:0; z-index:9999; background:rgba(0,0,0,.45); align-items:center; justify-content:center; }
+  #detailModal.open{ display:flex; }
+  .detail-box{ background:var(--card); border-radius:14px; padding:24px; max-width:700px; width:95%; max-height:90vh; overflow-y:auto; box-shadow:0 8px 32px rgba(0,0,0,.2); }
+  .detail-box h3{ color:var(--heading); margin:0 0 14px; }
+  .info-grid{ display:grid; grid-template-columns:1fr 1fr; gap:8px 20px; margin-bottom:16px; }
+  .info-item label{ font-size:11px; color:#888; font-weight:700; display:block; }
+  .info-item span{ font-size:13px; font-weight:600; }
+  .items-tbl{ width:100%; border-collapse:collapse; font-size:12px; margin-bottom:14px; }
+  .items-tbl th{ background:var(--heading); color:#fff; padding:7px 8px; text-align:left; }
+  .items-tbl td{ padding:7px 8px; border-bottom:1px solid var(--line); }
+  .close-btn{ padding:9px 20px; background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:8px; cursor:pointer; font-size:13px; font-weight:700; width:auto; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+</head>
+<body>
+<div class="card">
+  <h2>🏢 Department Requests</h2>
+  <div id="connStatus">Connecting...</div>
+  <div class="summary-row" id="summaryRow"></div>
+  <div class="toolbar">
+    <input type="text" id="searchBox" placeholder="🔍 Search title, number or requester..." oninput="onSearch()">
+    <select id="filterStatus" onchange="onSearch()">
+      <option value="">All Statuses</option>
+      <option value="draft">Draft</option>
+      <option value="submitted">Submitted</option>
+      <option value="acknowledged">Acknowledged</option>
+      <option value="in_progress">In Progress</option>
+      <option value="partially_released">Partially Released</option>
+      <option value="released">Released</option>
+      <option value="rejected">Rejected</option>
+      <option value="closed">Closed</option>
+    </select>
+    <select id="rowsPerPage" onchange="onRowsChange()">
+      <option value="10">10 rows</option>
+      <option value="25" selected>25 rows</option>
+      <option value="50">50 rows</option>
+    </select>
+    <button style="width:auto;padding:9px 14px;background:var(--heading);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;" onclick="loadData()">⟳ Refresh</button>
+    <span class="count-label" id="countLabel"></span>
+  </div>
+  <div class="table-wrap"><div id="tableArea">Loading...</div></div>
+  <div class="pagination" id="paginationArea"></div>
+</div>
+
+<div id="detailModal">
+  <div class="detail-box">
+    <h3 id="dTitle"></h3>
+    <div class="info-grid" id="dInfo"></div>
+    <h4 style="color:var(--heading);margin:0 0 8px;">Items</h4>
+    <table class="items-tbl"><thead><tr><th>Item</th><th>Qty</th><th>Unit</th><th>Released</th><th>Status</th><th>Remarks</th></tr></thead>
+    <tbody id="dItems"></tbody></table>
+    <div style="margin-top:14px;text-align:right;"><button class="close-btn" onclick="closeDetail()">Close</button></div>
+  </div>
+</div>
+
+<script>
+let ME=null, ALL_ROWS=[], FILTERED=[], currentPage=1;
+function esc(s){ return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+function authHeaders(){ return {"apikey":SUPABASE_ANON_KEY,"Authorization":"Bearer "+SUPABASE_ANON_KEY}; }
+function fmtDate(d){ return d?d.slice(0,10):"—"; }
+function getRowsPerPage(){ return Number(document.getElementById("rowsPerPage").value)||25; }
+function statusBadge(s){ return `<span class="badge badge-${s}">${esc(s.replace(/_/g," "))}</span>`; }
+function priBadge(p){ return `<span class="pri-${p}">${p==="Normal"?"🔵":p==="Urgent"?"🟡":"🔴"} ${p}</span>`; }
+
+async function loadData(){
+  document.getElementById("tableArea").innerHTML="Loading...";
+  try{
+    const dept = ME.departmentNames?.[0];
+    let url = SUPABASE_URL+"/rest/v1/requests?select=*&order=created_at.desc";
+    if(dept) url += "&department=eq."+encodeURIComponent(dept);
+    const res = await fetch(url,{headers:Object.assign({},authHeaders(),{"Range-Unit":"items","Range":"0-4999"})});
+    ALL_ROWS = await res.json();
+    // Summary chips
+    const sr = document.getElementById("summaryRow");
+    const counts = { submitted:0, in_progress:0, released:0 };
+    ALL_ROWS.forEach(r=>{
+      if(r.status==="submitted"||r.status==="acknowledged") counts.submitted++;
+      else if(r.status==="in_progress"||r.status==="partially_released") counts.in_progress++;
+      else if(r.status==="released"||r.status==="closed") counts.released++;
+    });
+    sr.innerHTML=`<span class="chip chip-total">📋 Total: ${ALL_ROWS.length}</span>
+      <span class="chip chip-pending">📤 Pending: ${counts.submitted}</span>
+      <span class="chip chip-progress">⚙️ In Progress: ${counts.in_progress}</span>
+      <span class="chip chip-released">✅ Released: ${counts.released}</span>`;
+    currentPage=1; document.getElementById("searchBox").value=""; onSearch();
+  }catch(e){ document.getElementById("tableArea").innerHTML="❌ "+e.message; }
+}
+
+function onSearch(){ currentPage=1; applyFilter(); }
+function onRowsChange(){ currentPage=1; applyFilter(); }
+
+function applyFilter(){
+  const q=document.getElementById("searchBox").value.trim().toLowerCase();
+  const st=document.getElementById("filterStatus").value;
+  FILTERED=ALL_ROWS.filter(r=>{
+    if(st&&r.status!==st) return false;
+    if(q&&!(r.title||"").toLowerCase().includes(q)&&!(r.request_number||"").toLowerCase().includes(q)&&!(r.requester_username||"").toLowerCase().includes(q)) return false;
+    return true;
+  });
+  renderTable();
+}
+
+function renderTable(){
+  const total=FILTERED.length,rpp=getRowsPerPage();
+  const totalPages=Math.max(1,Math.ceil(total/rpp));
+  if(currentPage>totalPages) currentPage=totalPages;
+  const start=(currentPage-1)*rpp, end=Math.min(start+rpp,total);
+  const rows=FILTERED.slice(start,end);
+  document.getElementById("countLabel").textContent=total+" request"+(total!==1?"s":"");
+  if(!rows.length){ document.getElementById("tableArea").innerHTML="<p style='color:#666;padding:10px 0;font-size:13px;'>No requests found.</p>"; document.getElementById("paginationArea").innerHTML=""; return; }
+  let html="<table><thead><tr><th>#</th><th>Number</th><th>Title</th><th>Requester</th><th>Priority</th><th>Status</th><th>Date</th><th>Action</th></tr></thead><tbody>";
+  rows.forEach((r,i)=>{
+    html+=`<tr><td>${start+i+1}</td><td><b>${esc(r.request_number)}</b></td><td>${esc(r.title)}</td>
+      <td>${esc(r.requester_username)}</td><td>${priBadge(r.priority)}</td>
+      <td>${statusBadge(r.status)}</td><td>${fmtDate(r.created_at)}</td>
+      <td><button class="view-btn" onclick="openDetail('${r.id}')">View</button></td></tr>`;
+  });
+  html+="</tbody></table>";
+  document.getElementById("tableArea").innerHTML=html;
+  // Pagination
+  if(totalPages<=1){ document.getElementById("paginationArea").innerHTML=""; return; }
+  let p=`<button onclick="goPage(${currentPage-1})" ${currentPage===1?"disabled":""}>‹ Prev</button>`;
+  let pages=new Set([1,totalPages]);
+  for(let x=Math.max(1,currentPage-2);x<=Math.min(totalPages,currentPage+2);x++) pages.add(x);
+  let prev=0;
+  Array.from(pages).sort((a,b)=>a-b).forEach(pg=>{ if(prev&&pg-prev>1) p+=`<span class="page-info">…</span>`; p+=`<button class="${pg===currentPage?"active":""}" onclick="goPage(${pg})">${pg}</button>`; prev=pg; });
+  p+=`<button onclick="goPage(${currentPage+1})" ${currentPage===totalPages?"disabled":""}>Next ›</button><span class="page-info">Page ${currentPage} of ${totalPages}</span>`;
+  document.getElementById("paginationArea").innerHTML=p;
+}
+function goPage(p){ const tp=Math.max(1,Math.ceil(FILTERED.length/getRowsPerPage())); if(p<1||p>tp) return; currentPage=p; renderTable(); }
+
+async function openDetail(id){
+  const req=ALL_ROWS.find(r=>r.id===id); if(!req) return;
+  document.getElementById("dTitle").textContent=req.request_number+" — "+req.title;
+  document.getElementById("dInfo").innerHTML=`
+    <div class="info-item"><label>Requester</label><span>${esc(req.requester_username)}</span></div>
+    <div class="info-item"><label>Status</label><span>${req.status.replace(/_/g," ")}</span></div>
+    <div class="info-item"><label>Priority</label><span>${req.priority}</span></div>
+    <div class="info-item"><label>Date</label><span>${fmtDate(req.created_at)}</span></div>
+    ${req.store_remark?`<div class="info-item" style="grid-column:1/-1"><label>Store Remark</label><span>${esc(req.store_remark)}</span></div>`:""}
+    ${req.rejected_reason?`<div class="info-item" style="grid-column:1/-1"><label>Rejection Reason</label><span style="color:#dc2626;">${esc(req.rejected_reason)}</span></div>`:""}
+  `;
+  try{
+    const items=await fetch(SUPABASE_URL+"/rest/v1/request_items?request_id=eq."+id+"&order=created_at",{headers:authHeaders()}).then(r=>r.json());
+    document.getElementById("dItems").innerHTML=items.map(i=>`<tr><td>${esc(i.item_name)}</td><td>${i.quantity}</td><td>${esc(i.unit)}</td><td>${i.qty_released||0}</td><td><span class="badge badge-${i.item_status}">${i.item_status}</span></td><td>${esc(i.remarks)}</td></tr>`).join("");
+  }catch(e){}
+  document.getElementById("detailModal").classList.add("open");
+}
+function closeDetail(){ document.getElementById("detailModal").classList.remove("open"); }
+
+async function init(){
+  const s=document.getElementById("connStatus");
+  try{
+    ME=await requireAuth("../../login.html");
+    if(!ME) return;
+    s.style.color="#1e7a34"; s.textContent="Connected as "+ME.username+" · Department: "+(ME.departmentNames?.[0]||"All");
+    await loadData();
+  }catch(e){ s.style.color="#dc2626"; s.textContent="Error: "+e.message; }
+}
+init();
+</script>
+</body>
+</html>
