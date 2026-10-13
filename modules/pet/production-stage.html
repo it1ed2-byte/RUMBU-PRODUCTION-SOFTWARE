@@ -191,6 +191,7 @@
               <a href="external-material-intake.html" target="_blank">External Material Intake</a> or
               <a href="external-material-monitor.html" target="_blank">External Material Monitor</a>.
             </p>
+            <div id="kanoLotSummary" style="margin-bottom:12px;"></div>
             <div id="kanoUsageRows"></div>
             <button class="btn-ghost" onclick="addKanoUsageRow()" style="margin-top:8px;">+ Add Another Entry</button>
             <div id="kanoUsageStandaloneRow" style="margin-top:14px;display:none;">
@@ -1414,8 +1415,27 @@ async function loadKanoLotsForUsage(collectionId){
     if(r.source_name){ if(!sourcesPerLot[r.lot_id]) sourcesPerLot[r.lot_id]=[]; if(!sourcesPerLot[r.lot_id].includes(r.source_name)) sourcesPerLot[r.lot_id].push(r.source_name); }
   });
   (usage||[]).forEach(r => { balances[r.lot_id] = (balances[r.lot_id]||0) - Number(r.quantity_used_kg); });
-  // Show all LOTs that have had external material intake (not just KANO-named)
-  KANO_LOTS = (lots||[]).filter(l => balances[l.id] !== undefined).map(l => ({ id:l.id, name:l.lot_name, balance: balances[l.id]||0, sources: sourcesPerLot[l.id]||[] }));
+  // Show only LOTs with a positive balance remaining
+  KANO_LOTS = (lots||[])
+    .filter(l => (balances[l.id]||0) > 0)
+    .map(l => ({ id:l.id, name:l.lot_name, balance: balances[l.id]||0, sources: sourcesPerLot[l.id]||[] }))
+    .sort((a,b) => b.balance - a.balance);
+
+  // Render available LOT summary
+  const summEl = document.getElementById("kanoLotSummary");
+  if(summEl){
+    if(KANO_LOTS.length){
+      summEl.innerHTML=`<div style="background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:12px 14px;font-size:12.5px;">
+        <div style="font-weight:800;color:var(--heading);margin-bottom:8px;font-size:13px;">Available External LOTs</div>
+        ${KANO_LOTS.map(l=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--line);">
+          <span><b>${esc(l.name)}</b>${l.sources.length?` <span style="color:var(--muted);font-size:11px;">${esc(l.sources.join(', '))}</span>`:''}</span>
+          <span style="font-weight:800;color:var(--ok);background:#f0fdf4;border:1px solid #86efac;border-radius:20px;padding:2px 10px;font-size:11px;">${l.balance.toFixed(2)} kg available</span>
+        </div>`).join('')}
+      </div>`;
+    } else {
+      summEl.innerHTML=`<div class="correction-note">No LOT currently holds external material with a positive balance. Log a new arrival in <a href="external-material-intake.html" target="_blank">External Material Intake</a> first.</div>`;
+    }
+  }
 
   KANO_USAGE_ROW_COUNT = 0;
   KANO_EXISTING_KG_FOR_PROD = {};
@@ -1484,7 +1504,11 @@ function addKanoUsageRow(){
     <div><label>Source / Origin</label>
       <input type="text" id="kanoRow${idx}_src" placeholder="e.g. Kano Wash Plant, Lagos...">
     </div>
-    <div><label>Quantity Used (kg)</label><input type="number" id="kanoRow${idx}_kg" min="0" step="0.01" inputmode="decimal"></div>
+    <div>
+      <label>Quantity Used (kg)</label>
+      <input type="number" id="kanoRow${idx}_kg" min="0" step="0.01" inputmode="decimal" oninput="onKanoQtyInput('kanoRow${idx}')">
+      <div id="kanoRow${idx}_hint" style="font-size:11px;margin-top:3px;min-height:14px;"></div>
+    </div>
     <div style="align-self:flex-end;"><button class="btn-ghost" onclick="document.getElementById('kanoRow${idx}').remove()">Remove</button></div>
   `;
   wrap.appendChild(row);
@@ -1495,7 +1519,22 @@ function onExtMatLotChange(rowId){
   if(!sel||!srcInput) return;
   const opt=sel.options[sel.selectedIndex];
   const sources=(opt&&opt.dataset.sources||"").split(",").map(s=>s.trim()).filter(Boolean);
-  if(sources.length===1) srcInput.value=sources[0]; // auto-fill when only one source for this LOT
+  if(sources.length===1) srcInput.value=sources[0];
+  onKanoQtyInput(rowId); // refresh balance hint
+}
+function onKanoQtyInput(rowId){
+  const sel=document.getElementById(rowId+"_lot");
+  const kgEl=document.getElementById(rowId+"_kg");
+  const hint=document.getElementById(rowId+"_hint");
+  if(!hint) return;
+  if(!sel?.value){ hint.textContent=""; return; }
+  const lot=KANO_LOTS.find(l=>String(l.id)===String(sel.value));
+  if(!lot){ hint.textContent=""; return; }
+  const kg=parseFloat(kgEl?.value)||0;
+  const remaining=parseFloat((lot.balance-kg).toFixed(2));
+  if(kg<=0){ hint.style.color="var(--muted)"; hint.textContent=lot.balance.toFixed(2)+" kg available in this LOT"; return; }
+  if(remaining>=0){ hint.style.color="var(--ok)"; hint.textContent="✅ "+remaining.toFixed(2)+" kg remaining after this entry"; }
+  else { hint.style.color="var(--bad)"; hint.textContent="⚠ Exceeds available balance by "+Math.abs(remaining).toFixed(2)+" kg"; }
 }
 window.addKanoUsageRow = addKanoUsageRow;
 

@@ -439,7 +439,6 @@ function detailsHtml(d){
       ${kv("AA flake", nz(run.total_aa_kg)?fmtN(run.total_aa_kg)+" kg":"—")}
       ${kv("AB flake", nz(run.total_ab_kg)?fmtN(run.total_ab_kg)+" kg":"—")}
       ${kv("Total production", nz(run.total_production_kg)?fmtN(run.total_production_kg)+" kg":"—")}
-      ${Number(run.kano_used_kg)>0?kv("External material used", fmtN(run.kano_used_kg)+" kg"):""}
     </div>`;
 
   if(nz(run.total_waste_kg)){
@@ -490,7 +489,55 @@ async function checkPassword(){
 
   document.getElementById("gate").style.display="none";
   content.innerHTML = detailsHtml(d);
+  loadExternalMaterial(d);
   loadChainOfCustody(d);
+}
+
+// ── External Material Used (by LOT breakdown) ─────────────────────────────────
+async function loadExternalMaterial(d){
+  const extEl=document.createElement("div");
+  extEl.id="extMatSection";
+  // Insert before chain-of-custody (which hasn't rendered yet, but append now and CoC will come after)
+  document.getElementById("content").appendChild(extEl);
+  try{
+    const formNo=d?.run?.form_number;
+    if(!formNo) return;
+
+    const {data:col}=await sb.from("pet_collections").select("id").eq("form_number",formNo).single();
+    if(!col) return;
+
+    const {data:prod}=await sb.from("pet_stage4_production").select("id").eq("collection_id",col.id).maybeSingle();
+    if(!prod) return;
+
+    const {data:usage}=await sb.from("pet_kano_lot_usage")
+      .select("lot_id,quantity_used_kg,source_name,pet_lots(lot_name)")
+      .eq("production_id",prod.id)
+      .order("lot_id",{ascending:true});
+
+    if(!usage||!usage.length){ extEl.remove(); return; } // nothing used — hide entirely
+
+    const total=usage.reduce((s,r)=>s+Number(r.quantity_used_kg),0);
+    extEl.innerHTML=sec("🏗️","External Material Used")+`
+      <p style="font-size:11.5px;color:var(--muted);margin:0 0 10px;">External PET material used alongside the agent's delivery in this production run.</p>
+      <div class="tscroll">
+        <table class="ctable">
+          <thead><tr><th>LOT</th><th>Source / Origin</th><th style="text-align:right;">Quantity (kg)</th></tr></thead>
+          <tbody>
+            ${usage.map(r=>`<tr>
+              <td style="font-weight:700;white-space:nowrap;">${esc(r.pet_lots?.lot_name||("LOT #"+r.lot_id))}</td>
+              <td>${esc(r.source_name||"—")}</td>
+              <td style="text-align:right;font-weight:700;">${Number(r.quantity_used_kg).toLocaleString(undefined,{maximumFractionDigits:2})}</td>
+            </tr>`).join("")}
+            <tr style="border-top:2px solid var(--line);">
+              <td colspan="2" style="font-size:11px;color:var(--muted);font-weight:700;text-align:right;text-transform:uppercase;letter-spacing:.4px;">Total</td>
+              <td style="text-align:right;font-weight:900;color:var(--navy);">${total.toLocaleString(undefined,{maximumFractionDigits:2})} kg</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>`;
+  }catch(e){
+    extEl.remove(); // fail silently
+  }
 }
 
 // ── Chain of Custody ─────────────────────────────────────────────────────────
