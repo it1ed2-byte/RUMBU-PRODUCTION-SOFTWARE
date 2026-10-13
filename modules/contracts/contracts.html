@@ -76,6 +76,13 @@ td.clickable{cursor:pointer}
         <option value="terminated">Terminated</option>
         <option value="closeout">Closeout</option>
       </select>
+      <select class="flt" id="fRisk" onchange="render()">
+        <option value="">All Risk Levels</option>
+        <option value="critical">🔴 Critical</option>
+        <option value="high">🟠 High</option>
+        <option value="medium">🟡 Medium</option>
+        <option value="low">🟢 Low</option>
+      </select>
     </div>
 
     <!-- Table -->
@@ -91,6 +98,7 @@ td.clickable{cursor:pointer}
               <th>End Date</th>
               <th>Physical</th>
               <th>Financial</th>
+              <th>Risk</th>
               <th>Status</th>
             </tr>
           </thead>
@@ -119,7 +127,7 @@ async function init() {
 
     const [cRes, aRes] = await Promise.all([
       sb.from('cnt_contracts').select(`
-        id,contract_id,title,status,contract_value,
+        id,contract_id,title,status,risk_level,contract_value,
         start_date,end_date,physical_progress,financial_progress,
         cnt_agencies(id,name),cnt_companies(id,name)
       `).order('created_at',{ascending:false}),
@@ -169,21 +177,30 @@ const STATUS_BADGE = {
   closeout:  ['b-gold',  'Closeout'],
 };
 
+const RISK_BADGE = {
+  low:      ['b-ok',   '🟢 Low'],
+  medium:   ['b-warn', '🟡 Medium'],
+  high:     ['b-orange','🟠 High'],
+  critical: ['b-bad',  '🔴 Critical'],
+};
+
 function render() {
   const q  = document.getElementById('q').value.toLowerCase();
   const st = document.getElementById('fStatus').value;
   const ag = document.getElementById('fAgency').value;
+  const rk = document.getElementById('fRisk').value;
 
   const data = rows.filter(r => {
     if (q && !r.title?.toLowerCase().includes(q) && !r.contract_id?.toLowerCase().includes(q)) return false;
     if (st && r.status !== st) return false;
     if (ag && r.cnt_agencies?.id !== ag) return false;
+    if (rk && r.risk_level !== rk) return false;
     return true;
   });
 
   const tbody = document.getElementById('tbody');
   if (!data.length) {
-    tbody.innerHTML = `<tr><td colspan="8">
+    tbody.innerHTML = `<tr><td colspan="9">
       <div class="empty-state">
         <span class="e-icon">📋</span>
         <p>${rows.length ? 'No contracts match your filters.' : 'No contracts yet. Click <strong>New Contract</strong> to create the first one.'}</p>
@@ -228,6 +245,8 @@ function render() {
           <span class="prog-pct">${fp}%</span>
         </div>
       </td>
+      <td>${(() => { const [rc,rl] = RISK_BADGE[r.risk_level ?? 'low'] ?? ['b-gray','—'];
+        return `<span class="badge ${rc}">${rl}</span>`; })()}</td>
       <td><span class="badge ${bCls}">${bLabel}</span></td>
     </tr>`;
   }).join('');
