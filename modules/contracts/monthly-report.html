@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Monthly Performance Report</title>
+<script src="auth-contracts.js"></script>
+<link rel="stylesheet" href="contracts.css">
+<style>
+/* ── Report form ─────────────────────────────────────── */
+.rpt-tbl{width:100%;border-collapse:collapse}
+.rpt-tbl th{background:#f1f5f9;padding:10px 14px;font-size:11px;font-weight:700;
+  text-transform:uppercase;color:var(--muted);text-align:left;
+  border-bottom:2px solid var(--border)}
+.rpt-tbl td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:top}
+.rpt-tbl .item-name{font-weight:600;font-size:13.5px;color:var(--heading);
+  min-width:160px;width:18%}
+.rpt-tbl .auto-note{font-size:11px;color:var(--muted);margin-top:4px;font-style:italic}
+.rpt-tbl select{border:1.5px solid var(--border);border-radius:6px;padding:6px 8px;
+  font-size:13px;min-width:140px;background:var(--card)}
+.rpt-tbl select:focus{outline:2px solid var(--accent);border-color:var(--accent)}
+.rpt-tbl textarea{border:1.5px solid var(--border);border-radius:6px;padding:7px 10px;
+  font-size:13px;width:100%;min-height:52px;resize:vertical;font-family:inherit}
+.rpt-tbl textarea:focus{outline:2px solid var(--accent);border-color:var(--accent)}
+
+/* Status colours */
+.s-on_track{color:#166534;font-weight:600}
+.s-satisfactory{color:#166534;font-weight:600}
+.s-at_risk{color:#92400e;font-weight:600}
+.s-behind{color:#991b1b;font-weight:600}
+.s-attention{color:#991b1b;font-weight:600}
+.s-na{color:var(--muted);font-weight:600}
+
+/* History table */
+.hist-row{cursor:pointer}
+.hist-row:hover td{background:#f8fafc}
+
+/* ── Print styles ────────────────────────────────────── */
+@media print {
+  body{background:#fff;font-family:Arial,sans-serif;font-size:11pt;color:#000}
+  .page-hdr,.content > :not(#app),.sec-card:not(#print-card),
+  #form-card,.toolbar-row,.btn,.alert{display:none !important}
+  #print-card{display:block !important;box-shadow:none;border:none;padding:0}
+  .print-hdr{display:block !important}
+  .print-tbl{width:100%;border-collapse:collapse;margin-top:16px}
+  .print-tbl th{background:#f1f5f9;border:1px solid #cbd5e1;padding:8px 10px;
+    font-size:10pt;text-align:left}
+  .print-tbl td{border:1px solid #cbd5e1;padding:8px 10px;
+    font-size:10pt;vertical-align:top}
+  .print-tbl .col-item{width:22%;font-weight:600}
+  .print-tbl .col-status{width:18%}
+  .print-tbl .col-remarks{width:60%}
+  .print-meta{display:grid;grid-template-columns:1fr 1fr;gap:4px 24px;
+    margin:12px 0 16px;font-size:10pt}
+  .print-meta-row{display:flex;gap:8px}
+  .print-meta-lbl{font-weight:700;min-width:140px}
+  .print-footer{margin-top:24px;font-size:9pt;color:#64748b;border-top:1px solid #cbd5e1;padding-top:8px}
+  @page{margin:18mm}
+}
+.print-hdr{display:none}
+#print-card{display:none}
+</style>
+</head>
+<body>
+
+<div class="page-hdr">
+  <div class="ph-left">
+    <div class="ph-icon">📄</div>
+    <div>
+      <div class="ph-title">Monthly Performance Report</div>
+      <div class="ph-sub">Appendix A — Rumbu Industries Subcontractor Monitoring Framework</div>
+    </div>
+  </div>
+  <div class="ph-right">
+    <button class="btn btn-hdr" onclick="window.print()" id="print-btn" style="display:none">🖨 Print / Export</button>
+    <button class="btn btn-hdr" onclick="location.href='contracts.html'">← Dashboard</button>
+  </div>
+</div>
+
+<div class="content">
+  <div id="loading" class="loading-wrap">
+    <div class="spinner"></div>
+    <div class="loading-txt">Loading…</div>
+  </div>
+
+  <div id="app" style="display:none">
+
+    <!-- Contract + Period selector -->
+    <div class="sec-card" style="margin-bottom:18px">
+      <div class="sec-body" style="padding:16px 20px">
+        <div class="g3">
+          <div class="field" style="margin-bottom:0">
+            <label>Contract <span class="req">*</span></label>
+            <select id="contract-sel" class="srch" onchange="onContractChange()">
+              <option value="">— Select contract —</option>
+            </select>
+          </div>
+          <div class="field" style="margin-bottom:0">
+            <label>Reporting Period <span class="req">*</span></label>
+            <select id="period-sel" class="srch">
+            </select>
+          </div>
+          <div class="field" style="margin-bottom:0;display:flex;align-items:flex-end">
+            <button class="btn btn-primary" style="width:100%" onclick="generateReport()">
+              Generate Report
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Past reports list -->
+    <div id="history-card" class="sec-card" style="display:none;margin-bottom:22px">
+      <div class="sec-hdr">
+        <div class="sec-title">
+          Past Reports
+          <span id="hist-count" style="font-weight:400;color:var(--muted);font-size:13px"></span>
+        </div>
+      </div>
+      <div id="hist-table" style="overflow-x:auto"></div>
+    </div>
+
+    <!-- Report form (shown after Generate is clicked) -->
+    <div id="form-card" class="sec-card" style="display:none">
+      <div class="sec-hdr">
+        <div>
+          <div class="sec-title" id="form-title">Monthly Performance Report</div>
+          <div class="sec-sub" id="form-sub"></div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-primary" onclick="saveReport('final')">✔ Finalise</button>
+          <button class="btn" onclick="saveReport('draft')">Save Draft</button>
+        </div>
+      </div>
+      <div class="sec-body">
+
+        <div class="alert alert-info" style="margin-bottom:16px">
+          Fields marked <em>auto-populated</em> are pre-filled from the system.
+          Review and add remarks as needed before finalising.
+        </div>
+
+        <div style="overflow-x:auto">
+          <table class="rpt-tbl">
+            <thead>
+              <tr>
+                <th class="col-item">Item</th>
+                <th style="width:160px">Status</th>
+                <th>Remarks</th>
+              </tr>
+            </thead>
+            <tbody id="rpt-body"></tbody>
+          </table>
+        </div>
+
+        <div style="display:flex;gap:10px;margin-top:20px">
+          <button class="btn btn-primary" onclick="saveReport('final')">✔ Finalise Report</button>
+          <button class="btn" onclick="saveReport('draft')">Save Draft</button>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Print-only card -->
+    <div id="print-card">
+      <div class="print-hdr">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;
+          border-bottom:2px solid #1F3864;padding-bottom:10px;margin-bottom:12px">
+          <div>
+            <div style="font-size:14pt;font-weight:800;color:#1F3864">RUMBU INDUSTRIES LIMITED</div>
+            <div style="font-size:10pt;color:#2E75B6;margin-top:2px">
+              Subcontractor Monitoring and Management Report
+            </div>
+          </div>
+          <div style="text-align:right;font-size:9pt;color:#64748b">
+            Appendix A — Monthly Performance Report
+          </div>
+        </div>
+        <div class="print-meta" id="print-meta"></div>
+      </div>
+      <table class="print-tbl" id="print-tbl">
+        <thead>
+          <tr>
+            <th class="col-item">Item</th>
+            <th class="col-status">Status</th>
+            <th class="col-remarks">Remarks</th>
+          </tr>
+        </thead>
+        <tbody id="print-body"></tbody>
+      </table>
+      <div class="print-footer" id="print-footer"></div>
+    </div>
+
+    <!-- Placeholder when no contract selected -->
+    <div id="no-contract" class="sec-card" style="text-align:center;padding:40px">
+      <div style="font-size:40px;margin-bottom:12px">📄</div>
+      <div style="font-weight:700;color:var(--primary);font-size:16px;margin-bottom:6px">
+        Select a contract above
+      </div>
+      <div style="color:var(--muted);font-size:13px">
+        Choose a contract and reporting period, then click Generate Report.
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ── 13 report items — Appendix A ────────────────────────────────
+const ITEMS = [
+  { key:'overall_progress',    label:'Overall Progress',         autoKey:'progress'   },
+  { key:'schedule_variance',   label:'Schedule Variance',        autoKey:'schedule'   },
+  { key:'quality_performance', label:'Quality Performance',      autoKey:null         },
+  { key:'hse_performance',     label:'HSE Performance',          autoKey:null         },
+  { key:'manpower',            label:'Manpower',                 autoKey:null         },
+  { key:'equipment',           label:'Equipment',                autoKey:null         },
+  { key:'materials',           label:'Materials',                autoKey:null         },
+  { key:'cost_commercial',     label:'Cost / Commercial Status', autoKey:'cost'       },
+  { key:'outstanding_ncrs',    label:'Outstanding NCRs',         autoKey:null         },
+  { key:'outstanding_actions', label:'Outstanding Actions',      autoKey:'actions'    },
+  { key:'key_risks',           label:'Key Risks',                autoKey:'risk'       },
+  { key:'recovery_plan',       label:'Recovery Plan',            autoKey:null         },
+  { key:'management_attention',label:'Management Attention Required', autoKey:null    },
+];
+
+const STATUS_OPTS = [
+  { val:'',           label:'— Select —'         },
+  { val:'on_track',   label:'✅ On Track'         },
+  { val:'satisfactory',label:'✅ Satisfactory'    },
+  { val:'at_risk',    label:'⚠ At Risk'           },
+  { val:'behind',     label:'🔴 Behind'           },
+  { val:'attention',  label:'🔴 Attention Required'},
+  { val:'na',         label:'— N/A'              },
+];
+
+const STATUS_LABEL = {
+  on_track:'On Track', satisfactory:'Satisfactory', at_risk:'At Risk',
+  behind:'Behind', attention:'Attention Required', na:'N/A', ''  : '—'
+};
+
+let sb, auth, contracts = [], selectedContract = null, currentReportId = null;
+
+async function init() {
+  try {
+    auth = await guardPage();
+    if (!auth) return;
+    sb = auth.sb;
+
+    // Build period dropdown — current + past 11 months + next 2
+    const periodSel = document.getElementById('period-sel');
+    const now = new Date();
+    for (let i = 2; i >= -11; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+      const label = d.toLocaleDateString('en-GB', { month:'long', year:'numeric' });
+      const opt = document.createElement('option');
+      opt.value = label; opt.textContent = label;
+      if (i === 0) opt.selected = true;
+      periodSel.appendChild(opt);
+    }
+
+    // Load contracts
+    const { data: cData } = await sb.from('cnt_contracts')
+      .select('id,contract_id,title,risk_level,risk_notes,contract_value,'+
+              'start_date,end_date,physical_progress,financial_progress,'+
+              'cnt_companies(name)')
+      .order('contract_id');
+    contracts = cData ?? [];
+
+    const cSel = document.getElementById('contract-sel');
+    contracts.forEach(c => {
+      const co = document.createElement('option');
+      co.value = c.id;
+      co.textContent = `${c.contract_id} — ${c.title}`;
+      cSel.appendChild(co);
+    });
+
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+
+  } catch(e) {
+    document.getElementById('loading').innerHTML =
+      `<p style="color:var(--err);text-align:center">${e.message}</p>`;
+  }
+}
+
+// ── Contract change ───────────────────────────────────────────────
+async function onContractChange() {
+  const cid = document.getElementById('contract-sel').value;
+  selectedContract = contracts.find(c => c.id === cid) ?? null;
+  document.getElementById('no-contract').style.display  = cid ? 'none'  : 'block';
+  document.getElementById('history-card').style.display = cid ? 'block' : 'none';
+  document.getElementById('form-card').style.display    = 'none';
+  document.getElementById('print-btn').style.display    = 'none';
+  document.getElementById('print-card').style.display   = 'none';
+  currentReportId = null;
+  if (cid) await loadHistory(cid);
+}
+
+// ── Load history ──────────────────────────────────────────────────
+async function loadHistory(contractId) {
+  const { data } = await sb.from('cnt_monthly_reports')
+    .select('id,report_period,report_date,report_status,sections')
+    .eq('contract_id', contractId)
+    .order('report_date', { ascending:false });
+
+  const rows = data ?? [];
+  document.getElementById('hist-count').textContent = `(${rows.length})`;
+  const el = document.getElementById('hist-table');
+
+  if (!rows.length) {
+    el.innerHTML = `<div style="padding:24px;text-align:center;color:var(--muted)">
+      No reports prepared for this contract yet.</div>`;
+    return;
+  }
+
+  el.innerHTML = `<table class="tbl">
+    <thead><tr>
+      <th>Period</th><th>Report Date</th><th>Status</th><th></th>
+    </tr></thead><tbody>
+    ${rows.map(r => `<tr class="hist-row">
+      <td style="font-weight:600">${esc(r.report_period)}</td>
+      <td>${fmtDate(r.report_date)}</td>
+      <td><span class="status ${r.report_status==='final'?'ok':''}">${
+        r.report_status === 'final' ? 'Final' : 'Draft'
+      }</span></td>
+      <td><button class="btn" style="padding:4px 10px;font-size:12px"
+        onclick="loadReport('${r.id}')">Open</button></td>
+    </tr>`).join('')}
+    </tbody></table>`;
+}
+
+// ── Generate new report (auto-populate) ──────────────────────────
+async function generateReport() {
+  const cid = document.getElementById('contract-sel').value;
+  if (!cid) { toast('Select a contract first', 'warn'); return; }
+  const period = document.getElementById('period-sel').value;
+  selectedContract = contracts.find(c => c.id === cid);
+  currentReportId = null;
+
+  // Auto-populate data
+  const autoData = await buildAutoData(cid);
+
+  renderForm(period, autoData, {});
+}
+
+// ── Load existing report ──────────────────────────────────────────
+async function loadReport(reportId) {
+  const { data } = await sb.from('cnt_monthly_reports')
+    .select('*').eq('id', reportId).single();
+  if (!data) { toast('Report not found', 'err'); return; }
+  currentReportId = reportId;
+
+  const autoData = await buildAutoData(data.contract_id);
+  renderForm(data.report_period, autoData, data.sections ?? {}, data.report_status);
+}
+
+// ── Build auto-populated data from DB ────────────────────────────
+async function buildAutoData(contractId) {
+  const c = contracts.find(x => x.id === contractId) ?? {};
+  const auto = {};
+
+  // Overall Progress — latest progress report
+  const { data: prog } = await sb.from('cnt_progress_reports')
+    .select('physical_pct,financial_pct,submitted_at')
+    .eq('cnt_contract_id', contractId)
+    .order('submitted_at', { ascending:false })
+    .limit(1);
+
+  const pp = c.physical_progress ?? prog?.[0]?.physical_pct ?? null;
+  const fp = c.financial_progress ?? prog?.[0]?.financial_pct ?? null;
+  if (pp != null) {
+    auto.progress = {
+      status: pp >= 80 ? 'on_track' : pp >= 50 ? 'at_risk' : 'behind',
+      hint: `Physical: ${pp}% · Financial: ${fp ?? '—'}%`
+    };
+  }
+
+  // Schedule Variance — compare today to contract dates
+  if (c.start_date && c.end_date && pp != null) {
+    const start = new Date(c.start_date);
+    const end   = new Date(c.end_date);
+    const today = new Date();
+    const elapsed = Math.max(0, (today - start) / (end - start)) * 100;
+    const variance = pp - elapsed;
+    const status = variance >= -5 ? 'on_track' : variance >= -15 ? 'at_risk' : 'behind';
+    auto.schedule = {
+      status,
+      hint: `Time elapsed: ${Math.round(elapsed)}% · Physical progress: ${pp}% · Variance: ${variance.toFixed(1)}%`
+    };
+  }
+
+  // Cost / Commercial Status
+  if (c.contract_value && fp != null) {
+    const spent = (fp / 100) * c.contract_value;
+    auto.cost = {
+      status: fp > 110 ? 'attention' : fp <= 105 ? 'on_track' : 'at_risk',
+      hint: `Contract value: NGN ${Number(c.contract_value).toLocaleString('en-NG')} · ` +
+            `Financial progress: ${fp}% · Amount equivalent: NGN ${Number(spent).toLocaleString('en-NG')}`
+    };
+  }
+
+  // Outstanding Actions — count open corrective actions
+  const { count } = await sb.from('cnt_corrective_actions')
+    .select('id', { count:'exact', head:true })
+    .eq('cnt_contract_id', contractId)
+    .neq('status', 'closed');
+  auto.actions = {
+    status: (count ?? 0) === 0 ? 'satisfactory' : count > 3 ? 'attention' : 'at_risk',
+    hint: `${count ?? 0} open corrective action${(count ?? 0) !== 1 ? 's' : ''}`
+  };
+
+  // Key Risks — from contract risk classification
+  const RISK_STATUS = { low:'satisfactory', medium:'at_risk', high:'attention', critical:'attention' };
+  auto.risk = {
+    status: RISK_STATUS[c.risk_level ?? 'low'],
+    hint: `Risk level: ${(c.risk_level ?? 'low').toUpperCase()}${c.risk_notes ? ' — ' + c.risk_notes : ''}`
+  };
+
+  return auto;
+}
+
+// ── Render the form ───────────────────────────────────────────────
+function renderForm(period, autoData, savedSections, reportStatus) {
+  const c = selectedContract ?? {};
+  document.getElementById('form-title').textContent =
+    `Monthly Performance Report — ${period}`;
+  document.getElementById('form-sub').textContent =
+    `${c.contract_id ?? ''} · ${c.title ?? ''} · ${c.cnt_companies?.name ?? ''}`;
+
+  const tbody = document.getElementById('rpt-body');
+  tbody.innerHTML = ITEMS.map(item => {
+    const saved  = savedSections[item.key] ?? {};
+    const autoDat = item.autoKey ? (autoData[item.autoKey] ?? {}) : {};
+    const st     = saved.status ?? autoDat.status ?? '';
+    const rem    = saved.remarks ?? '';
+    const hint   = autoDat.hint ?? null;
+
+    const opts = STATUS_OPTS.map(o =>
+      `<option value="${o.val}" ${st === o.val ? 'selected' : ''}>${o.label}</option>`
+    ).join('');
+
+    return `<tr>
+      <td class="item-name">
+        ${item.label}
+        ${hint ? `<div class="auto-note">⚡ Auto: ${esc(hint)}</div>` : ''}
+      </td>
+      <td>
+        <select id="st-${item.key}" onchange="syncPrint()">
+          ${opts}
+        </select>
+      </td>
+      <td>
+        <textarea id="rm-${item.key}" oninput="syncPrint()"
+          placeholder="Observations and details for ${item.label.toLowerCase()}…">${esc(rem)}</textarea>
+      </td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('form-card').style.display = 'block';
+  document.getElementById('no-contract').style.display = 'none';
+
+  // Build print version
+  buildPrintView(period, autoData, savedSections);
+  document.getElementById('print-btn').style.display = 'inline-flex';
+}
+
+// ── Build print view ──────────────────────────────────────────────
+function buildPrintView(period, autoData, savedSections) {
+  const c = selectedContract ?? {};
+  document.getElementById('print-meta').innerHTML = `
+    <div class="print-meta-row"><span class="print-meta-lbl">Contract Reference:</span>${esc(c.contract_id ?? '—')}</div>
+    <div class="print-meta-row"><span class="print-meta-lbl">Subcontractor:</span>${esc(c.cnt_companies?.name ?? '—')}</div>
+    <div class="print-meta-row"><span class="print-meta-lbl">Report Period:</span>${esc(period)}</div>
+    <div class="print-meta-row"><span class="print-meta-lbl">Report Date:</span>${fmtDate(new Date().toISOString().slice(0,10))}</div>
+    <div class="print-meta-row"><span class="print-meta-lbl">Prepared by:</span>${esc(auth.profile?.full_name ?? '—')}</div>
+    <div class="print-meta-row"><span class="print-meta-lbl">Risk Classification:</span>${(c.risk_level ?? 'low').toUpperCase()}</div>`;
+
+  document.getElementById('print-footer').textContent =
+    'RUMBU INDUSTRIES LIMITED · Subcontractor Monitoring and Management Report · ' +
+    'Prepared ' + new Date().toLocaleDateString('en-GB', {day:'2-digit',month:'long',year:'numeric'});
+
+  syncPrint();
+  document.getElementById('print-card').style.display = 'block';
+}
+
+// ── Keep print table in sync with form ───────────────────────────
+function syncPrint() {
+  const printBody = document.getElementById('print-body');
+  if (!printBody) return;
+  printBody.innerHTML = ITEMS.map(item => {
+    const selEl = document.getElementById('st-' + item.key);
+    const rmEl  = document.getElementById('rm-' + item.key);
+    if (!selEl) return '';
+    const stVal  = selEl.value;
+    const stLabel = STATUS_LABEL[stVal] ?? '—';
+    const rem    = rmEl?.value ?? '';
+    return `<tr>
+      <td class="col-item">${item.label}</td>
+      <td class="col-status">${stLabel}</td>
+      <td class="col-remarks">${esc(rem) || '<em style="color:#94a3b8">No remarks</em>'}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── Save report ───────────────────────────────────────────────────
+async function saveReport(status) {
+  const cid    = document.getElementById('contract-sel').value;
+  const period = document.getElementById('period-sel').value;
+  if (!cid) { toast('No contract selected', 'warn'); return; }
+
+  const sections = {};
+  ITEMS.forEach(item => {
+    sections[item.key] = {
+      status:  document.getElementById('st-' + item.key)?.value ?? '',
+      remarks: document.getElementById('rm-' + item.key)?.value?.trim() ?? ''
+    };
+  });
+
+  if (currentReportId) {
+    // Update existing
+    const { error } = await sb.from('cnt_monthly_reports').update({
+      sections, report_status: status, updated_at: new Date().toISOString()
+    }).eq('id', currentReportId);
+    if (error) { toast(error.message, 'err'); return; }
+  } else {
+    // Insert new
+    const { data, error } = await sb.from('cnt_monthly_reports').insert({
+      contract_id:   cid,
+      prepared_by:   auth.user.id,
+      report_period: period,
+      report_date:   new Date().toISOString().slice(0, 10),
+      sections,
+      report_status: status
+    }).select('id').single();
+    if (error) { toast(error.message, 'err'); return; }
+    currentReportId = data.id;
+  }
+
+  toast(status === 'final' ? 'Report finalised' : 'Draft saved', 'ok');
+  await loadHistory(cid);
+}
+
+// ── Utility ────────────────────────────────────────────────────
+function fmtDate(d) {
+  if (!d) return '—';
+  return new Date(d).toLocaleDateString('en-GB', {day:'2-digit',month:'short',year:'numeric'});
+}
+function esc(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+init();
+</script>
+</body>
+</html>
