@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NCR Register</title>
+<script src="auth-contracts.js"></script>
+<link rel="stylesheet" href="contracts.css">
+<style>
+/* Status pill colours */
+.ncr-open      {background:#FEE2E2;color:#991B1B}
+.ncr-in_progress{background:#FEF3C7;color:#92400E}
+.ncr-closed    {background:#DCFCE7;color:#166534}
+.ncr-disputed  {background:#E0E7FF;color:#3730A3}
+
+/* Detail panel */
+.detail-panel{background:#f8fafc;border:1.5px solid var(--border);
+  border-radius:10px;padding:22px;margin-bottom:22px}
+.detail-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px}
+.detail-item label{font-size:11px;font-weight:700;text-transform:uppercase;
+  color:var(--muted);display:block;margin-bottom:3px}
+.detail-item .dval{font-size:13.5px;color:var(--heading);line-height:1.55}
+
+/* Closeout section */
+.closeout-section{background:#f0fdf4;border:1.5px solid #22c55e;
+  border-radius:8px;padding:16px;margin-top:16px}
+.closeout-section h4{color:#166534;font-size:13px;font-weight:700;margin-bottom:12px}
+
+/* Priority row */
+.ncr-row td{vertical-align:top}
+.ncr-ref{font-size:11px;font-weight:700;color:var(--muted);letter-spacing:.3px}
+.ncr-issue{font-weight:600;font-size:13.5px;margin-top:2px;line-height:1.3}
+.ncr-meta{font-size:12px;color:var(--muted);margin-top:3px}
+</style>
+</head>
+<body>
+
+<div class="page-hdr">
+  <div class="ph-left">
+    <div class="ph-icon">⚠️</div>
+    <div>
+      <div class="ph-title">NCR Register</div>
+      <div class="ph-sub">Non-Conformance Reports — §3.3 Quality Monitoring</div>
+    </div>
+  </div>
+  <div class="ph-right">
+    <button class="btn btn-primary" id="raise-btn" onclick="showForm()" style="display:none">
+      ＋ Raise NCR
+    </button>
+    <button class="btn btn-hdr" onclick="location.href='contracts.html'">← Dashboard</button>
+  </div>
+</div>
+
+<div class="content">
+  <div id="loading" class="loading-wrap">
+    <div class="spinner"></div>
+    <div class="loading-txt">Loading NCR register…</div>
+  </div>
+
+  <div id="app" style="display:none">
+
+    <!-- Summary stats -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));
+      gap:12px;margin-bottom:22px" id="stats-row"></div>
+
+    <!-- NCR form (hidden by default) -->
+    <div id="form-card" class="sec-card" style="display:none;margin-bottom:22px">
+      <div class="sec-hdr">
+        <div>
+          <div class="sec-title" id="form-title">Raise New NCR</div>
+          <div class="sec-sub">All fields marked * are required — §2.6</div>
+        </div>
+        <button class="btn" onclick="hideForm()">✕ Cancel</button>
+      </div>
+      <div class="sec-body">
+        <div class="g2" style="margin-bottom:14px">
+          <div class="field">
+            <label>Contract <span class="req">*</span></label>
+            <select id="f-contract" class="srch">
+              <option value="">— Select Contract —</option>
+            </select>
+          </div>
+          <div class="field">
+            <label>Date Raised <span class="req">*</span></label>
+            <input id="f-date" type="date" class="srch">
+          </div>
+        </div>
+
+        <div class="field" style="margin-bottom:14px">
+          <label>Location / Area <span class="req">*</span></label>
+          <input id="f-location" class="srch" placeholder="Where was the non-conformance identified?">
+        </div>
+
+        <!-- §2.6: the specific deficiency -->
+        <div class="field" style="margin-bottom:14px">
+          <label>Issue Description — Specific Deficiency <span class="req">*</span></label>
+          <textarea id="f-issue" class="srch" rows="3"
+            placeholder="Describe the non-conformance in detail…"></textarea>
+        </div>
+
+        <div class="g2" style="margin-bottom:14px">
+          <!-- §2.6: the contractual or performance requirement affected -->
+          <div class="field">
+            <label>Specification / Requirement Reference</label>
+            <input id="f-spec" class="srch"
+              placeholder="Drawing no., clause, standard, spec ref…">
+            <span class="hint">The contractual or performance requirement affected (§2.6)</span>
+          </div>
+          <!-- §2.6: the responsible person -->
+          <div class="field">
+            <label>Responsible Person <span class="req">*</span></label>
+            <input id="f-responsible" class="srch"
+              placeholder="Name of subcontractor's responsible person">
+            <span class="hint">Subcontractor-side person accountable for rectification (§2.6)</span>
+          </div>
+        </div>
+
+        <!-- §2.6: the root cause where applicable -->
+        <div class="field" style="margin-bottom:14px">
+          <label>Root Cause</label>
+          <textarea id="f-root" class="srch" rows="2"
+            placeholder="Root cause of the non-conformance where applicable (§2.6)…"></textarea>
+        </div>
+
+        <!-- §2.6: the corrective action required -->
+        <div class="field" style="margin-bottom:14px">
+          <label>Corrective Action Required <span class="req">*</span></label>
+          <textarea id="f-action" class="srch" rows="2"
+            placeholder="What must be done to rectify the non-conformance (§2.6)…"></textarea>
+        </div>
+
+        <div class="g2" style="margin-bottom:14px">
+          <!-- §2.6: the required completion date -->
+          <div class="field">
+            <label>Required Completion Date <span class="req">*</span></label>
+            <input id="f-due" type="date" class="srch">
+            <span class="hint">Deadline for corrective action (§2.6)</span>
+          </div>
+          <div class="field">
+            <label>Status</label>
+            <select id="f-status" class="srch">
+              <option value="open">Open</option>
+              <option value="in_progress">In Progress</option>
+              <option value="disputed">Disputed</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- §2.6: consequences of failure to correct -->
+        <div class="field" style="margin-bottom:18px">
+          <label>Consequences of Failure to Correct</label>
+          <textarea id="f-consequences" class="srch" rows="2"
+            placeholder="Contractual remedies, escalation, or other consequences if not rectified (§2.6)…"></textarea>
+        </div>
+
+        <div style="display:flex;gap:10px">
+          <button class="btn btn-primary" onclick="saveNCR()">Save NCR</button>
+          <button class="btn" onclick="hideForm()">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Filter bar -->
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
+      <input class="srch" id="q" type="search" placeholder="🔍 Search NCRs…"
+        oninput="render()" style="min-width:200px">
+      <select class="flt" id="fContract" onchange="render()">
+        <option value="">All Contracts</option>
+      </select>
+      <select class="flt" id="fStatus" onchange="render()">
+        <option value="">All Statuses</option>
+        <option value="open">Open</option>
+        <option value="in_progress">In Progress</option>
+        <option value="closed">Closed</option>
+        <option value="disputed">Disputed</option>
+      </select>
+    </div>
+
+    <!-- NCR table -->
+    <div class="sec-card">
+      <div style="overflow-x:auto">
+        <table class="tbl" id="ncr-tbl">
+          <thead><tr>
+            <th>NCR Ref</th>
+            <th>Contract</th>
+            <th>Issue / Location</th>
+            <th>Responsible</th>
+            <th>Due Date</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr></thead>
+          <tbody id="ncr-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- NCR detail panel (shown on row click) -->
+    <div id="detail-panel" style="display:none;margin-top:18px">
+      <div class="sec-card">
+        <div class="sec-hdr">
+          <div>
+            <div class="sec-title" id="dp-ref"></div>
+            <div class="sec-sub" id="dp-contract"></div>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn" id="dp-edit-btn" onclick="editNCR()">Edit</button>
+            <button class="btn" id="dp-close-btn" onclick="showCloseout()"
+              style="display:none">✔ Close Out NCR</button>
+            <button class="btn btn-link" onclick="hideDetail()" style="font-size:18px">✕</button>
+          </div>
+        </div>
+        <div class="sec-body">
+          <div class="detail-grid" id="dp-grid"></div>
+
+          <!-- Close-out section (shown when closing) -->
+          <div id="closeout-form" style="display:none">
+            <div class="closeout-section">
+              <h4>✔ Close Out NCR — §2.6 Verification of Completion</h4>
+              <div class="g2" style="margin-bottom:12px">
+                <div class="field">
+                  <label>Close-Out Date <span class="req">*</span></label>
+                  <input id="co-date" type="date" class="srch">
+                </div>
+                <div class="field">
+                  <label>Verified By</label>
+                  <select id="co-verifier" class="srch">
+                    <option value="">— Select —</option>
+                  </select>
+                </div>
+              </div>
+              <div class="field" style="margin-bottom:12px">
+                <label>Verification Notes <span class="req">*</span></label>
+                <textarea id="co-notes" class="srch" rows="2"
+                  placeholder="How was rectification verified? Inspection, testing, sign-off…"></textarea>
+              </div>
+              <div style="display:flex;gap:10px">
+                <button class="btn btn-primary" onclick="closeOutNCR()">✔ Confirm Close-Out</button>
+                <button class="btn" onclick="hideCloseout()">Cancel</button>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+let sb, auth, ncrs = [], contracts = [], profiles = [], viewing = null, editing = false;
+
+async function init() {
+  try {
+    auth = await guardPage();
+    if (!auth) return;
+    sb = auth.sb;
+
+    document.getElementById('f-date').value = new Date().toISOString().slice(0,10);
+
+    const [cRes, pRes] = await Promise.all([
+      sb.from('cnt_contracts').select('id,contract_id,title').order('contract_id'),
+      sb.from('cnt_profiles').select('id,full_name').order('full_name')
+    ]);
+    contracts = cRes.data ?? [];
+    profiles  = pRes.data ?? [];
+
+    // Populate dropdowns
+    ['f-contract', 'fContract'].forEach(id => {
+      const sel = document.getElementById(id);
+      contracts.forEach(c => {
+        const o = document.createElement('option');
+        o.value = c.id;
+        o.textContent = `${c.contract_id} — ${c.title}`;
+        sel.appendChild(o);
+      });
+    });
+
+    const vSel = document.getElementById('co-verifier');
+    profiles.forEach(p => {
+      const o = document.createElement('option');
+      o.value = p.id; o.textContent = p.full_name;
+      vSel.appendChild(o);
+    });
+
+    await loadNCRs();
+    document.getElementById('raise-btn').style.display = 'inline-flex';
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+
+  } catch(e) {
+    document.getElementById('loading').innerHTML =
+      `<p style="color:var(--err);text-align:center">${e.message}</p>`;
+  }
+}
+
+async function loadNCRs() {
+  const { data } = await sb.from('cnt_ncrs')
+    .select(`id,ncr_ref,contract_id,raised_by,raised_date,location,
+             issue_description,specification_ref,root_cause,corrective_action,
+             responsible_person,due_date,consequences,status,
+             closeout_date,verification_notes,verified_by,created_at,
+             cnt_contracts(contract_id,title)`)
+    .order('raised_date', { ascending:false });
+
+  ncrs = data ?? [];
+  buildStats();
+  render();
+}
+
+function buildStats() {
+  const counts = { open:0, in_progress:0, closed:0, disputed:0 };
+  ncrs.forEach(n => { if (counts[n.status] !== undefined) counts[n.status]++; });
+  const configs = [
+    { key:'total',       val:ncrs.length,          lbl:'Total NCRs',    cls:'info'   },
+    { key:'open',        val:counts.open,           lbl:'Open',          cls:'bad'    },
+    { key:'in_progress', val:counts.in_progress,    lbl:'In Progress',   cls:'warn'   },
+    { key:'closed',      val:counts.closed,         lbl:'Closed',        cls:'ok'     },
+    { key:'disputed',    val:counts.disputed,       lbl:'Disputed',      cls:'info'   },
+  ];
+  document.getElementById('stats-row').innerHTML = configs.map(c => `
+    <div class="kpi-card ${c.cls}" style="background:var(--card);border-radius:10px;
+      box-shadow:var(--sh-sm);padding:14px 16px;border-left:4px solid var(--border)">
+      <div style="font-size:28px;font-weight:900;color:var(--primary)">${c.val}</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:3px">${c.lbl}</div>
+    </div>`).join('');
+}
+
+function render() {
+  const q  = document.getElementById('q').value.toLowerCase();
+  const fc = document.getElementById('fContract').value;
+  const fs = document.getElementById('fStatus').value;
+
+  const data = ncrs.filter(n => {
+    if (fc && n.contract_id !== fc) return false;
+    if (fs && n.status !== fs) return false;
+    if (q && !n.ncr_ref?.toLowerCase().includes(q) &&
+             !n.issue_description?.toLowerCase().includes(q) &&
+             !n.location?.toLowerCase().includes(q) &&
+             !n.responsible_person?.toLowerCase().includes(q)) return false;
+    return true;
+  });
+
+  const tbody = document.getElementById('ncr-body');
+  if (!data.length) {
+    tbody.innerHTML = `<tr><td colspan="7">
+      <div class="empty-state">
+        <span class="e-icon">✅</span>
+        <p>${ncrs.length ? 'No NCRs match the current filters.' : 'No NCRs raised yet. Click <strong>Raise NCR</strong> to log the first one.'}</p>
+      </div></td></tr>`;
+    return;
+  }
+
+  const STATUS_LABEL = { open:'Open', in_progress:'In Progress', closed:'Closed', disputed:'Disputed' };
+
+  tbody.innerHTML = data.map(n => {
+    const overdue = n.due_date && new Date(n.due_date) < new Date() && n.status !== 'closed';
+    const contract = n.cnt_contracts;
+    return `<tr style="cursor:pointer" onclick="viewNCR('${n.id}')">
+      <td>
+        <div class="ncr-ref">${esc(n.ncr_ref)}</div>
+        <div class="ncr-meta">${fmtDate(n.raised_date)}</div>
+      </td>
+      <td>
+        <div style="font-weight:600;font-size:13px">${esc(contract?.contract_id ?? '—')}</div>
+        <div class="ncr-meta">${esc(contract?.title ?? '—')}</div>
+      </td>
+      <td>
+        <div class="ncr-issue">${esc(n.issue_description ?? '—')}</div>
+        <div class="ncr-meta">📍 ${esc(n.location ?? '—')}</div>
+      </td>
+      <td style="font-size:13px">${esc(n.responsible_person ?? '—')}</td>
+      <td style="white-space:nowrap;font-size:13px;
+        ${overdue ? 'color:var(--err);font-weight:700' : ''}">
+        ${fmtDate(n.due_date)}
+        ${overdue ? '<br><span style="font-size:10px;background:#fee2e2;padding:1px 5px;border-radius:4px">OVERDUE</span>' : ''}
+      </td>
+      <td><span class="status ncr-${n.status}">${STATUS_LABEL[n.status] ?? n.status}</span></td>
+      <td style="white-space:nowrap">
+        ${n.status !== 'closed'
+          ? `<button class="btn" style="padding:4px 10px;font-size:12px"
+              onclick="event.stopPropagation();openCloseout('${n.id}')">Close Out</button>`
+          : '<span style="font-size:12px;color:#166534;font-weight:600">✔ Closed</span>'}
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+// ── View NCR detail ───────────────────────────────────────────────
+function viewNCR(id) {
+  viewing = ncrs.find(n => n.id === id);
+  if (!viewing) return;
+  renderDetail(viewing);
+  document.getElementById('detail-panel').style.display = 'block';
+  document.getElementById('detail-panel').scrollIntoView({ behavior:'smooth' });
+}
+
+function renderDetail(n) {
+  const contract = n.cnt_contracts;
+  const STATUS_LABEL = { open:'Open', in_progress:'In Progress', closed:'Closed', disputed:'Disputed' };
+
+  document.getElementById('dp-ref').textContent = n.ncr_ref;
+  document.getElementById('dp-contract').textContent =
+    `${contract?.contract_id ?? ''} — ${contract?.title ?? ''}`;
+
+  document.getElementById('dp-close-btn').style.display =
+    n.status !== 'closed' ? 'inline-flex' : 'none';
+
+  const verifier = profiles.find(p => p.id === n.verified_by);
+
+  const fields = [
+    ['Date Raised',          fmtDate(n.raised_date)],
+    ['Location / Area',      n.location ?? '—'],
+    ['Status',               STATUS_LABEL[n.status] ?? n.status],
+    ['Responsible Person',   n.responsible_person ?? '—'],
+    ['Required By',          fmtDate(n.due_date)],
+    ['Specification Ref',    n.specification_ref ?? '—'],
+    ['Issue Description',    n.issue_description ?? '—'],
+    ['Root Cause',           n.root_cause ?? '—'],
+    ['Corrective Action',    n.corrective_action ?? '—'],
+    ['Consequences',         n.consequences ?? '—'],
+    n.status === 'closed' ? ['Close-Out Date', fmtDate(n.closeout_date)] : null,
+    n.status === 'closed' ? ['Verified By',    verifier?.full_name ?? '—'] : null,
+    n.status === 'closed' ? ['Verification',   n.verification_notes ?? '—'] : null,
+  ].filter(Boolean);
+
+  document.getElementById('dp-grid').innerHTML = fields.map(([lbl, val]) => `
+    <div class="detail-item">
+      <label>${lbl}</label>
+      <div class="dval">${esc(String(val))}</div>
+    </div>`).join('');
+
+  hideCloseout();
+}
+
+function hideDetail() {
+  document.getElementById('detail-panel').style.display = 'none';
+  viewing = null;
+}
+
+// ── Close-out ─────────────────────────────────────────────────────
+function showCloseout() {
+  document.getElementById('co-date').value = new Date().toISOString().slice(0,10);
+  document.getElementById('co-notes').value = '';
+  document.getElementById('closeout-form').style.display = 'block';
+}
+
+function hideCloseout() {
+  document.getElementById('closeout-form').style.display = 'none';
+}
+
+function openCloseout(id) {
+  viewNCR(id);
+  setTimeout(showCloseout, 100);
+}
+
+async function closeOutNCR() {
+  if (!viewing) return;
+  const date  = document.getElementById('co-date').value;
+  const notes = document.getElementById('co-notes').value.trim();
+  const verif = document.getElementById('co-verifier').value;
+  if (!date || !notes) { toast('Close-out date and verification notes are required', 'warn'); return; }
+
+  const { error } = await sb.from('cnt_ncrs').update({
+    status:             'closed',
+    closeout_date:      date,
+    verification_notes: notes,
+    verified_by:        verif || null,
+    updated_at:         new Date().toISOString()
+  }).eq('id', viewing.id);
+
+  if (error) { toast(error.message, 'err'); return; }
+
+  toast('NCR closed out', 'ok');
+  hideCloseout();
+  hideDetail();
+  await loadNCRs();
+}
+
+// ── Edit NCR ──────────────────────────────────────────────────────
+function editNCR() {
+  if (!viewing) return;
+  const n = viewing;
+  editing = n.id;
+  document.getElementById('f-contract').value    = n.contract_id ?? '';
+  document.getElementById('f-date').value        = n.raised_date ?? '';
+  document.getElementById('f-location').value    = n.location ?? '';
+  document.getElementById('f-issue').value       = n.issue_description ?? '';
+  document.getElementById('f-spec').value        = n.specification_ref ?? '';
+  document.getElementById('f-responsible').value = n.responsible_person ?? '';
+  document.getElementById('f-root').value        = n.root_cause ?? '';
+  document.getElementById('f-action').value      = n.corrective_action ?? '';
+  document.getElementById('f-due').value         = n.due_date ?? '';
+  document.getElementById('f-consequences').value = n.consequences ?? '';
+  document.getElementById('f-status').value      = n.status;
+  document.getElementById('form-title').textContent = 'Edit NCR — ' + n.ncr_ref;
+  showForm();
+  hideDetail();
+}
+
+// ── Raise / Save NCR ──────────────────────────────────────────────
+function showForm() {
+  if (!editing) {
+    document.getElementById('form-title').textContent = 'Raise New NCR';
+    // Clear form
+    ['f-contract','f-location','f-spec','f-responsible','f-due','f-status'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el.tagName === 'SELECT') el.value = el.options[0]?.value ?? '';
+      else el.value = '';
+    });
+    ['f-issue','f-root','f-action','f-consequences'].forEach(id =>
+      document.getElementById(id).value = '');
+    document.getElementById('f-date').value = new Date().toISOString().slice(0,10);
+    document.getElementById('f-status').value = 'open';
+  }
+  document.getElementById('form-card').style.display = 'block';
+  document.getElementById('form-card').scrollIntoView({ behavior:'smooth' });
+}
+
+function hideForm() {
+  document.getElementById('form-card').style.display = 'none';
+  editing = false;
+}
+
+async function saveNCR() {
+  const contractId = document.getElementById('f-contract').value;
+  const issue      = document.getElementById('f-issue').value.trim();
+  const responsible = document.getElementById('f-responsible').value.trim();
+  const action     = document.getElementById('f-action').value.trim();
+  const due        = document.getElementById('f-due').value;
+  const location   = document.getElementById('f-location').value.trim();
+
+  if (!contractId || !issue || !responsible || !action || !due || !location) {
+    toast('Contract, location, issue, responsible person, corrective action and due date are required', 'warn');
+    return;
+  }
+
+  const payload = {
+    contract_id:        contractId,
+    raised_date:        document.getElementById('f-date').value,
+    location,
+    issue_description:  issue,
+    specification_ref:  document.getElementById('f-spec').value.trim() || null,
+    root_cause:         document.getElementById('f-root').value.trim() || null,
+    corrective_action:  action,
+    responsible_person: responsible,
+    due_date:           due,
+    consequences:       document.getElementById('f-consequences').value.trim() || null,
+    status:             document.getElementById('f-status').value,
+    updated_at:         new Date().toISOString()
+  };
+
+  if (editing) {
+    const { error } = await sb.from('cnt_ncrs').update(payload).eq('id', editing);
+    if (error) { toast(error.message, 'err'); return; }
+    toast('NCR updated', 'ok');
+  } else {
+    // Generate reference
+    const { count } = await sb.from('cnt_ncrs')
+      .select('id', { count:'exact', head:true });
+    payload.ncr_ref    = `NCR-${new Date().getFullYear()}-${String((count ?? 0) + 1).padStart(3,'0')}`;
+    payload.raised_by  = auth.user.id;
+
+    const { error } = await sb.from('cnt_ncrs').insert(payload);
+    if (error) { toast(error.message, 'err'); return; }
+    toast('NCR raised', 'ok');
+  }
+
+  editing = false;
+  hideForm();
+  await loadNCRs();
+}
+
+// ── Utility ────────────────────────────────────────────────────
+function fmtDate(d) {
+  if (!d) return '—';
+  return new Date(d).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
+}
+function esc(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+init();
+</script>
+</body>
+</html>
