@@ -252,14 +252,15 @@ async function openDetail(id){
   document.getElementById("modalLog").innerHTML="Loading...";
   document.getElementById("modal").classList.add("open");
 
-  const [{ data:c },{ data:qc },{ data:insp },{ data:off },{ data:pay },{ data:prod },{ data:log }]=await Promise.all([
+  const [{ data:c },{ data:qc },{ data:insp },{ data:off },{ data:pay },{ data:prod },{ data:log },{ data:batches }]=await Promise.all([
     sb.from("pet_collections").select("*").eq("id",id).single(),
     sb.from("pet_stage2_qc").select("*").eq("collection_id",id).single(),
     sb.from("pet_stage2_inspection").select("*").eq("collection_id",id).maybeSingle(),
     sb.from("pet_stage4a_offloading").select("*").eq("collection_id",id).maybeSingle(),
     sb.from("pet_stage3_payment").select("*").eq("collection_id",id).single(),
     sb.from("pet_stage4_production").select("*").eq("collection_id",id).single(),
-    sb.from("pet_activity_log").select("*").eq("collection_id",id).order("created_at",{ascending:true})
+    sb.from("pet_activity_log").select("*").eq("collection_id",id).order("created_at",{ascending:true}),
+    sb.from("pet_lab_batches").select("id,batch_no,grade,bag_count,labels_pdf_url,bags_generated_at").eq("collection_id",id).order("batch_no",{ascending:true})
   ]);
 
   document.getElementById("modalTitle").textContent="Collection — "+(c?.form_number||id);
@@ -300,8 +301,18 @@ async function openDetail(id){
     html+=row("Coloured PET",prod.waste_coloured_kg)+row("Labelled Bottles",prod.waste_labels_kg)+row("Caps & Rings",prod.waste_caps_rings_kg)+row("Non-Food Contact",prod.waste_non_food_kg)+row("Non-PET Product",prod.waste_non_pet_kg)+row("Aged PET Bottles",prod.waste_aged_kg)+row("Oily PET Bottles",prod.waste_oily_kg)+row("Metal Ring",prod.waste_metal_kg);
     html+="</div>";
     html+=`<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:12px;margin-top:6px;">`;
-    html+=row("Total Waste",prod.total_waste_kg+" kg")+row("Accepted Waste",prod.accepted_waste_kg+" kg")+row("Unacceptable Waste",prod.unacceptable_waste_kg+" kg")+row("Unacceptable Waste Value",prod.unacceptable_waste_value+" kg")+row("Weight Difference",prod.weight_difference_kg+" kg")+row("Total Production + Waste",prod.total_production_plus_waste_kg+" kg")+row("LOT Freed","After approval")+row("Bag Labels PDF",prod.labels_pdf_url?`<a href="${prod.labels_pdf_url}" target="_blank">Download</a>`:"—");
+    html+=row("Total Waste",prod.total_waste_kg+" kg")+row("Accepted Waste",prod.accepted_waste_kg+" kg")+row("Unacceptable Waste",prod.unacceptable_waste_kg+" kg")+row("Unacceptable Waste Value",prod.unacceptable_waste_value+" kg")+row("Weight Difference",prod.weight_difference_kg+" kg")+row("Total Production + Waste",prod.total_production_plus_waste_kg+" kg")+row("LOT Freed","After approval");
     html+="</div>";
+    // Show all batch label PDFs (one per batch, not just the last one)
+    const labelBatches=(batches||[]).filter(b=>b.labels_pdf_url);
+    if(labelBatches.length){
+      html+=`<div style="margin-top:10px;font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px;">Bag Label PDFs — all batches</div>`;
+      html+=`<div style="display:flex;flex-wrap:wrap;gap:8px;">`;
+      html+=labelBatches.map(b=>`<a href="${b.labels_pdf_url}" target="_blank" style="display:inline-block;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;color:var(--heading);text-decoration:none;">📄 Batch ${b.batch_no} — Grade ${b.grade} (${b.bag_count} bag${b.bag_count!==1?"s":""})</a>`).join("");
+      html+=`</div>`;
+    } else {
+      html+=`<div style="font-size:12px;color:var(--muted);margin-top:8px;">No bag label PDFs generated yet.</div>`;
+    }
   }
   document.getElementById("modalDetail").innerHTML=html;
 
