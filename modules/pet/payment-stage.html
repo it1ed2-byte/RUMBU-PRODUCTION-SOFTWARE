@@ -14,6 +14,16 @@
 <script src="review-modal.js"></script>
 <script src="queue-collapse.js"></script>
 <style>
+  .agent-card{ border:1px solid var(--line); border-left:4px solid var(--accent); border-radius:8px; padding:12px 14px; margin:12px 0; background:var(--card); }
+  .agent-card h5{ margin:0 0 8px; color:var(--heading); font-size:13px; }
+  .agent-grid{ display:grid; grid-template-columns:1fr 1fr; gap:8px 18px; font-size:13px; }
+  @media(max-width:640px){ .agent-grid{ grid-template-columns:1fr; } }
+  .agent-grid .k{ display:block; font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.3px; }
+  .agent-grid .v{ font-weight:600; word-break:break-word; }
+  .acct-num{ font-family:ui-monospace,Consolas,monospace; font-size:17px; letter-spacing:1px; }
+  .copy-btn{ width:auto !important; margin:0 0 0 8px !important; padding:3px 10px !important; font-size:12px !important; background:var(--accent,#2563eb) !important; color:var(--logo-fg,#fff) !important; border:none !important; cursor:pointer; border-radius:6px; vertical-align:middle; }
+  .agent-warn{ background:rgba(154,107,0,.12); color:var(--warn,#9a6b00); padding:8px 12px; border-radius:6px; font-size:12.5px; font-weight:600; margin-top:10px; }
+
   body{padding:20px;}
   .wrap{max-width:1100px;margin:0 auto;}
   label{font-size:12px;font-weight:700;display:block;margin:10px 0 4px;color:var(--muted);}
@@ -69,6 +79,7 @@
           <div><label>Agent</label><input type="text" id="p1Agent" readonly></div>
           <div><label>Section</label><input type="text" id="p1Section" readonly></div>
         </div>
+        <div id="p1AgentCard"></div>
         <div class="grid2" style="margin-top:4px;">
           <div>
             <label>Odoo PO Number *</label>
@@ -108,6 +119,7 @@
           <div><label>Agent</label><input type="text" id="p2Agent" readonly></div>
           <div><label>Section</label><input type="text" id="p2Section" readonly></div>
         </div>
+        <div id="p2AgentCard"></div>
 
         <!-- Deduction (computed from Stage 4 waste via Stage 2 QC) -->
         <div class="grid3" style="margin-top:8px;">
@@ -203,6 +215,61 @@ async function stageHasApprovers(stage, section){
   return !!(data && data.length);
 }
 
+// ---- Agent & bank details, so the transfer can be made straight from this page ----
+const AGENT_COLS = "id,agent_code,agent_name,phone,address,category,section,bank_name,bank_account_number,bank_account_name";
+let AGENT_BY_ID = {}, AGENT_BY_CODE = {};
+function esc(v){ return String(v==null?"":v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+// Looks up the agents for these collections (by agent_id; by agent code for older collections without one).
+async function cacheAgents(rows){
+  rows = rows || [];
+  const ids = [...new Set(rows.map(r=>r.agent_id).filter(v=>v!=null && !AGENT_BY_ID[v]))];
+  const codes = [...new Set(rows.filter(r=>r.agent_id==null && r.agent_code && !AGENT_BY_CODE[r.agent_code]).map(r=>r.agent_code))];
+  const keep = a => { AGENT_BY_ID[a.id] = a; AGENT_BY_CODE[a.agent_code] = a; };
+  if(ids.length){   const { data } = await sb.from("pet_agents").select(AGENT_COLS).in("id", ids);          (data||[]).forEach(keep); }
+  if(codes.length){ const { data } = await sb.from("pet_agents").select(AGENT_COLS).in("agent_code", codes); (data||[]).forEach(keep); }
+}
+function agentFor(c){ return (c && (AGENT_BY_ID[c.agent_id] || AGENT_BY_CODE[c.agent_code])) || null; }
+
+function agentCardHtml(a){
+  if(!a) return `<div class="agent-card"><h5>Agent &amp; Bank Details (for the transfer)</h5><div class="agent-warn">The agent's details could not be found. Check Manage Agents.</div></div>`;
+  const missing = [];
+  if(!a.bank_name) missing.push("bank name"); if(!a.bank_account_name) missing.push("account name"); if(!a.bank_account_number) missing.push("account number");
+  const cell = (k,v,extra) => `<div><span class="k">${k}</span><span class="v">${v?esc(v):"—"}${extra||""}</span></div>`;
+  const num = a.bank_account_number
+    ? `<span class="acct-num">${esc(a.bank_account_number)}</span><button type="button" class="copy-btn" data-copy="${esc(a.bank_account_number)}" onclick="copyText(this)">Copy</button>`
+    : "";
+  const all = ["Agent: "+a.agent_name+" ("+a.agent_code+")", "Bank: "+(a.bank_name||""), "Account Name: "+(a.bank_account_name||""), "Account Number: "+(a.bank_account_number||"")].join("\n");
+  return `<div class="agent-card"><h5>Agent &amp; Bank Details (for the transfer)</h5>
+    <div class="agent-grid">
+      ${cell("Agent", a.agent_name + " (" + a.agent_code + ")")}
+      ${cell("Phone", a.phone)}
+      ${cell("Address", a.address)}
+      ${cell("Category", a.category)}
+      ${cell("Bank", a.bank_name)}
+      ${cell("Account Name", a.bank_account_name)}
+      <div><span class="k">Account Number</span><span class="v">${num || "—"}</span></div>
+      <div><span class="k">All bank details</span><span class="v"><button type="button" class="copy-btn" style="margin-left:0 !important;" data-copy="${esc(all)}" onclick="copyText(this)">Copy details</button></span></div>
+    </div>
+    ${missing.length ? `<div class="agent-warn">Missing: ${missing.join(", ")}. Add them under Manage Agents before paying.</div>` : ""}
+  </div>`;
+}
+// the same details as rows for the approver's review window
+function agentRows(a){
+  if(!a) return [["Agent details","Not found - check Manage Agents"]];
+  return [["Agent", a.agent_name + " (" + a.agent_code + ")"], ["Phone", a.phone], ["Address", a.address], ["Category", a.category],
+          ["Bank", a.bank_name], ["Account Name", a.bank_account_name], ["Account Number", a.bank_account_number]];
+}
+function copyText(btn){
+  const text = btn.getAttribute("data-copy") || "";
+  const done = () => { const t = btn.textContent; btn.textContent = "Copied \u2713"; setTimeout(()=>{ btn.textContent = t; }, 1500); };
+  if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(text).then(done, ()=>fallbackCopy(text, done)); }
+  else fallbackCopy(text, done);
+}
+function fallbackCopy(text, done){
+  const ta = document.createElement("textarea"); ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+  document.body.appendChild(ta); ta.select(); try{ document.execCommand("copy"); done(); }catch(e){ alert("Copy failed - please select and copy the number manually."); } ta.remove();
+}
+
 async function loadP1FillQueue(sections){
   const { data }=await sb.from("pet_collections")
     .select("id,form_number,agent_name,agent_code,section,status,updated_at")
@@ -219,7 +286,7 @@ async function loadP1FillQueue(sections){
 
 async function loadP1ApprovalQueue(sections){
   const { data }=await sb.from("pet_collections")
-    .select("id,form_number,agent_name,agent_code,section,status,cycle,agent_waybill_weight,pet_stage3_payment(*)")
+    .select("id,agent_id,form_number,agent_name,agent_code,section,status,cycle,agent_waybill_weight,pet_stage3_payment(*)")
     .eq("status","stage3p1_approval")
     .in("section",sections.length?sections:ALL_SECTIONS)
     .order("updated_at",{ascending:false});
@@ -231,6 +298,7 @@ async function loadP1ApprovalQueue(sections){
   const decided=new Set((myDec||[]).map(d=>d.collection_id+":"+d.cycle));
 
   P1_QUEUE_DATA = data;
+  await cacheAgents(data);
   return data.map(c=>{
     const pay=(Array.isArray(c.pet_stage3_payment)?c.pet_stage3_payment[0]:c.pet_stage3_payment)||{};
     const hasDec=decided.has(c.id+":"+c.cycle);
@@ -258,6 +326,7 @@ function openP1Review(collectionId){
     subtitle: c.form_number + " — " + c.agent_name + " (" + c.agent_code + ") — " + c.section,
     mode: "decide",
     sections: [
+      { heading: "Agent & Bank Details (for the transfer)", rows: agentRows(agentFor(c)) },
       { heading: "Collection Context", rows: [
         ["Agent Waybill Weight", (c.agent_waybill_weight||0) + " kg"],
       ]},
@@ -287,7 +356,7 @@ async function loadP2FillQueue(sections){
 
 async function loadP2ApprovalQueue(sections){
   const { data }=await sb.from("pet_collections")
-    .select("id,form_number,agent_name,agent_code,section,status,cycle,pet_stage3_payment(*),pet_stage4_production(*),pet_stage4a_offloading(offload_location)")
+    .select("id,agent_id,form_number,agent_name,agent_code,section,status,cycle,pet_stage3_payment(*),pet_stage4_production(*),pet_stage4a_offloading(offload_location)")
     .eq("status","stage3p2_approval")
     .in("section",sections.length?sections:ALL_SECTIONS)
     .order("updated_at",{ascending:false});
@@ -299,6 +368,7 @@ async function loadP2ApprovalQueue(sections){
   const decided=new Set((myDec||[]).map(d=>d.collection_id+":"+d.cycle));
 
   P2_QUEUE_DATA = data;
+  await cacheAgents(data);
   return data.map(c=>{
     const pay=(Array.isArray(c.pet_stage3_payment)?c.pet_stage3_payment[0]:c.pet_stage3_payment)||{};
     const hasDec=decided.has(c.id+":"+c.cycle);
@@ -328,6 +398,7 @@ function openP2Review(collectionId){
     subtitle: c.form_number + " — " + c.agent_name + " (" + c.agent_code + ") — " + c.section,
     mode: "decide",
     sections: [
+      { heading: "Agent & Bank Details (for the transfer)", rows: agentRows(agentFor(c)) },
       { heading: "Production Context", rows: [
         ["LOT", off.offload_location],
         ["Production Start", prod.production_start ? new Date(prod.production_start).toLocaleString("en-GB") : null],
@@ -358,6 +429,8 @@ async function openP1Form(id){
   document.getElementById("p1FormNum").value=c.form_number;
   document.getElementById("p1Agent").value=c.agent_name;
   document.getElementById("p1Section").value=c.section;
+  await cacheAgents([c]);
+  document.getElementById("p1AgentCard").innerHTML = agentCardHtml(agentFor(c));
   document.getElementById("p1PO").value=pay.odoo_po_number||"";
   document.getElementById("p1ReceiptUrl").textContent=pay.payment_90pct_attachment||"";
 
@@ -445,6 +518,8 @@ async function openP2Form(id){
   document.getElementById("p2FormNum").value=c.form_number;
   document.getElementById("p2Agent").value=c.agent_name;
   document.getElementById("p2Section").value=c.section;
+  await cacheAgents([c]);
+  document.getElementById("p2AgentCard").innerHTML = agentCardHtml(agentFor(c));
   document.getElementById("p2ReceiptUrl").textContent=pay.payment_10pct_attachment||"";
 
   const rumbuW=c.rumbu_weighbridge_weight||0;
