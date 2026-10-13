@@ -743,8 +743,17 @@ async function addEmployeeToEntry(){
     return;
   }
   if(!reason){ status.className="status err"; status.textContent="Enter a Reason for Overtime."; return; }
-  if(CURRENT_EMPLOYEES.some(e => String(e.employee_id) === String(match.id))){
-    status.className="status err"; status.textContent = match.full_name + " is already on this request."; return;
+  // Check the whole form (every unit tab), not just the unit currently open
+  const { data: dupRows, error: dupErr } = await sb.from("overtime_employees")
+    .select("form_unit")
+    .eq("department_entry_id", CURRENT_ENTRY.id)
+    .eq("employee_id", match.id)
+    .limit(1);
+  if(dupErr){ status.className="status err"; status.textContent="❌ Could not check for duplicates: " + dupErr.message; return; }
+  if(dupRows && dupRows.length){
+    const where = dupRows[0].form_unit ? " under unit " + dupRows[0].form_unit : "";
+    status.className="status err"; status.textContent = match.full_name + " is already on this request" + where + ".";
+    return;
   }
 
   status.className="status"; status.textContent="Adding…";
@@ -777,12 +786,23 @@ async function removeEmployeeFromEntry(rowId){
 // Save & Continue Later — every employee is already persisted as it is added,
 // so this simply keeps the entry in the Fill queue (status unchanged) and
 // returns to the list. The person can reopen and finish any time.
+// Total employees on the whole form (all unit tabs), counted from the database.
+async function countEntryEmployees(){
+  if(!CURRENT_ENTRY) return 0;
+  const { count, error } = await sb.from("overtime_employees")
+    .select("id", { count:"exact", head:true })
+    .eq("department_entry_id", CURRENT_ENTRY.id);
+  if(error){ console.warn("Overtime: employee count failed:", error.message); return CURRENT_EMPLOYEES.length; }
+  return count || 0;
+}
+
 async function saveAndContinueLater(){
   if(!CURRENT_ENTRY) return;
   const status = document.getElementById("submitStatus");
   status.className = "status ok";
   status.textContent = "✅ Progress saved. This form is still in your Fill list to finish later.";
-  await logActivity("overtime_step2_saved", ME.username + " saved progress on overtime entry #" + CURRENT_ENTRY.id + " (" + CURRENT_ENTRY.section + " / " + CURRENT_ENTRY.department + ") — " + CURRENT_EMPLOYEES.length + " employee(s) so far");
+  const totalSaved = await countEntryEmployees();
+  await logActivity("overtime_step2_saved", ME.username + " saved progress on overtime entry #" + CURRENT_ENTRY.id + " (" + CURRENT_ENTRY.section + " / " + CURRENT_ENTRY.department + ") — " + totalSaved + " employee(s) so far");
   setTimeout(backToQueue, 700);
 }
 
@@ -813,7 +833,7 @@ async function submitEntry(skipUnitCheck){
     }
     if(!allEmps || !allEmps.length){ status.className="status err"; status.textContent="Add at least one employee before submitting."; return; }
   } else {
-    if(!CURRENT_EMPLOYEES.length){ status.className="status err"; status.textContent="Add at least one employee before submitting."; return; }
+    if(!(await countEntryEmployees())){ status.className="status err"; status.textContent="Add at least one employee before submitting."; return; }
   }
 
   const isCorrection = CURRENT_ENTRY.status === "rejected_to_step2";
@@ -858,7 +878,8 @@ async function submitEntry(skipUnitCheck){
     const { error } = await sb.from("overtime_department_entries").update(updateFields).eq("id", CURRENT_ENTRY.id);
     if(error) throw error;
 
-    await logActivity("overtime_step2_submitted", ME.username + " submitted overtime entry #" + CURRENT_ENTRY.id + " (" + CURRENT_ENTRY.section + " / " + CURRENT_ENTRY.department + ") with " + CURRENT_EMPLOYEES.length + " employee(s)" + (isCorrection ? ". Response: " + responseNote : ""));
+    const totalSubmitted = await countEntryEmployees();
+    await logActivity("overtime_step2_submitted", ME.username + " submitted overtime entry #" + CURRENT_ENTRY.id + " (" + CURRENT_ENTRY.section + " / " + CURRENT_ENTRY.department + ") with " + totalSubmitted + " employee(s)" + (isCorrection ? ". Response: " + responseNote : ""));
     status.className = "status ok"; status.textContent = "✅ Submitted for Step 3 approval.";
     setTimeout(backToQueue, 800);
   }catch(e){
