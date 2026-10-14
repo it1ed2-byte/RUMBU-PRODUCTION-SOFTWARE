@@ -148,12 +148,11 @@ async function _renderNav(nav) {
   const CHEV_DN_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><polyline points="6 9 12 15 18 9"/></svg>';
 
   /* Determine initial topbar state from localStorage */
-  let _topHidden = false;
-  try { _topHidden = localStorage.getItem('cnt_top_hidden') === '1'; } catch(_) {}
+  // top bar always visible — no toggle
   /* Apply it to the parent frame immediately (same-origin, so direct DOM access works) */
   try {
     const shell = window.parent.document.getElementById('appShell');
-    if (shell) { _topHidden ? shell.classList.add('cnt-top-hidden') : shell.classList.remove('cnt-top-hidden'); }
+    if (shell) shell.classList.remove('cnt-top-hidden');
   } catch(_) {}
 
   /* Render the chrome immediately so the toggle button is usable at once */
@@ -164,13 +163,7 @@ async function _renderNav(nav) {
         <span>GOVT. CONTRACTS</span>
       </div>
       <div class="cnt-nav-actions">
-        <button class="cnt-nav-toggle"
-                id="cntTopToggle"
-                onclick="cntToggleTopBar()"
-                aria-label="${_topHidden ? 'Show top bar' : 'Hide top bar'}"
-                title="${_topHidden ? 'Show top bar' : 'Hide top bar'}">
-          ${_topHidden ? CHEV_DN_SVG : CHEV_UP_SVG}
-        </button>
+        
         <button class="cnt-nav-toggle"
                 onclick="cntToggleNav()"
                 aria-label="Collapse sidebar"
@@ -264,26 +257,7 @@ async function _renderNav(nav) {
  * contracts content fills the full viewport height.
  * Accesses the parent frame directly (same-origin iframe, no postMessage needed).
  * ═══════════════════════════════════════════════════════════════════════════ */
-function cntToggleTopBar() {
-  const CHEV_UP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><polyline points="18 15 12 9 6 15"/></svg>';
-  const CHEV_DN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><polyline points="6 9 12 15 18 9"/></svg>';
-  try {
-    const shell = window.parent.document.getElementById('appShell');
-    if (!shell) return;
-    const hidden = shell.classList.toggle('cnt-top-hidden');
-    /* Update the button icon and label */
-    const btn = document.getElementById('cntTopToggle');
-    if (btn) {
-      btn.innerHTML    = hidden ? CHEV_DN : CHEV_UP;
-      btn.title        = hidden ? 'Show top bar' : 'Hide top bar';
-      btn.setAttribute('aria-label', hidden ? 'Show top bar' : 'Hide top bar');
-    }
-    /* Persist so the state survives page-to-page navigation within contracts */
-    try { localStorage.setItem('cnt_top_hidden', hidden ? '1' : '0'); } catch(_) {}
-  } catch(e) {
-    console.warn('cntToggleTopBar: could not access parent frame', e);
-  }
-}
+
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * Collapse / expand (desktop)
