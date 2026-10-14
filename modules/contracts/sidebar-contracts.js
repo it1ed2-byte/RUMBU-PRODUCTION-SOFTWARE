@@ -148,11 +148,12 @@ async function _renderNav(nav) {
   const CHEV_DN_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><polyline points="6 9 12 15 18 9"/></svg>';
 
   /* Determine initial topbar state from localStorage */
-  // top bar always visible — no toggle
+  let _topHidden = false;
+  try { _topHidden = localStorage.getItem('cnt_top_hidden') === '1'; } catch(_) {}
   /* Apply it to the parent frame immediately (same-origin, so direct DOM access works) */
   try {
     const shell = window.parent.document.getElementById('appShell');
-    if (shell) shell.classList.remove('cnt-top-hidden');
+    if (shell) { _topHidden ? shell.classList.add('cnt-top-hidden') : shell.classList.remove('cnt-top-hidden'); }
   } catch(_) {}
 
   /* Render the chrome immediately so the toggle button is usable at once */
@@ -169,6 +170,13 @@ async function _renderNav(nav) {
                 aria-label="Collapse sidebar"
                 title="Collapse / expand">
           ${BARS_SVG}
+        </button>
+        <button class="cnt-nav-action"
+                onclick="cntToggleTopBar()"
+                aria-label="Toggle top bar"
+                title="Show / hide top bar"
+                id="cnt-topbar-btn">
+          ${_topHidden ? CHEV_DN_SVG : CHEV_UP_SVG}
         </button>
       </div>
     </div>
@@ -268,6 +276,18 @@ function cntToggleNav() {
   const collapsed = shell.classList.toggle('cnt-collapsed');
   try { localStorage.setItem('cnt_nav_collapsed', collapsed ? '1' : '0'); } catch (_) {}
 }
+function cntToggleTopBar() {
+  try {
+    const shell = window.parent.document.getElementById('appShell');
+    const hidden = shell.classList.toggle('cnt-top-hidden');
+    localStorage.setItem('cnt_top_hidden', hidden ? '1' : '0');
+    const btn = document.getElementById('cnt-topbar-btn');
+    if (btn) btn.innerHTML = hidden ? CHEV_DN_SVG : CHEV_UP_SVG;
+  } catch(e) {
+    console.warn('cntToggleTopBar: could not access parent frame', e);
+  }
+}
+
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * Mobile drawer open / close
