@@ -38,6 +38,8 @@
       <button class="tab-btn" onclick="switchTab('kpi',this)">KPI</button>
       <button class="tab-btn" onclick="switchTab('team',this)">Team</button>
       <button class="tab-btn" onclick="switchTab('actions',this)">Corrective Actions</button>
+      <button class="tab-btn" onclick="switchTab('ncr',this)">NCRs</button>
+      <button class="tab-btn" onclick="switchTab('mob',this)">Mobilization</button>
     </div>
 
     <!-- Overview -->
@@ -125,6 +127,32 @@
       </div>
     </div>
 
+    <!-- NCRs — §3.3 -->
+    <div class="tab-pane" id="tab-ncr">
+      <div style="display:flex;align-items:center;justify-content:space-between;
+        margin-bottom:14px;flex-wrap:wrap;gap:10px">
+        <div id="ncr-summary" style="font-size:13px;color:var(--muted)"></div>
+        <button class="btn btn-primary" style="padding:6px 14px;font-size:13px"
+          onclick="location.href='ncr-register.html?contract='+ID">
+          ＋ Raise NCR
+        </button>
+      </div>
+      <div class="tbl-wrap">
+        <div class="tbl-scroll"><table>
+          <thead><tr>
+            <th>NCR Ref</th><th>Issue / Location</th>
+            <th>Responsible</th><th>Due Date</th><th>Status</th>
+          </tr></thead>
+          <tbody id="ncr-tbody"></tbody>
+        </table></div>
+      </div>
+    </div>
+
+    <!-- Mobilization — §2.3 -->
+    <div class="tab-pane" id="tab-mob">
+      <div id="mob-content"></div>
+    </div>
+
   </div>
 </div>
 
@@ -166,6 +194,8 @@ function switchTab(id, el) {
   if (id === 'kpi') loadKPIs();
   if (id === 'team') loadTeam();
   if (id === 'actions') loadActions();
+  if (id === 'ncr')     loadNCRs();
+  if (id === 'mob')     loadMobilization();
 }
 
 async function loadContract() {
@@ -310,6 +340,128 @@ async function loadActions() {
       <td><span class="badge ${sCls}">${sLbl}</span></td>
     </tr>`;
   }).join('') : `<tr><td colspan="4"><div class="empty-state"><span class="e-icon">🔧</span><p>No corrective actions for this contract.</p></div></td></tr>`;
+}
+
+async function loadNCRs() {
+  const { data } = await sb.from('cnt_ncrs')
+    .select('id,ncr_ref,issue_description,location,responsible_person,due_date,status')
+    .eq('contract_id', ID).order('raised_date', { ascending:false });
+  const rows = data ?? [];
+  const open   = rows.filter(r => r.status === 'open').length;
+  const overdue= rows.filter(r => r.due_date && new Date(r.due_date) < new Date() && r.status !== 'closed').length;
+  document.getElementById('ncr-summary').innerHTML =
+    `<strong>${rows.length}</strong> total &nbsp;·&nbsp; ` +
+    `<span style="color:${open?'#ef4444':'#22c55e'}">${open} open</span>` +
+    (overdue ? ` &nbsp;·&nbsp; <span style="color:#ef4444;font-weight:700">${overdue} overdue</span>` : '');
+
+  const SL = { open:'Open', in_progress:'In Progress', closed:'Closed', disputed:'Disputed' };
+  const SC = { open:'b-bad', in_progress:'b-warn', closed:'b-ok', disputed:'b-info' };
+  document.getElementById('ncr-tbody').innerHTML = rows.length ? rows.map(r => {
+    const od = r.due_date && new Date(r.due_date) < new Date() && r.status !== 'closed';
+    return `<tr onclick="location.href='ncr-register.html'" style="cursor:pointer">
+      <td style="font-weight:700;font-size:12px;color:var(--muted)">${r.ncr_ref ?? '—'}</td>
+      <td>
+        <div style="font-weight:600;font-size:13px">${esc(r.issue_description ?? '—')}</div>
+        <div style="font-size:11px;color:var(--muted)">📍 ${esc(r.location ?? '—')}</div>
+      </td>
+      <td style="font-size:13px">${esc(r.responsible_person ?? '—')}</td>
+      <td style="font-size:13px;${od ? 'color:#ef4444;font-weight:700' : ''}">
+        ${r.due_date ? new Date(r.due_date).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) : '—'}
+        ${od ? ' ⚠' : ''}
+      </td>
+      <td><span class="badge ${SC[r.status] ?? 'b-gray'}">${SL[r.status] ?? r.status}</span></td>
+    </tr>`;
+  }).join('')
+  : `<tr><td colspan="5"><div class="empty-state">
+      <span class="e-icon">✅</span>
+      <p>No NCRs raised for this contract. Click <strong>Raise NCR</strong> to log one.</p>
+    </div></td></tr>`;
+}
+
+async function loadMobilization() {
+  const { data: mob } = await sb.from('cnt_mobilization')
+    .select('*').eq('contract_id', ID).maybeSingle();
+
+  const ITEMS = [
+    { key:'personnel',     label:'Approved personnel are available'                   },
+    { key:'equipment',     label:'Required equipment is available and fit for purpose'},
+    { key:'materials',     label:'Materials have been identified and planned'          },
+    { key:'procedures',    label:'Work procedures have been reviewed'                 },
+    { key:'safety',        label:'Safety requirements have been communicated'          },
+    { key:'permits',       label:'Required permits and approvals are in place'         },
+    { key:'communication', label:'Communication channels have been established'        },
+    { key:'reporting',     label:'Reporting templates have been agreed'               },
+    { key:'schedule',      label:'The baseline schedule has been approved'            },
+  ];
+
+  const items   = mob?.items ?? {};
+  const confirmed = ITEMS.filter(ci => items[ci.key]?.status === 'confirmed').length;
+  const pct     = Math.round((confirmed / ITEMS.length) * 100);
+  const status  = mob?.status ?? 'not_started';
+  const SBADGE  = {
+    not_started: ['b-gray',   '⬜ Not Started'],
+    in_progress: ['b-warn',   '⚠ In Progress'],
+    signed_off:  ['b-ok',     '✅ Signed Off'],
+  };
+  const [sCls, sLbl] = SBADGE[status];
+
+  const fillCol = pct === 100 ? '#22c55e' : pct >= 50 ? '#f59e0b' : '#ef4444';
+
+  const itemRows = ITEMS.map((ci, i) => {
+    const it = items[ci.key] ?? { status:'not_confirmed', notes:'' };
+    const icon = it.status === 'confirmed' ? '✅' : it.status === 'in_progress' ? '⚠' : '✕';
+    const col  = it.status === 'confirmed' ? '#166534' : it.status === 'in_progress' ? '#92400e' : '#64748b';
+    return `<div style="display:flex;gap:12px;padding:10px 0;
+      border-bottom:1px solid var(--border);align-items:flex-start">
+      <span style="color:var(--muted);font-size:12px;min-width:20px;margin-top:1px">${i+1}.</span>
+      <div style="flex:1;font-size:13.5px;color:var(--heading)">${ci.label}</div>
+      <span style="font-weight:700;font-size:13px;color:${col};white-space:nowrap">${icon} ${
+        { confirmed:'Confirmed', in_progress:'In Progress', not_confirmed:'Not Confirmed' }[it.status] ?? '—'
+      }</span>
+    </div>`;
+  }).join('');
+
+  const signedSection = mob?.status === 'signed_off'
+    ? `<div style="margin-top:14px;background:#f0fdf4;border:1.5px solid #22c55e;
+        border-radius:8px;padding:14px 16px;font-size:13px;color:#166534;line-height:1.7">
+        ✅ <strong>Signed off</strong> on ${mob.signed_off_date
+          ? new Date(mob.signed_off_date).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})
+          : '—'}.
+        Work may commence in accordance with §2.3.
+      </div>` : '';
+
+  document.getElementById('mob-content').innerHTML = `
+    <div class="sec-card" style="margin-bottom:14px">
+      <div class="sec-body" style="padding:18px 20px">
+        <div style="display:flex;align-items:center;justify-content:space-between;
+          flex-wrap:wrap;gap:10px;margin-bottom:12px">
+          <div>
+            <div style="font-size:15px;font-weight:700;color:var(--heading)">
+              Mobilization Review — §2.3
+            </div>
+            <div style="font-size:12px;color:var(--muted);margin-top:2px">
+              Before commencement of work, the mobilization review should confirm:
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <span class="badge ${sCls}">${sLbl}</span>
+            <button class="btn btn-primary" style="padding:6px 14px;font-size:13px"
+              onclick="location.href='mobilization-checklist.html?contract=${ID}'">
+              ${status === 'signed_off' ? 'View Checklist' : 'Open Checklist'}
+            </button>
+          </div>
+        </div>
+        <!-- Progress bar -->
+        <div style="background:var(--border);border-radius:6px;height:10px;margin-bottom:6px">
+          <div style="width:${pct}%;height:10px;border-radius:6px;background:${fillCol};transition:width .4s"></div>
+        </div>
+        <div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:14px">
+          ${confirmed} of ${ITEMS.length} items confirmed
+        </div>
+        ${itemRows}
+        ${signedSection}
+      </div>
+    </div>`;
 }
 
 async function changeStatus(newStatus) {

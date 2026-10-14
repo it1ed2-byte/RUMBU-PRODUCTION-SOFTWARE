@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Prequalification</title>
+<script src="auth-contracts.js"></script>
+<link rel="stylesheet" href="contracts.css">
+<style>
+/* Criteria card */
+.crit-card{border:1.5px solid var(--border);border-radius:10px;padding:16px 18px;
+  margin-bottom:12px;transition:border .15s}
+.crit-card.satisfactory      {border-color:#22c55e;background:#f0fdf4}
+.crit-card.requires_improvement{border-color:#f59e0b;background:#fffbeb}
+.crit-card.unsatisfactory    {border-color:#ef4444;background:#fef2f2}
+.crit-card.not_assessed      {border-color:var(--border);background:var(--card)}
+.crit-header{display:flex;align-items:flex-start;gap:14px}
+.crit-num{font-size:12px;font-weight:800;color:var(--muted);min-width:22px;margin-top:2px}
+.crit-body{flex:1}
+.crit-title{font-weight:700;font-size:14px;color:var(--heading);margin-bottom:2px}
+.crit-desc{font-size:12px;color:var(--muted);margin-bottom:10px;line-height:1.5}
+.crit-btns{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.crit-btn{padding:5px 14px;border:1.5px solid var(--border);border-radius:20px;
+  font-size:12px;font-weight:700;cursor:pointer;background:var(--card);transition:all .15s}
+.crit-btn.a-satisfactory      {background:#22c55e;border-color:#22c55e;color:#fff}
+.crit-btn.a-requires_improvement{background:#f59e0b;border-color:#f59e0b;color:#fff}
+.crit-btn.a-unsatisfactory    {background:#ef4444;border-color:#ef4444;color:#fff}
+.crit-btn.a-not_assessed      {background:#94a3b8;border-color:#94a3b8;color:#fff}
+.crit-btn:hover:not([class*="a-"]){background:#f1f5f9}
+.crit-notes{width:100%;border:1.5px solid var(--border);border-radius:7px;
+  padding:7px 10px;font-size:13px;font-family:inherit;resize:vertical;margin-top:4px}
+.crit-notes:focus{outline:2px solid var(--accent);border-color:var(--accent)}
+
+/* Recommendation panel */
+.rec-panel{border-radius:12px;padding:22px;margin-top:4px}
+.rec-panel.approved    {background:#f0fdf4;border:2px solid #22c55e}
+.rec-panel.conditional {background:#fffbeb;border:2px solid #f59e0b}
+.rec-panel.not_approved{background:#fef2f2;border:2px solid #ef4444}
+.rec-panel.none        {background:#f8fafc;border:1.5px solid var(--border)}
+
+/* Company list */
+.co-item{display:flex;align-items:center;justify-content:space-between;
+  padding:12px 16px;border:1.5px solid var(--border);border-radius:8px;
+  cursor:pointer;margin-bottom:8px;transition:border .15s}
+.co-item:hover{border-color:var(--accent)}
+.co-name{font-weight:600;font-size:14px}
+.co-meta{font-size:12px;color:var(--muted);margin-top:2px}
+</style>
+</head>
+<body>
+
+<div class="page-hdr">
+  <div class="ph-left">
+    <div class="ph-icon">🔍</div>
+    <div>
+      <div class="ph-title">Prequalification</div>
+      <div class="ph-sub">§2.1 — Structured prequalification and selection process</div>
+    </div>
+  </div>
+  <div class="ph-right">
+    <button class="btn btn-hdr" onclick="location.href='contracts.html'">← Dashboard</button>
+  </div>
+</div>
+
+<div class="content">
+  <div id="loading" class="loading-wrap">
+    <div class="spinner"></div>
+    <div class="loading-txt">Loading…</div>
+  </div>
+
+  <div id="app" style="display:none">
+
+    <!-- Company list view -->
+    <div id="list-view">
+      <div class="alert alert-info" style="margin-bottom:18px">
+        <strong>§2.1:</strong> Effective subcontractor monitoring should begin before contract
+        award through a structured prequalification and selection process.
+        Select a company to assess or review its prequalification status.
+      </div>
+
+      <div style="display:flex;gap:10px;margin-bottom:16px">
+        <input class="srch" id="co-search" type="search"
+          placeholder="🔍 Search companies…" oninput="renderList()" style="flex:1">
+      </div>
+
+      <div id="co-list"></div>
+    </div>
+
+    <!-- Assessment view -->
+    <div id="assess-view" style="display:none">
+
+      <!-- Header -->
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap">
+        <button class="btn" onclick="showList()">← All Companies</button>
+        <div>
+          <div style="font-size:18px;font-weight:800;color:var(--primary)" id="av-company"></div>
+          <div style="font-size:13px;color:var(--muted)" id="av-meta"></div>
+        </div>
+        <div style="margin-left:auto;display:flex;gap:8px">
+          <button class="btn btn-primary" onclick="saveAssessment('finalised')">✔ Finalise</button>
+          <button class="btn" onclick="saveAssessment('draft')">Save Draft</button>
+        </div>
+      </div>
+
+      <!-- Progress -->
+      <div class="sec-card" style="margin-bottom:18px">
+        <div class="sec-body" style="padding:16px 20px">
+          <div style="display:flex;align-items:center;justify-content:space-between;
+            flex-wrap:wrap;gap:8px;margin-bottom:8px">
+            <span style="font-size:13px;font-weight:600;color:var(--heading)">
+              Assessment Progress
+            </span>
+            <div id="av-score-badge"></div>
+          </div>
+          <div style="background:var(--border);border-radius:6px;height:8px;margin-bottom:4px">
+            <div id="av-prog-fill" style="height:8px;border-radius:6px;
+              background:#22c55e;width:0%;transition:width .3s"></div>
+          </div>
+          <div id="av-prog-txt" style="font-size:12px;color:var(--muted)">
+            0 of 12 criteria assessed
+          </div>
+        </div>
+      </div>
+
+      <!-- 12 criteria -->
+      <div id="criteria-wrap"></div>
+
+      <!-- Recommendation -->
+      <div class="sec-card" style="margin-top:4px">
+        <div class="sec-hdr">
+          <div class="sec-title">Overall Recommendation</div>
+        </div>
+        <div class="sec-body">
+          <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+            <button class="crit-btn" id="rec-approved"
+              onclick="setRec('approved')">✅ Approved</button>
+            <button class="crit-btn" id="rec-conditional"
+              onclick="setRec('conditional')">⚠ Conditionally Approved</button>
+            <button class="crit-btn" id="rec-not_approved"
+              onclick="setRec('not_approved')">🔴 Not Approved</button>
+          </div>
+          <div class="field">
+            <label>Recommendation Notes</label>
+            <textarea id="rec-notes" class="srch" rows="3"
+              placeholder="Summary of assessment findings and basis for recommendation…"></textarea>
+          </div>
+          <div id="rec-panel" class="rec-panel none" style="margin-top:14px;display:none"></div>
+          <div style="margin-top:16px;display:flex;gap:10px">
+            <button class="btn btn-primary" onclick="saveAssessment('finalised')">✔ Finalise Assessment</button>
+            <button class="btn" onclick="saveAssessment('draft')">Save Draft</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ── 12 criteria — §2.1 exactly ───────────────────────────────────
+const CRITERIA = [
+  { key:'technical_capability',
+    label:'Technical capability',
+    desc:'Assess the subcontractor\'s technical competence and ability to execute the required scope.' },
+  { key:'relevant_experience',
+    label:'Relevant experience',
+    desc:'Verify experience in similar projects, scopes and working environments.' },
+  { key:'previous_performance',
+    label:'Previous performance',
+    desc:'Review past performance in terms of cost, quality, schedule, safety and contract compliance.' },
+  { key:'financial_capacity',
+    label:'Financial capacity',
+    desc:'Confirm the subcontractor has sufficient financial resources to sustain the work and meet project obligations.' },
+  { key:'qualified_personnel',
+    label:'Availability of qualified personnel',
+    desc:'Verify the availability and competence of key technical and management personnel.' },
+  { key:'equipment_resource',
+    label:'Equipment and resource capacity',
+    desc:'Confirm that adequate equipment, materials, manpower and other resources are available.' },
+  { key:'hse_record',
+    label:'Health and safety record',
+    desc:'Review previous safety performance, incident record and effectiveness of HSE practice.' },
+  { key:'quality_management',
+    label:'Quality management systems',
+    desc:'Assess the systems and procedures used to control and maintain quality.' },
+  { key:'regulatory_compliance',
+    label:'Regulatory and statutory compliance',
+    desc:'Confirm compliance with applicable laws, permits, licenses, regulations and statutory requirements.' },
+  { key:'insurance_coverage',
+    label:'Insurance coverage',
+    desc:'Verify that required insurance policies and adequate coverage are in place.' },
+  { key:'client_references',
+    label:'References from previous clients',
+    desc:'Obtain and review references from previous clients to validate capability and performance.' },
+  { key:'schedule_capacity',
+    label:'Capacity to meet project schedule requirements',
+    desc:'Confirm the subcontractor has sufficient resources and capacity to meet the project schedule and key milestones.' },
+];
+
+const RATINGS = [
+  { val:'satisfactory',       label:'✅ Satisfactory' },
+  { val:'requires_improvement',label:'⚠ Requires Improvement' },
+  { val:'unsatisfactory',     label:'🔴 Unsatisfactory' },
+  { val:'not_assessed',       label:'— Not Assessed' },
+];
+
+let sb, auth, companies = [], assessmentMap = {};
+let currentCompany = null, currentAssessment = null;
+let criteria = {}, recommendation = '', recNotes = '';
+
+async function init() {
+  try {
+    auth = await guardPage();
+    if (!auth) return;
+    sb = auth.sb;
+
+    const [cRes, aRes] = await Promise.all([
+      sb.from('cnt_companies').select('id,name,status').order('name'),
+      sb.from('cnt_prequalification')
+        .select('id,company_id,recommendation,status,assessment_date')
+    ]);
+    companies     = cRes.data ?? [];
+    (aRes.data ?? []).forEach(a => { assessmentMap[a.company_id] = a; });
+
+    renderList();
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+
+  } catch(e) {
+    document.getElementById('loading').innerHTML =
+      `<p style="color:var(--err);text-align:center">${e.message}</p>`;
+  }
+}
+
+// ── Company list ──────────────────────────────────────────────────
+function renderList() {
+  const q = document.getElementById('co-search').value.toLowerCase();
+  const filtered = companies.filter(c =>
+    !q || c.name.toLowerCase().includes(q));
+
+  const REC_BADGE = {
+    approved:    ['b-ok',   '✅ Approved'],
+    conditional: ['b-warn', '⚠ Conditional'],
+    not_approved:['b-bad',  '🔴 Not Approved'],
+  };
+
+  document.getElementById('co-list').innerHTML = filtered.length
+    ? filtered.map(c => {
+        const a = assessmentMap[c.id];
+        const [rCls, rLbl] = a?.recommendation
+          ? (REC_BADGE[a.recommendation] ?? ['b-gray','—'])
+          : ['b-gray','Not Assessed'];
+        const statusLbl = a?.status === 'finalised' ? 'Finalised' : a ? 'Draft' : 'No assessment';
+        return `<div class="co-item" onclick="openAssessment('${c.id}')">
+          <div>
+            <div class="co-name">${esc(c.name)}</div>
+            <div class="co-meta">${statusLbl}${a?.assessment_date
+              ? ' · ' + new Date(a.assessment_date).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})
+              : ''}</div>
+          </div>
+          <span class="badge ${rCls}">${rLbl}</span>
+        </div>`;
+      }).join('')
+    : `<div style="text-align:center;padding:32px;color:var(--muted)">
+        No companies found.</div>`;
+}
+
+// ── Open assessment ───────────────────────────────────────────────
+async function openAssessment(companyId) {
+  currentCompany = companies.find(c => c.id === companyId);
+
+  // Load full assessment if exists
+  const { data } = await sb.from('cnt_prequalification')
+    .select('*').eq('company_id', companyId).maybeSingle();
+  currentAssessment = data ?? null;
+
+  // Build criteria state
+  criteria = {};
+  CRITERIA.forEach(cr => {
+    criteria[cr.key] = currentAssessment?.criteria?.[cr.key]
+      ?? { rating:'not_assessed', notes:'' };
+  });
+  recommendation = currentAssessment?.recommendation ?? '';
+  recNotes       = currentAssessment?.recommendation_notes ?? '';
+
+  document.getElementById('av-company').textContent = currentCompany?.name ?? '—';
+  document.getElementById('av-meta').textContent =
+    currentAssessment
+      ? `${currentAssessment.status === 'finalised' ? 'Finalised' : 'Draft'} · Last updated ${
+          new Date(currentAssessment.updated_at).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})}`
+      : 'No assessment yet — start below';
+
+  renderCriteria();
+  updateProgress();
+  setRec(recommendation);
+  document.getElementById('rec-notes').value = recNotes;
+
+  document.getElementById('list-view').style.display   = 'none';
+  document.getElementById('assess-view').style.display = 'block';
+}
+
+function showList() {
+  document.getElementById('assess-view').style.display = 'none';
+  document.getElementById('list-view').style.display   = 'block';
+}
+
+// ── Criteria rendering ────────────────────────────────────────────
+function renderCriteria() {
+  document.getElementById('criteria-wrap').innerHTML = CRITERIA.map((cr, idx) => {
+    const item = criteria[cr.key];
+    const rt   = item.rating;
+    return `<div class="crit-card ${rt}" id="crit-${cr.key}">
+      <div class="crit-header">
+        <div class="crit-num">${idx + 1}.</div>
+        <div class="crit-body">
+          <div class="crit-title">${cr.label}</div>
+          <div class="crit-desc">${cr.desc}</div>
+          <div class="crit-btns">
+            ${RATINGS.map(r => `
+              <button class="crit-btn ${rt === r.val ? 'a-' + r.val : ''}"
+                onclick="setRating('${cr.key}','${r.val}')">
+                ${r.label}
+              </button>`).join('')}
+          </div>
+          <textarea class="crit-notes" id="cnotes-${cr.key}" rows="2"
+            placeholder="Assessment notes for ${cr.label.toLowerCase()}…"
+            oninput="criteria['${cr.key}'].notes=this.value"
+            >${esc(item.notes)}</textarea>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function setRating(key, rating) {
+  criteria[key].rating = rating;
+  const card = document.getElementById('crit-' + key);
+  card.className = `crit-card ${rating}`;
+  card.querySelectorAll('.crit-btn').forEach(b => {
+    const rv = b.onclick.toString().match(/'([^']+)'\)$/)?.[1] ?? '';
+    b.className = `crit-btn${rv === rating ? ' a-' + rating : ''}`;
+  });
+  updateProgress();
+}
+
+function updateProgress() {
+  const assessed = CRITERIA.filter(cr => criteria[cr.key]?.rating !== 'not_assessed').length;
+  const pct = Math.round((assessed / CRITERIA.length) * 100);
+  document.getElementById('av-prog-fill').style.width = pct + '%';
+  document.getElementById('av-prog-txt').textContent  =
+    `${assessed} of ${CRITERIA.length} criteria assessed`;
+
+  const sat   = CRITERIA.filter(cr => criteria[cr.key]?.rating === 'satisfactory').length;
+  const unsat = CRITERIA.filter(cr => criteria[cr.key]?.rating === 'unsatisfactory').length;
+  const rimp  = CRITERIA.filter(cr => criteria[cr.key]?.rating === 'requires_improvement').length;
+  document.getElementById('av-score-badge').innerHTML =
+    `<span class="badge b-ok">✅ ${sat}</span>` +
+    (rimp  ? ` <span class="badge b-warn">⚠ ${rimp}</span>`  : '') +
+    (unsat ? ` <span class="badge b-bad">🔴 ${unsat}</span>` : '');
+}
+
+// ── Recommendation ────────────────────────────────────────────────
+function setRec(val) {
+  recommendation = val;
+  ['approved','conditional','not_approved'].forEach(r => {
+    document.getElementById('rec-' + r).className =
+      `crit-btn${val === r ? ' a-' + (r === 'approved' ? 'satisfactory' : r === 'conditional' ? 'requires_improvement' : 'unsatisfactory') : ''}`;
+  });
+
+  const panel = document.getElementById('rec-panel');
+  if (!val) { panel.style.display = 'none'; return; }
+  const cfg = {
+    approved:     { cls:'approved',     icon:'✅', title:'Approved',
+                    text:'The subcontractor meets prequalification requirements and may be invited to tender.' },
+    conditional:  { cls:'conditional',  icon:'⚠',  title:'Conditionally Approved',
+                    text:'The subcontractor may be invited to tender subject to the conditions noted above.' },
+    not_approved: { cls:'not_approved', icon:'🔴', title:'Not Approved',
+                    text:'The subcontractor does not meet prequalification requirements at this time.' },
+  }[val];
+  panel.className = `rec-panel ${cfg.cls}`;
+  panel.innerHTML = `<strong>${cfg.icon} ${cfg.title}</strong><br>
+    <span style="font-size:13px">${cfg.text}</span>`;
+  panel.style.display = 'block';
+}
+
+// ── Save ──────────────────────────────────────────────────────────
+async function saveAssessment(status) {
+  if (!currentCompany) return;
+
+  // Capture any unsaved notes
+  CRITERIA.forEach(cr => {
+    const el = document.getElementById('cnotes-' + cr.key);
+    if (el) criteria[cr.key].notes = el.value;
+  });
+  const rn = document.getElementById('rec-notes').value.trim();
+
+  const payload = {
+    company_id:           currentCompany.id,
+    assessed_by:          auth.user.id,
+    assessment_date:      new Date().toISOString().slice(0,10),
+    criteria,
+    recommendation:       recommendation || null,
+    recommendation_notes: rn || null,
+    status,
+    updated_at:           new Date().toISOString()
+  };
+
+  if (currentAssessment?.id) {
+    const { error } = await sb.from('cnt_prequalification')
+      .update(payload).eq('id', currentAssessment.id);
+    if (error) { toast(error.message, 'err'); return; }
+  } else {
+    const { data, error } = await sb.from('cnt_prequalification')
+      .insert(payload).select('*').single();
+    if (error) { toast(error.message, 'err'); return; }
+    currentAssessment = data;
+  }
+
+  assessmentMap[currentCompany.id] = {
+    company_id: currentCompany.id,
+    recommendation,
+    status,
+    assessment_date: payload.assessment_date
+  };
+
+  document.getElementById('av-meta').textContent =
+    `${status === 'finalised' ? 'Finalised' : 'Draft'} · Saved ${
+      new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})}`;
+
+  toast(status === 'finalised' ? 'Assessment finalised' : 'Draft saved', 'ok');
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+init();
+</script>
+</body>
+</html>
