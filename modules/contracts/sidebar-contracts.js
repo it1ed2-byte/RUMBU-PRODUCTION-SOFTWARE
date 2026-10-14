@@ -100,6 +100,12 @@ _CNT_GROUPS.forEach((g, i) => g.stems.forEach(s => (_CNT_STEM_MAP[s] = i)));
     shell.appendChild(nav);
     shell.appendChild(main);
 
+    /* Hover-peek: expand sidebar when collapsed */
+    nav.addEventListener('mouseenter', () => {
+      if (shell.classList.contains('cnt-collapsed')) shell.classList.add('cnt-peek');
+    });
+    nav.addEventListener('mouseleave', () => shell.classList.remove('cnt-peek'));
+
     /* Mobile overlay (backdrop to close the drawer) */
     const overlay = document.createElement('div');
     overlay.id = 'cntMobOverlay';
