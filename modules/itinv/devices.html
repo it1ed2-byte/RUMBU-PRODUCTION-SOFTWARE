@@ -14,6 +14,7 @@
 </script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="../../auth.js"></script>
+<script src="org-lists.js"></script>
 <style>
   :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;--amber:#d97706;}
   *{box-sizing:border-box;}
@@ -151,17 +152,16 @@ async function init(){
 }
 
 async function loadRefData(){
-  const [sec, dep, un, ca, ty, st, co] = await Promise.all([
-    sb.from("app_sections").select("name").order("name"),
-    sb.from("it_ref_departments").select("*").order("name"),
-    sb.from("it_ref_units").select("*").order("name"),
+  // Branches, departments and units come from the lists HR and Admin maintain (see org-lists.js).
+  const [org, ca, ty, st, co] = await Promise.all([
+    loadOrgLists(sb),
     sb.from("it_ref_categories").select("*").order("name"),
     sb.from("it_ref_types").select("*").order("name"),
     sb.from("it_ref_statuses").select("*").order("name"),
     sb.from("it_ref_conditions").select("*").order("name")
   ]);
-  BRANCHES = (sec.data || []).map(s => s.name);
-  DEPTS = dep.data || []; UNITS = un.data || [];
+  BRANCHES = org.branches;
+  DEPTS = org.depts; UNITS = org.units;
   CATS = ca.data || []; TYPES = ty.data || [];
   STATUSES = (st.data || []).map(r => r.name);
   CONDITIONS = (co.data || []).map(r => r.name);
@@ -390,11 +390,13 @@ function editDevice(id){
 
   const set = (id,v)=>{ document.getElementById(id).value = v||""; };
   // branch + dependent chain
-  document.getElementById("branch").value = r.branch || "";
+  // A saved branch / department / unit that is not in HR's list is kept as a "(not in HR list)" entry,
+  // so editing the device can never erase it.
+  selectKeepingValue(document.getElementById("branch"), r.branch);
   onBranchChange();
-  document.getElementById("department").value = r.department || "";
+  selectKeepingValue(document.getElementById("department"), r.department);
   onDeptChange();
-  document.getElementById("unit").value = r.unit || "";
+  selectKeepingValue(document.getElementById("unit"), r.unit);
   document.getElementById("category").value = r.category || "";
   onCatChange();
   document.getElementById("type").value = r.type || "";

@@ -14,6 +14,7 @@
 </script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="../../auth.js"></script>
+<script src="org-lists.js"></script>
 <style>
   :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;--amber:#d97706;}
   *{box-sizing:border-box;}
@@ -59,8 +60,8 @@
     <div class="row">
       <div><label>Email</label><input type="text" id="assignEmail"></div>
       <div><label>Phone</label><input type="text" id="assignPhone"></div>
-      <div><label>Department</label><input type="text" id="assignDept"></div>
-      <div><label>Unit</label><input type="text" id="assignUnit"></div>
+      <div><label>Department</label><select id="assignDept" onchange="onAssignDeptChange()"></select></div>
+      <div><label>Unit</label><select id="assignUnit"></select></div>
     </div>
     <label>Notes</label>
     <textarea id="notes"></textarea>
@@ -83,7 +84,7 @@
 
 <script>
 let ME = null;
-let DEVICES = [], ASSIGNS = [], BRANCHES = [];
+let DEVICES = [], ASSIGNS = [], BRANCHES = [], DEPTS = [], UNITS = [];
 
 async function logActivity(actionType, description){
   try{
@@ -102,6 +103,8 @@ async function init(){
     if(!ME) return;
     status.style.color = "#1d8a4e"; status.textContent = "Connected.";
     document.getElementById("appArea").style.display = "block";
+    const org = await loadOrgLists(sb);          // branches / departments / units maintained by HR and Admin
+    BRANCHES = org.branches; DEPTS = org.depts; UNITS = org.units;
     await loadDevices();
     await loadAssignments();
   }catch(e){
@@ -124,9 +127,24 @@ async function loadDevices(){
 }
 
 function currentDevice(){ return DEVICES.find(d=>String(d.id)===document.getElementById("device").value); }
+// Department / Unit of the person being issued the device: HR's lists for the device's branch.
+function fillAssignOptions(id, values){
+  const sel = document.getElementById(id);
+  sel.innerHTML = '<option value="">—</option>';
+  values.forEach(v => { const o = document.createElement("option"); o.value = v; o.textContent = v; sel.appendChild(o); });
+}
+function fillAssignDepts(branch){
+  fillAssignOptions("assignDept", DEPTS.filter(d => d.branch === branch).map(d => d.name));
+  onAssignDeptChange();
+}
+function onAssignDeptChange(){
+  const d = currentDevice(), branch = d ? d.branch : "", dept = document.getElementById("assignDept").value;
+  fillAssignOptions("assignUnit", UNITS.filter(u => u.branch === branch && u.department === dept).map(u => u.name));
+}
 function onDeviceChange(){
   const d = currentDevice();
   const box = document.getElementById("currentBox");
+  fillAssignDepts(d ? d.branch : "");
   if(!d){ box.textContent=""; return; }
   const holder = (d.assigned_name && d.assigned_name!=="Unassigned") ? d.assigned_name : "Unassigned";
   box.innerHTML = "Currently assigned to: <b>"+holder+"</b> &nbsp;|&nbsp; Branch: "+(d.branch||"—");

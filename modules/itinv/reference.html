@@ -14,6 +14,7 @@
 </script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="../../auth.js"></script>
+<script src="org-lists.js"></script>
 <style>
   :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;}
   *{box-sizing:border-box;}
@@ -45,6 +46,12 @@
   ul.tree{list-style:none;padding-left:0;margin:10px 0 0;}
   ul.tree li{padding:4px 0;}
   ul.tree .u{padding-left:22px;font-size:13px;color:var(--text);}
+  .note{background:rgba(29,138,78,.10);border:1px solid rgba(29,138,78,.35);border-radius:8px;padding:10px 12px;font-size:13px;margin:0 0 12px;}
+  table.chk{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px;}
+  table.chk th,table.chk td{border:1px solid var(--line);padding:7px 9px;text-align:left;vertical-align:middle;}
+  table.chk th{background:var(--navy);color:#fff;}
+  table.chk select{padding:6px;min-width:170px;}
+  .warnbox{background:rgba(217,119,6,.12);border:1px solid rgba(217,119,6,.4);border-radius:8px;padding:10px 12px;font-size:13px;margin-top:10px;}
 </style>
 </head>
 <body>
@@ -54,41 +61,28 @@
 
 <div id="appArea" style="display:none;">
   <div class="tabs">
-    <div class="tab active" data-pane="hier" onclick="showTab('hier',this)">Branch → Dept → Unit</div>
+    <div class="tab active" data-pane="hier" onclick="showTab('hier',this)">Branch → Dept → Unit (from HR)</div>
     <div class="tab" data-pane="cats" onclick="showTab('cats',this)">Categories &amp; Types</div>
     <div class="tab" data-pane="statuses" onclick="showTab('statuses',this)">Statuses</div>
     <div class="tab" data-pane="conditions" onclick="showTab('conditions',this)">Conditions</div>
   </div>
 
-  <!-- HIERARCHY -->
+  <!-- HIERARCHY (read-only: maintained by HR and Admin) -->
   <div class="pane active" id="pane-hier">
     <div class="card">
-      <h3>Add Department to a Branch</h3>
-      <p class="sub">Departments describe where a device sits. They are separate from access-control departments.</p>
-      <div class="row">
-        <div><label>Branch</label><select id="deptBranch" onchange="renderTree()"></select></div>
-        <div><label>Department name</label><input type="text" id="deptName" placeholder="e.g. Administration"></div>
-        <div style="flex:0 0 auto;"><button onclick="addDepartment()">Add Dept</button></div>
-      </div>
-      <div class="status" id="deptStatus"></div>
-    </div>
-
-    <div class="card">
-      <h3>Add Unit to a Department</h3>
-      <div class="row">
-        <div><label>Branch</label><select id="unitBranch" onchange="fillUnitDepts()"></select></div>
-        <div><label>Department</label><select id="unitDept"></select></div>
-        <div><label>Unit name</label><input type="text" id="unitName" placeholder="e.g. Accounts Office"></div>
-        <div style="flex:0 0 auto;"><button onclick="addUnit()">Add Unit</button></div>
-      </div>
-      <div class="status" id="unitStatus"></div>
-    </div>
-
-    <div class="card">
-      <h3>Current Structure</h3>
+      <h3>Branches, Departments and Units</h3>
+      <p class="sub">These are the same lists HR and Admin maintain, so anything they add or rename appears in the Devices, Movement and Assignments dropdowns automatically.</p>
+      <div class="note">To add or change a department or unit, use the <b>HR Special Console</b> (or <b>Admin &rarr; Manage Accounts</b>). It cannot be edited here.</div>
       <label>View Branch</label>
       <select id="treeBranch" onchange="renderTree()"></select>
       <div id="treeWrap"></div>
+    </div>
+
+    <div class="card">
+      <h3>Data Check: saved devices compared with HR's lists</h3>
+      <p class="sub">Devices keep the department and unit they were saved with, and nothing is changed or deleted automatically. A value listed below is not (yet) in HR's list, so it will not appear in the dropdowns for new devices.</p>
+      <div id="checkSummary" class="status"></div>
+      <div id="checkWrap"></div>
     </div>
   </div>
 
@@ -192,27 +186,23 @@ async function init(){
 }
 
 async function loadAll(){
-  const [sec, dep, un, ca, ty, st, co] = await Promise.all([
-    sb.from("app_sections").select("name").order("name"),
-    sb.from("it_ref_departments").select("*").order("name"),
-    sb.from("it_ref_units").select("*").order("name"),
+  const [org, ca, ty, st, co] = await Promise.all([
+    loadOrgLists(sb),                                   // branches / departments / units from HR and Admin
     sb.from("it_ref_categories").select("*").order("name"),
     sb.from("it_ref_types").select("*").order("name"),
     sb.from("it_ref_statuses").select("*").order("name"),
     sb.from("it_ref_conditions").select("*").order("name")
   ]);
-  BRANCHES = (sec.data || []).map(s => s.name);
-  DEPTS = dep.data || [];
-  UNITS = un.data || [];
+  BRANCHES = org.branches;
+  DEPTS = org.depts;
+  UNITS = org.units;
   CATS = ca.data || [];
   TYPES = ty.data || [];
 
   const mine = branchScope();
-  fillBranchSelect("deptBranch", mine);
-  fillBranchSelect("unitBranch", mine);
   fillBranchSelect("treeBranch", mine);
-  fillUnitDepts();
   renderTree();
+  runDataCheck();
   fillCatSelect();
   renderCatTree();
   renderChips("statusList", st.data || [], "it_ref_statuses");
@@ -235,84 +225,103 @@ function showTab(name, el){
   document.getElementById("pane-"+name).classList.add("active");
 }
 
-// ---- Departments ----
-async function addDepartment(){
-  const status = document.getElementById("deptStatus");
-  const branch = document.getElementById("deptBranch").value;
-  const name = document.getElementById("deptName").value.trim();
-  if(!branch || !name){ status.className="status err"; status.textContent="Branch and name required."; return; }
-  if(DEPTS.some(d => d.branch===branch && d.name.toLowerCase()===name.toLowerCase())){
-    status.className="status err"; status.textContent="Department already exists for this branch."; return;
-  }
-  const { error } = await sb.from("it_ref_departments").insert({ branch, name });
-  if(error){ status.className="status err"; status.textContent="❌ "+error.message; return; }
-  await logActivity("it_ref_dept_added", ME.username+" added IT department '"+name+"' to "+branch);
-  document.getElementById("deptName").value="";
-  status.className="status ok"; status.textContent="✅ Added.";
-  await loadAll();
-}
-
-async function delDepartment(id){
-  const d = DEPTS.find(x=>x.id===id); if(!d) return;
-  if(!confirm("Delete department '"+d.name+"' and its units?")) return;
-  await sb.from("it_ref_units").delete().eq("branch", d.branch).eq("department", d.name);
-  const { error } = await sb.from("it_ref_departments").delete().eq("id", id);
-  if(error){ alert(error.message); return; }
-  await logActivity("it_ref_dept_deleted", ME.username+" deleted IT department '"+d.name+"' from "+d.branch);
-  await loadAll();
-}
-
-// ---- Units ----
-function fillUnitDepts(){
-  const branch = document.getElementById("unitBranch").value;
-  const sel = document.getElementById("unitDept");
-  sel.innerHTML = "";
-  DEPTS.filter(d=>d.branch===branch).forEach(d=>{
-    const o=document.createElement("option"); o.value=d.name; o.textContent=d.name; sel.appendChild(o);
-  });
-}
-
-async function addUnit(){
-  const status = document.getElementById("unitStatus");
-  const branch = document.getElementById("unitBranch").value;
-  const dept = document.getElementById("unitDept").value;
-  const name = document.getElementById("unitName").value.trim();
-  if(!branch || !dept || !name){ status.className="status err"; status.textContent="Branch, department and name required."; return; }
-  if(UNITS.some(u => u.branch===branch && u.department===dept && u.name.toLowerCase()===name.toLowerCase())){
-    status.className="status err"; status.textContent="Unit already exists."; return;
-  }
-  const { error } = await sb.from("it_ref_units").insert({ branch, department: dept, name });
-  if(error){ status.className="status err"; status.textContent="❌ "+error.message; return; }
-  await logActivity("it_ref_unit_added", ME.username+" added IT unit '"+name+"' to "+dept+" ("+branch+")");
-  document.getElementById("unitName").value="";
-  status.className="status ok"; status.textContent="✅ Added.";
-  await loadAll();
-}
-
-async function delUnit(id){
-  const u = UNITS.find(x=>x.id===id); if(!u) return;
-  if(!confirm("Delete unit '"+u.name+"'?")) return;
-  const { error } = await sb.from("it_ref_units").delete().eq("id", id);
-  if(error){ alert(error.message); return; }
-  await logActivity("it_ref_unit_deleted", ME.username+" deleted IT unit '"+u.name+"'");
-  await loadAll();
-}
-
+// ---- Branch / Department / Unit: read-only view of HR's lists ----
 function renderTree(){
   const branch = document.getElementById("treeBranch").value;
   const wrap = document.getElementById("treeWrap");
-  const depts = DEPTS.filter(d=>d.branch===branch);
-  if(!depts.length){ wrap.innerHTML="<p style='color:#6b7280'>No departments yet for this branch.</p>"; return; }
+  const depts = DEPTS.filter(d => d.branch === branch);
+  if(!depts.length){ wrap.innerHTML = "<p style='color:#6b7280'>No departments for this branch in HR's list yet.</p>"; return; }
   let html = "<ul class='tree'>";
-  depts.forEach(d=>{
-    html += `<li><b>${d.name}</b> <button class="mini del" onclick="delDepartment(${d.id})">Delete</button></li>`;
-    const units = UNITS.filter(u=>u.branch===branch && u.department===d.name);
-    units.forEach(u=>{
-      html += `<li class="u">• ${u.name} <button class="mini del" onclick="delUnit(${u.id})">Delete</button></li>`;
-    });
+  depts.forEach(d => {
+    const units = UNITS.filter(u => u.branch === branch && u.department === d.name);
+    html += `<li><b>${esc(d.name)}</b> <span style="color:#6b7280;font-size:12px;">(${units.length} unit${units.length === 1 ? "" : "s"})</span></li>`;
+    units.forEach(u => { html += `<li class="u">• ${esc(u.name)}</li>`; });
   });
-  html += "</ul>";
-  wrap.innerHTML = html;
+  wrap.innerHTML = html + "</ul>";
+}
+function esc(v){ return String(v == null ? "" : v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+
+// ---- Data check: which saved department / unit values are not in HR's lists? ----
+let CHECK_ITEMS = [];
+function normKey(s){ return String(s == null ? "" : s).trim().toLowerCase(); }
+
+async function runDataCheck(){
+  const sum = document.getElementById("checkSummary"), wrap = document.getElementById("checkWrap");
+  sum.className = "status"; sum.textContent = "Checking..."; wrap.innerHTML = "";
+  try{
+    const scope = branchScope();
+    const all = await itOrgFetchAll(sb, "it_devices", "id,branch,department,unit", "id");
+    const devices = all.filter(d => ME.role === "super_admin" || scope.indexOf(d.branch) !== -1);
+
+    const deptKnown = {}; DEPTS.forEach(d => { deptKnown[d.branch + "|" + normKey(d.name)] = true; });
+    const unitKnown = {}; UNITS.forEach(u => { unitKnown[u.branch + "|" + normKey(u.department) + "|" + normKey(u.name)] = true; });
+
+    const bad = {}; const badBranches = {};
+    devices.forEach(d => {
+      if(!d.branch) return;
+      if(BRANCHES.indexOf(d.branch) === -1){ badBranches[d.branch] = (badBranches[d.branch] || 0) + 1; return; }
+      const dept = (d.department || "").trim() ? d.department : null;
+      if(!dept) return;
+      if(!deptKnown[d.branch + "|" + normKey(dept)]){
+        const k = "D|" + d.branch + "|" + d.department;
+        (bad[k] = bad[k] || { kind: "department", branch: d.branch, value: d.department, count: 0 }).count++;
+        return;                                          // the unit is checked once its department matches
+      }
+      const unit = (d.unit || "").trim() ? d.unit : null;
+      if(unit && !unitKnown[d.branch + "|" + normKey(dept) + "|" + normKey(unit)]){
+        const k = "U|" + d.branch + "|" + d.department + "|" + d.unit;
+        (bad[k] = bad[k] || { kind: "unit", branch: d.branch, department: d.department, value: d.unit, count: 0 }).count++;
+      }
+    });
+
+    CHECK_ITEMS = Object.keys(bad).map(k => bad[k]).sort((a,b) => (a.branch + a.kind + a.value).localeCompare(b.branch + b.kind + b.value));
+    const nBranch = Object.keys(badBranches).length;
+    if(!CHECK_ITEMS.length && !nBranch){
+      sum.className = "status ok"; sum.textContent = "✅ All " + devices.length + " device(s) match HR's branches, departments and units.";
+      return;
+    }
+    sum.className = "status"; sum.style.color = "#d97706";
+    sum.textContent = "Checked " + devices.length + " device(s): " + CHECK_ITEMS.length + " saved value(s) not in HR's list" + (nBranch ? ", " + nBranch + " branch name(s) not in the system" : "") + ".";
+
+    let html = "";
+    if(CHECK_ITEMS.length){
+      html += `<table class="chk"><thead><tr><th>Branch</th><th>Type</th><th>Saved value</th><th>Devices</th><th>Change to (HR's list)</th></tr></thead><tbody>`;
+      CHECK_ITEMS.forEach((it, i) => {
+        const options = (it.kind === "department"
+            ? DEPTS.filter(d => d.branch === it.branch).map(d => d.name)
+            : UNITS.filter(u => u.branch === it.branch && normKey(u.department) === normKey(it.department)).map(u => u.name))
+          .map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("");
+        const what = it.kind === "department" ? "Department" : "Unit of " + esc(it.department);
+        html += `<tr><td>${esc(it.branch)}</td><td>${what}</td><td><b>${esc(it.value)}</b></td><td>${it.count}</td><td>` +
+          (options ? `<select id="remap${i}"><option value="">— choose —</option>${options}</select> <button class="mini" onclick="applyRemap(${i})">Apply</button>`
+                   : `<span style="color:#6b7280;">HR has none for this ${it.kind === "department" ? "branch" : "department"} yet</span>`) + `</td></tr>`;
+      });
+      html += "</tbody></table>";
+    }
+    if(nBranch){
+      html += `<div class="warnbox"><b>Branch names not in the system's branch list:</b> ` +
+        Object.keys(badBranches).map(b => esc(b) + " (" + badBranches[b] + " device(s))").join(", ") +
+        `. These devices are only visible to a Super Admin. Ask a Super Admin to correct the branch.</div>`;
+    }
+    wrap.innerHTML = html;
+  }catch(e){
+    sum.className = "status err"; sum.textContent = "❌ " + e.message;
+  }
+}
+
+async function applyRemap(i){
+  const it = CHECK_ITEMS[i]; if(!it) return;
+  const to = document.getElementById("remap" + i).value;
+  if(!to){ alert("Choose the HR " + it.kind + " to change it to."); return; }
+  if(!confirm(it.count + " device(s) in " + it.branch + " with " + it.kind + " \"" + it.value + "\" will be changed to \"" + to + "\".\n\nOnly those devices change. Continue?")) return;
+  let q = sb.from("it_devices").update(it.kind === "department" ? { department: to } : { unit: to }).eq("branch", it.branch);
+  q = it.kind === "department" ? q.eq("department", it.value) : q.eq("department", it.department).eq("unit", it.value);
+  const { data, error } = await q.select("id");
+  if(error){ alert("Could not update: " + error.message); return; }
+  const n = (data || []).length;
+  await logActivity("it_devices_remapped", ME.username + " changed " + n + " device(s) in " + it.branch + ": " + it.kind + " '" + it.value + "' to '" + to + "'");
+  await runDataCheck();
+  const sum = document.getElementById("checkSummary"); sum.insertAdjacentText("afterbegin", "✅ " + n + " device(s) updated.  ");
 }
 
 // ---- Categories & Types ----
