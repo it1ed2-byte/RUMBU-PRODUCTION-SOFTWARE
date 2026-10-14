@@ -88,6 +88,7 @@ _CNT_GROUPS.forEach((g, i) => g.stems.forEach(s => (_CNT_STEM_MAP[s] = i)));
 
     const nav = document.createElement('nav');
     nav.id = 'cnt-nav';
+    nav.className = 'cnt-nav';  // required — CSS selector is .cnt-nav, not #cnt-nav
     nav.setAttribute('aria-label', 'Government Contracts navigation');
 
     const main = document.createElement('div');
