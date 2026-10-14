@@ -190,7 +190,7 @@ async function loadData() {
   // 1. All contracts
   const { data: cData } = await sb.from('cnt_contracts').select(`
     id, contract_id, title, status, risk_level, risk_notes,
-    original_value, start_date, end_date,
+    original_value, start_date, original_completion_date,
     physical_progress_pct, financial_progress_pct,
     cnt_agencies(name), cnt_companies(name)
   `).order('risk_level', { ascending: false })
@@ -239,7 +239,7 @@ async function loadData() {
 function getFlags(c) {
   const flags = [];
   const today  = new Date();
-  const end    = c.end_date ? new Date(c.end_date) : null;
+  const end    = c.original_completion_date ? new Date(c.original_completion_date) : null;
   const pp     = c.physical_progress_pct ?? 0;
   const fp     = c.financial_progress_pct ?? 0;
   const risk   = c.risk_level ?? 'low';
@@ -276,7 +276,7 @@ function buildKPICards() {
   const active   = contracts.filter(c => c.status === 'active');
   const highRisk = contracts.filter(c => c.risk_level === 'high' || c.risk_level === 'critical');
   const overdue  = contracts.filter(c => {
-    const end = c.end_date ? new Date(c.end_date) : null;
+    const end = c.original_completion_date ? new Date(c.original_completion_date) : null;
     return end && end < new Date() && c.status === 'active';
   });
   const totalActions  = Object.values(actionCountMap).reduce((s, v) => s + v, 0);
@@ -312,9 +312,9 @@ function buildDimensionOverview() {
 
   // Schedule health: % of active contracts on schedule
   const onSched = active.filter(c => {
-    if (!c.start_date || !c.end_date) return true;
+    if (!c.start_date || !c.original_completion_date) return true;
     const elapsed = (new Date() - new Date(c.start_date)) /
-                    (new Date(c.end_date) - new Date(c.start_date)) * 100;
+                    (new Date(c.original_completion_date) - new Date(c.start_date)) * 100;
     return (c.physical_progress_pct ?? 0) >= elapsed - 10;
   });
   const schedPct = Math.round((onSched.length / active.length) * 100);
@@ -432,12 +432,12 @@ function render() {
 
     // Schedule status
     let schedStatus = '', schedCol = 'var(--muted)';
-    if (c.start_date && c.end_date && c.status === 'active') {
+    if (c.start_date && c.original_completion_date && c.status === 'active') {
       const today   = new Date();
       const elapsed = (today - new Date(c.start_date)) /
-                      (new Date(c.end_date) - new Date(c.start_date)) * 100;
+                      (new Date(c.original_completion_date) - new Date(c.start_date)) * 100;
       const variance = pp - elapsed;
-      if (new Date(c.end_date) < today) {
+      if (new Date(c.original_completion_date) < today) {
         schedStatus = 'Overdue'; schedCol = '#ef4444';
       } else if (variance >= -5) {
         schedStatus = 'On Track'; schedCol = '#22c55e';
