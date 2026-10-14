@@ -188,6 +188,19 @@ async function _renderNav(nav) {
     </div>
     <div class="cnt-nav-body" id="cntNavBody">
       <div class="cnt-nav-loading">Loading…</div>
+    </div>
+    <div class="cnt-nav-footer">
+      <a href="#" class="cnt-nav-logout"
+         onclick="event.preventDefault();window.parent.logout&&window.parent.logout('login.html')"
+         title="Log Out">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+          <polyline points="16 17 21 12 16 7"/>
+          <line x1="21" y1="12" x2="9" y2="12"/>
+        </svg>
+        <span>Log Out</span>
+      </a>
     </div>`;
 
   /* Detect the active page from the current URL */
