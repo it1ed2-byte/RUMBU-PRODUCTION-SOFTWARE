@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mobilization Checklist</title>
+<script src="auth-contracts.js"></script>
+<link rel="stylesheet" href="contracts.css">
+<style>
+/* Progress bar */
+.mob-progress{background:var(--border);border-radius:8px;height:12px;margin:8px 0 4px;overflow:hidden}
+.mob-fill{height:12px;border-radius:8px;background:#22c55e;transition:width .4s}
+.mob-pct{font-size:13px;font-weight:700;color:var(--primary)}
+
+/* Checklist item */
+.chk-item{border:1.5px solid var(--border);border-radius:10px;
+  padding:16px 18px;margin-bottom:12px;transition:border .15s}
+.chk-item.confirmed   {border-color:#22c55e;background:#f0fdf4}
+.chk-item.in_progress {border-color:#f59e0b;background:#fffbeb}
+.chk-item.not_confirmed{border-color:var(--border);background:var(--card)}
+.chk-item.signed-off  {pointer-events:none;opacity:.8}
+
+.chk-header{display:flex;align-items:flex-start;gap:14px}
+.chk-num{font-size:12px;font-weight:800;color:var(--muted);min-width:22px;margin-top:2px}
+.chk-body{flex:1}
+.chk-title{font-weight:700;font-size:14px;color:var(--heading);margin-bottom:2px}
+.chk-ref{font-size:11px;color:var(--muted)}
+.chk-controls{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.chk-btn{padding:5px 14px;border:1.5px solid var(--border);border-radius:20px;
+  font-size:12px;font-weight:700;cursor:pointer;background:var(--card);
+  transition:all .15s;white-space:nowrap}
+.chk-btn.active-confirmed   {background:#22c55e;border-color:#22c55e;color:#fff}
+.chk-btn.active-in_progress {background:#f59e0b;border-color:#f59e0b;color:#fff}
+.chk-btn.active-not_confirmed{background:#ef4444;border-color:#ef4444;color:#fff}
+.chk-btn:hover:not(.active-confirmed):not(.active-in_progress):not(.active-not_confirmed){
+  background:#f1f5f9}
+
+.chk-notes{width:100%;border:1.5px solid var(--border);border-radius:7px;
+  padding:7px 10px;font-size:13px;font-family:inherit;margin-top:10px;resize:vertical}
+.chk-notes:focus{outline:2px solid var(--accent);border-color:var(--accent)}
+
+/* Sign-off panel */
+.signoff-panel{background:#f0fdf4;border:2px solid #22c55e;
+  border-radius:12px;padding:22px;margin-top:4px}
+.signoff-panel h3{color:#166534;font-size:16px;font-weight:800;margin-bottom:14px}
+.signoff-locked{background:#f8fafc;border:1.5px solid var(--border);
+  border-radius:10px;padding:20px}
+.signoff-locked .sl-check{font-size:32px;margin-bottom:8px}
+
+/* Status summary badge */
+.mob-status-badge{display:inline-flex;align-items:center;gap:6px;
+  padding:6px 14px;border-radius:20px;font-size:13px;font-weight:700}
+.mob-status-badge.not_started  {background:#f1f5f9;color:#475569}
+.mob-status-badge.in_progress  {background:#fef3c7;color:#92400e}
+.mob-status-badge.signed_off   {background:#dcfce7;color:#166534}
+</style>
+</head>
+<body>
+
+<div class="page-hdr">
+  <div class="ph-left">
+    <div class="ph-icon">✅</div>
+    <div>
+      <div class="ph-title">Mobilization Checklist</div>
+      <div class="ph-sub">§2.3 — Before commencement of work, the mobilization review should confirm:</div>
+    </div>
+  </div>
+  <div class="ph-right">
+    <button class="btn btn-hdr" onclick="location.href='contracts.html'">← Dashboard</button>
+  </div>
+</div>
+
+<div class="content">
+  <div id="loading" class="loading-wrap">
+    <div class="spinner"></div>
+    <div class="loading-txt">Loading…</div>
+  </div>
+
+  <div id="app" style="display:none">
+
+    <!-- Contract selector -->
+    <div class="sec-card" style="margin-bottom:18px">
+      <div class="sec-body" style="padding:16px 20px">
+        <div class="field" style="margin-bottom:0;max-width:520px">
+          <label>Contract</label>
+          <select id="contract-sel" class="srch" onchange="onContractChange()">
+            <option value="">— Select a contract —</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Checklist (shown after contract selected) -->
+    <div id="checklist-wrap" style="display:none">
+
+      <!-- Header card: progress + status -->
+      <div class="sec-card" style="margin-bottom:18px">
+        <div class="sec-body" style="padding:18px 22px">
+          <div style="display:flex;align-items:center;justify-content:space-between;
+            flex-wrap:wrap;gap:12px;margin-bottom:12px">
+            <div>
+              <div style="font-size:15px;font-weight:700;color:var(--heading)" id="prog-title">
+                Mobilization Review
+              </div>
+              <div style="font-size:13px;color:var(--muted);margin-top:2px" id="prog-sub"></div>
+            </div>
+            <div id="status-badge-wrap"></div>
+          </div>
+          <div class="mob-progress"><div class="mob-fill" id="mob-fill" style="width:0%"></div></div>
+          <div class="mob-pct" id="mob-pct">0 of 9 items confirmed</div>
+        </div>
+      </div>
+
+      <!-- The 9 checklist items — §2.3 -->
+      <div id="checklist-items"></div>
+
+      <!-- Save button -->
+      <div id="save-row" style="margin-bottom:22px;display:none">
+        <button class="btn btn-primary" onclick="saveChecklist()">Save Progress</button>
+      </div>
+
+      <!-- Sign-off panel -->
+      <div id="signoff-wrap" style="margin-bottom:22px"></div>
+
+    </div>
+
+    <!-- Placeholder -->
+    <div id="no-contract" class="sec-card" style="text-align:center;padding:48px">
+      <div style="font-size:44px;margin-bottom:12px">✅</div>
+      <div style="font-weight:700;color:var(--primary);font-size:16px;margin-bottom:6px">
+        Select a contract above
+      </div>
+      <div style="color:var(--muted);font-size:13px">
+        The mobilization checklist must be completed and signed off before commencement of work (§2.3).
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ── 9 checklist items — exactly as listed in §2.3 ────────────────
+const CHECKLIST_ITEMS = [
+  { key:'personnel',     label:'Approved personnel are available.',                   ref:'§2.3' },
+  { key:'equipment',     label:'Required equipment is available and fit for purpose.',ref:'§2.3' },
+  { key:'materials',     label:'Materials have been identified and planned.',         ref:'§2.3' },
+  { key:'procedures',    label:'Work procedures have been reviewed.',                 ref:'§2.3' },
+  { key:'safety',        label:'Safety requirements have been communicated.',         ref:'§2.3' },
+  { key:'permits',       label:'Required permits and approvals are in place.',        ref:'§2.3' },
+  { key:'communication', label:'Communication channels have been established.',       ref:'§2.3' },
+  { key:'reporting',     label:'Reporting templates have been agreed.',               ref:'§2.3' },
+  { key:'schedule',      label:'The baseline schedule has been approved.',            ref:'§2.3' },
+];
+
+let sb, auth, contracts = [], profiles = [];
+let current = null;       // loaded cnt_mobilization row (null if none yet)
+let contractId = null;
+let items = {};           // { key: { status, notes } }
+
+async function init() {
+  try {
+    auth = await guardPage();
+    if (!auth) return;
+    sb = auth.sb;
+
+    const [cRes, pRes] = await Promise.all([
+      sb.from('cnt_contracts')
+        .select('id,contract_id,title,status,cnt_companies(name)')
+        .order('contract_id'),
+      sb.from('cnt_profiles').select('id,full_name').order('full_name')
+    ]);
+    contracts = cRes.data ?? [];
+    profiles  = pRes.data ?? [];
+
+    const sel = document.getElementById('contract-sel');
+    contracts.forEach(c => {
+      const o = document.createElement('option');
+      o.value = c.id;
+      o.textContent = `${c.contract_id} — ${c.title}${c.cnt_companies?.name ? ' (' + c.cnt_companies.name + ')' : ''}`;
+      sel.appendChild(o);
+    });
+
+    // Pre-select from URL param if present
+    const urlId = new URLSearchParams(location.search).get('contract');
+    if (urlId) { sel.value = urlId; await onContractChange(); }
+
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+
+  } catch(e) {
+    document.getElementById('loading').innerHTML =
+      `<p style="color:var(--err);text-align:center">${e.message}</p>`;
+  }
+}
+
+// ── Contract change ───────────────────────────────────────────────
+async function onContractChange() {
+  contractId = document.getElementById('contract-sel').value;
+  document.getElementById('no-contract').style.display   = contractId ? 'none'  : 'block';
+  document.getElementById('checklist-wrap').style.display = contractId ? 'block' : 'none';
+  if (!contractId) return;
+
+  const contract = contracts.find(c => c.id === contractId);
+  document.getElementById('prog-sub').textContent =
+    `${contract?.contract_id ?? ''} · ${contract?.title ?? ''}`;
+
+  // Load or initialise checklist
+  const { data } = await sb.from('cnt_mobilization')
+    .select('*').eq('contract_id', contractId).maybeSingle();
+
+  current = data ?? null;
+
+  // Build items state from DB or empty
+  items = {};
+  CHECKLIST_ITEMS.forEach(ci => {
+    items[ci.key] = current?.items?.[ci.key] ?? { status:'not_confirmed', notes:'' };
+  });
+
+  renderChecklist(current?.status === 'signed_off');
+  updateProgress();
+  renderSignOff();
+}
+
+// ── Render checklist items ────────────────────────────────────────
+function renderChecklist(locked) {
+  const wrap = document.getElementById('checklist-items');
+  wrap.innerHTML = CHECKLIST_ITEMS.map((ci, idx) => {
+    const item = items[ci.key];
+    const st   = item.status;
+    return `<div class="chk-item ${st}${locked ? ' signed-off' : ''}" id="chk-${ci.key}">
+      <div class="chk-header">
+        <div class="chk-num">${idx + 1}.</div>
+        <div class="chk-body">
+          <div class="chk-title">${ci.label}</div>
+          <div class="chk-ref">${ci.ref}</div>
+          ${!locked ? `
+          <div class="chk-controls">
+            <button class="chk-btn ${st === 'confirmed'    ? 'active-confirmed'    : ''}"
+              onclick="setStatus('${ci.key}','confirmed')">✅ Confirmed</button>
+            <button class="chk-btn ${st === 'in_progress'  ? 'active-in_progress'  : ''}"
+              onclick="setStatus('${ci.key}','in_progress')">⚠ In Progress</button>
+            <button class="chk-btn ${st === 'not_confirmed'? 'active-not_confirmed': ''}"
+              onclick="setStatus('${ci.key}','not_confirmed')">✕ Not Confirmed</button>
+          </div>
+          <textarea class="chk-notes" id="notes-${ci.key}"
+            placeholder="Notes or observations for this item…" rows="2"
+            oninput="items['${ci.key}'].notes=this.value;updateProgress()"
+            >${esc(item.notes)}</textarea>` : `
+          <div style="margin-top:8px">
+            <span class="status ${st === 'confirmed' ? 'ok' : st === 'in_progress' ? 'warn' : 'err'}">
+              ${st === 'confirmed' ? '✅ Confirmed' : st === 'in_progress' ? '⚠ In Progress' : '✕ Not Confirmed'}
+            </span>
+            ${item.notes ? `<div style="font-size:12px;color:var(--muted);margin-top:6px">${esc(item.notes)}</div>` : ''}
+          </div>`}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('save-row').style.display = locked ? 'none' : 'block';
+}
+
+// ── Item status change ────────────────────────────────────────────
+function setStatus(key, status) {
+  items[key].status = status;
+  const chkEl = document.getElementById('chk-' + key);
+  chkEl.className = `chk-item ${status}`;
+  // Update button active states
+  chkEl.querySelectorAll('.chk-btn').forEach(b => {
+    const s = b.textContent.includes('Confirmed') && !b.textContent.includes('Not')
+      ? 'confirmed' : b.textContent.includes('Progress') ? 'in_progress' : 'not_confirmed';
+    b.className = `chk-btn${s === status ? ' active-' + status : ''}`;
+  });
+  updateProgress();
+  renderSignOff();
+}
+
+// ── Progress bar ──────────────────────────────────────────────────
+function updateProgress() {
+  const confirmed = CHECKLIST_ITEMS.filter(ci => items[ci.key]?.status === 'confirmed').length;
+  const pct = Math.round((confirmed / CHECKLIST_ITEMS.length) * 100);
+  document.getElementById('mob-fill').style.width = pct + '%';
+  document.getElementById('mob-pct').textContent  =
+    `${confirmed} of ${CHECKLIST_ITEMS.length} items confirmed`;
+
+  const overallStatus = confirmed === CHECKLIST_ITEMS.length
+    ? 'signed_off' : confirmed > 0 ? 'in_progress' : 'not_started';
+
+  const BADGES = {
+    not_started: '⬜ Not Started',
+    in_progress: '⚠ In Progress',
+    signed_off:  '✅ Signed Off'
+  };
+  document.getElementById('status-badge-wrap').innerHTML =
+    `<span class="mob-status-badge ${overallStatus}">${BADGES[overallStatus]}</span>`;
+}
+
+// ── Save progress ─────────────────────────────────────────────────
+async function saveChecklist() {
+  // Read any unsaved textarea values into items
+  CHECKLIST_ITEMS.forEach(ci => {
+    const el = document.getElementById('notes-' + ci.key);
+    if (el) items[ci.key].notes = el.value;
+  });
+
+  const confirmed = CHECKLIST_ITEMS.filter(ci => items[ci.key]?.status === 'confirmed').length;
+  const status = confirmed === CHECKLIST_ITEMS.length
+    ? 'in_progress' : confirmed > 0 ? 'in_progress' : 'not_started';
+
+  const payload = {
+    contract_id:  contractId,
+    reviewed_by:  auth.user.id,
+    review_date:  new Date().toISOString().slice(0,10),
+    items,
+    status,
+    updated_at:   new Date().toISOString()
+  };
+
+  if (current?.id) {
+    const { error } = await sb.from('cnt_mobilization')
+      .update(payload).eq('id', current.id);
+    if (error) { toast(error.message, 'err'); return; }
+  } else {
+    const { data, error } = await sb.from('cnt_mobilization')
+      .insert(payload).select('*').single();
+    if (error) { toast(error.message, 'err'); return; }
+    current = data;
+  }
+
+  toast('Progress saved', 'ok');
+  renderSignOff();
+}
+
+// ── Sign-off panel ────────────────────────────────────────────────
+function renderSignOff() {
+  const wrap = document.getElementById('signoff-wrap');
+  const confirmed = CHECKLIST_ITEMS.filter(ci => items[ci.key]?.status === 'confirmed').length;
+  const allConfirmed = confirmed === CHECKLIST_ITEMS.length;
+  const alreadySigned = current?.status === 'signed_off';
+
+  if (alreadySigned) {
+    const signedBy = profiles.find(p => p.id === current.signed_off_by);
+    wrap.innerHTML = `
+      <div class="signoff-locked">
+        <div class="sl-check">✅</div>
+        <div style="font-size:16px;font-weight:800;color:#166534;margin-bottom:6px">
+          Mobilization Signed Off
+        </div>
+        <div style="font-size:13px;color:var(--muted);line-height:1.7">
+          <strong>Signed by:</strong> ${esc(signedBy?.full_name ?? '—')}<br>
+          <strong>Date:</strong> ${fmtDate(current.signed_off_date)}<br>
+          ${current.sign_off_notes
+            ? `<strong>Notes:</strong> ${esc(current.sign_off_notes)}`
+            : ''}
+        </div>
+        <div style="margin-top:12px;font-size:12px;color:var(--muted)">
+          Work may now commence in accordance with §2.3.
+        </div>
+      </div>`;
+    return;
+  }
+
+  if (!allConfirmed) {
+    wrap.innerHTML = `
+      <div style="padding:16px 18px;background:#fffbeb;border:1.5px solid #f59e0b;
+        border-radius:10px;font-size:13px;color:#92400e">
+        ⚠ All 9 items must be confirmed before the mobilization review can be signed off
+        (${confirmed} of ${CHECKLIST_ITEMS.length} confirmed). Save your progress after
+        confirming each item.
+      </div>`;
+    return;
+  }
+
+  // All confirmed — show sign-off form
+  wrap.innerHTML = `
+    <div class="signoff-panel">
+      <h3>✅ All Items Confirmed — Sign Off Mobilization Review</h3>
+      <p style="font-size:13px;color:#166534;margin-bottom:16px;line-height:1.6">
+        By signing off, you confirm that all nine mobilization requirements in §2.3 have been
+        reviewed and are in place. Work may commence after sign-off.
+      </p>
+      <div class="g2" style="margin-bottom:14px">
+        <div class="field">
+          <label>Sign-Off Date <span class="req">*</span></label>
+          <input id="so-date" type="date" class="srch"
+            value="${new Date().toISOString().slice(0,10)}">
+        </div>
+        <div class="field">
+          <label>Signed Off By <span class="req">*</span></label>
+          <select id="so-by" class="srch">
+            <option value="">— Select —</option>
+            ${profiles.map(p =>
+              `<option value="${p.id}"${p.id === auth.user.id ? ' selected' : ''}>${esc(p.full_name)}</option>`
+            ).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="field" style="margin-bottom:16px">
+        <label>Sign-Off Notes (optional)</label>
+        <textarea id="so-notes" class="srch" rows="2"
+          placeholder="Any final observations before commencement of work…"></textarea>
+      </div>
+      <label style="display:flex;align-items:flex-start;gap:10px;margin-bottom:16px;
+        font-size:13px;cursor:pointer;color:#166534;line-height:1.55">
+        <input type="checkbox" id="so-confirm" style="margin-top:3px;width:16px;height:16px;flex-shrink:0">
+        I confirm that all mobilization requirements have been reviewed and are in place,
+        and that work may commence in accordance with the subcontract agreement.
+      </label>
+      <button class="btn btn-primary" onclick="signOff()">✔ Sign Off Mobilization</button>
+    </div>`;
+}
+
+async function signOff() {
+  const date  = document.getElementById('so-date').value;
+  const byId  = document.getElementById('so-by').value;
+  const notes = document.getElementById('so-notes').value.trim();
+  const confirmed = document.getElementById('so-confirm').checked;
+
+  if (!date || !byId) { toast('Sign-off date and signatory are required', 'warn'); return; }
+  if (!confirmed) { toast('You must confirm by ticking the checkbox', 'warn'); return; }
+
+  // Save current item state + sign-off
+  CHECKLIST_ITEMS.forEach(ci => {
+    const el = document.getElementById('notes-' + ci.key);
+    if (el) items[ci.key].notes = el.value;
+  });
+
+  const payload = {
+    contract_id:     contractId,
+    reviewed_by:     auth.user.id,
+    review_date:     new Date().toISOString().slice(0,10),
+    items,
+    status:          'signed_off',
+    signed_off_by:   byId,
+    signed_off_date: date,
+    sign_off_notes:  notes || null,
+    updated_at:      new Date().toISOString()
+  };
+
+  if (current?.id) {
+    const { error } = await sb.from('cnt_mobilization')
+      .update(payload).eq('id', current.id);
+    if (error) { toast(error.message, 'err'); return; }
+  } else {
+    const { data, error } = await sb.from('cnt_mobilization')
+      .insert(payload).select('*').single();
+    if (error) { toast(error.message, 'err'); return; }
+    current = data;
+  }
+
+  toast('Mobilization signed off — work may commence', 'ok');
+  // Reload to show locked state
+  await onContractChange();
+}
+
+// ── Utility ────────────────────────────────────────────────────
+function fmtDate(d) {
+  if (!d) return '—';
+  return new Date(d).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'});
+}
+function esc(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+init();
+</script>
+</body>
+</html>
