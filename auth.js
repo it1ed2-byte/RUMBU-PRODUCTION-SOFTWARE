@@ -20,6 +20,9 @@ const SUPABASE_URL = "https://betfhunzmhtdzgvufmfk.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp";
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// Expose sb on window so module iframes can access it via window.parent.sb
+// (const is not a window property — this explicit assignment is required)
+window.sb = sb;
 
 // Derives the force-change-password page path from whatever loginPath
 // the caller passed in (e.g. "login.html" -> "force-change-password.html",
