@@ -4,7 +4,6 @@
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Management Dashboard</title>
 <script src="auth-contracts.js"></script>
-<script src="sidebar-contracts.js"></script>
 <link rel="stylesheet" href="contracts.css">
 <style>
 /* ── Summary cards ─────────────────────────────────────── */
@@ -190,8 +189,8 @@ async function loadData() {
   // 1. All contracts
   const { data: cData } = await sb.from('cnt_contracts').select(`
     id, contract_id, title, status, risk_level, risk_notes,
-    contract_value, start_date, end_date,
-    physical_progress, financial_progress,
+    original_value, start_date, end_date,
+    physical_progress_pct, financial_progress_pct,
     cnt_agencies(name), cnt_companies(name)
   `).order('risk_level', { ascending: false })
     .order('contract_id');
@@ -240,8 +239,8 @@ function getFlags(c) {
   const flags = [];
   const today  = new Date();
   const end    = c.end_date ? new Date(c.end_date) : null;
-  const pp     = c.physical_progress ?? 0;
-  const fp     = c.financial_progress ?? 0;
+  const pp     = c.physical_progress_pct ?? 0;
+  const fp     = c.financial_progress_pct ?? 0;
   const risk   = c.risk_level ?? 'low';
   const openAct = actionCountMap[c.id] ?? 0;
   const eval_  = evalMap[c.id];
@@ -281,7 +280,7 @@ function buildKPICards() {
   });
   const totalActions  = Object.values(actionCountMap).reduce((s, v) => s + v, 0);
   const needAttention = contracts.filter(c => getFlags(c).length > 0);
-  const totalVal      = contracts.reduce((s, c) => s + (c.contract_value ?? 0), 0);
+  const totalVal      = contracts.reduce((s, c) => s + (c.original_value ?? 0), 0);
 
   document.getElementById('kpi-grid').innerHTML = [
     { val: contracts.length,                lbl:'Total Contracts',         cls:'info'   },
@@ -307,20 +306,20 @@ function buildDimensionOverview() {
     return;
   }
 
-  const avgPP = avg(active.map(c => c.physical_progress ?? 0));
-  const avgFP = avg(active.map(c => c.financial_progress ?? 0));
+  const avgPP = avg(active.map(c => c.physical_progress_pct ?? 0));
+  const avgFP = avg(active.map(c => c.financial_progress_pct ?? 0));
 
   // Schedule health: % of active contracts on schedule
   const onSched = active.filter(c => {
     if (!c.start_date || !c.end_date) return true;
     const elapsed = (new Date() - new Date(c.start_date)) /
                     (new Date(c.end_date) - new Date(c.start_date)) * 100;
-    return (c.physical_progress ?? 0) >= elapsed - 10;
+    return (c.physical_progress_pct ?? 0) >= elapsed - 10;
   });
   const schedPct = Math.round((onSched.length / active.length) * 100);
 
   // Cost health: % not over-running
-  const notOver = active.filter(c => (c.financial_progress ?? 0) <= 105);
+  const notOver = active.filter(c => (c.financial_progress_pct ?? 0) <= 105);
   const costPct = Math.round((notOver.length / active.length) * 100);
 
   // Quality/Safety: from performance evaluations
@@ -415,8 +414,8 @@ function render() {
   };
 
   tbody.innerHTML = data.map(c => {
-    const pp   = c.physical_progress ?? 0;
-    const fp   = c.financial_progress ?? 0;
+    const pp   = c.physical_progress_pct ?? 0;
+    const fp   = c.financial_progress_pct ?? 0;
     const ppCol= pp >= 80 ? '#22c55e' : pp >= 40 ? '#2E75B6' : '#f59e0b';
     const fpCol= fp >= 80 ? '#22c55e' : fp >= 40 ? '#2E75B6' : '#f59e0b';
     const [rCls, rLbl] = RISK_BADGE[c.risk_level ?? 'low'] ?? ['b-gray','—'];
@@ -426,8 +425,8 @@ function render() {
     const ev           = evalMap[c.id];
     const [evCls, evLbl] = ev ? (RATING_MAP[ev.rating] ?? ['none','—']) : ['none','No eval'];
     const flags        = getFlags(c);
-    const val          = c.contract_value
-      ? 'NGN ' + fmtVal(c.contract_value)
+    const val          = c.original_value
+      ? 'NGN ' + fmtVal(c.original_value)
       : '—';
 
     // Schedule status
