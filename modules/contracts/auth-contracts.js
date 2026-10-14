@@ -25,29 +25,13 @@ const _CNT_KEY = 'sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp';
  * window.parent.sb is always undefined from an iframe. The fallback below
  * fixes this transparently without touching the main app.
  */
-function _getSb() {
-  // ── Option 1: window.parent.sb ────────────────────────────────────
-  // Works if auth.js declares `var sb` or `window.sb = …` (var at
-  // script top-level DOES become a window property; const/let do NOT).
-  if (window.parent?.sb) return window.parent.sb;
-
-  // ── Option 2: window.parent.eval('sb') ───────────────────────────
-  // const/let are NOT window properties but ARE in the parent window's
-  // JavaScript execution scope. eval() runs in that scope on same-origin
-  // frames, so this reliably returns the exact authenticated client
-  // object the main app is already using — JWT, session and all.
-  try {
-    const parentSb = window.parent.eval(
-      'typeof sb !== "undefined" && sb'
-    );
-    if (parentSb) return parentSb;
-  } catch (_) { /* cross-origin or eval blocked — fall through */ }
-
-  // ── Option 3: create a fresh client from parent's library ─────────
-  // Same-origin frames share localStorage, so Supabase finds the active
-  // session token and subsequent getSession()/getUser() calls succeed.
-  // Use this only as a last resort because a new client needs one
-  // async round-trip before its JWT is applied to DB queries.
+/**
+ * Returns a Supabase library reference for creating clients.
+ * The actual authenticated client is built inside guardPage()
+ * using an explicit setSession() call to avoid cross-frame
+ * auth-header propagation issues.
+ */
+function _getLib() {
   const lib = window.supabase ?? window.parent?.supabase;
   if (!lib?.createClient) {
     throw new Error(
@@ -55,7 +39,68 @@ function _getSb() {
       'Reload the app — if the problem persists, contact IT.'
     );
   }
-  return lib.createClient(_CNT_URL, _CNT_KEY);
+  return lib;
+}
+
+/**
+ * Creates a fresh Supabase client in the iframe's own context,
+ * then explicitly sets the session so the JWT is attached to
+ * every PostgREST request via the client's internal auth hook.
+ * Falls back gracefully through multiple session sources.
+ */
+async function _buildAuthenticatedSb() {
+  const lib = _getLib();
+
+  // Build a fresh client scoped to this iframe
+  const fresh = lib.createClient(_CNT_URL, _CNT_KEY, {
+    auth: { persistSession: false, autoRefreshToken: true, detectSessionInUrl: false }
+  });
+
+  // ── Try to find an active session ────────────────────────────────
+  let accessToken = null, refreshToken = null;
+
+  // Source 1: parent's sb (now exposed as window.sb in auth.js)
+  try {
+    const parentSb = window.parent?.sb;
+    if (parentSb) {
+      const { data: { session: ps } } = await parentSb.auth.getSession();
+      if (ps?.access_token) {
+        accessToken  = ps.access_token;
+        refreshToken = ps.refresh_token;
+      }
+    }
+  } catch (_) {}
+
+  // Source 2: localStorage — Supabase v2 key format
+  if (!accessToken) {
+    try {
+      const ref = _CNT_URL.split('//')[1].split('.')[0];
+      const raw = localStorage.getItem(`sb-${ref}-auth-token`);
+      const stored = raw ? JSON.parse(raw) : null;
+      if (stored?.access_token) {
+        accessToken  = stored.access_token;
+        refreshToken = stored.refresh_token;
+      }
+    } catch (_) {}
+  }
+
+  // Source 3: fresh.auth.getSession() — reads localStorage via client
+  if (!accessToken) {
+    try {
+      const { data: { session: ls } } = await fresh.auth.getSession();
+      if (ls?.access_token) {
+        accessToken  = ls.access_token;
+        refreshToken = ls.refresh_token;
+      }
+    } catch (_) {}
+  }
+
+  // Apply the session so the JWT reaches every PostgREST request
+  if (accessToken) {
+    await fresh.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
+  }
+
+  return { fresh, hasSession: !!accessToken };
 }
 
 /**
@@ -66,13 +111,10 @@ function _getSb() {
  * @returns {Promise<{user, profile, permissions: Set<string>, sb} | null>}
  */
 async function guardPage() {
-  const sb = _getSb();
+  const { fresh: sb, hasSession } = await _buildAuthenticatedSb();
 
-  // getSession() loads the stored session into this client instance so the
-  // JWT is attached to every subsequent PostgREST request. getUser() makes
-  // a network call but does not guarantee the token is set on the client
-  // before the first DB query fires — causing auth.uid() / request.jwt.claim.sub
-  // to resolve as null in RLS policies even when the user is authenticated.
+  if (!hasSession) { _accessDenied(); return null; }
+
   const { data: { session } } = await sb.auth.getSession();
   if (!session) { _accessDenied(); return null; }
   const user = session.user;
@@ -146,7 +188,7 @@ async function guardPage() {
  * Call at the start of portal sub-pages.
  */
 async function guardPortal() {
-  const sb = _getSb();
+  const { fresh: sb } = await _buildAuthenticatedSb();
 
   const { data: { user } } = await sb.auth.getUser();
   if (!user) { window.location.href = '/portal.html'; return null; }
