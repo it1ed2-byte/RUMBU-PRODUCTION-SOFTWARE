@@ -210,7 +210,10 @@ async function _renderNav(nav) {
   /* Fetch pages from the database */
   let pages = [];
   try {
-    const sb = _getSb(); // defined in auth-contracts.js
+    // Use the authenticated client the page already set up via guardPage()
+    // Falls back to parent sb; avoids calling the now-removed _getSb()
+    const sb = window._sb ?? window.parent?.sb;
+    if (!sb) throw new Error('No Supabase client available');
     const { data, error } = await sb
       .from('pages')
       .select('id, name, module_path')

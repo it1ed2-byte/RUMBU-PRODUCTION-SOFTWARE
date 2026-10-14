@@ -25,6 +25,19 @@ const _CNT_KEY = 'sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp';
  * window.parent.sb is always undefined from an iframe. The fallback below
  * fixes this transparently without touching the main app.
  */
+
+/**
+ * Synchronous backward-compatibility shim.
+ * New code should use _buildAuthenticatedSb() instead.
+ * Returns a fresh unauthenticated client; the caller should prefer
+ * window._sb (set by guardPage) for authenticated queries.
+ */
+function _getSb() {
+  const lib = window.supabase ?? window.parent?.supabase;
+  if (!lib?.createClient) throw new Error('Cannot reach Supabase from this frame.');
+  return lib.createClient(_CNT_URL, _CNT_KEY);
+}
+
 /**
  * Returns a Supabase library reference for creating clients.
  * The actual authenticated client is built inside guardPage()
