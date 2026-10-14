@@ -43,6 +43,7 @@
   .pri-Normal{ color:#2563eb; font-weight:700; }
   .pri-Urgent{ color:#d97706; font-weight:700; }
   .pri-Critical{ color:#dc2626; font-weight:700; }
+  .req-link{ color:var(--accent); font-weight:700; text-decoration:underline; cursor:pointer; }
   .process-btn{ padding:5px 12px; background:var(--heading); color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:12px; font-weight:600; }
   .pagination{ display:flex; align-items:center; justify-content:center; gap:6px; margin-top:14px; flex-wrap:wrap; }
   .pagination button{ padding:6px 12px; font-size:12px; background:var(--bg); color:var(--heading); border:1px solid var(--line); border-radius:6px; font-weight:600; cursor:pointer; }
@@ -69,8 +70,6 @@
     <select id="filterStatus" onchange="onSearch()">
       <option value="">All Pending</option>
       <option value="submitted">Submitted</option>
-      <option value="acknowledged">Acknowledged</option>
-      <option value="in_progress">In Progress</option>
       <option value="partially_released">Partially Released</option>
     </select>
     <select id="rowsPerPage" onchange="onRowsChange()">
@@ -87,7 +86,7 @@
 
 <script>
 let ACCESS_TOKEN=null;
-let ME=null, ALL_ROWS=[], FILTERED=[], currentPage=1;
+let ME=null, ALL_ROWS=[], FILTERED=[], currentPage=1, LAST_RELEASE={};
 const PENDING_STATUSES=["submitted","acknowledged","in_progress","partially_released"];
 function esc(s){ return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
 function authHeaders(){ return {"apikey":SUPABASE_ANON_KEY,"Authorization":"Bearer "+(ACCESS_TOKEN||SUPABASE_ANON_KEY)}; }
@@ -105,19 +104,23 @@ async function loadData(){
     // Sort: Critical first, then Urgent, then Normal
     const priOrder={Critical:0,Urgent:1,Normal:2};
     ALL_ROWS.sort((a,b)=>(priOrder[a.priority]||2)-(priOrder[b.priority]||2)||new Date(a.created_at)-new Date(b.created_at));
+    // Latest release per request, for the "Released By" column
+    LAST_RELEASE={};
+    const ids=ALL_ROWS.filter(r=>r.status==="partially_released").map(r=>r.id);
+    if(ids.length){
+      const rr=await fetch(SUPABASE_URL+"/rest/v1/request_releases?select=request_id,released_by_name,released_by_id,released_at&request_id=in.("+ids.join(",")+")&order=released_at.desc",{headers:authHeaders()});
+      if(rr.ok) (await rr.json()).forEach(x=>{ if(!LAST_RELEASE[x.request_id]) LAST_RELEASE[x.request_id]=x; });
+    }
     const sr=document.getElementById("summaryRow");
     const c={submitted:0,acknowledged:0,in_progress:0,partially_released:0,critical:0};
     ALL_ROWS.forEach(r=>{
-      if(r.status==="submitted") c.submitted++;
-      else if(r.status==="acknowledged") c.acknowledged++;
-      else if(r.status==="in_progress") c.in_progress++;
+      if(r.status==="submitted"||r.status==="acknowledged"||r.status==="in_progress") c.submitted++;
       else if(r.status==="partially_released") c.partially_released++;
       if(r.priority==="Critical") c.critical++;
     });
     sr.innerHTML=`<span class="chip chip-total">📋 Total Pending: ${ALL_ROWS.length}</span>
       <span class="chip chip-submitted">📤 New: ${c.submitted}</span>
-      <span class="chip chip-ack">👁️ Acknowledged: ${c.acknowledged}</span>
-      <span class="chip chip-progress">⚙️ In Progress: ${c.in_progress+c.partially_released}</span>
+      <span class="chip chip-progress">⚠️ Partially Released: ${c.partially_released}</span>
       <span class="chip chip-critical">🔴 Critical: ${c.critical}</span>`;
     currentPage=1; document.getElementById("searchBox").value=""; onSearch();
   }catch(e){ document.getElementById("tableArea").innerHTML="❌ "+e.message; }
@@ -132,7 +135,8 @@ function applyFilter(){
   const st=document.getElementById("filterStatus").value;
   FILTERED=ALL_ROWS.filter(r=>{
     if(pri&&r.priority!==pri) return false;
-    if(st&&r.status!==st) return false;
+    const eff=(r.status==="acknowledged"||r.status==="in_progress")?"submitted":r.status;
+    if(st&&eff!==st) return false;
     if(q&&!(r.title||"").toLowerCase().includes(q)&&!(r.request_number||"").toLowerCase().includes(q)&&!(r.department||"").toLowerCase().includes(q)) return false;
     return true;
   });
@@ -146,13 +150,13 @@ function renderTable(){
   const start=(currentPage-1)*rpp,end=Math.min(start+rpp,total);
   document.getElementById("countLabel").textContent=total+" request"+(total!==1?"s":"");
   if(!FILTERED.length){ document.getElementById("tableArea").innerHTML="<p style='color:#666;padding:10px 0;'>No pending requests.</p>"; document.getElementById("paginationArea").innerHTML=""; return; }
-  let html="<table><thead><tr><th>#</th><th>Number</th><th>Title</th><th>Department</th><th>Requester</th><th>Priority</th><th>Status</th><th>Date Submitted</th><th>Action</th></tr></thead><tbody>";
+  let html="<table><thead><tr><th>#</th><th>Number</th><th>Title</th><th>Department</th><th>Requester</th><th>Priority</th><th>Status</th><th>Date Submitted</th><th>Released By</th></tr></thead><tbody>";
   FILTERED.slice(start,end).forEach((r,i)=>{
-    html+=`<tr><td>${start+i+1}</td><td><b>${esc(r.request_number)}</b></td><td>${esc(r.title)}</td>
+    html+=`<tr><td>${start+i+1}</td><td><a class="req-link" onclick="processRequest('${r.id}')" title="Open to release items">${esc(r.request_number)}</a></td><td>${esc(r.title)}</td>
       <td>${esc(r.department)}</td><td>${esc(r.requester_username)}</td>
       <td>${priBadge(r.priority)}</td><td>${statusBadge(r.status)}</td>
       <td>${fmtDate(r.submitted_at||r.created_at)}</td>
-      <td><button class="process-btn" onclick="processRequest('${r.id}')">Process</button></td></tr>`;
+      <td>${LAST_RELEASE[r.id]?esc(LAST_RELEASE[r.id].released_by_name)+" ("+esc(LAST_RELEASE[r.id].released_by_id)+")":"—"}</td></tr>`;
   });
   html+="</tbody></table>";
   document.getElementById("tableArea").innerHTML=html;
@@ -168,9 +172,6 @@ function renderTable(){
 function goPage(p){ const tp=Math.max(1,Math.ceil(FILTERED.length/getRowsPerPage())); if(p<1||p>tp) return; currentPage=p; renderTable(); }
 
 function processRequest(id){
-  // Navigate to process-request page with request ID
-  window.parent.postMessage({ openModule: "requests/process-request", requestId: id }, "*");
-  // Fallback: store in sessionStorage and open directly
   sessionStorage.setItem("process_request_id", id);
   window.location.href="process-request.html?id="+id;
 }

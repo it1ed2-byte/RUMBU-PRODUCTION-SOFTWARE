@@ -48,6 +48,7 @@
   .btn-row{ display:flex; gap:10px; margin-top:18px; flex-wrap:wrap; }
   .btn-row button{ flex:1; padding:11px; font-size:14px; font-weight:700; border:none; border-radius:8px; cursor:pointer; transition:opacity .2s; }
   .btn-row button:hover{ opacity:.85; }
+  .btn-row button:disabled{ opacity:.5; cursor:not-allowed; }
   .btn-draft{ background:var(--bg); color:var(--heading); border:2px solid var(--heading)!important; }
   .btn-submit{ background:var(--heading); color:#fff; }
   .msg{ text-align:center; margin-top:10px; font-size:13px; font-weight:600; min-height:18px; }
@@ -114,8 +115,8 @@
   <button type="button" class="add-item-btn" onclick="addItemRow()">+ Add Item</button>
 
   <div class="btn-row">
-    <button class="btn-draft" onclick="saveRequest('draft')">💾 Save as Draft</button>
-    <button class="btn-submit" onclick="saveRequest('submitted')">📤 Submit Request</button>
+    <button class="btn-draft" id="btnDraft" onclick="saveRequest('draft')">💾 Save as Draft</button>
+    <button class="btn-submit" id="btnSubmit" onclick="saveRequest('submitted')">📤 Submit Request</button>
   </div>
   <div class="msg" id="msg"></div>
 </div>
@@ -124,6 +125,7 @@
 let ACCESS_TOKEN=null;
 let ME = null;
 let PRIORITY = 'Normal';
+let SAVING = false;
 let EDIT_ID = new URLSearchParams(window.location.search).get("draft");
 let ITEM_COUNT = 0;
 const UNITS = ['pcs','kg','litres','rolls','metres','bags','boxes','sets','pairs','sheets','bottles','cartons'];
@@ -182,6 +184,8 @@ async function saveRequest(status){
   const items = getItems();
   if(!items.length){ msg.className="msg err"; msg.textContent="❌ Add at least one item."; return; }
 
+  if(SAVING) return;               // ignore repeat clicks while a save is running
+  SAVING = true; lockButtons(true);
   msg.className="msg"; msg.textContent="Saving...";
   try{
     const payload = {
@@ -237,36 +241,33 @@ async function saveRequest(status){
     });
     if(!itemRes.ok) throw new Error("Items: HTTP "+itemRes.status);
 
-    // Log activity
-    await fetch(SUPABASE_URL+"/rest/v1/request_activity_log", {
-      method:"POST", headers:authHeaders(),
-      body: JSON.stringify({ request_id:req.id, actor_username:ME.username,
-        action: status==='submitted'?"Submitted":(EDIT_ID?"Draft Updated":"Saved as Draft"),
-        note: `Request "${title}" ${status==='submitted'?"submitted for processing":"saved as draft"}.` })
-    });
-
+    // Clear the form straight away so the same request cannot be saved twice
+    resetForm();
     msg.className="msg ok";
     msg.textContent = status==='submitted'
-      ? "✅ Request submitted successfully! Number: "+req.request_number
-      : "✅ Draft saved! Number: "+req.request_number;
-
-    // Reset form after 2s
-    setTimeout(()=>{
-      document.getElementById("f_title").value="";
-      document.getElementById("f_desc").value="";
-      document.getElementById("f_reqno").value="";
-      document.getElementById("itemsBody").innerHTML="";
-      ITEM_COUNT=0; PRIORITY='Normal'; setPriority('Normal');
-      msg.textContent="";
-      if(EDIT_ID){
-        EDIT_ID=null;
-        history.replaceState(null,"","fill-request.html");
-        document.getElementById("draftBanner").style.display="none";
-      }
-      addItemRow();
-    },2500);
+      ? "✅ Request "+req.request_number+" submitted to the store. The form is ready for a new request."
+      : "✅ Draft "+req.request_number+" saved. Open it from My Requests to continue. The form is ready for a new request.";
 
   }catch(e){ msg.className="msg err"; msg.textContent="❌ "+e.message; }
+  finally{ SAVING = false; lockButtons(false); }
+}
+
+function lockButtons(on){
+  ["btnDraft","btnSubmit"].forEach(id=>{ const b=document.getElementById(id); if(b) b.disabled=on; });
+}
+
+function resetForm(){
+  document.getElementById("f_title").value="";
+  document.getElementById("f_desc").value="";
+  document.getElementById("f_reqno").value="";
+  document.getElementById("itemsBody").innerHTML="";
+  ITEM_COUNT=0; PRIORITY='Normal'; setPriority('Normal');
+  if(EDIT_ID){
+    EDIT_ID=null;
+    history.replaceState(null,"","fill-request.html");
+    document.getElementById("draftBanner").style.display="none";
+  }
+  addItemRow();
 }
 
 async function loadDraft(id){

@@ -37,6 +37,8 @@
   .badge-partially_released{ background:#fff7ed; color:#c2410c; }
   .badge-released{ background:#dcfce7; color:#15803d; }
   .badge-rejected{ background:#fee2e2; color:#dc2626; }
+  .badge-pending{ background:#fef9c3; color:#92400e; }
+  .badge-partial{ background:#fff7ed; color:#c2410c; }
   .badge-closed{ background:#f3f4f6; color:#374151; }
   .pri-Normal{ color:#2563eb; font-weight:700; }
   .pri-Urgent{ color:#d97706; font-weight:700; }
@@ -98,17 +100,21 @@
     <h4 style="color:var(--heading);margin:0 0 8px;">Items</h4>
     <table class="items-tbl"><thead><tr><th>Item</th><th>Qty Requested</th><th>Qty Released</th><th>Unit</th><th>Status</th><th>Remarks</th></tr></thead>
     <tbody id="dItems"></tbody></table>
+    <h4 style="color:var(--heading);margin:0 0 8px;">Release History</h4>
+    <div id="dReleases"></div>
     <div style="margin-top:14px;text-align:right;"><button class="close-btn" onclick="closeDetail()">Close</button></div>
   </div>
 </div>
 
 <script>
 let ACCESS_TOKEN=null;
-let ME=null, ALL_ROWS=[], FILTERED=[], currentPage=1;
+let ME=null, ALL_ROWS=[], FILTERED=[], currentPage=1, LAST_REL_AT={};
 const DONE_STATUSES=["released","partially_released","rejected","closed"];
 function esc(s){ return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
 function authHeaders(){ return {"apikey":SUPABASE_ANON_KEY,"Authorization":"Bearer "+(ACCESS_TOKEN||SUPABASE_ANON_KEY)}; }
-function fmtDate(d){ return d?d.slice(0,10):"—"; }
+function fmtDate(d){ if(!d) return "—"; return new Date(d).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"}); }
+function fmtTime(d){ if(!d) return "—"; return new Date(d).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}); }
+function relDate(r){ return r.released_at || LAST_REL_AT[r.id] || null; }
 function getRowsPerPage(){ return Number(document.getElementById("rowsPerPage").value)||25; }
 function statusBadge(s){ return `<span class="badge badge-${s}">${esc(s.replace(/_/g," "))}</span>`; }
 function priBadge(p){ return `<span class="pri-${p}">${p==="Critical"?"🔴":p==="Urgent"?"🟡":"🔵"} ${p}</span>`; }
@@ -119,6 +125,10 @@ async function loadData(){
     const res=await fetch(SUPABASE_URL+"/rest/v1/requests?select=*&status=in.("+DONE_STATUSES.join(",")+")"+"&order=updated_at.desc",
       {headers:Object.assign({},authHeaders(),{"Range-Unit":"items","Range":"0-9999"})});
     ALL_ROWS=await res.json();
+    LAST_REL_AT={};
+    const rr=await fetch(SUPABASE_URL+"/rest/v1/request_releases?select=request_id,released_at&order=released_at.desc",
+      {headers:Object.assign({},authHeaders(),{"Range-Unit":"items","Range":"0-49999"})});
+    if(rr.ok) (await rr.json()).forEach(x=>{ if(!LAST_REL_AT[x.request_id]) LAST_REL_AT[x.request_id]=x.released_at; });
     const c={released:0,partially_released:0,rejected:0,closed:0};
     ALL_ROWS.forEach(r=>{ if(c[r.status]!==undefined) c[r.status]++; });
     document.getElementById("summaryRow").innerHTML=
@@ -141,7 +151,7 @@ function applyFilter(){
   const to=document.getElementById("toDate").value;
   FILTERED=ALL_ROWS.filter(r=>{
     if(st&&r.status!==st) return false;
-    const d=(r.released_at||r.updated_at||"").slice(0,10);
+    const d=(relDate(r)||r.updated_at||"").slice(0,10);
     if(from&&d<from) return false;
     if(to&&d>to) return false;
     if(q&&!(r.title||"").toLowerCase().includes(q)&&!(r.request_number||"").toLowerCase().includes(q)&&!(r.department||"").toLowerCase().includes(q)&&!(r.requester_username||"").toLowerCase().includes(q)) return false;
@@ -157,12 +167,12 @@ function renderTable(){
   const start=(currentPage-1)*rpp,end=Math.min(start+rpp,total);
   document.getElementById("countLabel").textContent=total+" record"+(total!==1?"s":"");
   if(!FILTERED.length){ document.getElementById("tableArea").innerHTML="<p style='color:#666;padding:10px 0;font-size:13px;'>No records found.</p>"; document.getElementById("paginationArea").innerHTML=""; return; }
-  let html="<table><thead><tr><th>#</th><th>Number</th><th>Title</th><th>Department</th><th>Requester</th><th>Priority</th><th>Status</th><th>Date Requested</th><th>Date Released</th><th>Action</th></tr></thead><tbody>";
+  let html="<table><thead><tr><th>#</th><th>Number</th><th>Title</th><th>Department</th><th>Requester</th><th>Priority</th><th>Status</th><th>Date Requested</th><th>Last Released</th><th>Action</th></tr></thead><tbody>";
   FILTERED.slice(start,end).forEach((r,i)=>{
     html+=`<tr><td>${start+i+1}</td><td><b>${esc(r.request_number)}</b></td><td>${esc(r.title)}</td>
       <td>${esc(r.department)}</td><td>${esc(r.requester_username)}</td>
       <td>${priBadge(r.priority)}</td><td>${statusBadge(r.status)}</td>
-      <td>${fmtDate(r.created_at)}</td><td>${fmtDate(r.released_at)}</td>
+      <td>${fmtDate(r.created_at)}</td><td>${fmtDate(relDate(r))}</td>
       <td><button class="view-btn" onclick="openDetail('${r.id}')">View</button></td></tr>`;
   });
   html+="</tbody></table>";
@@ -187,13 +197,24 @@ async function openDetail(id){
     <div class="info-item"><label>Priority</label><span>${req.priority}</span></div>
     <div class="info-item"><label>Status</label><span>${req.status.replace(/_/g," ")}</span></div>
     <div class="info-item"><label>Date Requested</label><span>${fmtDate(req.created_at)}</span></div>
-    <div class="info-item"><label>Date Released</label><span>${fmtDate(req.released_at)}</span></div>
+    <div class="info-item"><label>Fully Released</label><span>${req.released_at?fmtDate(req.released_at)+" "+fmtTime(req.released_at):"—"}</span></div>
     ${req.store_remark?`<div class="info-item" style="grid-column:1/-1"><label>Store Remark</label><span>${esc(req.store_remark)}</span></div>`:""}
     ${req.rejected_reason?`<div class="info-item" style="grid-column:1/-1"><label>Rejection Reason</label><span style="color:#dc2626;">${esc(req.rejected_reason)}</span></div>`:""}
   `;
   try{
-    const items=await fetch(SUPABASE_URL+"/rest/v1/request_items?request_id=eq."+id+"&order=created_at",{headers:authHeaders()}).then(r=>r.json());
-    document.getElementById("dItems").innerHTML=items.map(i=>`<tr><td>${esc(i.item_name)}</td><td>${i.quantity}</td><td>${i.qty_released||0}</td><td>${esc(i.unit)}</td><td><span class="badge badge-${i.item_status}">${i.item_status}</span></td><td>${esc(i.remarks)}</td></tr>`).join("");
+    const [items,rels]=await Promise.all([
+      fetch(SUPABASE_URL+"/rest/v1/request_items?request_id=eq."+id+"&order=created_at",{headers:authHeaders()}).then(r=>r.json()),
+      fetch(SUPABASE_URL+"/rest/v1/request_releases?request_id=eq."+id+"&order=released_at",{headers:authHeaders()}).then(r=>r.ok?r.json():[])
+    ]);
+    document.getElementById("dItems").innerHTML=items.map(i=>`<tr><td>${esc(i.item_name)}</td><td>${i.quantity}</td><td>${i.qty_released||0}</td><td>${esc(i.unit)}</td><td><span class="badge badge-${i.item_status}">${esc(i.item_status)}</span></td><td>${esc(i.remarks)}</td></tr>`).join("");
+    const byId={}; items.forEach(i=>byId[i.id]=i);
+    document.getElementById("dReleases").innerHTML = rels.length
+      ? `<table class="items-tbl"><thead><tr><th>Date</th><th>Time</th><th>Item</th><th>Qty</th><th>Collected By</th><th>Released By</th></tr></thead><tbody>`+
+        rels.map(r=>`<tr><td>${fmtDate(r.released_at)}</td><td>${fmtTime(r.released_at)}</td>
+          <td>${esc(byId[r.item_id]?.item_name||"—")}</td><td>${r.qty_released} ${esc(byId[r.item_id]?.unit||"")}</td>
+          <td>${esc(r.collector_name)} (${esc(r.collector_id)})</td><td>${esc(r.released_by_name)} (${esc(r.released_by_id)})</td></tr>`).join("")+
+        `</tbody></table>`
+      : "<p style='color:#888;font-size:12px;margin:0 0 14px;'>No releases recorded for this request.</p>";
   }catch(e){}
   document.getElementById("detailModal").classList.add("open");
 }
