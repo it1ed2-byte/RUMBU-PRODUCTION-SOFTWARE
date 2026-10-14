@@ -142,8 +142,19 @@ _CNT_GROUPS.forEach((g, i) => g.stems.forEach(s => (_CNT_STEM_MAP[s] = i)));
  * Sidebar rendering
  * ═══════════════════════════════════════════════════════════════════════════ */
 async function _renderNav(nav) {
-  const SHIELD_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><path d="M12 3l7 3v5c0 5-3.2 8-7 10-3.8-2-7-5-7-10V6l7-3Z"/></svg>';
-  const BARS_SVG   = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" width="13" height="13"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>';
+  const SHIELD_SVG  = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><path d="M12 3l7 3v5c0 5-3.2 8-7 10-3.8-2-7-5-7-10V6l7-3Z"/></svg>';
+  const BARS_SVG    = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" width="13" height="13"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>';
+  const CHEV_UP_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><polyline points="18 15 12 9 6 15"/></svg>';
+  const CHEV_DN_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><polyline points="6 9 12 15 18 9"/></svg>';
+
+  /* Determine initial topbar state from localStorage */
+  let _topHidden = false;
+  try { _topHidden = localStorage.getItem('cnt_top_hidden') === '1'; } catch(_) {}
+  /* Apply it to the parent frame immediately (same-origin, so direct DOM access works) */
+  try {
+    const shell = window.parent.document.getElementById('appShell');
+    if (shell) { _topHidden ? shell.classList.add('cnt-top-hidden') : shell.classList.remove('cnt-top-hidden'); }
+  } catch(_) {}
 
   /* Render the chrome immediately so the toggle button is usable at once */
   nav.innerHTML = `
@@ -152,12 +163,21 @@ async function _renderNav(nav) {
         ${SHIELD_SVG}
         <span>GOVT. CONTRACTS</span>
       </div>
-      <button class="cnt-nav-toggle"
-              onclick="cntToggleNav()"
-              aria-label="Collapse sidebar"
-              title="Collapse / expand">
-        ${BARS_SVG}
-      </button>
+      <div class="cnt-nav-actions">
+        <button class="cnt-nav-toggle"
+                id="cntTopToggle"
+                onclick="cntToggleTopBar()"
+                aria-label="${_topHidden ? 'Show top bar' : 'Hide top bar'}"
+                title="${_topHidden ? 'Show top bar' : 'Hide top bar'}">
+          ${_topHidden ? CHEV_DN_SVG : CHEV_UP_SVG}
+        </button>
+        <button class="cnt-nav-toggle"
+                onclick="cntToggleNav()"
+                aria-label="Collapse sidebar"
+                title="Collapse / expand">
+          ${BARS_SVG}
+        </button>
+      </div>
     </div>
     <div class="cnt-nav-body" id="cntNavBody">
       <div class="cnt-nav-loading">Loading…</div>
@@ -237,6 +257,32 @@ async function _renderNav(nav) {
   }
 
   document.getElementById('cntNavBody').innerHTML = html;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * Top bar hide / show — collapses the main app's header + m-bar so the
+ * contracts content fills the full viewport height.
+ * Accesses the parent frame directly (same-origin iframe, no postMessage needed).
+ * ═══════════════════════════════════════════════════════════════════════════ */
+function cntToggleTopBar() {
+  const CHEV_UP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><polyline points="18 15 12 9 6 15"/></svg>';
+  const CHEV_DN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><polyline points="6 9 12 15 18 9"/></svg>';
+  try {
+    const shell = window.parent.document.getElementById('appShell');
+    if (!shell) return;
+    const hidden = shell.classList.toggle('cnt-top-hidden');
+    /* Update the button icon and label */
+    const btn = document.getElementById('cntTopToggle');
+    if (btn) {
+      btn.innerHTML    = hidden ? CHEV_DN : CHEV_UP;
+      btn.title        = hidden ? 'Show top bar' : 'Hide top bar';
+      btn.setAttribute('aria-label', hidden ? 'Show top bar' : 'Hide top bar');
+    }
+    /* Persist so the state survives page-to-page navigation within contracts */
+    try { localStorage.setItem('cnt_top_hidden', hidden ? '1' : '0'); } catch(_) {}
+  } catch(e) {
+    console.warn('cntToggleTopBar: could not access parent frame', e);
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
