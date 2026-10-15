@@ -275,7 +275,6 @@ async function loadData() {
   });
 
   buildKPICards();
-  buildDimensionOverview();
   render();
 
   document.getElementById('loading').style.display = 'none';
@@ -447,76 +446,6 @@ function buildKPICards() {
 }
 
 // ── 7-Dimension Overview ──────────────────────────────────────────
-function buildDimensionOverview() {
-  const active = contracts.filter(c => c.status === 'active');
-  if (!active.length) {
-    document.getElementById('dimension-overview').innerHTML =
-      '<p style="color:var(--muted);font-size:13px">No active contracts to summarise.</p>';
-    return;
-  }
-
-  const avgPP = avg(active.map(c => c.physical_progress_pct ?? 0));
-  const avgFP = avg(active.map(c => c.financial_progress_pct ?? 0));
-
-  // Schedule health: % of active contracts on schedule
-  const onSched = active.filter(c => {
-    if (!c.start_date || !c.original_completion_date) return true;
-    const elapsed = (new Date() - new Date(c.start_date)) /
-                    (new Date(c.original_completion_date) - new Date(c.start_date)) * 100;
-    return (c.physical_progress_pct ?? 0) >= elapsed - 10;
-  });
-  const schedPct = Math.round((onSched.length / active.length) * 100);
-
-  // Cost health: % not over-running
-  const notOver = active.filter(c => (c.financial_progress_pct ?? 0) <= 105);
-  const costPct = Math.round((notOver.length / active.length) * 100);
-
-  // Quality/Safety: from performance evaluations
-  const activeEvals = active.map(c => evalMap[c.id]).filter(Boolean);
-  const meetsReq = activeEvals.filter(e => e.rating === 'meets_requirements').length;
-  const perfPct  = activeEvals.length
-    ? Math.round((meetsReq / activeEvals.length) * 100)
-    : null;
-
-  // Risk: % low/medium
-  const lowRisk = active.filter(c => c.risk_level === 'low' || c.risk_level === 'medium');
-  const riskPct = Math.round((lowRisk.length / active.length) * 100);
-
-  // Corrective Actions: % contracts with 0 open actions
-  const clearAct = active.filter(c => !(actionCountMap[c.id] ?? 0));
-  const actPct   = Math.round((clearAct.length / active.length) * 100);
-
-  // Overall status: % active
-  const activePct = Math.round((active.length / Math.max(contracts.length, 1)) * 100);
-
-  const dims = [
-    { lbl:'Schedule',    pct:schedPct, note:`${onSched.length}/${active.length} contracts on track`           },
-    { lbl:'Cost',        pct:costPct,  note:`${notOver.length}/${active.length} within budget`                },
-    { lbl:'Quality',     pct:perfPct,  note:perfPct != null ? `${meetsReq}/${activeEvals.length} meet requirements` : 'No evaluations yet' },
-    { lbl:'Safety',      pct:perfPct,  note:'Based on performance evaluations'                                },
-    { lbl:'Risk',        pct:riskPct,  note:`${lowRisk.length}/${active.length} low or medium risk`           },
-    { lbl:'Actions',     pct:actPct,   note:`${clearAct.length}/${active.length} contracts with no open actions`},
-    { lbl:'Status',      pct:activePct,note:`${active.length} of ${contracts.length} contracts active`        },
-  ];
-
-  document.getElementById('dimension-overview').innerHTML =
-    `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px">
-    ${dims.map(d => {
-      const p = d.pct ?? 0;
-      const col = p >= 80 ? '#22c55e' : p >= 60 ? '#f59e0b' : '#ef4444';
-      return `<div>
-        <div class="dim-row">
-          <span class="dim-lbl">${d.lbl}</span>
-          <div class="dim-bar"><div class="dim-fill" style="width:${p}%;background:${col}"></div></div>
-          <span class="dim-pct" style="color:${col}">${d.pct != null ? p + '%' : '—'}</span>
-        </div>
-        <div style="font-size:11px;color:var(--muted);margin-left:74px">${d.note}</div>
-      </div>`;
-    }).join('')}
-    </div>`;
-}
-
-// ── Performance Register table ────────────────────────────────────
 function render() {
   const q    = document.getElementById('q').value.toLowerCase();
   const fSt  = document.getElementById('fStatus').value;
