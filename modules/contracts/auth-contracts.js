@@ -27,24 +27,14 @@ const _CNT_KEY = 'sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp';
  */
 
 /**
- * Synchronous backward-compatibility shim.
- * New code should use _buildAuthenticatedSb() instead.
- * Returns a fresh unauthenticated client; the caller should prefer
- * window._sb (set by guardPage) for authenticated queries.
+ * Returns the best available authenticated Supabase client.
+ * Tries the parent frame's client first (already authenticated),
+ * then falls back to a fresh client that auto-loads the session
+ * from localStorage. The _uid_select RLS policies use auth.uid()
+ * which correctly reads request.jwt.claims regardless of client source.
  */
 function _getSb() {
-  const lib = window.supabase ?? window.parent?.supabase;
-  if (!lib?.createClient) throw new Error('Cannot reach Supabase from this frame.');
-  return lib.createClient(_CNT_URL, _CNT_KEY);
-}
-
-/**
- * Returns a Supabase library reference for creating clients.
- * The actual authenticated client is built inside guardPage()
- * using an explicit setSession() call to avoid cross-frame
- * auth-header propagation issues.
- */
-function _getLib() {
+  if (window.parent?.sb) return window.parent.sb;
   const lib = window.supabase ?? window.parent?.supabase;
   if (!lib?.createClient) {
     throw new Error(
@@ -52,68 +42,7 @@ function _getLib() {
       'Reload the app — if the problem persists, contact IT.'
     );
   }
-  return lib;
-}
-
-/**
- * Creates a fresh Supabase client in the iframe's own context,
- * then explicitly sets the session so the JWT is attached to
- * every PostgREST request via the client's internal auth hook.
- * Falls back gracefully through multiple session sources.
- */
-async function _buildAuthenticatedSb() {
-  const lib = _getLib();
-
-  // Build a fresh client scoped to this iframe
-  const fresh = lib.createClient(_CNT_URL, _CNT_KEY, {
-    auth: { persistSession: false, autoRefreshToken: true, detectSessionInUrl: false }
-  });
-
-  // ── Try to find an active session ────────────────────────────────
-  let accessToken = null, refreshToken = null;
-
-  // Source 1: parent's sb (now exposed as window.sb in auth.js)
-  try {
-    const parentSb = window.parent?.sb;
-    if (parentSb) {
-      const { data: { session: ps } } = await parentSb.auth.getSession();
-      if (ps?.access_token) {
-        accessToken  = ps.access_token;
-        refreshToken = ps.refresh_token;
-      }
-    }
-  } catch (_) {}
-
-  // Source 2: localStorage — Supabase v2 key format
-  if (!accessToken) {
-    try {
-      const ref = _CNT_URL.split('//')[1].split('.')[0];
-      const raw = localStorage.getItem(`sb-${ref}-auth-token`);
-      const stored = raw ? JSON.parse(raw) : null;
-      if (stored?.access_token) {
-        accessToken  = stored.access_token;
-        refreshToken = stored.refresh_token;
-      }
-    } catch (_) {}
-  }
-
-  // Source 3: fresh.auth.getSession() — reads localStorage via client
-  if (!accessToken) {
-    try {
-      const { data: { session: ls } } = await fresh.auth.getSession();
-      if (ls?.access_token) {
-        accessToken  = ls.access_token;
-        refreshToken = ls.refresh_token;
-      }
-    } catch (_) {}
-  }
-
-  // Apply the session so the JWT reaches every PostgREST request
-  if (accessToken) {
-    await fresh.auth.setSession({ access_token: accessToken, refresh_token: refreshToken });
-  }
-
-  return { fresh, hasSession: !!accessToken };
+  return lib.createClient(_CNT_URL, _CNT_KEY);
 }
 
 /**
@@ -124,9 +53,7 @@ async function _buildAuthenticatedSb() {
  * @returns {Promise<{user, profile, permissions: Set<string>, sb} | null>}
  */
 async function guardPage() {
-  const { fresh: sb, hasSession } = await _buildAuthenticatedSb();
-
-  if (!hasSession) { _accessDenied(); return null; }
+  const sb = _getSb();
 
   const { data: { session } } = await sb.auth.getSession();
   if (!session) { _accessDenied(); return null; }
@@ -201,7 +128,7 @@ async function guardPage() {
  * Call at the start of portal sub-pages.
  */
 async function guardPortal() {
-  const { fresh: sb } = await _buildAuthenticatedSb();
+  const sb = _getSb();
 
   const { data: { user } } = await sb.auth.getUser();
   if (!user) { window.location.href = '/portal.html'; return null; }
