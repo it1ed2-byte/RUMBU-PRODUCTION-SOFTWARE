@@ -219,73 +219,40 @@ function switchTab(id, el) {
 }
 
 async function loadContract() {
+  /* ── Read from localStorage (written by management dashboard / contracts list) ── */
+  let cached = null;
 
-  /* ── 1. FAST PATH: localStorage (set by dashboard / contracts list) ──────── */
   try {
     const raw = localStorage.getItem('cnt_pending_contract');
-    if (raw) {
-      const cached = JSON.parse(raw);
-      if (cached && cached.id === ID) {
-        localStorage.removeItem('cnt_pending_contract');
-        contract = cached;
-        renderContract(cached);
-        return;
-      }
-    }
+    if (raw) cached = JSON.parse(raw);
   } catch (_) {}
 
-  /* ── 2. FAST PATH: window.parent._pendingContract (backup) ──────────────── */
-  try {
-    const cached = window.parent?._pendingContract;
-    if (cached && cached.id === ID) {
-      window.parent._pendingContract = null;
-      contract = cached;
-      renderContract(cached);
-      return;
-    }
-  } catch (_) {}
+  if (!cached || cached.id !== ID) {
+    try { cached = window.parent?._pendingContract ?? null; } catch (_) {}
+  }
 
-  /* ── 3. FALLBACK: DB query with 8-second hard timeout ───────────────────── */
-  const queryPromise = sb.from('cnt_contracts').select(`
-    id, reference_number, title, status, risk_level, risk_notes,
-    original_value, start_date, original_completion_date,
-    revised_completion_date, contract_type, funding_source,
-    site_location, lga, state, notes, description,
-    physical_progress_pct, financial_progress_pct,
-    agency_id, assigned_company_id
-  `).eq('id', ID).limit(1);
-
-  const timeoutPromise = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error(
-      'Query timed out — open this contract from the contracts list.'
-    )), 8000)
-  );
-
-  const { data, error: cErr } = await Promise.race([queryPromise, timeoutPromise]);
-  if (cErr) throw new Error('Database error: ' + cErr.message);
-
-  const row = Array.isArray(data) ? data[0] : data;
-  if (!row) {
-    document.getElementById('loading').innerHTML =
-      '<p style="color:var(--err);text-align:center">Contract not found or access denied.</p>';
+  if (cached && cached.id === ID) {
+    try { localStorage.removeItem('cnt_pending_contract'); } catch (_) {}
+    try { if (window.parent) window.parent._pendingContract = null; } catch (_) {}
+    contract = cached;
+    renderContract(cached);
     return;
   }
 
-  // Resolve names separately
-  const [agRes, coRes] = await Promise.all([
-    row.agency_id
-      ? sb.from('cnt_agencies').select('name').eq('id', row.agency_id).limit(1)
-      : Promise.resolve({ data: [] }),
-    row.assigned_company_id
-      ? sb.from('cnt_companies').select('name').eq('id', row.assigned_company_id).limit(1)
-      : Promise.resolve({ data: [] }),
-  ]);
-  row.cnt_agencies  = agRes.data?.[0]?.name  ? { name: agRes.data[0].name }  : null;
-  row.cnt_companies = coRes.data?.[0]?.name ? { name: coRes.data[0].name } : null;
-
-  contract = row;
-  renderContract(row);
+  /* ── No cache found: show a clear, non-hanging message ─────────────────── */
+  document.getElementById('loading').innerHTML = `
+    <div style="text-align:center;padding:40px;font-size:14px;color:var(--muted,#6b7280)">
+      <div style="font-size:2rem;margin-bottom:12px">⚠️</div>
+      <div style="font-weight:600;color:#1f2937;margin-bottom:8px">Cannot load contract directly</div>
+      <div style="margin-bottom:20px">Please open contracts from the list or management dashboard.</div>
+      <a href="contracts.html"
+         style="background:#1e3a5f;color:#fff;padding:10px 20px;border-radius:6px;
+                text-decoration:none;font-size:13px">
+        ← Go to Contracts List
+      </a>
+    </div>`;
 }
+
 
 function renderContract(data) {
   const STATUS_BADGE = {
@@ -322,22 +289,20 @@ function renderContract(data) {
   const fmtDt  = v => v ? new Date(v).toLocaleDateString('en-GB',
     { day:'2-digit', month:'short', year:'numeric' }) : '—';
 
-  // Agency and company — handle both join shapes
   const agencyName  = data.cnt_agencies?.name  ?? data.agency_name  ?? '—';
   const companyName = data.cnt_companies?.name ?? data.company_name ?? '—';
 
   document.getElementById('info-grid').innerHTML = [
-    ['Agency',          agencyName],
-    ['Contractor',      companyName],
-    ['Contract Value',  fmtCcy(data.original_value)],
-    ['Start Date',      fmtDt(data.original_start_date ?? data.start_date)],
-    ['End Date',        fmtDt(data.original_completion_date)],
-    ['Revised End',     fmtDt(data.revised_completion_date)],
-    ['Contract Type',   data.contract_type ?? '—'],
-    ['Funding Source',  data.funding_source ?? '—'],
-    ['Location', [data.site_location, data.lga, data.state].filter(Boolean).join(', ') || '—'],
-    ['Risk Level',      `<span class="badge ${rCls}">${rLbl}</span>`],
-    ['Risk Notes',      data.risk_notes ?? '—'],
+    ['Agency',         agencyName],
+    ['Contractor',     companyName],
+    ['Contract Value', fmtCcy(data.original_value)],
+    ['Start Date',     fmtDt(data.start_date ?? data.original_start_date)],
+    ['End Date',       fmtDt(data.original_completion_date)],
+    ['Revised End',    fmtDt(data.revised_completion_date)],
+    ['Contract Type',  data.contract_type ?? '—'],
+    ['Location',       [data.lga, data.state].filter(Boolean).join(', ') || '—'],
+    ['Risk Level',     `<span class="badge ${rCls}">${rLbl}</span>`],
+    ['Risk Notes',     data.risk_notes ?? '—'],
   ].map(([label, val]) =>
     `<div class="info-item"><label>${label}</label><div class="val">${val}</div></div>`
   ).join('');
@@ -345,11 +310,11 @@ function renderContract(data) {
   const RISK_NOTICE = {
     high: {
       bg:'#fff7ed', border:'#f97316', color:'#7c2d12',
-      text:'🟠 <strong>High risk contract</strong> — Management escalation and recovery plan required (§5.4).'
+      text:'🟠 <strong>High risk contract</strong> — Management escalation required (§5.4).'
     },
     critical: {
       bg:'#fef2f2', border:'#ef4444', color:'#991b1b',
-      text:'🔴 <strong>Critical risk contract</strong> — Immediate escalation and executive intervention required (§5.4).'
+      text:'🔴 <strong>Critical risk contract</strong> — Immediate executive intervention required (§5.4).'
     },
   };
   const rNotice = RISK_NOTICE[data.risk_level];
@@ -371,7 +336,7 @@ function renderContract(data) {
   document.getElementById('pp-pct').textContent = pp + '%';
   document.getElementById('fp-pct').textContent = fp + '%';
 
-  const noteText = data.notes ?? data.description;
+  const noteText = data.notes ?? data.description ?? data.risk_notes;
   if (noteText) {
     document.getElementById('notes-wrap').style.display = 'block';
     document.getElementById('notes-body').textContent = noteText;
