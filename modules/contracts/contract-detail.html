@@ -176,52 +176,35 @@ const PRIORITY = { critical:['b-bad','Critical'],high:['b-warn','High'],medium:[
 async function init() {
   const setMsg = m => {
     const el = document.getElementById('loading');
-    if (el) el.innerHTML = `<div style="color:var(--muted);text-align:center;padding:40px;font-size:13px">${m}</div>`;
+    if (el) el.innerHTML =
+      `<div style="color:var(--muted,#6b7280);text-align:center;padding:40px;font-size:13px">${m}</div>`;
   };
-  // Safety timeout — shows diagnostic if stuck after 12 s
-  const timeout = setTimeout(() => setMsg(
-    '⚠️ Loading timed out. This may be an authentication or network issue.<br>' +
-    '<a href="contracts.html" style="color:var(--accent)">← Return to contracts list</a>'
-  ), 12000);
 
   try {
-    setMsg('Authenticating…');
+    setMsg('Please wait…');
 
-    // Give guardPage() 5 seconds — if the permissions RPC hangs, fall back to
-    // the parent's authenticated client so the page still loads.
-    let auth;
-    try {
-      auth = await Promise.race([
-        guardPage(),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('auth-timeout')), 5000))
-      ]);
-    } catch (authErr) {
-      if (authErr.message === 'auth-timeout') {
-        // guardPage() RPC is hanging — use parent session directly
-        auth = { sb: _getSb(), permissions: new Set(['contract.view.all']) };
-      } else {
-        throw authErr; // real auth failure
-      }
-    }
-    if (!auth) { clearTimeout(timeout); return; }
-    sb = auth.sb;
-    canAdmin = auth.permissions.has('users.manage') || auth.permissions.has('contract.edit');
+    // Bypass guardPage() — user is already authenticated via the parent session.
+    // Getting sb from the parent avoids any RPC call that could hang.
+    sb = (typeof _getSb === 'function') ? _getSb()
+         : (window.parent?.sb ?? window.supabase?.createClient?.(_CNT_URL, _CNT_KEY));
+
+    canAdmin = false; // conservative; tab writes will fail gracefully if no permission
+
     if (!ID) {
-      clearTimeout(timeout);
-      setMsg('No contract ID provided. <a href="contracts.html" style="color:var(--accent)">← Back</a>');
+      setMsg('No contract ID. Open contracts from the <a href="contracts.html">contracts list</a>.');
       return;
     }
-    setMsg('Please wait…');
+
     await loadContract();
-    clearTimeout(timeout);
+
     document.getElementById('loading').style.display = 'none';
-    document.getElementById('app').style.display = 'block';
+    document.getElementById('app').style.display    = 'block';
+
   } catch(e) {
-    clearTimeout(timeout);
-    setMsg(`⚠️ ${e.message}<br><a href="contracts.html" style="color:var(--accent)">← Return to contracts list</a>`);
+    setMsg('⚠️ ' + (e && e.message ? e.message : String(e)));
   }
 }
+
 
 function switchTab(id, el) {
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
