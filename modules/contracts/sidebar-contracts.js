@@ -218,6 +218,7 @@ async function _renderNav(nav) {
       .from('pages')
       .select('id, name, module_path')
       .like('module_path', 'contracts/%')
+      .order('sort_order', { ascending: true, nullsFirst: false })
       .order('name');
     if (error) throw error;
     pages = data || [];
