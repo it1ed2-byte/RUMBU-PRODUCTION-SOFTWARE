@@ -62,6 +62,30 @@
 /* Section header */
 .dash-section{font-size:12px;font-weight:700;text-transform:uppercase;
   color:var(--muted);letter-spacing:.5px;margin:22px 0 10px}
+
+/* ── CEO Dashboard Styles ─────────────────────────────── */
+#ceo-hero{background:linear-gradient(135deg,#1F3864 0%,#2E75B6 100%);
+  border-radius:12px;padding:28px 32px;display:flex;align-items:center;
+  gap:32px;margin-bottom:18px;flex-wrap:wrap}
+.hero-value-wrap{flex-shrink:0}
+.hero-currency{font-size:14px;font-weight:700;color:rgba(255,255,255,.6);
+  text-transform:uppercase;letter-spacing:.1em;margin-bottom:2px}
+.hero-amount{font-size:52px;font-weight:900;color:#fff;line-height:1;margin-bottom:4px}
+.hero-label{font-size:12px;color:rgba(255,255,255,.65);font-weight:600;
+  text-transform:uppercase;letter-spacing:.07em}
+.hero-stats-wrap{display:flex;gap:0;flex-wrap:wrap;flex:1}
+.hero-stat{padding:14px 24px;border-left:1px solid rgba(255,255,255,.15);
+  text-align:center;min-width:90px}
+.hero-stat .hs-val{font-size:30px;font-weight:900;color:#fff;line-height:1}
+.hero-stat .hs-lbl{font-size:11px;color:rgba(255,255,255,.6);font-weight:600;
+  text-transform:uppercase;letter-spacing:.06em;margin-top:4px}
+.hero-stat.ok  .hs-val{color:#86efac}
+.hero-stat.bad .hs-val{color:#fca5a5}
+.hero-stat.warn .hs-val{color:#fde68a}
+.ceo-card{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:18px 22px}
+.ceo-card-title{font-size:11px;font-weight:700;text-transform:uppercase;
+  letter-spacing:.07em;color:#6b7280;margin-bottom:14px}
+
 </style>
 </head>
 <body>
@@ -70,8 +94,8 @@
   <div class="ph-left">
     <div class="ph-icon">📊</div>
     <div>
-      <div class="ph-title">Management Dashboard</div>
-      <div class="ph-sub">Section 7 — Consolidated Subcontractor Performance Register</div>
+      <div class="ph-title">Contract Portfolio Dashboard</div>
+      <div class="ph-sub" id="ph-date">Government Contracts — Rumbu Industries Group</div>
     </div>
   </div>
   <div class="ph-right">
@@ -88,30 +112,53 @@
 
   <div id="app" style="display:none">
 
-    <!-- ── KPI Summary Cards ────────────────────────────── -->
-    <div class="kpi-grid" id="kpi-grid"></div>
-
-    <!-- ── 7-Dimension Overview (§7) ───────────────────── -->
-    <div class="dash-section">Portfolio Overview — Schedule · Cost · Quality · Safety · Risk · Corrective Actions · Status</div>
-    <div class="sec-card" style="margin-bottom:22px">
-      <div class="sec-body" style="padding:18px 22px">
-        <div id="dimension-overview"></div>
+    <!-- ── CEO Hero Banner ─────────────────────────────────── -->
+    <div id="ceo-hero">
+      <div class="hero-value-wrap">
+        <div class="hero-currency">NGN</div>
+        <div class="hero-amount" id="hero-amount">—</div>
+        <div class="hero-label">Total Portfolio Value</div>
       </div>
+      <div class="hero-stats-wrap" id="hero-stats"></div>
     </div>
 
+    <!-- ── Status Distribution Bar ──────────────────────────── -->
+    <div class="ceo-card" style="margin-bottom:18px">
+      <div class="ceo-card-title">Portfolio Status Distribution</div>
+      <div id="status-dist-bar" style="height:28px;border-radius:6px;overflow:hidden;
+           display:flex;margin-bottom:10px"></div>
+      <div id="status-dist-legend" style="display:flex;flex-wrap:wrap;gap:10px 22px;
+           font-size:12px;color:#374151"></div>
+    </div>
+
+    <!-- ── Alert Strip ───────────────────────────────────────── -->
+    <div id="alert-strip" style="display:none;margin-bottom:18px"></div>
+
+    <!-- ── Portfolio Narrative ──────────────────────────────── -->
+    <div class="ceo-card" style="margin-bottom:18px">
+      <div class="ceo-card-title">Portfolio Overview</div>
+      <div id="portfolio-narrative" style="font-size:13.5px;line-height:1.8;color:#374151"></div>
+    </div>
+
+    <!-- ── Secondary KPIs ───────────────────────────────────── -->
+    <div class="kpi-grid" id="kpi-grid" style="margin-bottom:22px"></div>
+
     <!-- ── Performance Register (§7) ───────────────────── -->
-    <div class="dash-section">Subcontractor Performance Register</div>
+    <div class="dash-section">Contract Register</div>
 
     <!-- Filter bar -->
     <div class="filter-bar">
       <input class="srch flt" id="q" type="search" placeholder="🔍 Search…" oninput="render()" style="min-width:200px">
       <select class="flt" id="fStatus" onchange="render()">
         <option value="">All Statuses</option>
-        <option value="active">Active</option>
-        <option value="pipeline">Pipeline</option>
-        <option value="awarded">Awarded</option>
-        <option value="on_hold">On Hold</option>
-        <option value="completed">Completed</option>
+        <option value="Pipeline">Pipeline</option>
+        <option value="Active">Active</option>
+        <option value="On Hold">On Hold</option>
+        <option value="At Risk">At Risk</option>
+        <option value="Delayed">Delayed</option>
+        <option value="Practically Complete">Practically Complete</option>
+        <option value="Closed">Closed</option>
+        <option value="Cancelled">Cancelled</option>
       </select>
       <select class="flt" id="fRisk" onchange="render()">
         <option value="">All Risk Levels</option>
@@ -286,23 +333,117 @@ function buildKPICards() {
   const totalVal      = contracts.reduce((s, c) => s + (c.original_value ?? 0), 0);
 
   const byStatus = s => contracts.filter(c => norm(c.status) === s.toLowerCase()).length;
+  const today    = new Date();
+  today.setHours(0,0,0,0);
+
+  // ── Hero banner ──────────────────────────────────────────────────────────
+  document.getElementById('hero-amount').textContent =
+    totalVal >= 1e9  ? (totalVal/1e9).toFixed(2)  + 'B'
+    : totalVal >= 1e6 ? (totalVal/1e6).toFixed(2) + 'M'
+    : totalVal.toLocaleString('en-NG');
+
+  const heroStats = [
+    { val: contracts.length,        lbl: 'Contracts', cls: '' },
+    { val: byStatus('Active'),      lbl: 'Active',    cls: 'ok' },
+    { val: byStatus('Pipeline'),    lbl: 'Pipeline',  cls: '' },
+    { val: byStatus('Closed'),      lbl: 'Closed',    cls: 'ok' },
+    { val: byStatus('At Risk') + byStatus('Delayed'), lbl: 'At Risk', cls: 'bad' },
+  ];
+  document.getElementById('hero-stats').innerHTML = heroStats.map(s =>
+    '<div class="hero-stat ' + s.cls + '">' +
+    '<div class="hs-val">' + s.val + '</div>' +
+    '<div class="hs-lbl">' + s.lbl + '</div></div>'
+  ).join('');
+
+  // Update date
+  const el = document.getElementById('ph-date');
+  if (el) el.textContent = 'As at ' +
+    new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'long',year:'numeric'});
+
+  // ── Status distribution bar ──────────────────────────────────────────────
+  const STATUS_COLOURS = {
+    Pipeline:'#2E75B6', Active:'#22c55e', Closed:'#94a3b8',
+    'On Hold':'#f59e0b', 'At Risk':'#ef4444', Delayed:'#f97316',
+    'Practically Complete':'#10b981', Cancelled:'#6b7280'
+  };
+  const statusGroups = {};
+  contracts.forEach(c => {
+    const s = c.status || 'Unknown';
+    statusGroups[s] = (statusGroups[s] || 0) + 1;
+  });
+  const total = contracts.length || 1;
+  const barHtml = Object.entries(statusGroups)
+    .sort((a,b) => b[1]-a[1])
+    .map(([s,n]) => {
+      const col = STATUS_COLOURS[s] || '#94a3b8';
+      const pct = (n/total*100).toFixed(1);
+      return '<div title="' + s + ': ' + n + ' (' + pct + '%)" style="flex:' + n +
+             ';background:' + col + ';transition:flex .5s"></div>';
+    }).join('');
+  document.getElementById('status-dist-bar').innerHTML = barHtml;
+  document.getElementById('status-dist-legend').innerHTML = Object.entries(statusGroups)
+    .sort((a,b) => b[1]-a[1])
+    .map(([s,n]) => {
+      const col = STATUS_COLOURS[s] || '#94a3b8';
+      const pct = (n/total*100).toFixed(1);
+      return '<span style="display:flex;align-items:center;gap:5px">' +
+        '<span style="width:10px;height:10px;border-radius:2px;background:' + col +
+        ';display:inline-block"></span>' + s + ' <strong>' + n + '</strong> (' + pct + '%)</span>';
+    }).join('');
+
+  // ── Alert strip ──────────────────────────────────────────────────────────
+  const atRisk    = byStatus('At Risk') + byStatus('Delayed');
+  const highRiskN = contracts.filter(c => ['high','critical'].includes((c.risk_level||'').toLowerCase())).length;
+  const overdueN  = contracts.filter(c => {
+    const end = c.original_completion_date ? new Date(c.original_completion_date) : null;
+    return end && end < today && norm(c.status) === 'active';
+  }).length;
+  const alertEl = document.getElementById('alert-strip');
+  const alerts  = [];
+  if (atRisk)    alerts.push({ col:'#ef4444', bg:'#fef2f2', icon:'🔴', msg: atRisk    + ' contract' + (atRisk>1?'s':'')+' flagged At Risk or Delayed' });
+  if (highRiskN) alerts.push({ col:'#f97316', bg:'#fff7ed', icon:'🟠', msg: highRiskN + ' high / critical risk contract' + (highRiskN>1?'s':'') });
+  if (overdueN)  alerts.push({ col:'#dc2626', bg:'#fef2f2', icon:'⏰', msg: overdueN  + ' active contract' + (overdueN>1?'s':'')+' past completion date' });
+  if (alerts.length) {
+    alertEl.style.display = 'block';
+    alertEl.innerHTML = '<div style="display:flex;flex-direction:column;gap:8px">' +
+      alerts.map(a => '<div style="background:' + a.bg + ';border:1.5px solid ' + a.col +
+        ';color:' + a.col + ';border-radius:8px;padding:10px 16px;font-size:13px;font-weight:600">' +
+        a.icon + ' ' + a.msg + '</div>').join('') + '</div>';
+  } else {
+    alertEl.style.display = 'none';
+  }
+
+  // ── Portfolio narrative ──────────────────────────────────────────────────
+  const agencies  = new Set(contracts.map(c => c.cnt_agencies?.name).filter(Boolean));
+  const companies = new Set(contracts.map(c => c.cnt_companies?.name).filter(Boolean));
+  const fmtN = n => n.toLocaleString('en-NG');
+  const narrativeEl = document.getElementById('portfolio-narrative');
+  if (narrativeEl) {
+    const activeN   = byStatus('Active');
+    const pipelineN = byStatus('Pipeline');
+    const closedN   = byStatus('Closed');
+    narrativeEl.innerHTML =
+      '<p style="margin:0 0 10px">The portfolio comprises <strong>' + fmtN(contracts.length) +
+      ' contracts</strong> with a combined value of <strong>NGN ' +
+      (totalVal/1e9).toFixed(2) + ' billion</strong>, spanning ' +
+      agencies.size + ' government agenc' + (agencies.size===1?'y':'ies') + ' and ' +
+      companies.size + ' subcontractor' + (companies.size===1?'':'s') + '.</p>' +
+      '<p style="margin:0;color:#6b7280">' +
+      '<strong style="color:#2E75B6">' + pipelineN + '</strong> contracts in pipeline &nbsp;·&nbsp; ' +
+      '<strong style="color:#22c55e">' + activeN   + '</strong> active &nbsp;·&nbsp; ' +
+      '<strong style="color:#94a3b8">' + closedN   + '</strong> closed' +
+      (atRisk ? ' &nbsp;·&nbsp; <strong style="color:#ef4444">' + atRisk + '</strong> at risk / delayed' : '') +
+      '</p>';
+  }
+
+  // ── Secondary KPI cards ──────────────────────────────────────────────────
   document.getElementById('kpi-grid').innerHTML = [
-    { val: contracts.length,                lbl:'Total Contracts',         cls:'info'   },
-    { val: byStatus('Active'),              lbl:'Active',                  cls:'ok'     },
-    { val: byStatus('Pipeline'),            lbl:'Pipeline',                cls:'info'   },
-    { val: byStatus('Closed'),              lbl:'Closed',                  cls:'ok'     },
-    { val: byStatus('At Risk'),             lbl:'At Risk',                 cls:'bad'    },
-    { val: byStatus('Delayed'),             lbl:'Delayed',                 cls:'warn'   },
-    { val: highRisk.length,                 lbl:'High / Critical Risk',    cls:'orange' },
-    { val: overdue.length,                  lbl:'Overdue (Active)',         cls:'bad'    },
-    { val: totalActions,                    lbl:'Open Corrective Actions',  cls:'warn'   },
-    { val: needAttention.length,            lbl:'Require Attention',        cls:'bad'    },
-    { val: fmtVal(totalVal),                lbl:'Total Portfolio Value',    cls:'info'   },
-  ].map(k => `
-    <div class="kpi-card ${k.cls}">
-      <div class="kpi-val">${k.val}</div>
-      <div class="kpi-lbl">${k.lbl}</div>
-    </div>`).join('');
+    { val: highRiskN,   lbl:'High / Critical Risk',   cls: highRiskN   ? 'orange' : 'info' },
+    { val: overdueN,    lbl:'Overdue (Active)',        cls: overdueN    ? 'bad'    : 'info' },
+    { val: totalActions,lbl:'Open Corrective Actions', cls: totalActions? 'warn'   : 'info' },
+    { val: needAttention.length, lbl:'Require Attention', cls: needAttention.length ? 'bad' : 'info' },
+  ].map(k => '<div class="kpi-card ' + k.cls + '"><div class="kpi-val">' + k.val +
+    '</div><div class="kpi-lbl">' + k.lbl + '</div></div>').join('');
 }
 
 // ── 7-Dimension Overview ──────────────────────────────────────────
