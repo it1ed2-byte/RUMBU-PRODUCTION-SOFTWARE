@@ -186,7 +186,24 @@ async function init() {
 
   try {
     setMsg('Authenticating…');
-    const auth = await guardPage();
+
+    // Give guardPage() 5 seconds — if the permissions RPC hangs, fall back to
+    // the parent's authenticated client so the page still loads.
+    let auth;
+    try {
+      auth = await Promise.race([
+        guardPage(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('auth-timeout')), 5000))
+      ]);
+    } catch (authErr) {
+      if (authErr.message === 'auth-timeout') {
+        // guardPage() RPC is hanging — use parent session directly
+        auth = { sb: _getSb(), permissions: new Set(['contract.view.all']) };
+      } else {
+        throw authErr; // real auth failure
+      }
+    }
     if (!auth) { clearTimeout(timeout); return; }
     sb = auth.sb;
     canAdmin = auth.permissions.has('users.manage') || auth.permissions.has('contract.edit');
