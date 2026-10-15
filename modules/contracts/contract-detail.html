@@ -219,6 +219,12 @@ function switchTab(id, el) {
 }
 
 async function loadContract() {
+  // Use AbortController to cancel if PostgREST hangs
+  const ctrl = new AbortController();
+  const abort = setTimeout(() => ctrl.abort(), 10000);
+
+  // Fetch main contract WITHOUT embedded joins (avoids PostgREST stall on
+  // single-row queries with relationship resolution)
   const { data, error: cErr } = await sb.from('cnt_contracts').select(`
     id, contract_id, title, status, risk_level, risk_notes,
     original_value, currency, award_date, start_date,
@@ -227,16 +233,41 @@ async function loadContract() {
     physical_progress_pct, financial_progress_pct, overall_progress_pct,
     payment_terms, advance_payment, retention_pct,
     mda, government_client, awarding_unit, contract_type, sector,
-    location, state, lga,
-    cnt_agencies(name), cnt_companies(name)
-  `).eq('id', ID).maybeSingle();
-  if (cErr) throw new Error('Query failed: ' + cErr.message);
-  if (!data) {
+    location, state, lga
+  `).eq('id', ID).abortSignal(ctrl.signal).limit(1)
+   .then(r => { clearTimeout(abort); return r; });
+
+  if (cErr) {
+    clearTimeout(abort);
+    if (cErr.name === 'AbortError') throw new Error('Query timed out — check your connection and try again.');
+    throw new Error('Query failed: ' + cErr.message);
+  }
+
+  const row = Array.isArray(data) ? data[0] : data;
+
+  // Look up agency and company names separately (simple single-row queries)
+  const [agRes, coRes] = await Promise.all([
+    row?.agency_id
+      ? sb.from('cnt_agencies').select('name').eq('id', row.agency_id).limit(1)
+      : Promise.resolve({ data: [] }),
+    row?.assigned_company_id
+      ? sb.from('cnt_companies').select('name').eq('id', row.assigned_company_id).limit(1)
+      : Promise.resolve({ data: [] }),
+  ]);
+
+  // Attach names to match the shape the rendering code expects
+  const agencyName  = agRes.data?.[0]?.name  ?? null;
+  const companyName = coRes.data?.[0]?.name  ?? null;
+  if (row) {
+    row.cnt_agencies  = agencyName  ? { name: agencyName }  : null;
+    row.cnt_companies = companyName ? { name: companyName } : null;
+  }
+  if (!row) {
     document.getElementById('loading').innerHTML =
       '<p style="color:var(--err);text-align:center">Contract not found or access denied.</p>';
     return;
   }
-  contract = data;
+  contract = row;
   const [bCls, bLbl] = STATUS_BADGE[data.status] ?? ['b-gray', data.status ?? '—'];
   const RISK_BADGE = { low:['b-ok','🟢 Low'], medium:['b-warn','🟡 Medium'],
                        high:['b-orange','🟠 High'], critical:['b-bad','🔴 Critical'] };
