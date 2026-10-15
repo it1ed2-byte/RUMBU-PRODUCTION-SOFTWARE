@@ -101,6 +101,7 @@
   .act-btn:hover{opacity:.8;}
   .act-edit{background:#dbeafe;color:#1e40af;}
   .act-deactivate{background:#fee2e2;color:#991b1b;}
+  .act-move{background:#ccfbf1;color:#0f766e;}
   .act-activate{background:#dcfce7;color:#166534;}
   .badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:10.5px;font-weight:700;}
   .b-active{background:#dcfce7;color:#166534;}
@@ -418,6 +419,22 @@
       <button class="btn-ghost" onclick="closeEditModal()">Cancel</button>
     </div>
     <div class="status" id="editStatus"></div>
+  </div>
+</div>
+
+<!-- Move a unit to another department of the same branch -->
+<div class="modal-overlay" id="moveUnitModal">
+  <div class="modal" style="max-width:540px;">
+    <h3 style="margin-top:0;">Move Unit to Another Department</h3>
+    <p id="mvIntro" style="font-size:13px;color:var(--muted);margin:0 0 14px;"></p>
+    <label>Move to department <span style="font-weight:normal;color:var(--muted);">(same branch only)</span></label>
+    <select id="mvTarget" onchange="previewMoveUnit()"></select>
+    <div id="mvPreview" style="margin-top:14px;font-size:13px;line-height:1.55;"></div>
+    <div class="status" id="mvStatus"></div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px;">
+      <button class="btn-ghost" onclick="closeMoveUnit()">Cancel</button>
+      <button id="mvGo" onclick="confirmMoveUnit()" disabled>Move Unit</button>
+    </div>
   </div>
 </div>
 
@@ -1289,6 +1306,7 @@ function renderRefDataLists(){
           <td style="color:var(--muted);font-size:12px;">${dept?dept.section:"—"}</td>
           <td style="white-space:nowrap;">
             <button class="act-btn act-edit" onclick="renameUnitRd(${u.id})">Save</button>
+            <button class="act-btn act-move" onclick="openMoveUnit(${u.id})" title="Move this unit, with its employees, to another department of the same branch">Move</button>
             <button class="act-btn act-deactivate" onclick="deleteUnitRd(${u.id},\'${u.name.replace(/\'/g,"\\'")}\')">Delete</button>
           </td>
         </tr>`;
@@ -1468,6 +1486,88 @@ async function deleteUnitRd(id, name){
   }
 }
 window.deleteUnitRd = deleteUnitRd;
+
+// ---- Unit: move to another department of the SAME branch, with all its employees ----
+// The database function does the whole move in one step (unit + employees + IT devices + PM policies),
+// so it either all happens or none of it does. See move_unit_between_departments_sql.sql.
+let MOVE_UNIT = null;      // { unit, dept } currently shown in the dialog
+let MOVE_TOKEN = 0;        // ignores a preview that arrives after the choice was changed
+function mvEsc(v){ return String(v==null?"":v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+function mvError(error){
+  const m = (error && error.message) || String(error);
+  if(/could not find the function|PGRST202|does not exist/i.test(m)){
+    return "The move feature is not installed in the database yet. Run move_unit_between_departments_sql.sql in Supabase first.";
+  }
+  return m;
+}
+
+function openMoveUnit(unitId){
+  const u = UNITS.find(x => x.id === unitId); if(!u) return;
+  const dept = DEPARTMENTS.find(d => d.id === u.department_id);
+  if(!dept){ alert("This unit's department could not be found."); return; }
+  const targets = DEPARTMENTS.filter(d => d.section === dept.section && d.id !== dept.id)
+                             .sort((a,b) => a.name.localeCompare(b.name));
+  MOVE_UNIT = { unit: u, dept: dept };
+  MOVE_TOKEN++;
+  document.getElementById("mvIntro").innerHTML =
+    "<b>" + mvEsc(u.name) + "</b> is in <b>" + mvEsc(dept.name) + "</b> (" + mvEsc(dept.section) + "). " +
+    "A unit can only move to another department of the same branch, and <b>all of its employees move with it</b>.";
+  const sel = document.getElementById("mvTarget");
+  sel.innerHTML = targets.length
+    ? '<option value="">— choose a department —</option>' + targets.map(d => `<option value="${d.id}">${mvEsc(d.name)}</option>`).join("")
+    : '<option value="">— no other department in this branch —</option>';
+  sel.disabled = targets.length === 0;
+  document.getElementById("mvPreview").innerHTML = targets.length ? "" :
+    "<span style='color:var(--muted);'>" + mvEsc(dept.section) + " has only one department. Add another department first.</span>";
+  document.getElementById("mvStatus").textContent = "";
+  document.getElementById("mvGo").disabled = true;
+  document.getElementById("moveUnitModal").classList.add("open");
+}
+function closeMoveUnit(){ document.getElementById("moveUnitModal").classList.remove("open"); MOVE_UNIT = null; }
+
+async function previewMoveUnit(){
+  if(!MOVE_UNIT) return;
+  const toId = Number(document.getElementById("mvTarget").value);
+  const box = document.getElementById("mvPreview"), go = document.getElementById("mvGo"), st = document.getElementById("mvStatus");
+  go.disabled = true; st.textContent = ""; box.innerHTML = "";
+  if(!toId) return;
+  const token = ++MOVE_TOKEN;
+  box.innerHTML = "<span style='color:var(--muted);'>Checking...</span>";
+  const { data, error } = await sb.rpc("move_unit_to_department", { p_unit_id: MOVE_UNIT.unit.id, p_target_department_id: toId, p_dry_run: true });
+  if(token !== MOVE_TOKEN) return;                       // a newer choice has been made
+  if(error){ box.innerHTML = "<span style='color:#991b1b;font-weight:700;'>" + mvEsc(mvError(error)) + "</span>"; return; }
+  let h = "";
+  h += data.employees > 0
+    ? "<div><b>" + data.employees + " employee" + (data.employees === 1 ? "" : "s") + "</b> will move with this unit. Their Department changes from <b>" + mvEsc(data.from_department) + "</b> to <b>" + mvEsc(data.to_department) + "</b>; their Branch and Unit stay the same.</div>"
+    : "<div>No employees are in this unit right now, so only the unit itself moves.</div>";
+  if(data.devices  > 0) h += "<div>" + data.devices  + " IT Inventory device" + (data.devices  === 1 ? "" : "s") + " in this unit will follow.</div>";
+  if(data.policies > 0) h += "<div>" + data.policies + " PM polic" + (data.policies === 1 ? "y" : "ies") + " for this unit will follow.</div>";
+  if(data.other_employees > 0) h += "<div style='margin-top:6px;color:#92400e;background:#fef3c7;padding:7px 10px;border-radius:8px;'>" + data.other_employees + " other employee" + (data.other_employees === 1 ? " has" : "s have") + " a unit with this name but a different department. They are <b>not</b> changed.</div>";
+  box.innerHTML = h;
+  go.disabled = false;
+}
+
+async function confirmMoveUnit(){
+  if(!MOVE_UNIT) return;
+  const toId = Number(document.getElementById("mvTarget").value); if(!toId) return;
+  const to = DEPARTMENTS.find(d => d.id === toId);
+  const { unit, dept } = MOVE_UNIT;
+  const go = document.getElementById("mvGo"), st = document.getElementById("mvStatus");
+  go.disabled = true; st.className = "status"; st.textContent = "Moving...";
+  const { data, error } = await sb.rpc("move_unit_to_department", { p_unit_id: unit.id, p_target_department_id: toId });
+  if(error){ st.className = "status err"; st.textContent = "❌ " + mvError(error); go.disabled = false; return; }
+
+  await logActivity("hr_console_unit_moved", ME.username + " moved unit \"" + unit.name + "\" from \"" + dept.name + "\" to \"" + to.name + "\" (" + dept.section + ") with " + data.employees + " employee(s)");
+  closeMoveUnit();
+  await loadReferenceData();
+  await loadEmployees();                                 // the Employee Directory now shows the new department
+  const top = document.getElementById("rdUnitStatus");
+  top.className = "status ok";
+  top.textContent = "✅ Unit \"" + unit.name + "\" moved from " + dept.name + " to " + to.name + " with " + data.employees + " employee(s).";
+}
+window.openMoveUnit = openMoveUnit; window.closeMoveUnit = closeMoveUnit;
+window.previewMoveUnit = previewMoveUnit; window.confirmMoveUnit = confirmMoveUnit;
+document.getElementById("moveUnitModal").addEventListener("click", function(e){ if(e.target === this) closeMoveUnit(); });
 
 init();
 </script>
