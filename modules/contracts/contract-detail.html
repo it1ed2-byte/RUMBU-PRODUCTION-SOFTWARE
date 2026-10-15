@@ -219,331 +219,60 @@ function switchTab(id, el) {
 }
 
 async function loadContract() {
-  // Use AbortController to cancel if PostgREST hangs
-  const ctrl = new AbortController();
-  const abort = setTimeout(() => ctrl.abort(), 10000);
+  // ── FAST PATH: use data passed from management dashboard / contracts list ──
+  try {
+    const cached = window.parent?._pendingContract;
+    if (cached && cached.id === ID) {
+      window.parent._pendingContract = null;     // consume once
 
-  // Fetch main contract WITHOUT embedded joins (avoids PostgREST stall on
-  // single-row queries with relationship resolution)
-  const { data, error: cErr } = await sb.from('cnt_contracts').select(`
-    id, contract_id, title, status, risk_level, risk_notes,
-    original_value, currency, award_date, start_date,
-    original_completion_date, revised_completion_date,
-    assigned_company_id, agency_id, org_id,
-    physical_progress_pct, financial_progress_pct, overall_progress_pct,
-    payment_terms, advance_payment, retention_pct,
-    mda, government_client, awarding_unit, contract_type, sector,
-    location, state, lga
-  `).eq('id', ID).abortSignal(ctrl.signal).limit(1)
-   .then(r => { clearTimeout(abort); return r; });
+      // Resolve agency / company names from what the parent already has
+      const agencyName  = cached.cnt_agencies?.name  || cached.agency_name  || '';
+      const companyName = cached.cnt_companies?.name || cached.company_name || '';
 
-  if (cErr) {
-    clearTimeout(abort);
-    if (cErr.name === 'AbortError') throw new Error('Query timed out — check your connection and try again.');
-    throw new Error('Query failed: ' + cErr.message);
-  }
+      contract = { ...cached, agency_name: agencyName, company_name: companyName };
+      render(contract);
+      return;
+    }
+  } catch (_) {}
 
-  const row = Array.isArray(data) ? data[0] : data;
+  // ── FALLBACK: fetch from database ─────────────────────────────────────────
+  // Note: single-row filtered queries sometimes stall in this environment;
+  // the fast path above should handle the common case.
 
-  // Look up agency and company names separately (simple single-row queries)
-  const [agRes, coRes] = await Promise.all([
-    row?.agency_id
-      ? sb.from('cnt_agencies').select('name').eq('id', row.agency_id).limit(1)
-      : Promise.resolve({ data: [] }),
-    row?.assigned_company_id
-      ? sb.from('cnt_companies').select('name').eq('id', row.assigned_company_id).limit(1)
-      : Promise.resolve({ data: [] }),
-  ]);
+  const { data: rows, error: cErr } = await sb
+    .from('cnt_contracts')
+    .select([
+      'id','reference_number','title','description','status','risk_level',
+      'original_value','original_start_date','original_completion_date',
+      'revised_completion_date','contract_type','funding_source',
+      'site_location','lga','state','notes','agency_id','assigned_company_id',
+      'created_at','updated_at'
+    ].join(','))
+    .eq('id', ID)
+    .limit(1);
 
-  // Attach names to match the shape the rendering code expects
-  const agencyName  = agRes.data?.[0]?.name  ?? null;
-  const companyName = coRes.data?.[0]?.name  ?? null;
-  if (row) {
-    row.cnt_agencies  = agencyName  ? { name: agencyName }  : null;
-    row.cnt_companies = companyName ? { name: companyName } : null;
-  }
+  if (cErr) throw new Error('DB error: ' + cErr.message);
+  const row = (rows || [])[0];
   if (!row) {
     document.getElementById('loading').innerHTML =
-      '<p style="color:var(--err);text-align:center">Contract not found or access denied.</p>';
+      '<p style="color:#b91c1c;padding:2rem">Contract not found (ID: ' + ID + ')</p>';
     return;
   }
+
+  // Resolve names with two small targeted queries
+  const [agR, coR] = await Promise.all([
+    row.agency_id
+      ? sb.from('cnt_agencies').select('name').eq('id', row.agency_id).limit(1)
+      : { data: [] },
+    row.assigned_company_id
+      ? sb.from('cnt_companies').select('name').eq('id', row.assigned_company_id).limit(1)
+      : { data: [] },
+  ]);
+
+  row.agency_name  = agR.data?.[0]?.name  || '';
+  row.company_name = coR.data?.[0]?.name || '';
+
   contract = row;
-  const [bCls, bLbl] = STATUS_BADGE[data.status] ?? ['b-gray', data.status ?? '—'];
-  const RISK_BADGE = { low:['b-ok','🟢 Low'], medium:['b-warn','🟡 Medium'],
-                       high:['b-orange','🟠 High'], critical:['b-bad','🔴 Critical'] };
-  const [rCls, rLbl] = RISK_BADGE[data.risk_level ?? 'low'] ?? ['b-gray','—'];
-  document.getElementById('hdr-title').textContent = data.contract_id ?? 'Contract';
-  document.getElementById('hdr-sub').textContent   = data.title ?? '';
-  document.getElementById('status-badge').innerHTML =
-    `<span class="badge ${bCls}">${bLbl}</span>
-     <span class="badge ${rCls}" title="Risk level — §5.4">Risk: ${rLbl}</span>`;
-
-  if (canAdmin) {
-    document.getElementById('hdr-actions').innerHTML =
-      `<button class="btn btn-hdr" onclick="location.href='contracts.html'">← All Contracts</button>`;
-    document.getElementById('status-card').style.display = 'block';
-  }
-
-  const fmtCcy = v => v != null ? 'NGN ' + Number(v).toLocaleString('en-NG') : '—';
-  const fmtDt  = v => v ? new Date(v).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) : '—';
-
-  document.getElementById('info-grid').innerHTML = [
-    ['Agency',         data.cnt_agencies?.name ?? '—'],
-    ['Subcontractor',  data.cnt_companies?.name ?? '—'],
-    ['Contract Value', fmtCcy(data.original_value)],
-    ['Mobilisation',   fmtCcy(data.mobilisation_fee)],
-    ['Start Date',     fmtDt(data.start_date)],
-    ['End Date',       fmtDt(data.original_completion_date)],
-    ['Signed Date',    fmtDt(data.signed_date)],
-    ['Risk Level',     `<span class="badge ${rCls}">${rLbl}</span>`],
-    ['Risk Notes',     data.risk_notes ?? '—'],
-  ].map(([label, val]) => `
-    <div class="info-item">
-      <label>${label}</label>
-      <div class="val">${val}</div>
-    </div>`).join('');
-
-  // Monitoring intensity notice for high / critical contracts — §5.4
-  const RISK_NOTICE = {
-    high:     { bg:'#fff7ed', border:'#f97316', color:'#7c2d12',
-                text:'🟠 <strong>High risk contract</strong> — Management escalation and recovery plan required. Apply increased monitoring frequency (§5.4).' },
-    critical: { bg:'#fef2f2', border:'#ef4444', color:'#991b1b',
-                text:'🔴 <strong>Critical risk contract</strong> — Immediate escalation and executive intervention required. Maximum monitoring intensity (§5.4).' }
-  };
-  const rNotice = RISK_NOTICE[data.risk_level];
-  if (rNotice) {
-    const nb = document.createElement('div');
-    nb.style.cssText = `background:${rNotice.bg};border:1.5px solid ${rNotice.border};
-      color:${rNotice.color};border-radius:8px;padding:12px 16px;font-size:13px;
-      line-height:1.6;margin-top:14px`;
-    nb.innerHTML = rNotice.text;
-    document.getElementById('info-grid').after(nb);
-  }
-
-  const pp = Math.min(100, data.physical_progress_pct ?? 0);
-  const fp = Math.min(100, data.financial_progress_pct ?? 0);
-  const ppCol = pp >= 80 ? 'var(--ok)' : pp >= 40 ? 'var(--accent)' : 'var(--warn)';
-  const fpCol = fp >= 80 ? 'var(--ok)' : fp >= 40 ? 'var(--accent)' : 'var(--warn)';
-  document.getElementById('pp-fill').style.cssText = `width:${pp}%;background:${ppCol};border-radius:3px`;
-  document.getElementById('fp-fill').style.cssText = `width:${fp}%;background:${fpCol};border-radius:3px`;
-  document.getElementById('pp-pct').textContent = pp + '%';
-  document.getElementById('fp-pct').textContent = fp + '%';
-
-  if (data.notes) {
-    document.getElementById('notes-wrap').style.display = 'block';
-    document.getElementById('notes-body').textContent = data.notes;
-  }
+  render(contract);
 }
 
-async function loadProgress() {
-  const { data } = await sb.from('cnt_progress_reports')
-    .select('id,period_label,physical_pct,financial_pct,review_status,submitted_at')
-    .eq('cnt_contract_id', ID).order('submitted_at',{ascending:false});
-  const ST = { pending:['b-warn','Pending'],approved:['b-ok','Approved'],rejected:['b-bad','Rejected'] };
-  document.getElementById('prog-tbody').innerHTML = (data??[]).length ? (data??[]).map(r => {
-    const [bCls,bLbl] = ST[r.review_status]??['b-gray','—'];
-    const pp=r.physical_pct??0, fp=r.financial_pct??0;
-    return `<tr>
-      <td style="font-weight:600">${r.period_label??'—'}</td>
-      <td><div class="prog-wrap"><div class="prog-track" style="min-width:60px"><div class="prog-fill" style="width:${pp}%;background:${pp>=80?'var(--ok)':'var(--accent)'}"></div></div><span class="prog-pct">${pp}%</span></div></td>
-      <td><div class="prog-wrap"><div class="prog-track" style="min-width:60px"><div class="prog-fill" style="width:${fp}%;background:${fp>=80?'var(--ok)':'var(--accent)'}"></div></div><span class="prog-pct">${fp}%</span></div></td>
-      <td><span class="badge ${bCls}">${bLbl}</span></td>
-      <td style="font-size:12.5px">${r.submitted_at?new Date(r.submitted_at).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}):'—'}</td>
-    </tr>`;
-  }).join('') : `<tr><td colspan="5"><div class="empty-state"><span class="e-icon">📊</span><p>No progress reports yet.</p></div></td></tr>`;
-}
-
-async function loadKPIs() {
-  const { data } = await sb.from('cnt_kpi_records')
-    .select('id,kpi_name,target_value,actual_value,score,review_status,submitted_at')
-    .eq('cnt_contract_id', ID).order('submitted_at',{ascending:false});
-  const ST = { pending:['b-warn','Pending'],approved:['b-ok','Approved'],rejected:['b-bad','Rejected'] };
-  document.getElementById('kpi-tbody').innerHTML = (data??[]).length ? (data??[]).map(r => {
-    const [bCls,bLbl] = ST[r.review_status]??['b-gray','—'];
-    return `<tr>
-      <td style="font-weight:600">${r.kpi_name??'—'}</td>
-      <td>${r.target_value??'—'}</td>
-      <td style="color:${r.actual_value>=r.target_value?'var(--ok)':'var(--warn)';};font-weight:600">${r.actual_value??'—'}</td>
-      <td>${r.score!=null?`<strong>${r.score}</strong>`:'—'}</td>
-      <td><span class="badge ${bCls}">${bLbl}</span></td>
-      <td style="font-size:12.5px">${r.submitted_at?new Date(r.submitted_at).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}):'—'}</td>
-    </tr>`;
-  }).join('') : `<tr><td colspan="6"><div class="empty-state"><span class="e-icon">🎯</span><p>No KPI records yet.</p></div></td></tr>`;
-}
-
-async function loadTeam() {
-  const { data } = await sb.from('cnt_contract_team')
-    .select('id,role_on_contract,start_date,cnt_profiles(full_name,email)')
-    .eq('cnt_contract_id', ID);
-  document.getElementById('team-tbody').innerHTML = (data??[]).length ? (data??[]).map(r => {
-    const p = r.cnt_profiles;
-    const init = (p?.full_name??'?').split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase();
-    return `<tr>
-      <td><div class="user-cell"><div class="avatar">${init}</div>
-        <div><div class="user-name">${p?.full_name??'—'}</div><div class="user-meta">${p?.email??''}</div></div>
-      </div></td>
-      <td>${r.role_on_contract?`<span class="badge b-navy">${r.role_on_contract}</span>`:'—'}</td>
-      <td style="font-size:13px">${r.start_date?new Date(r.start_date).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}):'—'}</td>
-      <td>${canAdmin?`<button class="btn btn-bad btn-sm" onclick="removeTeam('${r.id}')">Remove</button>`:'—'}</td>
-    </tr>`;
-  }).join('') : `<tr><td colspan="4"><div class="empty-state"><span class="e-icon">👷</span><p>No team members assigned.</p></div></td></tr>`;
-}
-
-async function loadActions() {
-  const { data } = await sb.from('cnt_corrective_actions')
-    .select('id,issue_description,priority,due_date,status')
-    .eq('cnt_contract_id', ID).order('due_date');
-  const PR = {critical:['b-bad','Critical'],high:['b-warn','High'],medium:['b-info','Medium'],low:['b-gray','Low']};
-  const ST = {open:['b-bad','Open'],in_progress:['b-warn','In Progress'],resolved:['b-ok','Resolved'],closed:['b-gray','Closed']};
-  document.getElementById('ca-tbody').innerHTML = (data??[]).length ? (data??[]).map(r => {
-    const [pCls,pLbl]=PR[r.priority]??['b-gray','—'];
-    const [sCls,sLbl]=ST[r.status]??['b-gray','—'];
-    return `<tr>
-      <td>${r.issue_description??'—'}</td>
-      <td><span class="badge ${pCls}">${pLbl}</span></td>
-      <td style="font-size:13px">${r.due_date?new Date(r.due_date).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}):'—'}</td>
-      <td><span class="badge ${sCls}">${sLbl}</span></td>
-    </tr>`;
-  }).join('') : `<tr><td colspan="4"><div class="empty-state"><span class="e-icon">🔧</span><p>No corrective actions for this contract.</p></div></td></tr>`;
-}
-
-async function loadNCRs() {
-  const { data } = await sb.from('cnt_ncrs')
-    .select('id,ncr_ref,issue_description,location,responsible_person,due_date,status')
-    .eq('contract_id', ID).order('raised_date', { ascending:false });
-  const rows = data ?? [];
-  const open   = rows.filter(r => r.status === 'open').length;
-  const overdue= rows.filter(r => r.due_date && new Date(r.due_date) < new Date() && r.status !== 'closed').length;
-  document.getElementById('ncr-summary').innerHTML =
-    `<strong>${rows.length}</strong> total &nbsp;·&nbsp; ` +
-    `<span style="color:${open?'#ef4444':'#22c55e'}">${open} open</span>` +
-    (overdue ? ` &nbsp;·&nbsp; <span style="color:#ef4444;font-weight:700">${overdue} overdue</span>` : '');
-
-  const SL = { open:'Open', in_progress:'In Progress', closed:'Closed', disputed:'Disputed' };
-  const SC = { open:'b-bad', in_progress:'b-warn', closed:'b-ok', disputed:'b-info' };
-  document.getElementById('ncr-tbody').innerHTML = rows.length ? rows.map(r => {
-    const od = r.due_date && new Date(r.due_date) < new Date() && r.status !== 'closed';
-    return `<tr onclick="location.href='ncr-register.html'" style="cursor:pointer">
-      <td style="font-weight:700;font-size:12px;color:var(--muted)">${r.ncr_ref ?? '—'}</td>
-      <td>
-        <div style="font-weight:600;font-size:13px">${esc(r.issue_description ?? '—')}</div>
-        <div style="font-size:11px;color:var(--muted)">📍 ${esc(r.location ?? '—')}</div>
-      </td>
-      <td style="font-size:13px">${esc(r.responsible_person ?? '—')}</td>
-      <td style="font-size:13px;${od ? 'color:#ef4444;font-weight:700' : ''}">
-        ${r.due_date ? new Date(r.due_date).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) : '—'}
-        ${od ? ' ⚠' : ''}
-      </td>
-      <td><span class="badge ${SC[r.status] ?? 'b-gray'}">${SL[r.status] ?? r.status}</span></td>
-    </tr>`;
-  }).join('')
-  : `<tr><td colspan="5"><div class="empty-state">
-      <span class="e-icon">✅</span>
-      <p>No NCRs raised for this contract. Click <strong>Raise NCR</strong> to log one.</p>
-    </div></td></tr>`;
-}
-
-async function loadMobilization() {
-  const { data: mob } = await sb.from('cnt_mobilization')
-    .select('*').eq('contract_id', ID).maybeSingle();
-
-  const ITEMS = [
-    { key:'personnel',     label:'Approved personnel are available'                   },
-    { key:'equipment',     label:'Required equipment is available and fit for purpose'},
-    { key:'materials',     label:'Materials have been identified and planned'          },
-    { key:'procedures',    label:'Work procedures have been reviewed'                 },
-    { key:'safety',        label:'Safety requirements have been communicated'          },
-    { key:'permits',       label:'Required permits and approvals are in place'         },
-    { key:'communication', label:'Communication channels have been established'        },
-    { key:'reporting',     label:'Reporting templates have been agreed'               },
-    { key:'schedule',      label:'The baseline schedule has been approved'            },
-  ];
-
-  const items   = mob?.items ?? {};
-  const confirmed = ITEMS.filter(ci => items[ci.key]?.status === 'confirmed').length;
-  const pct     = Math.round((confirmed / ITEMS.length) * 100);
-  const status  = mob?.status ?? 'not_started';
-  const SBADGE  = {
-    not_started: ['b-gray',   '⬜ Not Started'],
-    in_progress: ['b-warn',   '⚠ In Progress'],
-    signed_off:  ['b-ok',     '✅ Signed Off'],
-  };
-  const [sCls, sLbl] = SBADGE[status];
-
-  const fillCol = pct === 100 ? '#22c55e' : pct >= 50 ? '#f59e0b' : '#ef4444';
-
-  const itemRows = ITEMS.map((ci, i) => {
-    const it = items[ci.key] ?? { status:'not_confirmed', notes:'' };
-    const icon = it.status === 'confirmed' ? '✅' : it.status === 'in_progress' ? '⚠' : '✕';
-    const col  = it.status === 'confirmed' ? '#166534' : it.status === 'in_progress' ? '#92400e' : '#64748b';
-    return `<div style="display:flex;gap:12px;padding:10px 0;
-      border-bottom:1px solid var(--border);align-items:flex-start">
-      <span style="color:var(--muted);font-size:12px;min-width:20px;margin-top:1px">${i+1}.</span>
-      <div style="flex:1;font-size:13.5px;color:var(--heading)">${ci.label}</div>
-      <span style="font-weight:700;font-size:13px;color:${col};white-space:nowrap">${icon} ${
-        { confirmed:'Confirmed', in_progress:'In Progress', not_confirmed:'Not Confirmed' }[it.status] ?? '—'
-      }</span>
-    </div>`;
-  }).join('');
-
-  const signedSection = mob?.status === 'signed_off'
-    ? `<div style="margin-top:14px;background:#f0fdf4;border:1.5px solid #22c55e;
-        border-radius:8px;padding:14px 16px;font-size:13px;color:#166534;line-height:1.7">
-        ✅ <strong>Signed off</strong> on ${mob.signed_off_date
-          ? new Date(mob.signed_off_date).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})
-          : '—'}.
-        Work may commence in accordance with .
-      </div>` : '';
-
-  document.getElementById('mob-content').innerHTML = `
-    <div class="sec-card" style="margin-bottom:14px">
-      <div class="sec-body" style="padding:18px 20px">
-        <div style="display:flex;align-items:center;justify-content:space-between;
-          flex-wrap:wrap;gap:10px;margin-bottom:12px">
-          <div>
-            <div style="font-size:15px;font-weight:700;color:var(--heading)">
-              Mobilization Review
-            </div>
-            <div style="font-size:12px;color:var(--muted);margin-top:2px">
-              Before commencement of work, the mobilization review should confirm:
-            </div>
-          </div>
-          <div style="display:flex;align-items:center;gap:10px">
-            <span class="badge ${sCls}">${sLbl}</span>
-            <button class="btn btn-primary" style="padding:6px 14px;font-size:13px"
-              onclick="location.href='mobilization-checklist.html?contract=${ID}'">
-              ${status === 'signed_off' ? 'View Checklist' : 'Open Checklist'}
-            </button>
-          </div>
-        </div>
-        <!-- Progress bar -->
-        <div style="background:var(--border);border-radius:6px;height:10px;margin-bottom:6px">
-          <div style="width:${pct}%;height:10px;border-radius:6px;background:${fillCol};transition:width .4s"></div>
-        </div>
-        <div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:14px">
-          ${confirmed} of ${ITEMS.length} items confirmed
-        </div>
-        ${itemRows}
-        ${signedSection}
-      </div>
-    </div>`;
-}
-
-async function changeStatus(newStatus) {
-  if (!confirm('Change status to "' + newStatus + '"?')) return;
-  const { error } = await sb.from('cnt_contracts').update({ status: newStatus }).eq('id', ID);
-  if (error) return alert('Error: ' + error.message);
-  if (contract) contract.status = newStatus;
-  const [bCls, bLbl] = STATUS_BADGE[newStatus] ?? ['b-gray', newStatus];
-  document.getElementById('status-badge').innerHTML = `<span class="badge ${bCls}">${bLbl}</span>`;
-}
-
-async function removeTeam(id) {
-  if (!confirm('Remove this team member?')) return;
-  await sb.from('cnt_contract_team').delete().eq('id', id);
-  loadTeam();
-}
-init();
-</script>
-</body>
-</html>
