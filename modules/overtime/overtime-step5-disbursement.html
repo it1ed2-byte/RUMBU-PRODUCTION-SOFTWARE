@@ -162,7 +162,7 @@
 </div>
 
 <div id="noAccess" class="noaccess" style="display:none;">
-  You are not assigned as a Step 5 approver for any Branch. Ask your Super Admin to assign you in Overtime Approver Setup.
+  You are not assigned as a Step 5 (HR Payment) approver. Ask your Super Admin to assign you in Overtime Approver Setup.
 </div>
 </div>
 
@@ -170,6 +170,7 @@
 let ME = null;
 let MY_SECTIONS = [];
 let IS_SUPER_ADMIN_BLANKET = false;
+let CENTRAL_STEP5 = false;   // assigned as an HR Payment approver for ALL branches (how Approver Setup saves Step 5)
 let MY_EMPLOYEE_ID = null;
 let QUEUE_ROWS = [];
 let CURRENT_ENTRY = null;
@@ -217,7 +218,7 @@ async function init(){
     ME = await requireAuth("../../login.html");
     if(!ME) return;
     await loadMySections();
-    if(!MY_SECTIONS.length && !IS_SUPER_ADMIN_BLANKET){
+    if(!MY_SECTIONS.length && !IS_SUPER_ADMIN_BLANKET && !CENTRAL_STEP5){
       status.textContent = "Connected.";
       document.getElementById("noAccess").style.display = "block";
       return;
@@ -225,6 +226,7 @@ async function init(){
     document.getElementById("appArea").style.display = "block";
     document.getElementById("scopeNote").textContent = IS_SUPER_ADMIN_BLANKET
       ? "Super Admin — showing every Branch."
+      : CENTRAL_STEP5 ? "HR Payment approver — showing every Branch."
       : "Your assigned Branch(es): " + MY_SECTIONS.join(", ");
     status.textContent = "Connected.";
     await loadQueue();
@@ -241,7 +243,21 @@ async function loadMySections(){
   if(!emp) return;
   MY_EMPLOYEE_ID = emp.id;
   const { data: scopes } = await sb.from("overtime_step_approvers").select("section").eq("employee_id", emp.id).eq("step", 5);
-  MY_SECTIONS = [...new Set((scopes||[]).map(s=>s.section))];
+  const secs = [...new Set((scopes||[]).map(s=>s.section))];
+  // Approver Setup saves HR Payment approvers as one central group ("ALL_BRANCHES"). Older per-branch assignments still work.
+  CENTRAL_STEP5 = secs.indexOf("ALL_BRANCHES") !== -1;
+  MY_SECTIONS = secs.filter(s => s !== "ALL_BRANCHES");
+}
+
+// The profiles that must approve an entry at Step 5: the central group if one is assigned, otherwise the older
+// per-branch assignment for that entry's branch.
+async function requiredStep5Profiles(section){
+  const { data } = await sb.from("overtime_step_approvers")
+    .select("section, employee_id, employees(linked_profile_id, full_name)")
+    .eq("step", 5).in("section", ["ALL_BRANCHES", section]);
+  const rows = data || [];
+  const central = rows.filter(r => r.section === "ALL_BRANCHES");
+  return (central.length ? central : rows).map(r => r.employees?.linked_profile_id).filter(Boolean);
 }
 
 // ===== QUEUE: only entries that still need MY approval =====
@@ -254,7 +270,7 @@ async function loadQueue(){
       .select("*, overtime_initiations(form_number, overtime_date, propose_hours)")
       .in("status", ["awaiting_step5","rejected_to_step5"])
       .order("created_at", { ascending: false });
-    if(!IS_SUPER_ADMIN_BLANKET) q = q.in("section", MY_SECTIONS);
+    if(!IS_SUPER_ADMIN_BLANKET && !CENTRAL_STEP5) q = q.in("section", MY_SECTIONS);
     const { data, error } = await q;
     if(error) throw error;
     let rows = data || [];
@@ -370,10 +386,7 @@ function backToQueue(){
 }
 
 async function renderApprovalProgress(entry){
-  const { data: requiredLinks } = await sb.from("overtime_step_approvers")
-    .select("employee_id, employees(linked_profile_id, full_name)")
-    .eq("section", entry.section).eq("step", 5);
-  const requiredProfileIds = (requiredLinks||[]).map(r => r.employees?.linked_profile_id).filter(Boolean);
+  const requiredProfileIds = await requiredStep5Profiles(entry.section);
   const requiredCount = requiredProfileIds.length;
 
   const { data: votes } = await sb.from("overtime_approvals")
@@ -391,7 +404,7 @@ async function renderApprovalProgress(entry){
   if(iHaveVoted){
     actionWrap.innerHTML = "<p class='voted'>✅ You have already reviewed this entry this round.</p>";
   } else if(!amRequired){
-    actionWrap.innerHTML = "<p class='empty'>You are viewing this as Super Admin, but are not a required approver for this Branch.</p>";
+    actionWrap.innerHTML = "<p class='empty'>You are not one of the HR Payment approvers for this entry, so you can view it but not approve it.</p>";
   } else {
     actionWrap.innerHTML =
       "<button class=\"green\" onclick=\"voteEntry('approved')\">Approve</button>" +
@@ -438,10 +451,7 @@ async function voteEntry(decision){
 
     let allApproved = (ME.role === "super_admin");
     if(!allApproved){
-      const { data: requiredLinks } = await sb.from("overtime_step_approvers")
-        .select("employee_id, employees(linked_profile_id)")
-        .eq("section", CURRENT_ENTRY.section).eq("step", 5);
-      const requiredProfileIds = (requiredLinks||[]).map(r=>r.employees?.linked_profile_id).filter(Boolean);
+      const requiredProfileIds = await requiredStep5Profiles(CURRENT_ENTRY.section);
       const { data: votes } = await sb.from("overtime_approvals")
         .select("approver_profile_id, decision")
         .eq("department_entry_id", CURRENT_ENTRY.id).eq("step", 5).eq("cycle", CURRENT_ENTRY.cycle);
