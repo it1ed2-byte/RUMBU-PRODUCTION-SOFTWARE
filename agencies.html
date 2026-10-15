@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agencies</title>
+<script src="auth-contracts.js"></script>
+<script src="sidebar-contracts.js"></script>
+<link rel="stylesheet" href="contracts.css">
+</head>
+<body>
+<div class="page-hdr">
+  <div class="ph-left">
+    <div class="ph-icon">🏛️</div>
+    <div>
+      <div class="ph-title">Government Agencies</div>
+      <div class="ph-sub">Manage contracting agencies and ministries</div>
+    </div>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center">
+    <div style="background:#f0f4ff;border:1px solid #c7d7ff;border-radius:8px;
+         padding:8px 18px;text-align:center">
+      <div id="stat-total" style="font-size:24px;font-weight:900;color:#1F3864;line-height:1">—</div>
+      <div style="font-size:11px;color:#6b7280;font-weight:600;margin-top:2px">Total Agencies</div>
+    </div>
+  </div>
+  <div class="ph-right">
+    <button class="btn btn-hdr-primary" onclick="openModal(null)">＋ Add Agency</button>
+  </div>
+</div>
+
+<div class="content">
+  <div id="loading" class="loading-wrap">
+    <div class="spinner"></div>
+    <div class="loading-txt">Loading agencies…</div>
+  </div>
+
+  <div id="app" style="display:none">
+    <div class="toolbar">
+      <input class="srch" id="q" type="search" placeholder="🔍  Search agencies…" oninput="render()">
+    </div>
+    <div class="tbl-wrap">
+      <div class="tbl-scroll">
+        <table>
+          <thead>
+            <tr><th>Agency</th><th>Code</th><th>Contact Person</th><th>Phone</th><th>Email</th><th>Actions</th></tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal -->
+<div class="overlay" id="overlay" onclick="closeModal(event)">
+  <div class="modal">
+    <div class="modal-hdr">
+      <span class="modal-title" id="modal-title">Add Agency</span>
+      <button class="modal-x" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="m-id">
+      <div class="g2" style="margin-bottom:14px">
+        <div class="field">
+          <label>Agency Name <span class="req">*</span></label>
+          <input id="m-name" placeholder="Federal Ministry of…">
+        </div>
+        <div class="field">
+          <label>Short Code</label>
+          <input id="m-code" placeholder="e.g. FMWH">
+        </div>
+      </div>
+      <div class="g3">
+        <div class="field">
+          <label>Contact Person</label>
+          <input id="m-contact" placeholder="Name">
+        </div>
+        <div class="field">
+          <label>Phone</label>
+          <input id="m-phone" placeholder="+234…">
+        </div>
+        <div class="field">
+          <label>Email</label>
+          <input id="m-email" type="email" placeholder="info@agency.gov.ng">
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="save()">Save</button>
+    </div>
+    <div style="padding:0 22px 14px">
+      <span id="msg" style="font-size:13px;display:none"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+let sb, rows = [];
+
+async function init() {
+  try {
+    const auth = await guardPage();
+    if (!auth) return;
+    sb = auth.sb;
+    const { data } = await sb.from('cnt_agencies').select('*').order('name');
+    rows = data ?? [];
+    document.getElementById('stat-total').textContent = rows.length;
+    render();
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+  } catch(e) {
+    document.getElementById('loading').innerHTML = `<div style="color:var(--bad);text-align:center;padding:40px">⚠️ ${e.message}</div>`;
+  }
+}
+
+function render() {
+  const q = document.getElementById('q').value.toLowerCase();
+  const data = q ? rows.filter(r => r.name?.toLowerCase().includes(q) || r.code?.toLowerCase().includes(q)) : rows;
+  const tbody = document.getElementById('tbody');
+  if (!data.length) {
+    tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state"><span class="e-icon">🏛️</span><p>${rows.length ? 'No agencies match your search.' : 'No agencies yet. Add the first one.'}</p></div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = data.map(r => `<tr>
+    <td><strong>${r.name ?? '—'}</strong></td>
+    <td>${r.code ? `<span class="ref">${r.code}</span>` : '—'}</td>
+    <td>${r.contact_name ?? '—'}</td>
+    <td>${r.phone ?? '—'}</td>
+    <td>${r.email ?? '—'}</td>
+    <td>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-ghost btn-sm" onclick='editRow(${JSON.stringify(r).replace(/'/g,"&#39;")})'>Edit</button>
+        <button class="btn btn-bad btn-sm" onclick="del('${r.id}')">Delete</button>
+      </div>
+    </td>
+  </tr>`).join('');
+}
+
+function openModal(data) {
+  document.getElementById('modal-title').textContent = data ? 'Edit Agency' : 'Add Agency';
+  document.getElementById('m-id').value      = data?.id ?? '';
+  document.getElementById('m-name').value    = data?.name ?? '';
+  document.getElementById('m-code').value    = data?.code ?? '';
+  document.getElementById('m-contact').value = data?.contact_name ?? '';
+  document.getElementById('m-phone').value   = data?.phone ?? '';
+  document.getElementById('m-email').value   = data?.email ?? '';
+  document.getElementById('msg').style.display = 'none';
+  document.getElementById('overlay').classList.add('open');
+}
+function editRow(r) { openModal(r); }
+function closeModal(e) {
+  if (!e || e.target === document.getElementById('overlay'))
+    document.getElementById('overlay').classList.remove('open');
+}
+
+async function save() {
+  const id   = document.getElementById('m-id').value;
+  const name = document.getElementById('m-name').value.trim();
+  if (!name) return showMsg('Agency name is required.', 'err');
+  const payload = {
+    name, code: document.getElementById('m-code').value.trim() || null,
+    contact_name: document.getElementById('m-contact').value.trim() || null,
+    phone: document.getElementById('m-phone').value.trim() || null,
+    email: document.getElementById('m-email').value.trim() || null,
+  };
+  let error;
+  if (id) {
+    ({ error } = await sb.from('cnt_agencies').update(payload).eq('id', id));
+  } else {
+    const res = await sb.from('cnt_agencies').insert(payload).select().single();
+    error = res.error;
+  }
+  if (error) return showMsg('Error: ' + error.message, 'err');
+  const { data } = await sb.from('cnt_agencies').select('*').order('name');
+  rows = data ?? [];
+  render();
+  closeModal();
+}
+
+async function del(id) {
+  const r = rows.find(r => r.id === id);
+  if (!confirm('Delete agency "' + (r?.name ?? id) + '"? This cannot be undone.')) return;
+  const { error } = await sb.from('cnt_agencies').delete().eq('id', id);
+  if (error) return alert('Error: ' + error.message);
+  rows = rows.filter(r => r.id !== id);
+  render();
+}
+
+function showMsg(text, type) {
+  const el = document.getElementById('msg');
+  el.textContent = text; el.style.color = type === 'ok' ? 'var(--ok)' : 'var(--bad)';
+  el.style.display = 'inline';
+}
+init();
+</script>
+</body>
+</html>

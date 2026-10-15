@@ -4,6 +4,7 @@
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Management Dashboard</title>
 <script src="auth-contracts.js"></script>
+<script src="sidebar-contracts.js"></script>
 <link rel="stylesheet" href="contracts.css">
 <style>
 /* ── Summary cards ─────────────────────────────────────── */
@@ -189,12 +190,13 @@ async function loadData() {
   // 1. All contracts
   const { data: cData } = await sb.from('cnt_contracts').select(`
     id, contract_id, title, status, risk_level, risk_notes,
-    contract_value, start_date, end_date,
-    physical_progress, financial_progress,
+    original_value, start_date, original_completion_date,
+    physical_progress_pct, financial_progress_pct,
     cnt_agencies(name), cnt_companies(name)
   `).order('risk_level', { ascending: false })
     .order('contract_id');
   contracts = cData ?? [];
+  window._contracts = contracts;
 
   // 2. Latest performance evaluation per contract
   const { data: evals } = await sb.from('cnt_performance_evaluations')
@@ -216,6 +218,15 @@ async function loadData() {
     actionCountMap[a.cnt_contract_id] = (actionCountMap[a.cnt_contract_id] ?? 0) + 1;
   });
 
+  // 4. Open NCR count per contract — §3.3
+  const { data: openNcrs } = await sb.from('cnt_ncrs')
+    .select('contract_id')
+    .neq('status', 'closed');
+  window._ncrCountMap = {};
+  (openNcrs ?? []).forEach(n => {
+    window._ncrCountMap[n.contract_id] = (window._ncrCountMap[n.contract_id] ?? 0) + 1;
+  });
+
   buildKPICards();
   buildDimensionOverview();
   render();
@@ -229,9 +240,9 @@ async function loadData() {
 function getFlags(c) {
   const flags = [];
   const today  = new Date();
-  const end    = c.end_date ? new Date(c.end_date) : null;
-  const pp     = c.physical_progress ?? 0;
-  const fp     = c.financial_progress ?? 0;
+  const end    = c.original_completion_date ? new Date(c.original_completion_date) : null;
+  const pp     = c.physical_progress_pct ?? 0;
+  const fp     = c.financial_progress_pct ?? 0;
   const risk   = c.risk_level ?? 'low';
   const openAct = actionCountMap[c.id] ?? 0;
   const eval_  = evalMap[c.id];
@@ -263,19 +274,24 @@ function getFlags(c) {
 
 // ── KPI Summary Cards ─────────────────────────────────────────────
 function buildKPICards() {
-  const active   = contracts.filter(c => c.status === 'active');
+  const norm     = s => (s||'').toLowerCase();
+  const active   = contracts.filter(c => norm(c.status) === 'active');
   const highRisk = contracts.filter(c => c.risk_level === 'high' || c.risk_level === 'critical');
   const overdue  = contracts.filter(c => {
-    const end = c.end_date ? new Date(c.end_date) : null;
-    return end && end < new Date() && c.status === 'active';
+    const end = c.original_completion_date ? new Date(c.original_completion_date) : null;
+    return end && end < new Date() && norm(c.status) === 'active';
   });
   const totalActions  = Object.values(actionCountMap).reduce((s, v) => s + v, 0);
   const needAttention = contracts.filter(c => getFlags(c).length > 0);
-  const totalVal      = contracts.reduce((s, c) => s + (c.contract_value ?? 0), 0);
+  const totalVal      = contracts.reduce((s, c) => s + (c.original_value ?? 0), 0);
 
+  const byStatus = s => contracts.filter(c => norm(c.status) === s.toLowerCase()).length;
   document.getElementById('kpi-grid').innerHTML = [
     { val: contracts.length,                lbl:'Total Contracts',         cls:'info'   },
-    { val: active.length,                   lbl:'Active',                  cls:'ok'     },
+    { val: byStatus('active'),              lbl:'Active',                  cls:'ok'     },
+    { val: byStatus('pipeline'),            lbl:'Pipeline',                cls:'info'   },
+    { val: byStatus('completed'),           lbl:'Completed',               cls:'ok'     },
+    { val: byStatus('on_hold'),             lbl:'On Hold',                 cls:'warn'   },
     { val: highRisk.length,                 lbl:'High / Critical Risk',    cls:'orange' },
     { val: overdue.length,                  lbl:'Overdue (Active)',         cls:'bad'    },
     { val: totalActions,                    lbl:'Open Corrective Actions',  cls:'warn'   },
@@ -297,20 +313,20 @@ function buildDimensionOverview() {
     return;
   }
 
-  const avgPP = avg(active.map(c => c.physical_progress ?? 0));
-  const avgFP = avg(active.map(c => c.financial_progress ?? 0));
+  const avgPP = avg(active.map(c => c.physical_progress_pct ?? 0));
+  const avgFP = avg(active.map(c => c.financial_progress_pct ?? 0));
 
   // Schedule health: % of active contracts on schedule
   const onSched = active.filter(c => {
-    if (!c.start_date || !c.end_date) return true;
+    if (!c.start_date || !c.original_completion_date) return true;
     const elapsed = (new Date() - new Date(c.start_date)) /
-                    (new Date(c.end_date) - new Date(c.start_date)) * 100;
-    return (c.physical_progress ?? 0) >= elapsed - 10;
+                    (new Date(c.original_completion_date) - new Date(c.start_date)) * 100;
+    return (c.physical_progress_pct ?? 0) >= elapsed - 10;
   });
   const schedPct = Math.round((onSched.length / active.length) * 100);
 
   // Cost health: % not over-running
-  const notOver = active.filter(c => (c.financial_progress ?? 0) <= 105);
+  const notOver = active.filter(c => (c.financial_progress_pct ?? 0) <= 105);
   const costPct = Math.round((notOver.length / active.length) * 100);
 
   // Quality/Safety: from performance evaluations
@@ -405,29 +421,30 @@ function render() {
   };
 
   tbody.innerHTML = data.map(c => {
-    const pp   = c.physical_progress ?? 0;
-    const fp   = c.financial_progress ?? 0;
+    const pp   = c.physical_progress_pct ?? 0;
+    const fp   = c.financial_progress_pct ?? 0;
     const ppCol= pp >= 80 ? '#22c55e' : pp >= 40 ? '#2E75B6' : '#f59e0b';
     const fpCol= fp >= 80 ? '#22c55e' : fp >= 40 ? '#2E75B6' : '#f59e0b';
     const [rCls, rLbl] = RISK_BADGE[c.risk_level ?? 'low'] ?? ['b-gray','—'];
-    const sBadgeCls    = STATUS_BADGE[c.status] ?? 'b-gray';
-    const sLabel       = STATUS_LABEL[c.status] ?? c.status;
+    const _st = (c.status||'').toLowerCase();
+    const sBadgeCls    = STATUS_BADGE[_st] ?? 'b-gray';
+    const sLabel       = STATUS_LABEL[_st] ?? c.status;
     const openAct      = actionCountMap[c.id] ?? 0;
     const ev           = evalMap[c.id];
     const [evCls, evLbl] = ev ? (RATING_MAP[ev.rating] ?? ['none','—']) : ['none','No eval'];
     const flags        = getFlags(c);
-    const val          = c.contract_value
-      ? 'NGN ' + fmtVal(c.contract_value)
+    const val          = c.original_value
+      ? 'NGN ' + fmtVal(c.original_value)
       : '—';
 
     // Schedule status
     let schedStatus = '', schedCol = 'var(--muted)';
-    if (c.start_date && c.end_date && c.status === 'active') {
+    if (c.start_date && c.original_completion_date && c.status === 'active') {
       const today   = new Date();
       const elapsed = (today - new Date(c.start_date)) /
-                      (new Date(c.end_date) - new Date(c.start_date)) * 100;
+                      (new Date(c.original_completion_date) - new Date(c.start_date)) * 100;
       const variance = pp - elapsed;
-      if (new Date(c.end_date) < today) {
+      if (new Date(c.original_completion_date) < today) {
         schedStatus = 'Overdue'; schedCol = '#ef4444';
       } else if (variance >= -5) {
         schedStatus = 'On Track'; schedCol = '#22c55e';
@@ -438,7 +455,7 @@ function render() {
       }
     } else { schedStatus = '—'; }
 
-    return `<tr onclick="location.href='contract-detail.html?id=${c.id}'">
+    return `<tr style="cursor:pointer" onclick="showPanel('${c.id}')">
       <td>
         <div class="contract-ref">${esc(c.contract_id ?? '—')}</div>
         <div class="contract-name">${esc(c.title ?? '—')}</div>
@@ -471,6 +488,8 @@ function render() {
         <span style="font-size:18px;font-weight:800;color:${openAct > 3 ? '#ef4444' : openAct > 0 ? '#f59e0b' : '#22c55e'}">
           ${openAct}
         </span>
+        ${(() => { const nc = window._ncrCountMap?.[c.id] ?? 0;
+          return nc ? `<div style="font-size:10px;font-weight:700;color:#991b1b;margin-top:2px">${nc} NCR${nc>1?'s':''}</div>` : ''; })()}
       </td>
       <td><span class="badge ${sBadgeCls}">${sLabel}</span></td>
       <td>
@@ -506,5 +525,396 @@ function esc(s) {
 
 init();
 </script>
+
+<!-- ── Contract Slide-Over Panel ──────────────────────────────────────── -->
+<div id="co-backdrop" onclick="closePanel()"
+     style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:200"></div>
+
+<div id="co-panel"
+     style="position:fixed;top:0;right:0;height:100%;width:420px;max-width:92vw;
+            background:#fff;z-index:201;box-shadow:-4px 0 24px rgba(0,0,0,.18);
+            display:flex;flex-direction:column;
+            transform:translateX(100%);transition:transform .25s ease;overflow:hidden">
+
+  <!-- Panel header -->
+  <div style="background:var(--primary);color:#fff;padding:14px 18px;flex-shrink:0;
+              display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
+    <div style="min-width:0">
+      <div id="co-ref" style="font-size:11px;font-weight:700;letter-spacing:.06em;
+                              opacity:.65;margin-bottom:4px"></div>
+      <div id="co-title" style="font-size:14px;font-weight:700;line-height:1.35;
+                                word-break:break-word"></div>
+    </div>
+    <button onclick="closePanel()"
+            style="background:rgba(255,255,255,.15);border:none;color:#fff;cursor:pointer;
+                   border-radius:6px;padding:4px 8px;font-size:16px;flex-shrink:0;
+                   line-height:1">×</button>
+  </div>
+
+  <!-- Badges row -->
+  <div id="co-badges"
+       style="padding:10px 18px;border-bottom:1px solid var(--border);
+              display:flex;flex-wrap:wrap;gap:6px;flex-shrink:0"></div>
+
+  <!-- Scrollable body -->
+  <div style="flex:1;overflow-y:auto;padding:18px">
+
+    <!-- Key figures -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:18px">
+      <div style="background:var(--subtle);border-radius:8px;padding:12px">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;
+                    letter-spacing:.06em;color:var(--muted);margin-bottom:4px">Agency</div>
+        <div id="co-agency" style="font-size:13px;font-weight:600;color:var(--heading)"></div>
+      </div>
+      <div style="background:var(--subtle);border-radius:8px;padding:12px">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;
+                    letter-spacing:.06em;color:var(--muted);margin-bottom:4px">Subcontractor</div>
+        <div id="co-company" style="font-size:13px;font-weight:600;color:var(--heading)"></div>
+      </div>
+      <div style="background:var(--subtle);border-radius:8px;padding:12px">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;
+                    letter-spacing:.06em;color:var(--muted);margin-bottom:4px">Contract Value</div>
+        <div id="co-value" style="font-size:13px;font-weight:700;color:var(--heading)"></div>
+      </div>
+      <div style="background:var(--subtle);border-radius:8px;padding:12px">
+        <div style="font-size:10px;font-weight:700;text-transform:uppercase;
+                    letter-spacing:.06em;color:var(--muted);margin-bottom:4px">Completion Date</div>
+        <div id="co-date" style="font-size:13px;font-weight:600;color:var(--heading)"></div>
+      </div>
+    </div>
+
+    <!-- Progress -->
+    <div style="margin-bottom:18px">
+      <div style="font-size:11px;font-weight:700;text-transform:uppercase;
+                  letter-spacing:.06em;color:var(--muted);margin-bottom:10px">Progress</div>
+      <div style="margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;font-size:12px;
+                    font-weight:600;color:var(--heading);margin-bottom:4px">
+          <span>Physical</span><span id="co-pp-pct">0%</span>
+        </div>
+        <div style="height:8px;background:var(--subtle);border-radius:4px;overflow:hidden">
+          <div id="co-pp-bar" style="height:100%;border-radius:4px;
+               background:var(--accent);transition:width .4s ease"></div>
+        </div>
+      </div>
+      <div>
+        <div style="display:flex;justify-content:space-between;font-size:12px;
+                    font-weight:600;color:var(--heading);margin-bottom:4px">
+          <span>Financial</span><span id="co-fp-pct">0%</span>
+        </div>
+        <div style="height:8px;background:var(--subtle);border-radius:4px;overflow:hidden">
+          <div id="co-fp-bar" style="height:100%;border-radius:4px;
+               background:#10b981;transition:width .4s ease"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Risk notes -->
+    <div id="co-risk-wrap" style="display:none;margin-bottom:18px;
+         padding:12px;border-radius:8px;font-size:13px;line-height:1.6;border:1.5px solid"></div>
+
+  </div>
+
+  <!-- Footer action -->
+  <div style="padding:14px 18px;border-top:1px solid var(--border);flex-shrink:0">
+    <button id="co-detail-btn" onclick=""
+            style="width:100%;padding:11px;background:var(--primary);color:#fff;
+                   border:none;border-radius:8px;font-size:14px;font-weight:700;
+                   cursor:pointer;letter-spacing:.01em">
+      View Full Details →
+    </button>
+  </div>
+</div>
+<script>
+/* ── Slide-over panel ─────────────────────────────────────────────────── */
+const STATUS_LABEL_MAP = {
+  'Pipeline':'Pipeline','Active':'Active','On Hold':'On Hold',
+  'At Risk':'At Risk','Delayed':'Delayed',
+  'Practically Complete':'Practically Complete',
+  'Closed':'Closed','Cancelled':'Cancelled'
+};
+const STATUS_COL = {
+  'Pipeline':'#1F3864','Active':'#22c55e','On Hold':'#f59e0b',
+  'At Risk':'#f97316','Delayed':'#ef4444',
+  'Practically Complete':'#2E75B6','Closed':'#6b7280','Cancelled':'#6b7280'
+};
+const RISK_COL = {low:'#22c55e',medium:'#f59e0b',high:'#f97316',critical:'#ef4444'};
+
+function showPanel(contractId) {
+  const c = (window._contracts || []).find(x => x.id === contractId);
+  if (!c) return;
+
+  const fmtV = v => v != null ? 'NGN ' + Number(v).toLocaleString('en-NG',{maximumFractionDigits:0}) : '—';
+  const fmtD = v => v ? new Date(v).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) : '—';
+
+  document.getElementById('co-ref').textContent   = c.contract_id ?? '—';
+  document.getElementById('co-title').textContent = c.title ?? '—';
+  document.getElementById('co-agency').textContent  = c.cnt_agencies?.name ?? '—';
+  document.getElementById('co-company').textContent = c.cnt_companies?.name ?? '—';
+  document.getElementById('co-value').textContent   = fmtV(c.original_value);
+  document.getElementById('co-date').textContent    = fmtD(c.original_completion_date);
+
+  const pp = c.physical_progress_pct  ?? 0;
+  const fp = c.financial_progress_pct ?? 0;
+  document.getElementById('co-pp-pct').textContent = pp + '%';
+  document.getElementById('co-fp-pct').textContent = fp + '%';
+  document.getElementById('co-pp-bar').style.width = Math.min(pp,100) + '%';
+  document.getElementById('co-fp-bar').style.width = Math.min(fp,100) + '%';
+
+  // Status + risk badges
+  const sBg  = STATUS_COL[c.status] ?? '#6b7280';
+  const rBg  = RISK_COL[c.risk_level ?? 'low'] ?? '#22c55e';
+  document.getElementById('co-badges').innerHTML =
+    `<span style="background:${sBg};color:#fff;padding:3px 10px;border-radius:20px;font-size:11.5px;font-weight:700">${c.status ?? '—'}</span>` +
+    `<span style="background:${rBg}22;color:${rBg};border:1px solid ${rBg}55;padding:3px 10px;border-radius:20px;font-size:11.5px;font-weight:700">Risk: ${c.risk_level ?? 'low'}</span>`;
+
+  // Risk notes
+  const rWrap = document.getElementById('co-risk-wrap');
+  if (c.risk_notes) {
+    rWrap.style.display = 'block';
+    rWrap.style.background = (rBg) + '11';
+    rWrap.style.borderColor = rBg;
+    rWrap.textContent = c.risk_notes;
+  } else { rWrap.style.display = 'none'; }
+
+  // Detail button
+  document.getElementById('co-detail-btn').onclick = function(){ openDetail(c); };
+
+  // Show panel
+  document.getElementById('co-backdrop').style.display = 'block';
+  requestAnimationFrame(() => {
+    document.getElementById('co-panel').style.transform = 'translateX(0)';
+  });
+}
+
+function closePanel() {
+  document.getElementById('co-panel').style.transform = 'translateX(100%)';
+  setTimeout(() => { document.getElementById('co-backdrop').style.display = 'none'; }, 260);
+}
+
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closePanel(); });
+</script>
+
+<!-- CONTRACT DETAIL OVERLAY -->
+<div id="dl-ov" style="display:none;position:fixed;inset:0;z-index:500;
+     background:#f4f6fa;overflow-y:auto"></div>
+
+<style>
+.dlt{background:none;border:none;padding:11px 15px;font-size:13px;font-weight:600;
+  cursor:pointer;color:#6b7280;border-bottom:3px solid transparent}
+.dlt.on{color:#1F3864;border-bottom-color:#1F3864}
+.dlt:hover{color:#1F3864}
+.dlcard{background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:14px}
+.dllabel{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;
+  color:#6b7280;margin-bottom:4px}
+.dlval{font-size:13px;font-weight:600;color:#1F3864}
+.dltbl{width:100%;border-collapse:collapse;font-size:13px}
+.dltbl th{background:#f8fafc;padding:8px 12px;text-align:left;font-size:11px;
+  font-weight:700;text-transform:uppercase;color:#6b7280;border-bottom:1px solid #e2e8f0}
+.dltbl td{padding:9px 12px;border-bottom:1px solid #f1f5f9;color:#374151}
+.dlsec{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:18px;margin-bottom:14px}
+</style>
+
+<script>
+var _dlC = null;
+var _dlDone = {};
+
+function openDetail(c) {
+  _dlC = c;
+  _dlDone = {};
+
+  var RCOL = {low:'#22c55e',medium:'#f59e0b',high:'#f97316',critical:'#ef4444'};
+  var SCOL = {Active:'#22c55e','On Hold':'#f59e0b','At Risk':'#f97316',
+              Delayed:'#ef4444',Closed:'#6b7280','Pipeline':'#2E75B6'};
+  var rc = RCOL[c.risk_level] || '#f59e0b';
+  var sc = SCOL[c.status]     || '#1F3864';
+
+  function fmtV(v){ return v!=null ? 'NGN '+Number(v).toLocaleString('en-NG',{maximumFractionDigits:0}) : '\u2014'; }
+  function fmtD(v){ return v ? new Date(v).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) : '\u2014'; }
+  function card(lbl,val){ return '<div class="dlcard"><div class="dllabel">'+lbl+'</div><div class="dlval">'+val+'</div></div>'; }
+
+  var ov = document.getElementById('dl-ov');
+
+  // Build header
+  var hdr = '<div style="background:#1F3864;color:#fff;padding:12px 20px;display:flex;'
+          + 'align-items:center;gap:14px;position:sticky;top:0;z-index:10;'
+          + 'box-shadow:0 2px 8px rgba(0,0,0,.25)">'
+          + '<button onclick="closeDetail()" style="background:rgba(255,255,255,.15);'
+          + 'border:none;color:#fff;cursor:pointer;border-radius:6px;padding:6px 14px;'
+          + 'font-size:13px;font-weight:700">\u2190 Dashboard</button>'
+          + '<div style="flex:1;min-width:0">'
+          + '<div style="font-size:11px;font-weight:700;opacity:.7;letter-spacing:.07em">'
+          + (c.contract_id||'') + '</div>'
+          + '<div style="font-size:15px;font-weight:700">' + (c.title||'\u2014') + '</div>'
+          + '</div>'
+          + '<span style="background:'+sc+';color:#fff;padding:3px 12px;border-radius:20px;'
+          + 'font-size:12px;font-weight:700">'+(c.status||'\u2014')+'</span>'
+          + '<span style="background:'+rc+'22;color:'+rc+';border:1px solid '+rc+'55;'
+          + 'padding:3px 12px;border-radius:20px;font-size:12px;font-weight:700">'
+          + 'Risk: '+(c.risk_level||'\u2014')+'</span>'
+          + '</div>';
+
+  // Tabs
+  var tabs = '<div style="background:#fff;border-bottom:1px solid #e2e8f0;padding:0 20px;'
+           + 'display:flex;overflow-x:auto">'
+           + '<button class="dlt on"  onclick="dlTab(\'ov\',this)">Overview</button>'
+           + '<button class="dlt"     onclick="dlTab(\'pr\',this)">Progress</button>'
+           + '<button class="dlt"     onclick="dlTab(\'kp\',this)">KPIs</button>'
+           + '<button class="dlt"     onclick="dlTab(\'tm\',this)">Team</button>'
+           + '<button class="dlt"     onclick="dlTab(\'ca\',this)">Corrective Actions</button>'
+           + '<button class="dlt"     onclick="dlTab(\'nc\',this)">NCRs</button>'
+           + '<button class="dlt"     onclick="dlTab(\'mb\',this)">Mobilisation</button>'
+           + '</div>';
+
+  // Overview content
+  var pp = Math.min(100, c.physical_progress_pct  || 0);
+  var fp = Math.min(100, c.financial_progress_pct || 0);
+  var agency  = (c.cnt_agencies  && c.cnt_agencies.name)  ? c.cnt_agencies.name  : '\u2014';
+  var company = (c.cnt_companies && c.cnt_companies.name) ? c.cnt_companies.name : '\u2014';
+
+  var overview = '<div id="dl-ov-pane" style="max-width:920px;margin:0 auto;padding:20px">'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">'
+    + card('Agency', agency)
+    + card('Contractor', company)
+    + card('Contract Value', fmtV(c.original_value))
+    + card('Start Date', fmtD(c.start_date))
+    + card('End Date', fmtD(c.original_completion_date))
+    + card('Status', c.status||'\u2014')
+    + card('Risk Level', c.risk_level||'\u2014')
+    + card('Location', [c.lga,c.state].filter(Boolean).join(', ')||'\u2014')
+    + '</div>';
+
+  // Risk notice
+  if (c.risk_level === 'high' || c.risk_level === 'critical') {
+    overview += '<div style="background:'+rc+'11;border:1.5px solid '+rc+';color:'+rc
+      + ';border-radius:8px;padding:12px 16px;font-size:13px;margin-bottom:16px">'
+      + (c.risk_level==='critical'
+         ? '\uD83D\uDD34 <strong>Critical risk</strong> \u2014 Immediate executive intervention required.'
+         : '\uD83D\uDFE0 <strong>High risk</strong> \u2014 Management escalation required.')
+      + '</div>';
+  }
+
+  // Progress
+  overview += '<div class="dlsec"><div style="font-size:11px;font-weight:700;'
+    + 'text-transform:uppercase;letter-spacing:.07em;color:#6b7280;margin-bottom:12px">Progress</div>'
+    + '<div style="margin-bottom:10px">'
+    + '<div style="display:flex;justify-content:space-between;font-size:13px;font-weight:600;margin-bottom:4px">'
+    + '<span>Physical</span><span>'+pp+'%</span></div>'
+    + '<div style="height:10px;background:#f1f5f9;border-radius:5px;overflow:hidden">'
+    + '<div style="height:100%;width:'+pp+'%;background:#2E75B6;border-radius:5px"></div></div></div>'
+    + '<div>'
+    + '<div style="display:flex;justify-content:space-between;font-size:13px;font-weight:600;margin-bottom:4px">'
+    + '<span>Financial</span><span>'+fp+'%</span></div>'
+    + '<div style="height:10px;background:#f1f5f9;border-radius:5px;overflow:hidden">'
+    + '<div style="height:100%;width:'+fp+'%;background:#10b981;border-radius:5px"></div></div>'
+    + '</div></div>';
+
+  if (c.risk_notes) {
+    overview += '<div class="dlsec"><div class="dllabel">Risk Notes</div>'
+      + '<div style="font-size:13px;line-height:1.7;color:#374151">' + c.risk_notes + '</div></div>';
+  }
+
+  overview += '</div>';
+
+  // Other tab placeholders
+  var panes = '<div id="dl-pr-pane" style="display:none;max-width:920px;margin:0 auto;padding:20px">'
+    + '<div style="text-align:center;padding:40px;color:#6b7280;font-size:13px">Loading\u2026</div></div>'
+    + '<div id="dl-kp-pane" style="display:none;max-width:920px;margin:0 auto;padding:20px">'
+    + '<div style="text-align:center;padding:40px;color:#6b7280;font-size:13px">Loading\u2026</div></div>'
+    + '<div id="dl-tm-pane" style="display:none;max-width:920px;margin:0 auto;padding:20px">'
+    + '<div style="text-align:center;padding:40px;color:#6b7280;font-size:13px">Loading\u2026</div></div>'
+    + '<div id="dl-ca-pane" style="display:none;max-width:920px;margin:0 auto;padding:20px">'
+    + '<div style="text-align:center;padding:40px;color:#6b7280;font-size:13px">Loading\u2026</div></div>'
+    + '<div id="dl-nc-pane" style="display:none;max-width:920px;margin:0 auto;padding:20px">'
+    + '<div style="text-align:center;padding:40px;color:#6b7280;font-size:13px">Loading\u2026</div></div>'
+    + '<div id="dl-mb-pane" style="display:none;max-width:920px;margin:0 auto;padding:20px">'
+    + '<div style="text-align:center;padding:40px;color:#6b7280;font-size:13px">Loading\u2026</div></div>';
+
+  ov.innerHTML = hdr + tabs + overview + panes;
+  ov.style.display = 'block';
+  ov.scrollTop = 0;
+  closePanel();
+}
+
+function closeDetail() {
+  document.getElementById('dl-ov').style.display = 'none';
+}
+
+function dlTab(name, btn) {
+  ['ov','pr','kp','tm','ca','nc','mb'].forEach(function(t) {
+    document.getElementById('dl-'+t+'-pane').style.display = (t===name?'block':'none');
+  });
+  document.querySelectorAll('.dlt').forEach(function(b){ b.classList.remove('on'); });
+  btn.classList.add('on');
+  if (name !== 'ov' && !_dlDone[name]) { _dlDone[name]=true; dlLoad(name); }
+}
+
+async function dlLoad(name) {
+  var sb  = window._sb;
+  var cid = _dlC && _dlC.id;
+  var el  = document.getElementById('dl-'+name+'-pane');
+  if (!sb || !cid || !el) return;
+  function noData(msg){ el.innerHTML='<div style="text-align:center;padding:40px;color:#6b7280;font-size:13px">'+msg+'</div>'; }
+  function tbl(headers, rows) {
+    var h = headers.map(function(t){ return '<th>'+t+'</th>'; }).join('');
+    var r = rows.map(function(cols){
+      return '<tr>'+cols.map(function(v){ return '<td>'+(v||'\u2014')+'</td>'; }).join('')+'</tr>';
+    }).join('');
+    return '<div class="dlsec"><table class="dltbl"><thead><tr>'+h+'</tr></thead><tbody>'+r+'</tbody></table></div>';
+  }
+  function fmtD(v){ return v ? new Date(v).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) : '\u2014'; }
+
+  try {
+    if (name === 'pr') {
+      var r = await sb.from('cnt_progress_reports').select('*').eq('contract_id',cid).order('report_date',{ascending:false});
+      if (!r.data || !r.data.length) { noData('No progress reports yet.'); return; }
+      el.innerHTML = tbl(['Date','Physical %','Financial %','Description'],
+        r.data.map(function(x){ return [fmtD(x.report_date), (x.physical_progress_pct||0)+'%', (x.financial_progress_pct||0)+'%', x.description||'']; }));
+    }
+    else if (name === 'kp') {
+      var r = await sb.from('cnt_kpis').select('*').eq('contract_id',cid);
+      if (!r.data || !r.data.length) { noData('No KPIs recorded.'); return; }
+      el.innerHTML = tbl(['KPI','Target','Actual','Status'],
+        r.data.map(function(x){ return [x.name||x.kpi_name, x.target_value, x.actual_value, x.status]; }));
+    }
+    else if (name === 'tm') {
+      var r = await sb.from('cnt_contract_staff').select('id,role_on_contract,start_date,cnt_profiles(full_name,email)').eq('contract_id',cid);
+      if (!r.data || !r.data.length) { noData('No team members recorded.'); return; }
+      el.innerHTML = tbl(['Name','Role','Email','Start Date'],
+        r.data.map(function(x){ return [x.cnt_profiles&&x.cnt_profiles.full_name, x.role_on_contract, x.cnt_profiles&&x.cnt_profiles.email, fmtD(x.start_date)]; }));
+    }
+    else if (name === 'ca') {
+      var r = await sb.from('cnt_corrective_actions').select('*').eq('contract_id',cid).order('created_at',{ascending:false});
+      if (!r.data || !r.data.length) { noData('No corrective actions recorded.'); return; }
+      el.innerHTML = tbl(['Title','Status','Due Date','Priority'],
+        r.data.map(function(x){ return [x.title||x.description, x.status, fmtD(x.due_date), x.priority]; }));
+    }
+    else if (name === 'nc') {
+      var r = await sb.from('cnt_ncrs').select('*').eq('contract_id',cid).order('created_at',{ascending:false});
+      if (!r.data || !r.data.length) { noData('No NCRs raised.'); return; }
+      el.innerHTML = tbl(['Reference','Title','Status','Date'],
+        r.data.map(function(x){ return [x.ncr_ref||x.reference_number, x.title, x.status, fmtD(x.created_at)]; }));
+    }
+    else if (name === 'mb') {
+      var r = await sb.from('cnt_mobilization').select('*').eq('contract_id',cid).maybeSingle();
+      var d = r.data;
+      if (!d) { noData('No mobilisation record found.'); return; }
+      var keys = ['personnel','equipment','materials','procedures','hse','insurance'];
+      var labels = ['Approved personnel available','Equipment available','Materials planned',
+                    'Work procedures reviewed','HSE plan in place','Insurance documents submitted'];
+      el.innerHTML = tbl(['Item','Status'],
+        keys.map(function(k,i){
+          var v = d[k]==='yes' ? '<span style="color:#22c55e;font-weight:700">\u2713 Yes</span>'
+                : d[k]==='no'  ? '<span style="color:#ef4444;font-weight:700">\u2717 No</span>'
+                : '\u2014';
+          return [labels[i], v];
+        }));
+    }
+  } catch(e) {
+    el.innerHTML = '<div style="text-align:center;padding:40px;color:#dc2626;font-size:13px">Error: '+e.message+'</div>';
+  }
+}
+</script>
+
 </body>
 </html>
