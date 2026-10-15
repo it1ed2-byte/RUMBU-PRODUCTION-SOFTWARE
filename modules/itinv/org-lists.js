@@ -75,3 +75,13 @@ function selectKeepingValue(sel, value){
   sel.add(legacy);
   sel.value = v;
 }
+
+/**
+ * Who sees (and can register devices for) EVERY branch in IT Inventory.
+ * Super Admins and Admins: the Admin accounts that hold the IT Inventory module work across all branches.
+ * Everyone else stays limited to the branch(es) they are assigned to.
+ * This is the one place the rule lives; every IT Inventory page asks it.
+ */
+function itSeesAllBranches(me){
+  return !!me && (me.role === "super_admin" || me.role === "admin");
+}
