@@ -112,10 +112,16 @@
 
     <div class="form-row-3">
       <div class="field"><label>Operator Name</label><div class="readonly-field" id="lk_opname">—</div></div>
-      <div class="field"><label>Operator ID</label><input type="text" id="f_opid" placeholder="Auto-fills, editable to override" oninput="onOperatorIdEdited()"></div>
+      <div class="field"><label>Operator ID *</label><input type="text" id="f_opid" placeholder="Required. Auto-fills, editable to override" oninput="onOperatorIdEdited()"></div>
       <div class="field"><label>Rank</label><div class="readonly-field" id="lk_rank">—</div></div>
     </div>
 
+    <div id="opIdWarn" style="display:none;margin:-4px 0 12px;padding:8px 12px;border-radius:8px;background:rgba(192,57,43,.10);border:1px solid rgba(192,57,43,.35);color:var(--bad);font-size:13px;font-weight:600;">
+      ⚠ No Operator ID. This entry cannot be submitted until one is filled in. For a Trainee / Vacant slot, type the ID of the person who actually ran the machine.
+    </div>
+    <div id="opIdInfo" style="display:none;margin:-4px 0 12px;padding:8px 12px;border-radius:8px;background:rgba(37,99,235,.08);border:1px solid rgba(37,99,235,.30);color:var(--text, #1f2937);font-size:13px;">
+      ℹ This asset's operator slot is <b>Trainee / Vacant</b>. The entry will be saved with Operator ID <b>Trainee</b>. To record the person who actually ran the machine instead, type their Operator ID.
+    </div>
     <div class="field"><label>Description</label><textarea id="f_description" placeholder="Any notes for this entry"></textarea></div>
 
     <button onclick="submitEntry()">Submit Entry</button>
@@ -131,6 +137,21 @@ let MW_TABLE = "mat_weaving"; // resolved properly in init() below
 let INITIATIONS = [];
 let CURRENT_INIT = null;
 let PICKED_ASSET = null;   // row from weaving_assets_full
+let AUTO_OP = null;        // the operator auto-filled from Manage Operator: { employee_id, name } (null until looked up)
+// Shows the red warning whenever an asset is picked but the Operator ID box is empty.
+// A Trainee / Vacant slot is the one case allowed to go without a real Operator ID. Its entries are saved with
+// this fixed value instead of an empty ID, so they are clear and consistent in every report.
+const TRAINEE_MARK = "Trainee";
+// A Trainee / Vacant slot is the one case allowed to go without an Operator ID.
+function isTraineeSlot(){ return !!(AUTO_OP && AUTO_OP.is_trainee && !AUTO_OP.employee_id); }
+function refreshOpIdWarn(){
+  const empty   = !document.getElementById("f_opid").value.trim();
+  const loading = document.getElementById("lk_opname").textContent === "Loading...";
+  const gap     = !!(PICKED_ASSET && empty && !loading);
+  document.getElementById("opIdWarn").style.display = (gap && !isTraineeSlot()) ? "block" : "none";
+  document.getElementById("opIdInfo").style.display = (gap &&  isTraineeSlot()) ? "block" : "none";
+  document.getElementById("f_opid").placeholder = (PICKED_ASSET && isTraineeSlot()) ? "Trainee (saved automatically)" : "Required. Auto-fills, editable to override";
+}
 const OPERATOR_DEPARTMENT = "Production";
 const OPERATOR_UNIT = "Weaving";
 
@@ -207,6 +228,9 @@ function resetEntryFields(){
   document.getElementById("lk_section").textContent = "—";
   document.getElementById("lk_opname").textContent = "—";
   document.getElementById("f_opid").value = "";
+  AUTO_OP = null;
+  document.getElementById("opIdWarn").style.display = "none";
+  document.getElementById("opIdInfo").style.display = "none";
   document.getElementById("lk_rank").textContent = "—";
   document.getElementById("f_description").value = "";
   document.getElementById("entryStatus").style.display = "none";
@@ -293,6 +317,8 @@ async function lookupOperator(){
   document.getElementById("lk_opname").textContent = "Loading...";
   document.getElementById("f_opid").value = "";
   document.getElementById("lk_rank").textContent = "—";
+  AUTO_OP = null;
+  refreshOpIdWarn();
 
   try{
     const { data, error } = await sb.from("weaving_unit_operators_full")
@@ -304,19 +330,24 @@ async function lookupOperator(){
     if(!data){
       document.getElementById("lk_opname").textContent = "No operator assigned for Group " + group + " — set one in Manage Operator";
       document.getElementById("lk_rank").textContent = "—";
+      refreshOpIdWarn();
       return;
     }
     document.getElementById("lk_opname").textContent = data.is_trainee ? "Trainee / Vacant" : data.operator_name;
     document.getElementById("f_opid").value = data.employee_id || "";
+    AUTO_OP = { employee_id: (data.employee_id || "").trim(), name: data.is_trainee ? "Trainee / Vacant" : data.operator_name, is_trainee: !!data.is_trainee };
     document.getElementById("lk_rank").textContent = data.rank || (data.is_trainee ? "Trainee" : "—");
     recomputeTarget();
+    refreshOpIdWarn();
   }catch(e){
     document.getElementById("lk_opname").textContent = "Error: " + e.message;
+    refreshOpIdWarn();
   }
 }
 
 let opIdTimer = null;
 function onOperatorIdEdited(){
+  refreshOpIdWarn();
   clearTimeout(opIdTimer);
   opIdTimer = setTimeout(reverseOperatorLookup, 300);
 }
@@ -355,15 +386,35 @@ async function submitEntry(){
   const group = document.getElementById("f_group").value;
   if(!group){ statusEl.className="status err"; statusEl.textContent="Select a Group."; return; }
 
-  const opNameRaw = document.getElementById("lk_opname").textContent;
-  if(opNameRaw === "—" || opNameRaw.startsWith("No operator assigned") || opNameRaw.startsWith("No " + OPERATOR_DEPARTMENT + " employee found")){
+  // ---- OPERATOR RULE: an entry cannot be sent without a valid Operator ID ----
+  const typedId = document.getElementById("f_opid").value.trim();
+  if(!typedId && !isTraineeSlot()){
     statusEl.className = "status err";
-    statusEl.textContent = "No valid operator resolved for this Unit/Group — fix the Operator ID, or assign one in Manage Operator first.";
+    statusEl.textContent = "Operator ID is empty, so this entry was NOT submitted. Enter the Operator ID of the person who ran the machine, or set the operator for this unit in Manage Target first.";
+    document.getElementById("f_opid").focus();
+    refreshOpIdWarn();
     return;
   }
-  const opName = opNameRaw.replace(" (override)","");
-  const opId = document.getElementById("f_opid").value.trim() || null;
-  const rank = document.getElementById("lk_rank").textContent;
+  const opNameRaw = document.getElementById("lk_opname").textContent;
+  // anything that is not a resolved operator name (still loading, an error, nobody assigned, unknown ID)
+  if(opNameRaw === "—" || /^(Loading|Error|No operator assigned|No employee found)/i.test(opNameRaw)){
+    statusEl.className = "status err";
+    statusEl.textContent = "No valid operator resolved for this Unit/Group (" + opNameRaw + ") — fix the Operator ID, or assign one in Manage Operator first. Entry not submitted.";
+    return;
+  }
+  let opName = opNameRaw.replace(" (override)","");
+  let rank = document.getElementById("lk_rank").textContent;
+  // An ID typed by hand (different from the one auto-filled) must be a real employee, checked right now,
+  // so a half-typed or mistyped ID can never be saved against a stale name.
+  if(typedId && (!AUTO_OP || AUTO_OP.employee_id !== typedId)){
+    statusEl.textContent = "Checking Operator ID...";
+    const { data: emp, error: eErr } = await sb.from("employees").select("employee_id, full_name, rank").eq("employee_id", typedId).maybeSingle();
+    if(eErr){ statusEl.className = "status err"; statusEl.textContent = "Could not verify Operator ID \"" + typedId + "\": " + eErr.message + ". Entry not submitted."; return; }
+    if(!emp){ statusEl.className = "status err"; statusEl.textContent = "Operator ID \"" + typedId + "\" was not found in Employees. Entry not submitted."; return; }
+    opName = emp.full_name; rank = emp.rank || "—";
+  }
+  // Only a Trainee / Vacant slot can reach this point without an ID: it is saved as "Trainee".
+  const opId = typedId || TRAINEE_MARK;
   const dbl = Number(document.getElementById("f_double").value) || 0;
   const sgl = Number(document.getElementById("f_single").value) || 0;
   const b = Number(document.getElementById("f_b").value) || 0;
