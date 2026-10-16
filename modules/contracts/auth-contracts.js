@@ -60,6 +60,10 @@ function _getSb() {
  * Fire-and-forget: does not block page initialisation.
  */
 function _cntSaveCurrentPage(sb, userId) {
+  // Make the client immediately available to sidebar-contracts.js.
+  // Most pages never set window._sb themselves; centralising it here
+  // means every page that calls guardPage() gets a working sidebar.
+  window._sb = sb;
   try {
     const stem  = window.location.pathname.split('/').pop().replace(/\.html?$/i, '');
     const entry = { dept: 'contracts', module: stem, label: stem, query: '' };
