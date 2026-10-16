@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Operations Follow-up: CEO Desk</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<link rel="stylesheet" href="ops-followup.css">
+<script src="ops-followup.js"></script>
+</head>
+<body>
+<script>
+/* Operations Follow-up: CEO Desk (port of the Apps Script CEO desk tab) */
+OF.start({
+  title: 'CEO desk',
+  sub: 'Escalated items waiting for a decision, and decisions still being carried out.',
+  render: function () {
+    var h = OF.h, add = OF.add;
+    var root = h('div');
+    var pending = OF.S.items.filter(OF.ceoPending).sort(OF.byAttention);
+    var decided = OF.S.items.filter(function (it) { return OF.outstanding(it) && it.ceo_flag !== 'no' && it.ceo_decision; }).sort(OF.byAttention);
+    var urgent = pending.filter(function (x) { return OF.pr(x.priority) <= 1; }).length;
+    root.appendChild(h('p', { class: 'brief', style: 'font-size:18px' },
+      pending.length ? OF.plural(pending.length, 'escalated item') + ' ' + (pending.length === 1 ? 'needs' : 'need') + ' a CEO decision. ' +
+        urgent + ' of ' + (pending.length === 1 ? 'it is' : 'these are') + ' emergency or critical.'
+        : 'No escalated item is waiting for a CEO decision.'));
+
+    function card(it, isPending) {
+      var c = h('article', { class: 'card p-' + String(it.priority).toLowerCase() });
+      add(c, h('div', { class: 'top' }, h('b', null, it.id), OF.prioTag(it.priority), OF.statusTag(it.status),
+        h('span', null, it.ceo_flag === 'yes' ? 'Escalated' : 'Conditional escalation'), h('span', null, OF.lateText(it))));
+      add(c, h('h3', null, it.issue));
+      var dl = h('dl');
+      [['Facility and owner', it.facility + ', ' + it.owner],
+       ['Owner response', it.response_status + (it.response_summary ? '. ' + it.response_summary : '')],
+       ['Evidence assessment', it.evidence], ['Recommended direction', it.resolution]].forEach(function (p) {
+        if (p[1]) add(dl, [h('dt', null, p[0]), h('dd', null, p[1])]);
+      });
+      add(c, dl);
+      if (it.ceo_decision) add(c, h('div', { class: 'decision' }, h('b', null, 'Decision on file: '), it.ceo_decision));
+      var form = null;
+      if (OF.canEdit()) {
+        var out = h('select', { 'aria-label': 'Decision outcome' }, h('option', { value: '' }, 'Choose the decision'),
+          OF.OUTCOMES.map(function (o) { return h('option', { value: o }, o); }));
+        var dir = h('textarea', { rows: '3', 'aria-label': 'Direction to the owner', placeholder: 'Direction to the owner: what, by when, and the evidence required for closure' });
+        var err = h('div', { class: 'err' });
+        var btn = h('button', { class: 'btn primary', type: 'button' }, isPending ? 'Record decision' : 'Record revised decision');
+        out.addEventListener('change', function () { if (out.value === 'Approve recommended direction' && !dir.value) dir.value = it.resolution || ''; });
+        btn.addEventListener('click', function () {
+          err.textContent = '';
+          if (!out.value) { err.textContent = 'Choose a decision outcome.'; return; }
+          if (!dir.value.trim() && out.value !== 'Approve recommended direction') { err.textContent = 'Write the direction to the owner.'; return; }
+          btn.disabled = true;
+          OF.rpc('ops_fu_record_ceo_decision', { p_id: it.id, p_outcome: out.value, p_direction: dir.value, p_expected_updated: it.updated_at })
+            .then(function (r) { OF.replaceItem(r.item); OF.toast('Decision recorded for ' + it.id + '.'); OF.render(); })
+            .catch(function (e) { btn.disabled = false; OF.handleErr(e, err); });
+        });
+        form = h('div', { class: 'cform', hidden: !isPending }, out, dir, err, btn);
+        add(c, form);
+      }
+      add(c, h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' },
+        h('button', { class: 'btn', type: 'button', onclick: function () { OF.openItem(it.id); } }, 'Open full item'),
+        (!isPending && form) ? h('button', { class: 'btn', type: 'button', onclick: function () { form.hidden = !form.hidden; } }, 'Revise decision') : null));
+      return c;
+    }
+
+    root.appendChild(h('section', null, h('h2', null, 'Awaiting decision (' + pending.length + ')'),
+      h('p', { class: 'hint' }, 'Each card shows the evidence and the recommended direction. Recording a decision dates it and adds it to the item history.'),
+      pending.length ? h('div', { class: 'cards' }, pending.map(function (it) { return card(it, true); })) : h('div', { class: 'empty' }, 'Nothing pending.')));
+    root.appendChild(h('section', { style: 'margin-top:22px' }, h('h2', null, 'Decided, still being carried out (' + decided.length + ')'),
+      decided.length ? h('div', { class: 'cards' }, decided.map(function (it) { return card(it, false); })) : h('div', { class: 'empty' }, 'No decided items are still open.')));
+    return root;
+  }
+});
+</script>
+</body>
+</html>

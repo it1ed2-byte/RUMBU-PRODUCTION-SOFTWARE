@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Operations Follow-up: Memos</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<link rel="stylesheet" href="ops-followup.css">
+<script src="ops-followup.js"></script>
+</head>
+<body>
+<script>
+/* Operations Follow-up: Memos (port of the Apps Script Memos and reminders tab) */
+(function () {
+  var memoOwner = '', mode = 'memo';
+  OF.start({
+    title: 'Memos and reminders',
+    sub: 'Follow-up memos to owners and the weekly CEO digest, built from the live register.',
+    render: function () {
+      var h = OF.h, S = OF.S;
+      var root = h('div');
+      var owners = OF.uniq(S.items.filter(OF.outstanding).map(function (i) { return i.owner; })).sort();
+      var ownerMeta = {}; S.owners.forEach(function (o) { ownerMeta[o.name] = o; });
+
+      var ta = h('textarea', { class: 'memo', readonly: true, 'aria-label': 'Memo text' });
+      var subj = h('p', { class: 'hint', style: 'margin:0 0 8px' });
+      var sel = h('select', { class: 'btn', 'aria-label': 'Memo recipient' },
+        h('option', { value: '' }, 'All owners, one consolidated memo'),
+        owners.map(function (o) { return h('option', { value: o }, o); }));
+      sel.value = owners.indexOf(memoOwner) > -1 ? memoOwner : '';
+      var info = h('p', { class: 'hint', style: 'margin:8px 0 0' });
+
+      function showMemo() {
+        mode = 'memo'; memoOwner = sel.value;
+        var m = OF.buildMemo(memoOwner);
+        ta.value = m.text; subj.textContent = 'Subject: ' + m.subject;
+        var meta = ownerMeta[memoOwner];
+        info.textContent = !memoOwner ? '' : (meta && meta.email
+          ? 'Email on file: ' + meta.email + (meta.cc ? ', copy to ' + meta.cc : '') + '.'
+          : 'No email is on file for this owner. A manager can add it on the Settings page.');
+      }
+      function showDigest() {
+        mode = 'digest'; ta.value = 'Preparing the CEO digest.'; subj.textContent = ''; info.textContent = '';
+        OF.buildDigest().then(function (d) {
+          ta.value = d.text; subj.textContent = 'Subject: ' + d.subject;
+          info.textContent = S.settings.ceoEmail ? 'CEO email on file: ' + S.settings.ceoEmail + '.' : 'No CEO email is set. A manager can add it on the Settings page.';
+        }).catch(function (e) { ta.value = ''; OF.handleErr(e); });
+      }
+      sel.addEventListener('change', showMemo);
+
+      root.appendChild(h('section', { class: 'panel' },
+        h('h2', null, 'Follow-up memo'),
+        h('p', { class: 'hint' }, 'Overdue items come first, each with the required action, due date, response on file and current direction. Owners are asked to respond within ' +
+          (Number(S.settings.memoResponseDays) || 3) + ' working days. Copy the memo into an email or letter.'),
+        h('div', { class: 'toolbar' },
+          h('span', { class: 'left' }, sel,
+            h('button', { class: 'btn', type: 'button', onclick: showMemo }, 'Show memo'),
+            h('button', { class: 'btn', type: 'button', onclick: showDigest }, 'Show CEO digest')),
+          h('span', { class: 'right' }, h('button', { class: 'btn primary', type: 'button', onclick: function () { OF.copyText(ta); } }, 'Copy text'))),
+        subj, ta, info));
+
+      if (OF.canEdit()) {
+        var sweep = h('button', { class: 'btn', type: 'button' }, 'Run overdue sweep now');
+        sweep.addEventListener('click', function () {
+          sweep.disabled = true;
+          OF.rpc('ops_fu_overdue_sweep').then(function (m) { OF.toast(m); return OF.reload(); })
+            .catch(function (e) { sweep.disabled = false; OF.handleErr(e); });
+        });
+        root.appendChild(h('section', { class: 'panel' }, h('h2', null, 'Automations'),
+          h('p', { class: 'hint' }, 'The overdue sweep runs by itself every day at 06:00 WAT and moves Open and In progress items past their due date to Overdue. Use the button to run it now. Sending memos and the CEO digest by email is the next phase of this module; until then, copy the text above.'),
+          sweep));
+      }
+
+      if (mode === 'digest') setTimeout(showDigest, 0); else setTimeout(showMemo, 0);
+      return root;
+    }
+  });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Operations Follow-up: Register</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<link rel="stylesheet" href="ops-followup.css">
+<script src="ops-followup.js"></script>
+</head>
+<body>
+<script>
+/* Operations Follow-up: Register (port of the Apps Script Register tab) */
+(function () {
+  var F = { view: '', age: '', facility: '', period: '', priority: '', status: '', ceo: '', owner: '', q: '' };
+  Object.keys(F).forEach(function (k) { F[k] = OF.param(k); });
+  var sortBy = 'attention';
+  function blank() { Object.keys(F).forEach(function (k) { F[k] = ''; }); history.replaceState(null, '', location.pathname); }
+
+  function filtered() {
+    var q = F.q.trim().toLowerCase();
+    return OF.S.items.filter(function (it) {
+      if (F.view && OF.VIEWS[F.view] && !OF.VIEWS[F.view].test(it)) return false;
+      if (F.age && (!OF.outstanding(it) || OF.ageKey(it) !== F.age)) return false;
+      if (F.facility && it.facility !== F.facility) return false;
+      if (F.period && it.period !== F.period) return false;
+      if (F.priority && it.priority !== F.priority) return false;
+      if (F.status && it.status !== F.status) return false;
+      if (F.ceo && it.ceo_flag !== F.ceo) return false;
+      if (F.owner && it.owner !== F.owner) return false;
+      if (q) {
+        var hay = [it.id, it.issue, it.action, it.owner, it.facility, it.response_summary, it.evidence, it.resolution, it.notes, it.ceo_decision].join(' ').toLowerCase();
+        if (hay.indexOf(q) < 0) return false;
+      }
+      return true;
+    });
+  }
+  function sorted(list) {
+    var l = list.slice();
+    if (sortBy === 'due') l.sort(function (a, b) { var da = a.due || '9999', db = b.due || '9999'; return da < db ? -1 : da > db ? 1 : OF.byAttention(a, b); });
+    else if (sortBy === 'id') l.sort(function (a, b) { return a.id < b.id ? -1 : 1; });
+    else if (sortBy === 'updated') l.sort(function (a, b) { return (b.updated_at || '') < (a.updated_at || '') ? -1 : 1; });
+    else l.sort(OF.byAttention);
+    return l;
+  }
+
+  OF.start({
+    title: 'Follow-up register',
+    sub: 'Every follow-up action raised in the weekly operations reviews.',
+    render: function () {
+      var h = OF.h, items = OF.S.items;
+      var root = h('div');
+      function selCtl(label, key, opts) {
+        var s = h('select', { onchange: function () { F[key] = s.value; OF.render(); } },
+          h('option', { value: '' }, 'All'), opts.map(function (o) { return h('option', { value: o[0] }, o[1]); }));
+        s.value = F[key];
+        return h('label', { class: 'ctl' }, label, s);
+      }
+      var opt = function (arr) { return arr.map(function (x) { return [x, x]; }); };
+      var search = h('input', { type: 'search', placeholder: 'ID, issue, owner, evidence', value: F.q,
+        oninput: function () { F.q = search.value; drawList(); } });
+      var filters = h('div', { class: 'filters' },
+        h('label', { class: 'ctl' }, 'Search', search),
+        h('button', { class: 'btn morebtn', type: 'button', 'aria-expanded': 'false', onclick: function (e) {
+          var on = filters.classList.toggle('open'); e.currentTarget.setAttribute('aria-expanded', String(on));
+          e.currentTarget.textContent = on ? 'Hide filters' : 'More filters'; } }, 'More filters'),
+        selCtl('Facility', 'facility', opt(OF.uniq(items.map(function (i) { return i.facility; })).sort())),
+        selCtl('Review period', 'period', opt(OF.uniq(items.map(function (i) { return i.period; })).sort())),
+        selCtl('Priority', 'priority', opt(OF.PRIORITIES)),
+        selCtl('Status', 'status', Object.keys(OF.STATUS).map(function (k) { return [k, OF.STATUS[k]]; })),
+        selCtl('CEO escalation', 'ceo', Object.keys(OF.CEO).map(function (k) { return [k, OF.CEO[k]]; })),
+        selCtl('Owner', 'owner', opt(OF.uniq(items.map(function (i) { return i.owner; })).sort())));
+
+      var sortSel = h('select', { class: 'btn', 'aria-label': 'Sort order', onchange: function () { sortBy = sortSel.value; drawList(); } },
+        h('option', { value: 'attention' }, 'Sort: priority, then lateness'), h('option', { value: 'due' }, 'Sort: due date'),
+        h('option', { value: 'updated' }, 'Sort: last updated'), h('option', { value: 'id' }, 'Sort: item ID'));
+      sortSel.value = sortBy;
+
+      var chips = h('span', { class: 'left' });
+      var countEl = h('span', { class: 'count' });
+      if (F.view && OF.VIEWS[F.view]) chips.appendChild(h('span', { class: 'chip' }, OF.VIEWS[F.view].label,
+        h('button', { type: 'button', 'aria-label': 'Remove filter', onclick: function () { F.view = ''; OF.render(); } }, '×')));
+      if (F.age) {
+        var band = OF.AGE.filter(function (a) { return a.k === F.age; })[0];
+        if (band) chips.appendChild(h('span', { class: 'chip' }, band.label,
+          h('button', { type: 'button', 'aria-label': 'Remove filter', onclick: function () { F.age = ''; OF.render(); } }, '×')));
+      }
+      chips.appendChild(countEl);
+
+      root.appendChild(filters);
+      root.appendChild(h('div', { class: 'toolbar' }, chips, h('span', { class: 'right' },
+        sortSel,
+        h('button', { class: 'btn', type: 'button', onclick: function () { blank(); OF.render(); } }, 'Clear filters'),
+        h('button', { class: 'btn', type: 'button', onclick: function () { OF.exportCsv(sorted(filtered())); } }, 'Export CSV'),
+        OF.canEdit() ? h('button', { class: 'btn primary', type: 'button', onclick: OF.openNew }, 'Add follow-up item') : null)));
+
+      var listBox = h('div', { class: 'panel listbox' });
+      function drawList() {
+        var l = sorted(filtered());
+        countEl.textContent = OF.plural(l.length, 'item') + ' shown of ' + OF.S.items.length;
+        listBox.innerHTML = '';
+        if (!l.length) listBox.appendChild(h('div', { class: 'empty', style: 'padding:18px' }, 'No items match these filters. Clear filters to see the full register.'));
+        else listBox.appendChild(h('div', { class: 'rows' }, l.map(OF.rowEl)));
+      }
+      drawList();
+      root.appendChild(listBox);
+      return root;
+    }
+  });
+})();
+</script>
+</body>
+</html>

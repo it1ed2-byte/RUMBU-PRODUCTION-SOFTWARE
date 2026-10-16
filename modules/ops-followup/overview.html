@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Operations Follow-up: Overview</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<link rel="stylesheet" href="ops-followup.css">
+<script src="ops-followup.js"></script>
+</head>
+<body>
+<script>
+/* Operations Follow-up: Overview (port of the Apps Script Overview tab) */
+OF.start({
+  title: 'Operations follow-up overview',
+  sub: 'Where the follow-up register stands across all facilities.',
+  editHint: false,
+  render: function () {
+    var h = OF.h, add = OF.add, S = OF.S;
+    var it = S.items, out = it.filter(OF.outstanding), late = it.filter(OF.isLate);
+    var emLate = late.filter(function (x) { return OF.pr(x.priority) <= 1; });
+    var emNoResp = out.filter(function (x) { return OF.pr(x.priority) <= 1 && OF.noResp(x); });
+    var closed = it.length - out.length;
+    var pct = it.length ? Math.round(closed / it.length * 100) : 0;
+    var root = h('div');
+
+    var brief = h('p', { class: 'brief' });
+    if (!it.length) brief.textContent = 'The register is empty. Add the first follow-up item on the Register page.';
+    else {
+      add(brief, [h('b', null, OF.plural(late.length, 'action')), ' of ' + out.length + ' outstanding ' + (late.length === 1 ? 'is' : 'are') + ' past due. ']);
+      add(brief, [h('b', null, String(emLate.length)), ' emergency or critical ' + (emLate.length === 1 ? 'item is' : 'items are') + ' late, and ']);
+      add(brief, [h('b', null, String(emNoResp.length)), ' emergency or critical ' + (emNoResp.length === 1 ? 'item has' : 'items have') + ' no response from the owner. ']);
+      add(brief, pct + '% of the register is verified closed.');
+    }
+    root.appendChild(brief);
+
+    var kp = [['outstanding', 't-prog'], ['overdue', 't-over'], ['emcrit', 't-crit'], ['ceo', 't-ceo'], ['noresp', 't-over'], ['closed', 't-closed']];
+    root.appendChild(h('div', { class: 'kpis' }, kp.map(function (k) {
+      var n = it.filter(OF.VIEWS[k[0]].test).length;
+      return h('button', { class: 'kpi ' + k[1], type: 'button', onclick: function () { OF.go('register', { view: k[0] }); } },
+        h('span', { class: 'n' }, String(n)), h('span', { class: 'l' }, OF.VIEWS[k[0]].label),
+        k[0] === 'closed' ? h('span', { class: 's' }, pct + '% of ' + it.length + ' items') : null);
+    })));
+
+    var counts = {}; OF.AGE.forEach(function (a) { counts[a.k] = 0; });
+    out.forEach(function (x) { counts[OF.ageKey(x)]++; });
+    var strip = h('div', { class: 'age', role: 'group', 'aria-label': 'Outstanding items by days past due' });
+    OF.AGE.forEach(function (a) {
+      if (!counts[a.k]) return;
+      strip.appendChild(h('button', { type: 'button', class: a.dark ? 'dk' : '', style: 'flex:' + counts[a.k] + ';background:' + a.col,
+        title: a.label + ': ' + counts[a.k], 'aria-label': a.label + ': ' + counts[a.k],
+        onclick: function () { OF.go('register', { age: a.k, view: 'outstanding' }); } },
+        counts[a.k] / Math.max(out.length, 1) > 0.06 ? String(counts[a.k]) : ''));
+    });
+    var agePanel = h('section', { class: 'panel' },
+      h('h2', null, 'How late are the outstanding actions'),
+      h('p', { class: 'hint' }, 'Each band is the number of outstanding items by days past due. Select a band to list those items.'),
+      out.length ? strip : h('div', { class: 'empty' }, 'No outstanding items.'),
+      h('div', { class: 'legend' }, OF.AGE.filter(function (a) { return counts[a.k]; }).map(function (a) {
+        return h('span', null, h('i', { style: 'background:' + a.col }), a.label + ' (' + counts[a.k] + ')');
+      })));
+
+    var fac = h('section', { class: 'panel' }, h('h2', null, 'Progress by facility'),
+      h('p', { class: 'hint' }, 'Bar shows closed, in progress, open and overdue. Percentage is verified closed.'),
+      OF.S.facilities.map(function (f) { return [f.name, it.filter(function (x) { return x.facility_id === f.id; })]; })
+        .filter(function (g) { return g[1].length; }).map(function (g) {
+        var c = { verified_closed: 0, in_progress: 0, open: 0, overdue: 0 };
+        g[1].forEach(function (x) { c[x.status] = (c[x.status] || 0) + 1; });
+        var n = g[1].length, lateN = g[1].filter(OF.isLate).length;
+        return h('button', { class: 'fac', type: 'button', onclick: function () { OF.go('register', { facility: g[0] }); } },
+          h('span', { class: 'nm' }, g[0], h('small', null, OF.plural(n, 'item') + ', ' + lateN + ' past due')),
+          h('span', { class: 'stack', 'aria-hidden': 'true' },
+            h('span', { style: 'flex:' + c.verified_closed + ';background:var(--of-closed)' }),
+            h('span', { style: 'flex:' + c.in_progress + ';background:var(--of-prog)' }),
+            h('span', { style: 'flex:' + c.open + ';background:var(--of-open)' }),
+            h('span', { style: 'flex:' + c.overdue + ';background:var(--of-over)' })),
+          h('span', { class: 'pc' }, Math.round(c.verified_closed / n * 100) + '%'));
+      }));
+    root.appendChild(h('div', { class: 'cols' }, agePanel, fac));
+
+    var attention = out.filter(function (x) { return OF.pr(x.priority) <= 1 || OF.isLate(x); }).sort(OF.byAttention).slice(0, 10);
+    root.appendChild(h('section', { class: 'panel listwrap' }, h('h2', null, 'Deal with these first'),
+      h('p', { class: 'hint' }, 'Highest priority first, then longest past due. Select an item to see the full record.'),
+      attention.length ? h('div', { class: 'rows' }, attention.map(OF.rowEl)) : h('div', { class: 'empty' }, 'Nothing urgent is outstanding.')));
+    return root;
+  }
+});
+</script>
+</body>
+</html>

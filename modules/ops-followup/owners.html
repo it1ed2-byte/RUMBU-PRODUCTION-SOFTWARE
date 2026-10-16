@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Operations Follow-up: Owners</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<link rel="stylesheet" href="ops-followup.css">
+<script src="ops-followup.js"></script>
+</head>
+<body>
+<script>
+/* Operations Follow-up: Owners (port of the Apps Script Owners tab) */
+OF.start({
+  title: 'Accountability by owner',
+  sub: 'Who owns the outstanding actions, and how far behind each owner is.',
+  render: function () {
+    var h = OF.h, S = OF.S;
+    var root = h('div');
+    var gen = S.items.filter(function (x) { return OF.outstanding(x) && OF.isGeneric(x.owner); }).length;
+    if (gen) root.appendChild(h('div', { class: 'banner warn' }, gen + ' outstanding ' + (gen === 1 ? 'item is' : 'items are') +
+      ' assigned to a generic "Plant/Functional Head" owner. A manager can rename these owners to the named head, with an email, on the Settings page, so reminders reach a person who is accountable.'));
+
+    var byOwner = {};
+    S.items.forEach(function (it) { (byOwner[it.owner] = byOwner[it.owner] || []).push(it); });
+    var rows = S.owners.filter(function (o) { return o.active || byOwner[o.name]; }).map(function (o) {
+      var l = byOwner[o.name] || [], out = l.filter(OF.outstanding), late = l.filter(OF.isLate);
+      var oldest = late.reduce(function (m, x) { var d = OF.daysLate(x); return d != null && d > m ? d : m; }, 0);
+      return { o: o, total: l.length, out: out.length, late: late.length, nr: l.filter(OF.noResp).length, oldest: oldest,
+        em: out.filter(function (x) { return OF.pr(x.priority) <= 1; }).length, closed: l.length - out.length };
+    }).sort(function (a, b) { return b.late - a.late || b.out - a.out || (a.o.name < b.o.name ? -1 : 1); });
+
+    var tbody = h('tbody', null, rows.map(function (g) {
+      var go = function () { OF.go('register', { owner: g.o.name, view: 'outstanding' }); };
+      return h('tr', { class: 'click', tabindex: '0', onclick: go, onkeydown: function (e) { if (e.key === 'Enter') go(); } },
+        h('td', null, g.o.name, OF.isJoint(g.o.name) ? h('div', null, h('span', { class: 'pill joint' }, 'Joint ownership')) : null),
+        h('td', null, g.o.reports_to || h('span', { class: 'muted' }, 'Not set')),
+        h('td', { class: 'n' }, String(g.out)),
+        h('td', { class: 'n' }, g.late ? h('span', { class: 'late' }, String(g.late)) : '0'),
+        h('td', { class: 'n' }, String(g.em)),
+        h('td', { class: 'n' }, g.oldest ? g.oldest + ' days' : '-'),
+        h('td', { class: 'n' }, String(g.nr)),
+        h('td', { class: 'n' }, g.total ? Math.round(g.closed / g.total * 100) + '%' : '-'),
+        h('td', null, g.o.email ? 'Yes' : h('span', { class: 'late' }, 'Missing')));
+    }));
+    root.appendChild(h('section', { class: 'panel' },
+      h('h2', null, 'Accountability by owner'),
+      h('p', { class: 'hint' }, 'Sorted by most items past due. Select an owner to see their outstanding items. Reporting lines and emails are kept on the Settings page.'),
+      h('div', { class: 'tscroll' }, h('table', { class: 'of-t' }, h('thead', null, h('tr', null,
+        h('th', null, 'Owner'), h('th', null, 'Reports to'), h('th', { class: 'n' }, 'Outstanding'), h('th', { class: 'n' }, 'Past due'),
+        h('th', { class: 'n' }, 'Emergency or critical'), h('th', { class: 'n' }, 'Oldest late'), h('th', { class: 'n' }, 'No response'),
+        h('th', { class: 'n' }, 'Closed'), h('th', null, 'Email on file'))), tbody))));
+
+    var joint = S.items.filter(OF.VIEWS.joint.test).sort(OF.byAttention);
+    root.appendChild(h('section', { class: 'panel listwrap' }, h('h2', null, 'Joint and cross-department actions (' + joint.length + ')'),
+      h('p', { class: 'hint' }, 'These depend on more than one head. Name one lead owner in the notes so the item does not stall between departments.'),
+      joint.length ? h('div', { class: 'rows' }, joint.map(OF.rowEl)) : h('div', { class: 'empty' }, 'No joint items are outstanding.')));
+    return root;
+  }
+});
+</script>
+</body>
+</html>
