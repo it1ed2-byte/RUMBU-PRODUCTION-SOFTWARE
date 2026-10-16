@@ -57,6 +57,10 @@
   .status.ok{color:var(--green);} .status.err{color:var(--red);}
   .loading,.empty{font-size:12.5px;color:var(--muted);}
 
+  .bgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:2px 14px;margin-top:6px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);}
+  .bgrid label,.allbox{display:flex;align-items:center;gap:8px;font-weight:normal;font-size:13px;margin:0;padding:6px 4px;cursor:pointer;}
+  .bgrid input[type=checkbox],.allbox input[type=checkbox]{width:auto;}
+  .allbox{font-weight:700;margin-top:6px;}
   .picker{border:1px solid var(--line);border-radius:8px;padding:8px;max-height:230px;overflow-y:auto;margin-top:6px;background:var(--bg);}
   .picker label{display:flex;align-items:center;gap:8px;font-weight:normal;font-size:13px;margin:0;padding:6px 6px;cursor:pointer;border-radius:6px;}
   .picker label:hover{background:var(--card);}
@@ -253,15 +257,17 @@
     <div class="backbar"><button class="mini grey" onclick="home()">← Back to setup</button></div>
     <div class="card">
       <h3>Overtime Viewer — view only</h3>
-      <p class="sub">People who can watch overtime in the branches you choose: every request, the step it has reached, and the staff and hours. They cannot approve, reject or change anything. Assign per branch; the same person can be added to more than one branch.</p>
-      <div class="row"><div><label>Branch</label><select id="view_branch" onchange="onViewerBranch()"></select></div></div>
-      <label style="margin-top:12px;">Add viewers (search by name or ID)</label>
+      <p class="sub">People who can watch overtime: every request, the step it has reached, and the staff and hours. They cannot approve, reject or change anything. Pick the people first, then tick the branches they may view (or tick All branches).</p>
+      <label>1. Who (search by name or ID)</label>
       <input type="text" id="view_search" placeholder="Type a name or employee ID" oninput="renderPicker('view')">
       <div class="picker" id="view_picker"></div>
       <div class="selwrap" id="view_sel"></div>
+      <label style="margin-top:16px;">2. Which branches can they view?</label>
+      <label class="allbox"><input type="checkbox" id="view_all" onchange="toggleAllViewerBranches(this.checked)"> All branches</label>
+      <div class="bgrid" id="view_branches"></div>
       <div class="btnbar"><button class="green" onclick="saveViewer()">Save Viewers</button></div>
       <div class="status" id="view_status"></div>
-      <h4>Currently assigned for this branch</h4>
+      <h4>Currently assigned</h4>
       <div id="view_list"></div>
     </div>
   </div>
@@ -342,7 +348,7 @@ async function branchNames(){
 async function populateBranches(){
   const names = await branchNames();
   const opts = names.map(n => "<option value=\"" + esc(n) + "\">" + esc(n) + "</option>").join("");
-  ["init_branch","fill_branch","pm_branch","hrr_branch","view_branch"].forEach(id=>{
+  ["init_branch","fill_branch","pm_branch","hrr_branch"].forEach(id=>{
     const sel = document.getElementById(id);
     if(sel){ sel.innerHTML = opts; sel.disabled = (names.length <= 1 && ME.role !== "super_admin"); }
   });
@@ -626,32 +632,85 @@ async function loadAcct(){
 
 // ---------- shared list renderer + remove ----------
 // ==========================================================
-// OVERTIME VIEWER (view only, per branch)
+// OVERTIME VIEWER (view only): pick the people, then tick the branches
 // ==========================================================
-async function onViewerBranch(){ renderPicker("view"); await loadViewerList(); }
+let VIEW_BRANCHES = [];            // the branches this person may assign (Super Admin: all; Admin: their own)
+const VIEW_TICKED = new Set();     // branches ticked for the people selected above
+
+async function onViewerBranch(){   // opens the panel
+  VIEW_BRANCHES = await branchNames();
+  VIEW_TICKED.clear();
+  renderViewerBranches();
+  renderPicker("view");
+  await loadViewerList();
+}
+function renderViewerBranches(){
+  const wrap = document.getElementById("view_branches");
+  if(!VIEW_BRANCHES.length){ wrap.innerHTML = "<p class='empty' style='padding:6px;'>You have no branch you can assign for.</p>"; return; }
+  wrap.innerHTML = VIEW_BRANCHES.map(b =>
+    "<label><input type=\"checkbox\" value=\"" + esc(b) + "\" " + (VIEW_TICKED.has(b) ? "checked" : "") +
+    " onchange=\"toggleViewerBranch(this.value, this.checked)\">" + esc(b) + "</label>").join("");
+  syncAllBox();
+}
+function syncAllBox(){
+  const all = document.getElementById("view_all");
+  all.checked = VIEW_BRANCHES.length > 0 && VIEW_BRANCHES.every(b => VIEW_TICKED.has(b));
+}
+function toggleViewerBranch(name, on){ if(on) VIEW_TICKED.add(name); else VIEW_TICKED.delete(name); syncAllBox(); }
+function toggleAllViewerBranches(on){
+  VIEW_TICKED.clear();
+  if(on) VIEW_BRANCHES.forEach(b => VIEW_TICKED.add(b));
+  renderViewerBranches();
+}
+
 async function saveViewer(){
   const st = document.getElementById("view_status");
-  const branch = document.getElementById("view_branch").value;
-  if(!branch){ st.className="status err"; st.textContent="Select a branch."; return; }
-  if(!SEL.view.size){ st.className="status err"; st.textContent="Select at least one person."; return; }
+  const people = Array.from(SEL.view);
+  const branches = VIEW_BRANCHES.filter(b => VIEW_TICKED.has(b));
+  if(!people.length){ st.className="status err"; st.textContent="Select at least one person."; return; }
+  if(!branches.length){ st.className="status err"; st.textContent="Tick at least one branch (or All branches)."; return; }
   st.className="status"; st.textContent="Saving…";
   try{
-    const rows = Array.from(SEL.view).map(id => ({ section: branch, employee_id: id }));
+    // add only what is missing, so a person who already has some of these branches is not an error
+    const { data: have, error: hErr } = await sb.from("overtime_viewers").select("section, employee_id")
+      .in("employee_id", people).in("section", branches);
+    if(hErr) throw hErr;
+    const haveKey = new Set((have||[]).map(r => r.section + "|" + r.employee_id));
+    const rows = [];
+    people.forEach(id => branches.forEach(b => { if(!haveKey.has(b + "|" + id)) rows.push({ section: b, employee_id: id }); }));
+    const skipped = people.length * branches.length - rows.length;
+    if(!rows.length){
+      st.className="status ok"; st.textContent="Nothing to add: they are already assigned to all the ticked branches."; return;
+    }
     const { error } = await sb.from("overtime_viewers").insert(rows);
     if(error) throw error;
-    await logActivity("overtime_viewer_assigned", ME.username + " assigned " + rows.length + " overtime viewer(s) for " + branch);
-    st.className="status ok"; st.textContent="✅ Saved.";
-    clearSel("view"); await loadViewerList(); loadOverviewIfOpen();
-  }catch(e){ st.className="status err"; st.textContent = dupMsg(e, "already a viewer for this branch"); }
+    await logActivity("overtime_viewer_assigned", ME.username + " assigned " + people.length + " overtime viewer(s) to " + branches.length + " branch(es) (" + rows.length + " assignment(s) added)");
+    st.className="status ok";
+    st.textContent = "✅ Saved: " + rows.length + " assignment(s) added" + (skipped ? " (" + skipped + " already existed)" : "") + ".";
+    clearSel("view"); VIEW_TICKED.clear(); renderViewerBranches();
+    await loadViewerList(); loadOverviewIfOpen();
+  }catch(e){ st.className="status err"; st.textContent = dupMsg(e, "already a viewer for one of these branches"); }
 }
+
+// Everyone assigned, one line per person with their branches. Each branch has its own remove button.
 async function loadViewerList(){
-  const branch = document.getElementById("view_branch").value;
   const wrap = document.getElementById("view_list");
-  if(!branch){ wrap.innerHTML=""; return; }
+  if(!VIEW_BRANCHES.length){ wrap.innerHTML = ""; return; }
   wrap.innerHTML = "<p class='loading'>Loading…</p>";
-  const { data, error } = await sb.from("overtime_viewers").select("id, employee_id").eq("section", branch);
+  const { data, error } = await sb.from("overtime_viewers").select("id, section, employee_id").in("section", VIEW_BRANCHES);
   if(error){ wrap.innerHTML = "<p class='status err'>❌ " + esc(error.message) + "</p>"; return; }
-  renderSimpleList(wrap, data||[], r=>nameFor(r.employee_id), r=>codeFor(r.employee_id), "overtime_viewers", "loadViewerList");
+  const byPerson = {};
+  (data||[]).forEach(r => { (byPerson[r.employee_id] = byPerson[r.employee_id] || []).push(r); });
+  const ids = Object.keys(byPerson).sort((a,b) => nameFor(a).localeCompare(nameFor(b)));
+  if(!ids.length){ wrap.innerHTML = "<p class='empty'>No one assigned yet.</p>"; return; }
+  let html = "<table><thead><tr><th>Name</th><th>ID</th><th>Can view</th></tr></thead><tbody>";
+  ids.forEach(id => {
+    const chips = byPerson[id].sort((a,b) => a.section.localeCompare(b.section)).map(r =>
+      "<span class='chip'>" + esc(r.section) +
+      "<button title='Remove this branch' onclick=\"removeRow('overtime_viewers','" + r.id + "','loadViewerList')\">×</button></span>").join("");
+    html += "<tr><td>" + esc(nameFor(id)) + "</td><td>" + esc(codeFor(id)) + "</td><td>" + chips + "</td></tr>";
+  });
+  wrap.innerHTML = html + "</tbody></table>";
 }
 
 function renderSimpleList(wrap, rows, nameFn, codeFn, table, reloadFn){

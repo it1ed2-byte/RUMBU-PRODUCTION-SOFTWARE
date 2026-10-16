@@ -402,13 +402,23 @@ async function openDept(deptEntryId){
     const dept = entry ? entry.department : "";
     const section = entry ? entry.section : (CUR && CUR.initiation ? CUR.initiation.section : "");
 
-    const { data: oe } = await sb.from("overtime_employees").select("employee_id, employee_code, employee_name, reason_for_overtime, hours_worked").eq("department_entry_id", deptEntryId).order("employee_name");
-    const rows = oe||[];
-    const internalIds = [...new Set(rows.map(r=>r.employee_id).filter(Boolean))];
-    let umap = {};
-    if(internalIds.length){
-      const { data: emps } = await sb.from("employees").select("id, employee_id, full_name, unit").in("id", internalIds);
-      (emps||[]).forEach(s=>{ umap[s.id] = s; });
+    // The employees table is private, so a viewer cannot look up other people's unit directly. The database function
+    // overtime_viewer_staff returns each person's unit for the branches this viewer is assigned to, and nothing else.
+    let rows = [], umap = {}, unitOf = null;
+    const { data: viaFn, error: fnErr } = await sb.rpc("overtime_viewer_staff", { p_department_entry_id: deptEntryId });
+    if(!fnErr && Array.isArray(viaFn)){
+      rows = viaFn;
+      unitOf = r => r.unit;
+    } else {
+      // Fallback (function not installed yet): names, reasons and hours still show, units only where the account may read them.
+      const { data: oe } = await sb.from("overtime_employees").select("employee_id, employee_code, employee_name, reason_for_overtime, hours_worked").eq("department_entry_id", deptEntryId).order("employee_name");
+      rows = oe||[];
+      const internalIds = [...new Set(rows.map(r=>r.employee_id).filter(Boolean))];
+      if(internalIds.length){
+        const { data: emps } = await sb.from("employees").select("id, employee_id, full_name, unit").in("id", internalIds);
+        (emps||[]).forEach(s=>{ umap[s.id] = s; });
+      }
+      unitOf = r => (umap[r.employee_id] || {}).unit;
     }
 
     document.getElementById("unitTitle").textContent = dept + (section ? " — " + section : "");
@@ -419,7 +429,8 @@ async function openDept(deptEntryId){
     const groups = {};
     rows.forEach(r=>{
       const s = umap[r.employee_id] || {};
-      const unit = (s.unit && String(s.unit).trim()) ? s.unit : "(no unit)";
+      const rawUnit = unitOf(r);
+      const unit = (rawUnit && String(rawUnit).trim()) ? rawUnit : "(no unit)";
       if(!unitAllowed(section, dept, unit === "(no unit)" ? "" : unit)) return;
       (groups[unit] = groups[unit] || []).push({
         code: r.employee_code || s.employee_id || "",
