@@ -625,22 +625,18 @@ async function init(){
     ME = await requireAuth("../../login.html");
     if(!ME) return;
 
-    const { data: sessData, error: sessErr } = await sb.auth.getSession();
-    if(sessErr) throw new Error("Could not get session: " + sessErr.message);
-    ACCESS_TOKEN = sessData.session.access_token;
-
-    const { data: secData } = await sb.from("app_sections").select("id,name").order("name");
-    ALL_SECTIONS = secData || [];
+    // These four do not depend on each other, so ask for all of them at once.
+    const [sessRes, secRes, , dashRes] = await Promise.all([
+      sb.auth.getSession(),
+      sb.from("app_sections").select("id,name").order("name"),
+      loadManagerAllowedPages(),   // which pages this manager is allowed to grant onward
+      sb.from("dashboards").select("module_path").then(r=>r, ()=>({ data: null }))   // which module_paths are dashboards
+    ]);
+    if(sessRes.error) throw new Error("Could not get session: " + sessRes.error.message);
+    ACCESS_TOKEN = sessRes.data.session.access_token;
+    ALL_SECTIONS = (secRes && secRes.data) || [];
     buildSectionDisplayNames();
-
-    // Determine which pages this manager is allowed to grant onward.
-    await loadManagerAllowedPages();
-
-    // Load which module_paths are dashboards, so pickers can group them.
-    try{
-      const { data: dash } = await sb.from("dashboards").select("module_path");
-      DASHBOARD_PATHS = new Set((dash||[]).map(d=>d.module_path));
-    }catch(e){ DASHBOARD_PATHS = new Set(); }
+    DASHBOARD_PATHS = new Set(((dashRes && dashRes.data) || []).map(d=>d.module_path));
 
     status.style.color = "#1d8a4e";
     status.textContent = "Connected.";
@@ -650,13 +646,10 @@ async function init(){
       showCreateTab("tab-employee-directory");
       document.getElementById("listTitle").textContent = "Manage Role";
       document.getElementById("roleDropdownLabel").textContent = "Enter the staff's Employee ID to manage the role and access of any Admin or User. Their name will appear so you can confirm it is the right person.";
-      await loadMySidebarSettings();
-      await loadRoleDropdown();
       populateBranchModulesDropdown();
       populateDeptBranchSelect();
-      await loadHrAdminMap();
-      await loadManageStaffPageId();
-      await showEmployeeDirectoryPlaceholder();
+      // Independent of each other - load together instead of one after another.
+      await Promise.all([ loadMySidebarSettings(), loadRoleDropdown(), loadHrAdminMap(), loadManageStaffPageId(), showEmployeeDirectoryPlaceholder() ]);
       // super admin: all panels available
     } else if(ME.role === "admin"){
       // Employees tab restored for view — an Admin should always be able to
@@ -667,10 +660,7 @@ async function init(){
       document.getElementById("adminEmployeeDirectory").classList.remove("hidden");
       document.getElementById("listTitle").textContent = "Manage Role";
       document.getElementById("roleDropdownLabel").textContent = "Enter the Employee ID of a User you created to manage their access. Their name will appear so you can confirm it is the right person.";
-      await loadMyHrStatus();
-      await loadManageStaffPageId();
-      await loadRoleDropdown();
-      await showEmployeeDirectoryPlaceholder();
+      await Promise.all([ loadMyHrStatus(), loadManageStaffPageId(), loadRoleDropdown(), showEmployeeDirectoryPlaceholder() ]);
       // admin: no Settings panel
       document.getElementById("sec-settings").classList.add("role-unavailable");
     } else {
@@ -685,7 +675,8 @@ async function init(){
     scopeNote.textContent = ME.role === "super_admin" ? "Showing all activity, system-wide."
       : ME.role === "admin" ? "Showing your own actions and the actions of Users you created."
       : "Showing only your own activity.";
-    await loadActivityLog();
+    // The Activity Log is only needed when that tab is opened, so do not make the page wait for it.
+    loadActivityLog().catch(e=>console.warn("Activity log load failed (non-fatal):", e));
 
     const params = new URLSearchParams(window.location.search);
     const wanted = params.get("section");
@@ -1778,40 +1769,69 @@ let BRANCH_OPTIONS = [];
 // exactly once, lazily, the first time the person actually searches or
 // picks a filter; every entry point below shares this one gate rather
 // than each deciding independently.
-let EMPLOYEES_LOADED = false;
-let EMPLOYEES_LITE_LOADED = false; // lightweight load for Manage Role search — no salaries/departments
+let EMPLOYEES_LOADED = false;       // true ONLY once the full staff data has loaded successfully
+let EMPLOYEES_LOADING = null;       // the one full load in flight - every caller shares it
+let EMPLOYEES_LITE_LOADED = false;  // lightweight load for Manage Role search - set only on success
+let EMPLOYEES_LITE_LOADING = null;
+
+// Shows a message under whichever directory is in use (Super Admin and Admin each have their own status line).
+function setEmployeeLoadStatus(html, isErr){
+  ["emp_dir_status","admin_emp_dir_status"].forEach(id=>{
+    const el = document.getElementById(id); if(!el) return;
+    el.className = isErr ? "status err" : "status"; el.innerHTML = html;
+  });
+}
+function retryEmployeeLoad(){
+  ensureEmployeesLoaded().then(ok=>{ if(ok){ renderEmployeeDirectory(); renderAdminEmployeeDirectory(); } });
+}
+window.retryEmployeeLoad = retryEmployeeLoad;
+
+// Waits until the FULL staff data is ready. Returns true when it is; false if the load failed (the reason and a
+// Retry link are shown). Safe to call from many places at once - they all share one load. The "loaded" flag is
+// set only AFTER success, so a failed load can always be tried again (it used to be set first, which left the
+// directory permanently empty after any failure).
 async function ensureEmployeesLoaded(){
   if(EMPLOYEES_LOADED) return true;
-  EMPLOYEES_LOADED = true;
-  await loadEmployeeDirectory();
-  return false;
+  if(!EMPLOYEES_LOADING){
+    EMPLOYEES_LOADING = loadEmployeesData().finally(()=>{ EMPLOYEES_LOADING = null; });
+  }
+  setEmployeeLoadStatus("Loading staff…", false);
+  try{
+    await EMPLOYEES_LOADING;
+  }catch(e){
+    setEmployeeLoadStatus("❌ Could not load staff: " + esc((e && e.message) || e) + " &nbsp;<a href=\"#\" onclick=\"retryEmployeeLoad();return false;\">Retry</a>", true);
+    return false;
+  }
+  setEmployeeLoadStatus("", false);
+  return true;
 }
 // Loads only the fields Manage Role search needs (name, ID, branch, access,
 // role). Much faster than the full directory load — no salaries or dept/unit data.
 // Safe to call repeatedly; returns immediately if employees are already loaded.
 async function ensureEmployeesForSearch(){
   if(EMPLOYEES_LOADED || EMPLOYEES_LITE_LOADED) return;
-  EMPLOYEES_LITE_LOADED = true;
-  try{
-    const [emps, profs] = await Promise.all([
-      fetchAllRows(sb.from("employees")
-        .select("id,employee_id,full_name,branch,department,has_system_access,linked_profile_id")
-        .order("full_name")),
-      sb.from("profiles").select("id,role")
-        .in("role",["admin","user","super_admin","hr_console"])
-        .then(r=>r.data||[])
-    ]);
-    const roleMap = {};
-    profs.forEach(p=>{ roleMap[p.id] = p.role; });
-    // Only populate EMPLOYEES if the full load hasn't happened yet
-    if(!EMPLOYEES_LOADED){
-      EMPLOYEES = emps.map(e=>({
-        ...e,
-        salary: null,
-        linked_role: e.linked_profile_id ? (roleMap[e.linked_profile_id]||null) : null
-      }));
-    }
-  }catch(e){ console.warn("ensureEmployeesForSearch failed:", e); }
+  if(!EMPLOYEES_LITE_LOADING){
+    EMPLOYEES_LITE_LOADING = (async()=>{
+      const [emps, profs] = await Promise.all([
+        fetchAllRows(sb.from("employees")
+          .select("id,employee_id,full_name,branch,department,has_system_access,linked_profile_id")
+          .order("full_name").order("id")),
+        fetchAllRows(sb.from("profiles").select("id,role").order("id"))
+      ]);
+      const roleMap = {};
+      profs.forEach(p=>{ roleMap[p.id] = p.role; });
+      // Never overwrite the full data with this lighter copy.
+      if(!EMPLOYEES_LOADED){
+        EMPLOYEES = emps.map(e=>({
+          ...e,
+          salary: null,
+          linked_role: e.linked_profile_id ? (roleMap[e.linked_profile_id]||null) : null
+        }));
+      }
+      EMPLOYEES_LITE_LOADED = true;   // only after success, so a failed load is retried next time
+    })().finally(()=>{ EMPLOYEES_LITE_LOADING = null; });
+  }
+  try{ await EMPLOYEES_LITE_LOADING; }catch(e){ console.warn("ensureEmployeesForSearch failed:", e); }
 }
 
 // Lightweight startup for the Employee Directory: populate just the
@@ -1864,63 +1884,56 @@ async function fetchAllRows(query){
   return all;
 }
 
-async function loadEmployeeDirectory(){
-  const status = document.getElementById("emp_dir_status");
-  if(status) status.textContent = "Loading…";
-  try{
-    // Phase 1 — parallel: employees, salaries, departments and branches all at once.
-    const [emps, sals, deptRows, secData] = await Promise.all([
-      fetchAllRows(sb.from("employees").select("*").order("full_name")),
-      fetchAllRows(sb.from("employee_salaries").select("*")),
-      sb.from("departments").select("id,name,section").order("name").then(r=>r.data||[]),
-      !BRANCH_OPTIONS.length ? sb.from("app_sections").select("name").order("name").then(r=>r.data||[]) : Promise.resolve(null)
-    ]);
+// Loads everything the directory needs in ONE parallel round. Nothing here puts a long list of ids into the
+// request address (a long list can exceed the server's address-length limit and fail), and a failure in ANY part
+// fails the whole load - it never quietly continues with a blank list (blank Department/Unit lists would make
+// an Edit-and-Save wipe those fields). Rows are ordered by id as a tie-breaker so paging cannot skip or repeat a person.
+async function loadEmployeesData(){
+  const [emps, sals, deptRows, unitRows, profs, secData] = await Promise.all([
+    fetchAllRows(sb.from("employees").select("*").order("full_name").order("id")),
+    fetchAllRows(sb.from("employee_salaries").select("*").order("employee_id")),
+    fetchAllRows(sb.from("departments").select("id,name,section").order("name").order("id")),
+    fetchAllRows(sb.from("units").select("id,name,department_id").order("name").order("id")),
+    fetchAllRows(sb.from("profiles").select("id,role").order("id")),
+    !BRANCH_OPTIONS.length ? fetchAllRows(sb.from("app_sections").select("name").order("name")) : Promise.resolve(null)
+  ]);
 
-    const salaryMap = {};
-    (sals||[]).forEach(s=>{ salaryMap[s.employee_id] = s.salary; });
-    ALL_DEPARTMENTS = deptRows;
-    if(secData) BRANCH_OPTIONS = secData.map(s=>s.name);
+  const salaryMap = {};
+  (sals||[]).forEach(s=>{ salaryMap[s.employee_id] = s.salary; });
+  const roleMap = {};
+  (profs||[]).forEach(p=>{ roleMap[p.id] = p.role; });
+  if(secData) BRANCH_OPTIONS = secData.map(s=>s.name);
+  ALL_DEPARTMENTS = deptRows;
+  ALL_UNITS = unitRows;
 
-    // Phase 2 — parallel: profile roles (needs employee IDs) and units (needs dept IDs).
-    const linkedIds = emps.map(e=>e.linked_profile_id).filter(Boolean);
-    const deptIds   = deptRows.map(d=>d.id);
-    const [profs, unitRows] = await Promise.all([
-      linkedIds.length ? fetchAllRows(sb.from("profiles").select("id,role").in("id",linkedIds)) : Promise.resolve([]),
-      deptIds.length   ? sb.from("units").select("id,name,department_id").in("department_id",deptIds).order("name").then(r=>r.data||[]) : Promise.resolve([])
-    ]);
+  EMPLOYEES = emps.map(e=>({
+    ...e,
+    salary: salaryMap[e.id],
+    linked_role: e.linked_profile_id ? (roleMap[e.linked_profile_id]||null) : null
+  }));
 
-    const roleMap = {};
-    (profs||[]).forEach(p=>{ roleMap[p.id] = p.role; });
-    ALL_UNITS = unitRows;
-
-    EMPLOYEES = emps.map(e=>({
-      ...e,
-      salary: salaryMap[e.id],
-      linked_role: e.linked_profile_id ? (roleMap[e.linked_profile_id]||null) : null
-    }));
-    // Mark as fully loaded so ensureEmployeesForSearch knows not to duplicate work
-    EMPLOYEES_LOADED = true;
-    const branchFilter = document.getElementById("emp_branch_filter");
-    if(branchFilter && branchFilter.options.length <= 1){
-      branchFilter.innerHTML = '<option value="all">All</option>' +
-        BRANCH_OPTIONS.map(b=>`<option value="${b}">${b}</option>`).join("") +
-        '<option value="__unset__">— Not set —</option>';
-    }
-    // Admin's own branch filter — scoped to ONLY the branches this Admin
-    // is assigned to (ME.sectionNames), never every branch in the system.
-    const adminBranchFilter = document.getElementById("admin_emp_branch_filter");
-    if(adminBranchFilter && adminBranchFilter.options.length <= 1 && ME.role === "admin"){
-      adminBranchFilter.innerHTML = '<option value="all">All my Branches</option>' +
-        (ME.sectionNames||[]).map(b=>`<option value="${b}">${b}</option>`).join("");
-    }
-
-    if(status) status.textContent = "";
-    initDirectoryFilters();   // seed the Department/Unit filter dropdowns
-    renderEmployeeDirectory();
-    renderAdminEmployeeDirectory();
-  }catch(e){
-    if(status) status.textContent = "Could not load employees: " + (e.message||e);
+  const branchFilter = document.getElementById("emp_branch_filter");
+  if(branchFilter && branchFilter.options.length <= 1){
+    branchFilter.innerHTML = '<option value="all">All</option>' +
+      BRANCH_OPTIONS.map(b=>`<option value="${b}">${b}</option>`).join("") +
+      '<option value="__unset__">— Not set —</option>';
   }
+  // Admin's own branch filter - scoped to ONLY the branches this Admin is assigned to, never every branch.
+  const adminBranchFilter = document.getElementById("admin_emp_branch_filter");
+  if(adminBranchFilter && adminBranchFilter.options.length <= 1 && ME.role === "admin"){
+    adminBranchFilter.innerHTML = '<option value="all">All my Branches</option>' +
+      (ME.sectionNames||[]).map(b=>`<option value="${b}">${b}</option>`).join("");
+  }
+  initDirectoryFilters();   // seed the Department/Unit filter dropdowns
+  EMPLOYEES_LOADED = true;  // last, and only on success
+}
+
+// Forces a fresh load of everything, then redraws both directories (used after bulk uploads).
+async function loadEmployeeDirectory(){
+  EMPLOYEES_LOADED = false;
+  if(!(await ensureEmployeesLoaded())) return;
+  renderEmployeeDirectory();
+  renderAdminEmployeeDirectory();
 }
 
 // =========================================================
@@ -2282,6 +2295,9 @@ function detailRow(label, valueHtml){
 
 // Opens the full profile for one employee, replacing the list in the wrap.
 function openEmployeeDetail(empId){
+  // The light copy of the staff list (used by Manage Role search) has no phone, bank or department lists, and
+  // an Edit-and-Save on it would blank those fields. Always open a profile on the full data.
+  if(!EMPLOYEES_LOADED){ ensureEmployeesLoaded().then(ok=>{ if(ok) openEmployeeDetail(empId); }); return; }
   const wrap = currentDirWrap();
   if(!wrap) return;
   const e = EMPLOYEES.find(x=>x.id === empId);
@@ -2549,9 +2565,7 @@ async function saveEmployeeDetails(empId){
         EMPLOYEES[empIdx].salary = (sv !== "" && sv !== null) ? Number(sv) : null;
       }
     }
-    renderEmployeeDirectory();
-    renderAdminEmployeeDirectory();
-    openEmployeeDetail(empId);       // reopen the (now-saved) profile
+    openEmployeeDetail(empId);       // reopen the (now-saved) profile; the list redraws when they press Back
     const st = document.getElementById("emp_detail_status");
     if(st){ st.className="status ok"; st.textContent="✅ Staff details saved."; }
   }catch(err){
@@ -3451,9 +3465,7 @@ async function grantAccessToEmployee(empId){
     // Patch in-memory — avoids a full DB reload.
     emp.has_system_access = true; emp.linked_profile_id = res.id; emp.linked_role = "user";
     await loadRoleDropdown(); // refresh MANAGEABLE_IDS so Manage Role sees the new account
-    renderEmployeeDirectory();
-    renderAdminEmployeeDirectory();
-    openEmployeeDetail(empId);
+    openEmployeeDetail(empId);   // the list redraws when they press Back (redrawing it here would cover this profile)
     const st2 = document.getElementById("emp_detail_status");
     if(st2){ st2.className = "status ok"; st2.textContent = "✅ Access granted. Username " + emp.employee_id + ", temporary password " + TEMP_ACCESS_PASSWORD + " (they must change it on first login)."; }
   }catch(e){
@@ -3557,8 +3569,6 @@ async function changeEmployeeRole(empId, profileId, currentRole){
     const changedEmp = EMPLOYEES.find(e=>e.id === empId);
     if(changedEmp) changedEmp.linked_role = newRole;
     await loadRoleDropdown();
-    renderEmployeeDirectory();
-    renderAdminEmployeeDirectory();
     openEmployeeDetail(empId);
   }catch(e){
     if(status) status.textContent = "\u274c " + (e.message||e);
@@ -3642,11 +3652,9 @@ async function loadRoleDropdown(){
     const rolesToLoad = ME.username === "itops3"
       ? ["admin","user","super_admin"]
       : ["admin","user"];
-    const { data } = await sb.from("profiles").select("id, role").in("role", rolesToLoad);
-    rows = data || [];
+    rows = await fetchAllRows(sb.from("profiles").select("id, role").in("role", rolesToLoad).order("id"));
   } else if(ME.role === "admin"){
-    const { data } = await sb.from("profiles").select("id, role").eq("created_by", ME.id).eq("role", "user");
-    rows = data || [];
+    rows = await fetchAllRows(sb.from("profiles").select("id, role").eq("created_by", ME.id).eq("role", "user").order("id"));
   }
   rows.forEach(r=>MANAGEABLE_IDS.add(r.id));
   resetManageRoleUI();
@@ -3674,6 +3682,14 @@ function renderRoleSearch(){
   document.getElementById("roleDetailsPanel").classList.add("hidden");
   if(!wrap) return;
   if(q.length < 1){ wrap.innerHTML = ""; return; }
+  if(!EMPLOYEES_LOADED && !EMPLOYEES_LITE_LOADED){
+    wrap.innerHTML = "<p class='sub' style='padding:8px 0;'>Loading staff…</p>";
+    ensureEmployeesForSearch().then(()=>{
+      if(EMPLOYEES_LOADED || EMPLOYEES_LITE_LOADED) renderRoleSearch();
+      else wrap.innerHTML = "<p class='sub' style='padding:8px 0;'>Could not load staff. Click the search box to try again.</p>";
+    });
+    return;
+  }
 
   let pool = EMPLOYEES;
   if(ME.role === "admin"){
@@ -3816,11 +3832,11 @@ async function openRolePanelForProfile(id){
         <label>Reset Password</label>
         <div class="pw-wrap">
           <input type="password" id="role_new_password" placeholder="New password (min 6 chars)" autocomplete="new-password">
-          <button class="pw-toggle" type="button" onclick="togglePw('role_new_password',this)">SHOW</button>
+          <button class="pw-toggle" type="button" onclick="togglePasswordField('role_new_password',this)">SHOW</button>
         </div>
         <div class="pw-wrap" style="margin-top:6px;">
           <input type="password" id="role_confirm_password" placeholder="Confirm new password" autocomplete="new-password">
-          <button class="pw-toggle" type="button" onclick="togglePw('role_confirm_password',this)">SHOW</button>
+          <button class="pw-toggle" type="button" onclick="togglePasswordField('role_confirm_password',this)">SHOW</button>
         </div>
         <button onclick="resetRolePassword('${id}')">Reset Password</button>
       </div>
@@ -3873,9 +3889,6 @@ async function openRolePanelForProfile(id){
   if(panel.scrollIntoView) panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
-window.onRoleEmpIdInput = onRoleEmpIdInput;
-window.roleContinue = roleContinue;
-window.renderRoleNameSearch = renderRoleNameSearch;
 window.pickRoleEmployee = pickRoleEmployee;
 window.goGrantAccessFromRole = goGrantAccessFromRole;
 window.openRolePanelForProfile = openRolePanelForProfile;
