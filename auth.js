@@ -121,6 +121,8 @@ async function requireAuth(loginPath) {
   const isItops = profile.username === "itops3";
   const readOnly = profile.role === "super_admin" && !isItops;
 
+  if(readOnly) _scheduleReadOnly();
+
   return {
     id: profile.id,
     username: profile.username,
@@ -134,11 +136,107 @@ async function requireAuth(loginPath) {
     departmentNames: departmentNames,
     canSelfManageTodos: !!profile.can_self_manage_todos,
     lastOpenModule: profile.last_open_module || null,
-    // Role access flags — check these instead of role === "super_admin" for write decisions
-    isItops: isItops,          // true only for itops3 — full system admin including role management
-    readOnly: readOnly         // true for all super_admin accounts except itops3 — view everything, change nothing
+    isItops: isItops,
+    readOnly: readOnly
   };
 }
+
+// ── Read-Only Enforcement ─────────────────────────────────────────────────────
+// Called automatically when a viewer super_admin logs in. Uses a MutationObserver
+// so it applies to every element the module renders dynamically — no module
+// file changes required. Allows filters, searches, downloads, and exports.
+// Blocks all add / save / submit / approve / delete / edit operations.
+
+function _scheduleReadOnly(){
+  if(document.readyState === "loading"){
+    document.addEventListener("DOMContentLoaded", ()=>setTimeout(_applyReadOnly, 300));
+  } else {
+    setTimeout(_applyReadOnly, 300);
+  }
+}
+
+// Button text that signals a write action — block these
+const _RO_WRITE = /^(save|submit|add\b|create|delete|remove|approve|reject|complete|generate label|upload|confirm|send|record|log entry|initiate|offload|dispatch|update|change|archive|assign|link|grant|revoke|switch operator|correct|reset password|mark as|close lot|open lot|set|apply changes|done|finish|process|pick|unlock|release|re-run|rerun|retest)/i;
+// Button text that signals a safe read action — always allow these
+const _RO_SAFE  = /^(search|filter|find|look|download|export|print|view|refresh|load|show|back|close|cancel|ok|got it|open report|preview|scan|lookup|check|select|go to|open detail|see|toggle|collapse|expand|branch|all branches|today|last|this week|this month|date|range|from|to|clear filter)/i;
+
+function _applyReadOnly(){
+  if(document.getElementById("rumbu-ro-banner")) return; // already applied
+
+  // 1. Banner
+  const banner = document.createElement("div");
+  banner.id = "rumbu-ro-banner";
+  banner.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:99999;background:#1F3864;color:#fff;"
+    +"font-size:12px;font-weight:700;text-align:center;padding:7px 14px;letter-spacing:.3px;"
+    +"box-shadow:0 2px 6px rgba(0,0,0,.3);";
+  banner.textContent = "👁  Read-Only Access — You can view all data, apply filters, and download reports. Changes to the database are not permitted.";
+  document.body.prepend(banner);
+  // Push content down so banner doesn't overlap the page header
+  const existing = parseInt(document.body.style.paddingTop)||0;
+  if(existing < 34) document.body.style.setProperty("padding-top","34px","important");
+
+  // 2. MutationObserver watches for dynamically rendered content
+  new MutationObserver(_roSweep).observe(document.body,{childList:true,subtree:true});
+  _roSweep();
+}
+
+function _roSweep(){
+  // Buttons
+  document.querySelectorAll("button:not([data-ro]),input[type=submit]:not([data-ro]),input[type=button]:not([data-ro])").forEach(el=>{
+    el.setAttribute("data-ro","1");
+    const txt = (el.textContent||el.value||el.innerText||"").trim();
+    const cls = el.className||"";
+    if(_RO_SAFE.test(txt)) return; // explicitly safe — leave alone
+    if(
+      _RO_WRITE.test(txt)            // write keyword in text
+      || /\bdanger\b/.test(cls)      // red/danger class
+      || /\bdelete\b/.test(cls)
+      || /\bsubmit\b/.test(cls)
+    ){
+      _roBlock(el);
+    }
+  });
+
+  // Text / number / date inputs — make readonly unless they are clearly a filter
+  document.querySelectorAll(
+    "input[type=text]:not([data-ro]),input[type=number]:not([data-ro]),"
+   +"input[type=email]:not([data-ro]),input[type=password]:not([data-ro]),"
+   +"input[type=date]:not([data-ro]),input[type=datetime-local]:not([data-ro]),"
+   +"input[type=time]:not([data-ro]),textarea:not([data-ro])"
+  ).forEach(el=>{
+    el.setAttribute("data-ro","1");
+    const id  = (el.id||"").toLowerCase();
+    const ph  = (el.placeholder||"").toLowerCase();
+    const nm  = (el.name||"").toLowerCase();
+    // Allow filter / search / date-range inputs
+    if(/search|filter|find|from|to_date|rep_|date_from|date_to|range/.test(id+ph+nm)) return;
+    el.setAttribute("readonly","");
+    el.style.cssText += ";background:var(--bg,#f5f7fa)!important;cursor:default;";
+  });
+
+  // Selects — disable unless they are clearly a filter or branch picker
+  document.querySelectorAll("select:not([data-ro])").forEach(el=>{
+    el.setAttribute("data-ro","1");
+    const id = (el.id||"").toLowerCase();
+    if(/branch|section|filter|search|range|rep_|from|to\b|date|period|status_filter|grade_filter|lot_filter/.test(id)) return;
+    el.disabled = true;
+    el.style.cssText += ";opacity:.5;cursor:default;";
+  });
+
+  // File inputs — disable upload
+  document.querySelectorAll("input[type=file]:not([data-ro])").forEach(el=>{
+    el.setAttribute("data-ro","1");
+    el.disabled = true;
+  });
+}
+
+function _roBlock(el){
+  el.disabled = true;
+  el.style.cssText += ";opacity:.3;cursor:not-allowed;";
+  el.title = "Read-only access — changes are not permitted";
+  el.addEventListener("click",e=>{e.preventDefault();e.stopImmediatePropagation();},true);
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 async function logout(loginPath) {
   await sb.auth.signOut();
