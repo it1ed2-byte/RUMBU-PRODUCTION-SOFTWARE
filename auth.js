@@ -20,9 +20,6 @@ const SUPABASE_URL = "https://betfhunzmhtdzgvufmfk.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp";
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-// Expose sb on window so module iframes can access it via window.parent.sb
-// (const is not a window property — this explicit assignment is required)
-window.sb = sb;
 
 // Derives the force-change-password page path from whatever loginPath
 // the caller passed in (e.g. "login.html" -> "force-change-password.html",
@@ -119,6 +116,11 @@ async function requireAuth(loginPath) {
     }
   }
 
+  // itops3 is the system IT administrator with full elevated access.
+  // All other super_admin accounts are Viewer-only (read-only across the system).
+  const isItops = profile.username === "itops3";
+  const readOnly = profile.role === "super_admin" && !isItops;
+
   return {
     id: profile.id,
     username: profile.username,
@@ -131,7 +133,10 @@ async function requireAuth(loginPath) {
     departmentIds: departmentIds,
     departmentNames: departmentNames,
     canSelfManageTodos: !!profile.can_self_manage_todos,
-    lastOpenModule: profile.last_open_module || null
+    lastOpenModule: profile.last_open_module || null,
+    // Role access flags — check these instead of role === "super_admin" for write decisions
+    isItops: isItops,          // true only for itops3 — full system admin including role management
+    readOnly: readOnly         // true for all super_admin accounts except itops3 — view everything, change nothing
   };
 }
 

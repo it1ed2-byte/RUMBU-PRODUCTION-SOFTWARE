@@ -2306,7 +2306,7 @@ function openEmployeeDetail(empId){
   // Access actions live here now that the list has no Action column.
   html += "<div class=\"card\" style=\"max-width:760px;\"><h3 style=\"margin-top:0;\">Access</h3>";
   if(e.has_system_access){
-    if(!isAdmin && e.linked_role !== "super_admin" && e.linked_profile_id){
+    if(!isAdmin && (e.linked_role !== "super_admin" || ME.username === "itops3") && e.linked_profile_id){
       // hr_console is a Rumbu-only role — AgriWatt is a separate company
       // that doesn't use that structure at all, so it's never even offered
       // as an option for someone whose Branch is AgriWatt, rather than
@@ -2325,7 +2325,7 @@ function openEmployeeDetail(empId){
     // Reset password — for when a staff member forgets theirs. Resets to the
     // temporary password and forces a change on next login. Not offered for
     // Super Admin accounts (protected server-side too).
-    if(e.linked_profile_id && e.linked_role !== "super_admin"){
+    if(e.linked_profile_id && (e.linked_role !== "super_admin" || ME.username === "itops3")){
       html += "<div style=\"margin-top:12px;padding-top:12px;border-top:1px solid var(--line);\">" +
         "<label>Forgot their password?</label>" +
         "<button style=\"margin:0;padding:8px 12px;\" onclick=\"resetAccessPassword(" + e.id + ")\">Reset Password</button>" +
@@ -3709,10 +3709,10 @@ function proceedRoleForEmployee(emp){
     return;
   }
 
-  if(emp.linked_role === "super_admin"){
+  if(emp.linked_role === "super_admin" && ME.username !== "itops3"){
     noacc.className = "status err"; noacc.style.cssText = "";
     noacc.classList.remove("hidden");
-    noacc.textContent = esc(emp.full_name) + " is a Super Admin account and cannot be managed here.";
+    noacc.textContent = esc(emp.full_name) + " is a Super Admin (viewer) account. Only itops3 can manage Super Admin accounts.";
     return;
   }
 
@@ -3761,6 +3761,53 @@ async function openRolePanelForProfile(id){
   const branchPickerHtml = `
       <label>Branch / Section (governs which Branch's data and dropdowns this account sees everywhere in the app)</label>
       <div id="role_sections"></div>`;
+
+  // ── Super Admin management panel (itops3 only) ─────────────────────────────
+  if(profile.role === "super_admin"){
+    panel.innerHTML = `
+      <div style="background:rgba(31,56,100,.08);border:1px solid #93c5fd;border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:13px;">
+        ℹ️ <b>Super Admin — Viewer role.</b> This account can see everything in the system but cannot make any changes.
+        Only <b>itops3</b> can manage Super Admin accounts.
+      </div>
+      <p class="sub" style="margin-top:0;">Managing <b>${esc(profile.username)}</b> — current role: <b>super_admin (Viewer)</b></p>
+
+      <label>Username</label>
+      <input id="role_username" value="${esc(profile.username)}">
+
+      <label style="margin-top:16px;">Change Role</label>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:6px;">
+        <select id="sa_new_role" style="flex:1;margin:0;">
+          <option value="super_admin">super_admin (Viewer — read-only)</option>
+          <option value="admin">admin (Write access — Section-scoped)</option>
+          <option value="user">user (Limited access)</option>
+        </select>
+        <button style="margin:0;padding:8px 14px;" onclick="changeRoleFromPanel('${id}','${esc(profile.username)}')">Change Role</button>
+      </div>
+
+      <button style="margin-top:14px;" onclick="saveRoleUsername('${id}')">Save Username</button>
+      <div class="status" id="role_status"></div>
+
+      <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line);">
+        <label>Reset Password</label>
+        <div class="pw-wrap">
+          <input type="password" id="role_new_password" placeholder="New password (min 6 chars)" autocomplete="new-password">
+          <button class="pw-toggle" type="button" onclick="togglePw('role_new_password',this)">SHOW</button>
+        </div>
+        <div class="pw-wrap" style="margin-top:6px;">
+          <input type="password" id="role_confirm_password" placeholder="Confirm new password" autocomplete="new-password">
+          <button class="pw-toggle" type="button" onclick="togglePw('role_confirm_password',this)">SHOW</button>
+        </div>
+        <button onclick="resetRolePassword('${id}')">Reset Password</button>
+      </div>
+
+      <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line);">
+        <button class="danger" onclick="deleteRoleAccount('${id}','${esc(profile.username)}')">DELETE ACCOUNT</button>
+      </div>`;
+    panel.classList.remove("hidden");
+    if(panel.scrollIntoView) panel.scrollIntoView({ behavior:"smooth", block:"nearest" });
+    return;
+  }
+  // ────────────────────────────────────────────────────────────────────────────
 
   if(profile.role === "admin"){
     const { data: ap } = await sb.from("assigned_pages").select("page_id").eq("profile_id", id);
@@ -3888,6 +3935,42 @@ async function resetRolePassword(id){
     status.className = "status err"; status.textContent = "❌ " + e.message;
   }
 }
+
+async function saveRoleUsername(id){
+  const status = document.getElementById("role_status");
+  const username = (document.getElementById("role_username")||{}).value.trim();
+  if(!username){ status.className="status err"; status.textContent="Username cannot be empty."; return; }
+  status.className="status"; status.textContent="Saving...";
+  try{
+    const { error } = await sb.from("profiles").update({ username }).eq("id", id);
+    if(error) throw error;
+    status.className="status ok"; status.textContent="✅ Username updated.";
+    await logActivity("account_edited", ME.username + " updated username for a Super Admin account to \"" + username + "\"");
+    await loadRoleDropdown();
+  }catch(e){ status.className="status err"; status.textContent="❌ " + e.message; }
+}
+window.saveRoleUsername = saveRoleUsername;
+
+async function changeRoleFromPanel(id, currentUsername){
+  const sel = document.getElementById("sa_new_role");
+  const newRole = sel ? sel.value : null;
+  if(!newRole) return;
+  if(newRole === "super_admin"){
+    alert("This account is already a Super Admin (Viewer).");
+    return;
+  }
+  if(!confirm("Change " + currentUsername + " from super_admin to " + newRole + "?\n\nNote: assigning admin or user roles will give this account write access within their assigned sections and pages.")) return;
+  const status = document.getElementById("role_status");
+  status.className="status"; status.textContent="Changing role...";
+  try{
+    const res = await callEdgeFunction({ action:"change_role", target_id:id, new_role:newRole });
+    status.className="status ok"; status.textContent="✅ " + res.message;
+    await logActivity("role_changed", ME.username + " changed role for \"" + currentUsername + "\" from super_admin to " + newRole);
+    await loadRoleDropdown();
+    await openRolePanelForProfile(id);
+  }catch(e){ status.className="status err"; status.textContent="❌ " + e.message; }
+}
+window.changeRoleFromPanel = changeRoleFromPanel;
 
 async function deleteRoleAccount(id, username){
   if(!confirm("Permanently delete the account \"" + username + "\"?\n\nThis cannot be undone.")) return;
