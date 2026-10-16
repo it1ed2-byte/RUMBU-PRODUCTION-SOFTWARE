@@ -210,10 +210,11 @@ async function _renderNav(nav) {
   /* Fetch pages from the database */
   let pages = [];
   try {
-    // Use the authenticated client the page already set up via guardPage()
-    // Falls back to parent sb; avoids calling the now-removed _getSb()
-    const sb = window._sb ?? window.parent?.sb;
-    if (!sb) throw new Error('No Supabase client available');
+    // Use window._sb if the page's guardPage() already ran, otherwise call
+    // _getSb() directly (defined in auth-contracts.js, loaded first).
+    // _getSb() builds a fresh authenticated client from the stored session
+    // in localStorage via window.parent.supabase — no waiting required.
+    const sb = window._sb ?? _getSb();
     const { data, error } = await sb
       .from('pages')
       .select('id, name, module_path')
