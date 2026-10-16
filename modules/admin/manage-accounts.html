@@ -2057,7 +2057,11 @@ async function addEmployee(){
     document.getElementById("new_emp_unit").innerHTML = '<option value="">— none —</option>';
     document.getElementById("new_emp_unit").disabled = true;
 
-    await loadEmployeeDirectory();
+    // Push the new record into the in-memory array and re-render — no full DB reload.
+    EMPLOYEES.push({ ...inserted, salary: salaryVal ? Number(salaryVal) : undefined, linked_role: null });
+    EMPLOYEES.sort((a,b)=>(a.full_name||"").localeCompare(b.full_name||""));
+    renderEmployeeDirectory();
+    renderAdminEmployeeDirectory();
   }catch(e){
     status.className = "status err";
     status.textContent = (e.message && e.message.toLowerCase().indexOf("duplicate") !== -1)
@@ -2103,11 +2107,11 @@ async function addEmployeeAsAdmin(){
 
   status.className = "status"; status.textContent = "Adding...";
   try{
-    const { error } = await sb.from("employees").insert({
+    const { data: inserted, error } = await sb.from("employees").insert({
       employee_id: employeeId, full_name: fullName, branch, department: deptName, unit: unitName, rank,
       email, phone, bank_name: bankName, bank_account_number: bankAccountNumber,
       badge_number: badgeNumber, employee_type: employeeType, location, date_of_joining: dateOfJoining
-    });
+    }).select().single();
     if(error) throw error;
 
     status.className = "status ok"; status.textContent = "✅ Employee added.";
@@ -2121,7 +2125,10 @@ async function addEmployeeAsAdmin(){
     document.getElementById("admin_new_emp_unit").innerHTML = '<option value="">— none —</option>';
     document.getElementById("admin_new_emp_unit").disabled = true;
 
-    await loadEmployeeDirectory();
+    // Push into the in-memory array — no full DB reload.
+    if(inserted){ EMPLOYEES.push({ ...inserted, salary: undefined, linked_role: null }); EMPLOYEES.sort((a,b)=>(a.full_name||"").localeCompare(b.full_name||"")); }
+    renderEmployeeDirectory();
+    renderAdminEmployeeDirectory();
   }catch(e){
     status.className = "status err";
     status.textContent = (e.message && e.message.toLowerCase().indexOf("duplicate") !== -1)
@@ -2532,7 +2539,18 @@ async function saveEmployeeDetails(empId){
     }
 
     await logActivity("employee_updated", ME.username + " updated employee \"" + fullName + "\" (" + e.employee_id + ")");
-    await loadEmployeeDirectory();   // refresh EMPLOYEES from the database
+    // Patch in-memory — no need to reload everything from DB for one record change.
+    const empIdx = EMPLOYEES.findIndex(x=>x.id === empId);
+    if(empIdx !== -1){
+      Object.assign(EMPLOYEES[empIdx], { full_name: fullName, branch, department, unit, rank, email, phone,
+        bank_name: bankName, bank_account_number: bankAccountNumber, sort_code: sortCode });
+      if(canSeeSalary){
+        const sv = document.getElementById("edit_emp_salary").value;
+        EMPLOYEES[empIdx].salary = (sv !== "" && sv !== null) ? Number(sv) : null;
+      }
+    }
+    renderEmployeeDirectory();
+    renderAdminEmployeeDirectory();
     openEmployeeDetail(empId);       // reopen the (now-saved) profile
     const st = document.getElementById("emp_detail_status");
     if(st){ st.className="status ok"; st.textContent="✅ Staff details saved."; }
@@ -3430,8 +3448,11 @@ async function grantAccessToEmployee(empId){
     // Link the account to the employee row (sets linked_profile_id / has_system_access).
     await callEdgeFunction({ action: "link_employee", employee_id: emp.id, profile_id: res.id });
     await logActivity("access_granted", ME.username + " granted access to \"" + emp.full_name + "\" (" + emp.employee_id + ") - username " + emp.employee_id);
-    await loadEmployeeDirectory();
-    await loadRoleDropdown(); // refresh MANAGEABLE_IDS — otherwise Manage Role wrongly says this brand-new account "cannot be managed" until a full page reload
+    // Patch in-memory — avoids a full DB reload.
+    emp.has_system_access = true; emp.linked_profile_id = res.id; emp.linked_role = "user";
+    await loadRoleDropdown(); // refresh MANAGEABLE_IDS so Manage Role sees the new account
+    renderEmployeeDirectory();
+    renderAdminEmployeeDirectory();
     openEmployeeDetail(empId);
     const st2 = document.getElementById("emp_detail_status");
     if(st2){ st2.className = "status ok"; st2.textContent = "✅ Access granted. Username " + emp.employee_id + ", temporary password " + TEMP_ACCESS_PASSWORD + " (they must change it on first login)."; }
@@ -3505,8 +3526,13 @@ async function linkPendingEmployeeIfAny(newProfileId){
   }catch(e){
     console.warn("Employee link failed (account was still created):", e.message||e);
   }
+  const pe = PENDING_EMPLOYEE;
   PENDING_EMPLOYEE = null;
-  await loadEmployeeDirectory();
+  // Patch the specific employee in-memory — avoids a full DB reload.
+  const linked = EMPLOYEES.find(e=>e.id === pe.id);
+  if(linked){ linked.has_system_access = true; linked.linked_profile_id = newProfileId; linked.linked_role = "user"; }
+  renderEmployeeDirectory();
+  renderAdminEmployeeDirectory();
 }
 
 // Changes an already-linked account's role directly from the Employee
@@ -3527,8 +3553,13 @@ async function changeEmployeeRole(empId, profileId, currentRole){
     const res = await callEdgeFunction(payload);
     await logActivity("role_changed", ME.username + " changed role for \"" + res.username + "\" to " + newRole);
     if(status) status.textContent = "\u2705 " + res.message;
-    await loadEmployeeDirectory();
+    // Patch in-memory — only the linked_role changed, no need to re-fetch everything.
+    const changedEmp = EMPLOYEES.find(e=>e.id === empId);
+    if(changedEmp) changedEmp.linked_role = newRole;
     await loadRoleDropdown();
+    renderEmployeeDirectory();
+    renderAdminEmployeeDirectory();
+    openEmployeeDetail(empId);
   }catch(e){
     if(status) status.textContent = "\u274c " + (e.message||e);
   }
