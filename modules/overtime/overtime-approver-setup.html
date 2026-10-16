@@ -119,6 +119,10 @@
           <div class="step">Step 6</div><div class="name">Accounting</div>
           <div class="desc">Central. Processes the payment. Assign one or more accounting staff.</div>
         </button>
+        <button class="tile" onclick="showView('viewerView'); onViewerBranch();">
+          <div class="step">View only</div><div class="name">Overtime Viewer</div>
+          <div class="desc">Can watch overtime in the branches you choose. Cannot approve, reject or change anything.</div>
+        </button>
         <button class="tile" onclick="showView('overviewView'); loadOverview();">
           <div class="step">Overview</div><div class="name">All Assignments</div>
           <div class="desc">See every role and who is assigned, across all branches, on one screen.</div>
@@ -244,6 +248,24 @@
     </div>
   </div>
 
+  <!-- ================= OVERTIME VIEWER (view only) ================= -->
+  <div id="viewerView" style="display:none;">
+    <div class="backbar"><button class="mini grey" onclick="home()">← Back to setup</button></div>
+    <div class="card">
+      <h3>Overtime Viewer — view only</h3>
+      <p class="sub">People who can watch overtime in the branches you choose: every request, the step it has reached, and the staff and hours. They cannot approve, reject or change anything. Assign per branch; the same person can be added to more than one branch.</p>
+      <div class="row"><div><label>Branch</label><select id="view_branch" onchange="onViewerBranch()"></select></div></div>
+      <label style="margin-top:12px;">Add viewers (search by name or ID)</label>
+      <input type="text" id="view_search" placeholder="Type a name or employee ID" oninput="renderPicker('view')">
+      <div class="picker" id="view_picker"></div>
+      <div class="selwrap" id="view_sel"></div>
+      <div class="btnbar"><button class="green" onclick="saveViewer()">Save Viewers</button></div>
+      <div class="status" id="view_status"></div>
+      <h4>Currently assigned for this branch</h4>
+      <div id="view_list"></div>
+    </div>
+  </div>
+
   <!-- ================= OVERVIEW ================= -->
   <div id="overviewView" style="display:none;">
     <div class="backbar"><button class="mini grey" onclick="home()">← Back to setup</button></div>
@@ -266,7 +288,7 @@
 let ME = null;
 let EMPLOYEES = [];
 let DEPT_CACHE = {};                 // branch -> [dept names]
-const SEL = { init:new Set(), fill:new Set(), pm:new Set(), hrr:new Set(), hrp:new Set(), acc:new Set() };
+const SEL = { init:new Set(), fill:new Set(), pm:new Set(), hrr:new Set(), hrp:new Set(), acc:new Set(), view:new Set() };
 const PM_DEPTS = new Set();          // selected departments for the plant-manager scope
 
 // ---------- helpers ----------
@@ -282,7 +304,7 @@ async function logActivity(actionType, description){
 }
 
 function showView(id){
-  ["homeView","initView","fillerView","pmView","hrRevView","hrPayView","acctView","overviewView"].forEach(v=>{
+  ["homeView","initView","fillerView","pmView","hrRevView","hrPayView","acctView","viewerView","overviewView"].forEach(v=>{
     const el = document.getElementById(v); if(el) el.style.display = (v===id) ? "block" : "none";
   });
   try{ window.scrollTo(0,0); }catch(e){}
@@ -320,7 +342,7 @@ async function branchNames(){
 async function populateBranches(){
   const names = await branchNames();
   const opts = names.map(n => "<option value=\"" + esc(n) + "\">" + esc(n) + "</option>").join("");
-  ["init_branch","fill_branch","pm_branch","hrr_branch"].forEach(id=>{
+  ["init_branch","fill_branch","pm_branch","hrr_branch","view_branch"].forEach(id=>{
     const sel = document.getElementById(id);
     if(sel){ sel.innerHTML = opts; sel.disabled = (names.length <= 1 && ME.role !== "super_admin"); }
   });
@@ -603,6 +625,35 @@ async function loadAcct(){
 }
 
 // ---------- shared list renderer + remove ----------
+// ==========================================================
+// OVERTIME VIEWER (view only, per branch)
+// ==========================================================
+async function onViewerBranch(){ renderPicker("view"); await loadViewerList(); }
+async function saveViewer(){
+  const st = document.getElementById("view_status");
+  const branch = document.getElementById("view_branch").value;
+  if(!branch){ st.className="status err"; st.textContent="Select a branch."; return; }
+  if(!SEL.view.size){ st.className="status err"; st.textContent="Select at least one person."; return; }
+  st.className="status"; st.textContent="Saving…";
+  try{
+    const rows = Array.from(SEL.view).map(id => ({ section: branch, employee_id: id }));
+    const { error } = await sb.from("overtime_viewers").insert(rows);
+    if(error) throw error;
+    await logActivity("overtime_viewer_assigned", ME.username + " assigned " + rows.length + " overtime viewer(s) for " + branch);
+    st.className="status ok"; st.textContent="✅ Saved.";
+    clearSel("view"); await loadViewerList(); loadOverviewIfOpen();
+  }catch(e){ st.className="status err"; st.textContent = dupMsg(e, "already a viewer for this branch"); }
+}
+async function loadViewerList(){
+  const branch = document.getElementById("view_branch").value;
+  const wrap = document.getElementById("view_list");
+  if(!branch){ wrap.innerHTML=""; return; }
+  wrap.innerHTML = "<p class='loading'>Loading…</p>";
+  const { data, error } = await sb.from("overtime_viewers").select("id, employee_id").eq("section", branch);
+  if(error){ wrap.innerHTML = "<p class='status err'>❌ " + esc(error.message) + "</p>"; return; }
+  renderSimpleList(wrap, data||[], r=>nameFor(r.employee_id), r=>codeFor(r.employee_id), "overtime_viewers", "loadViewerList");
+}
+
 function renderSimpleList(wrap, rows, nameFn, codeFn, table, reloadFn){
   if(!rows.length){ wrap.innerHTML = "<p class='empty'>No one assigned yet.</p>"; return; }
   let html = "<table><thead><tr><th>Name</th><th>ID</th><th></th></tr></thead><tbody>";
@@ -643,10 +694,11 @@ async function loadOverview(){
   const wrap = document.getElementById("overviewWrap");
   wrap.innerHTML = "<p class='loading'>Loading…</p>";
   try{
-    const [{ data: inits }, { data: fillers }, { data: apprs }] = await Promise.all([
+    const [{ data: inits }, { data: fillers }, { data: apprs }, { data: viewers }] = await Promise.all([
       sb.from("overtime_initiators").select("section, employee_id").order("section"),
       sb.from("overtime_step2_fillers").select("section, department, employee_id").order("section"),
-      sb.from("overtime_step_approvers").select("section, step, employee_id, departments").order("step")
+      sb.from("overtime_step_approvers").select("section, step, employee_id, departments").order("step"),
+      sb.from("overtime_viewers").select("section, employee_id").order("section")
     ]);
     const rowsHtml = [];
     const push = (scope, role, people) => rowsHtml.push("<tr><td>" + esc(scope) + "</td><td>" + esc(role) + "</td><td>" + esc(people) + "</td></tr>");
@@ -676,6 +728,11 @@ async function loadOverview(){
       const people = (apprs||[]).filter(a=>a.step===step).map(a=>nameFor(a.employee_id));
       if(people.length) push("All branches (central)", stepLabel[step], people.join(", "));
     });
+
+    // viewers, per branch (view only)
+    const byView = {};
+    (viewers||[]).forEach(v=>{ (byView[v.section] = byView[v.section] || []).push(nameFor(v.employee_id)); });
+    Object.keys(byView).sort().forEach(k => push(k, "Viewer (view only)", byView[k].join(", ")));
 
     if(!rowsHtml.length){ wrap.innerHTML = "<p class='empty'>Nothing assigned yet.</p>"; return; }
     wrap.innerHTML = "<table><thead><tr><th>Scope</th><th>Role</th><th>People</th></tr></thead><tbody>" + rowsHtml.join("") + "</tbody></table>";
