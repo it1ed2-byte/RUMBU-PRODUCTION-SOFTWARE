@@ -1775,11 +1775,39 @@ let BRANCH_OPTIONS = [];
 // picks a filter; every entry point below shares this one gate rather
 // than each deciding independently.
 let EMPLOYEES_LOADED = false;
+let EMPLOYEES_LITE_LOADED = false; // lightweight load for Manage Role search — no salaries/departments
 async function ensureEmployeesLoaded(){
-  if(EMPLOYEES_LOADED) return true;   // already loaded — proceed as normal
+  if(EMPLOYEES_LOADED) return true;
   EMPLOYEES_LOADED = true;
-  await loadEmployeeDirectory();       // fetches everyone, then renders both directories itself
-  return false;                        // signals "this call did the loading — nothing left to do"
+  await loadEmployeeDirectory();
+  return false;
+}
+// Loads only the fields Manage Role search needs (name, ID, branch, access,
+// role). Much faster than the full directory load — no salaries or dept/unit data.
+// Safe to call repeatedly; returns immediately if employees are already loaded.
+async function ensureEmployeesForSearch(){
+  if(EMPLOYEES_LOADED || EMPLOYEES_LITE_LOADED) return;
+  EMPLOYEES_LITE_LOADED = true;
+  try{
+    const [emps, profs] = await Promise.all([
+      fetchAllRows(sb.from("employees")
+        .select("id,employee_id,full_name,branch,department,has_system_access,linked_profile_id")
+        .order("full_name")),
+      sb.from("profiles").select("id,role")
+        .in("role",["admin","user","super_admin","hr_console"])
+        .then(r=>r.data||[])
+    ]);
+    const roleMap = {};
+    profs.forEach(p=>{ roleMap[p.id] = p.role; });
+    // Only populate EMPLOYEES if the full load hasn't happened yet
+    if(!EMPLOYEES_LOADED){
+      EMPLOYEES = emps.map(e=>({
+        ...e,
+        salary: null,
+        linked_role: e.linked_profile_id ? (roleMap[e.linked_profile_id]||null) : null
+      }));
+    }
+  }catch(e){ console.warn("ensureEmployeesForSearch failed:", e); }
 }
 
 // Lightweight startup for the Employee Directory: populate just the
@@ -1836,45 +1864,38 @@ async function loadEmployeeDirectory(){
   const status = document.getElementById("emp_dir_status");
   if(status) status.textContent = "Loading…";
   try{
-    const emps = await fetchAllRows(sb.from("employees").select("*").order("full_name"));
-    const sals = await fetchAllRows(sb.from("employee_salaries").select("*"));
+    // Phase 1 — parallel: employees, salaries, departments and branches all at once.
+    const [emps, sals, deptRows, secData] = await Promise.all([
+      fetchAllRows(sb.from("employees").select("*").order("full_name")),
+      fetchAllRows(sb.from("employee_salaries").select("*")),
+      sb.from("departments").select("id,name,section").order("name").then(r=>r.data||[]),
+      !BRANCH_OPTIONS.length ? sb.from("app_sections").select("name").order("name").then(r=>r.data||[]) : Promise.resolve(null)
+    ]);
+
     const salaryMap = {};
-    (sals||[]).forEach(s=> salaryMap[s.employee_id] = s.salary);
+    (sals||[]).forEach(s=>{ salaryMap[s.employee_id] = s.salary; });
+    ALL_DEPARTMENTS = deptRows;
+    if(secData) BRANCH_OPTIONS = secData.map(s=>s.name);
 
-    // Fetch the current role for every linked account so Employee Directory
-    // can offer a Change Role control instead of just a static "Has Access" badge.
-    const linkedIds = (emps||[]).map(e=>e.linked_profile_id).filter(Boolean);
-    let roleMap = {};
-    if(linkedIds.length){
-      const profs = await fetchAllRows(sb.from("profiles").select("id, role").in("id", linkedIds));
-      (profs||[]).forEach(p=>{ roleMap[p.id] = p.role; });
-    }
+    // Phase 2 — parallel: profile roles (needs employee IDs) and units (needs dept IDs).
+    const linkedIds = emps.map(e=>e.linked_profile_id).filter(Boolean);
+    const deptIds   = deptRows.map(d=>d.id);
+    const [profs, unitRows] = await Promise.all([
+      linkedIds.length ? fetchAllRows(sb.from("profiles").select("id,role").in("id",linkedIds)) : Promise.resolve([]),
+      deptIds.length   ? sb.from("units").select("id,name,department_id").in("department_id",deptIds).order("name").then(r=>r.data||[]) : Promise.resolve([])
+    ]);
 
-    EMPLOYEES = (emps||[]).map(e=>({
+    const roleMap = {};
+    (profs||[]).forEach(p=>{ roleMap[p.id] = p.role; });
+    ALL_UNITS = unitRows;
+
+    EMPLOYEES = emps.map(e=>({
       ...e,
       salary: salaryMap[e.id],
-      linked_role: e.linked_profile_id ? (roleMap[e.linked_profile_id] || null) : null
+      linked_role: e.linked_profile_id ? (roleMap[e.linked_profile_id]||null) : null
     }));
-
-    // Load the known Branch list once, for both the filter dropdown and the
-    // per-row inline edit control.
-    if(!BRANCH_OPTIONS.length){
-      const { data: sections } = await sb.from("app_sections").select("name").order("name");
-      BRANCH_OPTIONS = (sections||[]).map(s=>s.name);
-    }
-    // Load every real Department/Unit once too, for the Employee Directory's
-    // inline Department/Unit dropdowns — same source of truth as "Manage
-    // Departments & Units", refreshed every time the directory reloads so a
-    // department/unit added there shows up here without a page refresh.
-    const { data: deptRows } = await sb.from("departments").select("id,name,section").order("name");
-    ALL_DEPARTMENTS = deptRows || [];
-    const deptIds = ALL_DEPARTMENTS.map(d=>d.id);
-    if(deptIds.length){
-      const { data: unitRows } = await sb.from("units").select("id,name,department_id").in("department_id", deptIds).order("name");
-      ALL_UNITS = unitRows || [];
-    } else {
-      ALL_UNITS = [];
-    }
+    // Mark as fully loaded so ensureEmployeesForSearch knows not to duplicate work
+    EMPLOYEES_LOADED = true;
     const branchFilter = document.getElementById("emp_branch_filter");
     if(branchFilter && branchFilter.options.length <= 1){
       branchFilter.innerHTML = '<option value="all">All</option>' +
@@ -3608,7 +3629,10 @@ function resetManageRoleUI(){
 // Single unified search — matches on name OR employee ID, shows results inline.
 // Clicking a result immediately opens that person's role panel (or explains
 // why they cannot be managed here).
-function renderRoleSearch(){
+async function renderRoleSearch(){
+  // Ensure we have at minimum the lightweight employee list before searching.
+  // This is a no-op if the full directory has already been loaded.
+  await ensureEmployeesForSearch();
   const q = (document.getElementById("role_search").value || "").trim().toLowerCase();
   const wrap = document.getElementById("role_search_results");
   document.getElementById("role_no_access_msg").classList.add("hidden");
