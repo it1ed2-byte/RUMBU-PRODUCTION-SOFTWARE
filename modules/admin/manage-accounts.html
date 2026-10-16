@@ -2316,7 +2316,7 @@ function openEmployeeDetail(empId){
         .filter(r=>r !== "hr_console" || !isAgriwattBranch(e.branch));
       html += "<label>Change role</label>" +
         "<select id=\"chg_role_" + e.id + "\" style=\"width:auto;display:inline-block;margin:0 8px 0 0;\">" +
-        otherRoles.map(r=>"<option value=\"" + r + "\">" + r + "</option>").join("") +
+        otherRoles.map(r=>"<option value=\"" + r + "\">" + (r==="super_admin"?"super_admin (Viewer — read-only)":r) + "</option>").join("") +
         "</select>" +
         "<button style=\"margin:0;padding:8px 12px;\" onclick=\"changeEmployeeRole(" + e.id + ",'" + e.linked_profile_id + "','" + e.linked_role + "')\">Change Role</button>";
     } else {
@@ -3511,7 +3511,7 @@ async function changeEmployeeRole(empId, profileId, currentRole){
   if(status) status.textContent = "Updating role…";
   try{
     const payload = { action:"change_role", target_id: profileId, new_role: newRole };
-    if(newRole === "super_admin") payload.super_admin_type = "technical";
+    if(newRole === "super_admin") payload.super_admin_type = "viewer"; // read-only by default
     const res = await callEdgeFunction(payload);
     await logActivity("role_changed", ME.username + " changed role for \"" + res.username + "\" to " + newRole);
     if(status) status.textContent = "\u2705 " + res.message;
@@ -3595,7 +3595,11 @@ async function loadRoleDropdown(){
   MANAGEABLE_IDS = new Set();
   let rows = [];
   if(ME.role === "super_admin"){
-    const { data } = await sb.from("profiles").select("id, role").in("role", ["admin","user"]);
+    // itops3 can manage everyone including other super_admin accounts
+    const rolesToLoad = ME.username === "itops3"
+      ? ["admin","user","super_admin"]
+      : ["admin","user"];
+    const { data } = await sb.from("profiles").select("id, role").in("role", rolesToLoad);
     rows = data || [];
   } else if(ME.role === "admin"){
     const { data } = await sb.from("profiles").select("id, role").eq("created_by", ME.id).eq("role", "user");
