@@ -52,6 +52,25 @@ function _getSb() {
  * Shows a lock screen and returns null for anyone not authorised.
  * @returns {Promise<{user, profile, permissions: Set<string>, sb} | null>}
  */
+/**
+ * Saves the current contracts sub-page to localStorage and the user's
+ * profile row so that a browser refresh — or a new login on any device —
+ * restores exactly the page they were on rather than defaulting to whatever
+ * was last opened from the main app sidebar.
+ * Fire-and-forget: does not block page initialisation.
+ */
+function _cntSaveCurrentPage(sb, userId) {
+  try {
+    const stem  = window.location.pathname.split('/').pop().replace(/\.html?$/i, '');
+    const entry = { dept: 'contracts', module: stem, label: stem, query: '' };
+    localStorage.setItem('rumbu_open_module', JSON.stringify(entry));
+    sb.from('profiles')
+      .update({ last_open_module: entry })
+      .eq('id', userId)
+      .then(() => {}).catch(() => {});
+  } catch (_) {}
+}
+
 async function guardPage() {
   const sb = _getSb();
 
@@ -70,6 +89,7 @@ async function guardPage() {
     .maybeSingle();
 
   if (mainProfile?.role === 'super_admin') {
+    _cntSaveCurrentPage(sb, user.id);
     return {
       user,
       profile: {
@@ -120,6 +140,7 @@ async function guardPage() {
 
   const permissions = new Set((permRows ?? []).map(r => r.code));
 
+  _cntSaveCurrentPage(sb, user.id);
   return { user, profile, permissions, sb };
 }
 
