@@ -41,6 +41,11 @@
   button.mini{padding:6px 11px;font-size:12px;}
   button.green{background:var(--green);} button.green:hover{background:#166a2c;}
   button.grey{background:#6b7280;} button.grey:hover{background:#565d68;}
+  button.red{background:var(--red);} button.red:hover{background:#a02f23;}
+  .rejpanel{margin-top:16px;padding:14px 16px;border:1px solid var(--red);border-radius:10px;background:rgba(192,57,43,.06);}
+  .rejpanel label.dept{display:flex;align-items:center;gap:8px;font-weight:normal;font-size:13px;padding:5px 2px;cursor:pointer;}
+  .rejpanel label.dept input{width:auto;}
+  .rejpanel textarea{width:100%;min-height:70px;}
   .link-btn{background:none;border:none;color:var(--blue);font-weight:700;cursor:pointer;font-size:13px;padding:0;text-decoration:underline;}
   .links{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px;}
   .toolbar{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:6px;}
@@ -114,6 +119,18 @@
       <div id="attachWrap"></div>
       <div class="btnbar">
         <button class="green" id="markPaidBtn" onclick="markFormPaid()">Mark this form as Paid</button>
+        <button class="red" id="rejectBtn" onclick="toggleReject()">Reject back to Step 5…</button>
+      </div>
+      <div class="rejpanel" id="rejectPanel" style="display:none;">
+        <h4 style="margin:0 0 6px;">Reject back to Step 5 (HR Payment)</h4>
+        <p class="sub" style="margin:0 0 10px;">Tick the departments to send back. Any you leave unticked stay here for payment. Step 5 will see your reason and must respond to it before approving again.</p>
+        <div id="rejectDepts"></div>
+        <label style="margin-top:10px;">Reason <span style="color:var(--red);">*</span></label>
+        <textarea id="rejectReason" placeholder="What is wrong, and what must Step 5 correct?"></textarea>
+        <div class="btnbar" style="margin-top:10px;">
+          <button class="red" onclick="rejectToStep5()">Send back to Step 5</button>
+          <button class="grey" onclick="toggleReject()">Cancel</button>
+        </div>
       </div>
       <div class="status" id="formStatus"></div>
     </div>
@@ -312,6 +329,10 @@ async function openForm(initiationId, paid){
   // Paid forms are a read-only record: hide the "Mark as Paid" action and the back button returns to the Paid Record.
   const markBtn = document.getElementById("markPaidBtn");
   if(markBtn) markBtn.style.display = paid ? "none" : "";
+  const rejBtn = document.getElementById("rejectBtn");
+  if(rejBtn) rejBtn.style.display = paid ? "none" : "";
+  document.getElementById("rejectPanel").style.display = "none";
+  document.getElementById("rejectReason").value = "";
   const formBack = document.getElementById("formBackBtn");
   if(formBack) formBack.textContent = paid ? "← Back to Paid Record" : "← Back to list";
   const wrap = document.getElementById("summaryWrap");
@@ -332,7 +353,17 @@ async function openForm(initiationId, paid){
     const empInternalIds = [...new Set(overtimeEmps.map(e=>e.employee_id).filter(Boolean))];
     let empMap = {};
     if(empInternalIds.length){
-      const { data: staff } = await sb.from("employees").select("id, employee_id, full_name, unit, bank_account_number, sort_code, bank_name").in("id", empInternalIds);
+      // The employees table is private. The database function overtime_step6_pay_details gives anyone assigned to Step 6
+      // (and Super Admins) the unit and bank details of the staff on THIS form, whatever their account type.
+      // If it is not installed yet, fall back to reading the table directly (works only for accounts that may read it).
+      let staff = null;
+      const { data: viaFn, error: fnErr } = await sb.rpc("overtime_step6_pay_details", { p_initiation_id: initiationId, p_paid: !!paid });
+      if(!fnErr && Array.isArray(viaFn)){
+        staff = viaFn;
+      } else {
+        const r = await sb.from("employees").select("id, employee_id, full_name, unit, bank_account_number, sort_code, bank_name").in("id", empInternalIds);
+        staff = r.data;
+      }
       (staff||[]).forEach(s=>{ empMap[s.id] = s; });
     }
     const deptByEntry = {}; entryList.forEach(e=>{ deptByEntry[e.id] = e.department; });
@@ -344,6 +375,7 @@ async function openForm(initiationId, paid){
       overtime_date: meta.overtime_date || "",
       section: entryList[0]?.section || "",
       entryIds: entryIds,
+      entries: entryList.map(e => ({ id: e.id, department: e.department, cycle: e.cycle || 1, section: e.section })),
       staff: overtimeEmps.map(oe=>{
         const s = empMap[oe.employee_id] || {};
         return {
@@ -477,6 +509,61 @@ function downloadUnitExcel(){
 }
 
 // ===== Mark the whole form as Paid (completes its entries) =====
+// ===== REJECT back to Step 5 =====
+// Same contract Step 5 already reads: an approvals row (step 6, rejected, with the reason) and the entry set to
+// rejected_to_step5 with its cycle raised by one, so Step 5 approvers can vote again.
+function toggleReject(){
+  if(!CURRENT_FORM) return;
+  const panel = document.getElementById("rejectPanel");
+  const show = panel.style.display === "none";
+  panel.style.display = show ? "block" : "none";
+  if(!show) return;
+  document.getElementById("rejectDepts").innerHTML = (CURRENT_FORM.entries || []).map(e =>
+    '<label class="dept"><input type="checkbox" value="' + e.id + '" checked> ' + esc(e.department) + '</label>').join("");
+  document.getElementById("rejectReason").focus();
+}
+async function rejectToStep5(){
+  if(!CURRENT_FORM) return;
+  const status = document.getElementById("formStatus");
+  const reason = document.getElementById("rejectReason").value.trim();
+  const picked = Array.from(document.querySelectorAll("#rejectDepts input:checked")).map(x => Number(x.value));
+  const entries = (CURRENT_FORM.entries || []).filter(e => picked.indexOf(Number(e.id)) !== -1);
+  if(!entries.length){ status.className="status err"; status.textContent="Tick at least one department to send back."; return; }
+  if(!reason){ status.className="status err"; status.textContent="A reason is required to reject."; document.getElementById("rejectReason").focus(); return; }
+  if(!confirm("Send " + entries.length + " department(s) of form " + CURRENT_FORM.form_number + " back to Step 5?\n\nStep 5 will see your reason and must respond before approving again.")) return;
+
+  status.className="status"; status.textContent="Saving…";
+  const done = [], failed = [];
+  for(const e of entries){
+    try{
+      const { error: vErr } = await sb.from("overtime_approvals").insert({
+        department_entry_id: e.id, step: 6, cycle: e.cycle,
+        approver_profile_id: ME.id, approver_username: ME.username,
+        decision: "rejected", reason: reason
+      });
+      if(vErr) throw vErr;
+      // only an entry that is still waiting here can be sent back (guards against two people acting at once)
+      const { data: moved, error: uErr } = await sb.from("overtime_department_entries")
+        .update({ status: "rejected_to_step5", cycle: e.cycle + 1, updated_at: new Date().toISOString() })
+        .eq("id", e.id).eq("status", "awaiting_step6").select("id");
+      if(uErr) throw uErr;
+      if(!moved || !moved.length) throw new Error("it is no longer waiting at Step 6");
+      done.push(e);
+      await logActivity("overtime_step6_rejected", ME.username + " rejected overtime entry #" + e.id + " (" + e.section + " / " + e.department + ") of form " + CURRENT_FORM.form_number + " back to Step 5. Reason: " + reason);
+    }catch(err){ failed.push(e.department + ": " + err.message); }
+  }
+  if(failed.length){
+    status.className = "status err";
+    status.textContent = (done.length ? "Sent back: " + done.map(x=>x.department).join(", ") + ". " : "") + "NOT sent back: " + failed.join("; ");
+    if(done.length) setTimeout(() => { openForm(CURRENT_FORM.initiation_id); }, 1800);
+    return;
+  }
+  status.className = "status ok";
+  status.textContent = "✅ Sent back to Step 5: " + done.map(x=>x.department).join(", ") + ".";
+  const left = (CURRENT_FORM.entries || []).length - done.length;
+  setTimeout(() => { if(left > 0) openForm(CURRENT_FORM.initiation_id); else backToQueue(); }, 900);
+}
+
 async function markFormPaid(){
   if(!CURRENT_FORM) return;
   const status = document.getElementById("formStatus");
