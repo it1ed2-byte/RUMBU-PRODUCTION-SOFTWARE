@@ -489,25 +489,12 @@
 <section class="panel" id="sec-manage-user">
 <h2 class="panel-head" id="listTitle">Manage Role</h2>
 <div class="details-body" id="listCard">
-  <p class="sub" id="roleDropdownLabel">Enter the staff's Employee ID to manage their role and access. Their name will appear so you can confirm it is the right person.</p>
-  <div class="form-row">
-    <div class="field"><label>Employee ID</label>
-      <input id="role_emp_id_input" placeholder="e.g. RIG-0142" oninput="onRoleEmpIdInput()" onkeydown="if(event.key==='Enter'){event.preventDefault();roleContinue();}">
-    </div>
-    <div class="field" style="align-self:flex-end;"><label>&nbsp;</label>
-      <button style="margin:0;" onclick="roleContinue()">Continue</button>
-    </div>
+  <p class="sub" id="roleDropdownLabel">Search by name or Employee ID to manage a staff member's role and access.</p>
+  <div class="field">
+    <label>Search staff</label>
+    <input id="role_search" placeholder="Type a name or Employee ID…" oninput="renderRoleSearch()" autocomplete="off" style="font-size:14px;">
   </div>
-  <div id="role_emp_hint" class="sub" style="margin:-4px 0 12px;min-height:18px;"></div>
-
-  <details style="margin-bottom:12px;">
-    <summary style="cursor:pointer;color:var(--accent);">Don't know the ID? Search by name to find it</summary>
-    <div class="field" style="margin-top:8px;"><label>Search by name</label>
-      <input id="role_name_search" placeholder="Type part of the staff's name" oninput="renderRoleNameSearch()">
-    </div>
-    <div id="role_name_results" style="max-height:240px;overflow-y:auto;"></div>
-  </details>
-
+  <div id="role_search_results" style="max-height:300px;overflow-y:auto;margin-top:4px;"></div>
   <div id="role_no_access_msg" class="hidden"></div>
   <div class="role-panel hidden" id="roleDetailsPanel"></div>
 </div>
@@ -3612,84 +3599,59 @@ async function loadRoleDropdown(){
 // Clears the Manage Role inputs and hides both the grant-first message and
 // the role panel — the starting state, and where we return after a save.
 function resetManageRoleUI(){
-  const idIn = document.getElementById("role_emp_id_input"); if(idIn) idIn.value = "";
-  const nm = document.getElementById("role_name_search"); if(nm) nm.value = "";
-  const res = document.getElementById("role_name_results"); if(res) res.innerHTML = "";
-  const hint = document.getElementById("role_emp_hint"); if(hint){ hint.innerHTML = ""; hint.style.color = ""; }
+  const search = document.getElementById("role_search"); if(search) search.value = "";
+  const res = document.getElementById("role_search_results"); if(res) res.innerHTML = "";
   const noacc = document.getElementById("role_no_access_msg"); if(noacc) noacc.classList.add("hidden");
   const panel = document.getElementById("roleDetailsPanel"); if(panel) panel.classList.add("hidden");
 }
 
-// Resolves the Employee ID currently typed in the box to an employee record
-// (exact, case-insensitive match against the loaded EMPLOYEES).
-function findRoleEmployeeByIdInput(){
-  const raw = (document.getElementById("role_emp_id_input").value || "").trim().toLowerCase();
-  if(!raw) return null;
-  return EMPLOYEES.find(e => (e.employee_id||"").trim().toLowerCase() === raw) || null;
-}
-
-// Live feedback as the ID is typed: show the matched name, or a gentle nudge.
-function onRoleEmpIdInput(){
-  const hint = document.getElementById("role_emp_hint");
+// Single unified search — matches on name OR employee ID, shows results inline.
+// Clicking a result immediately opens that person's role panel (or explains
+// why they cannot be managed here).
+function renderRoleSearch(){
+  const q = (document.getElementById("role_search").value || "").trim().toLowerCase();
+  const wrap = document.getElementById("role_search_results");
   document.getElementById("role_no_access_msg").classList.add("hidden");
   document.getElementById("roleDetailsPanel").classList.add("hidden");
-  const raw = document.getElementById("role_emp_id_input").value.trim();
-  if(!raw){ hint.innerHTML = ""; return; }
-  const emp = findRoleEmployeeByIdInput();
-  if(emp){
-    hint.style.color = "";
-    hint.innerHTML = "Staff: <b>" + esc(emp.full_name) + "</b>" +
-      (emp.branch ? (" — " + esc(emp.branch)) : "") +
-      (emp.department ? (" / " + esc(emp.department)) : "");
-  } else {
-    hint.style.color = "var(--muted)";
-    hint.textContent = "No staff found with that exact ID yet. Check it, or search by name below.";
-  }
-}
-
-// The "Continue" action: resolve the ID and move to the access decision.
-function roleContinue(){
-  const hint = document.getElementById("role_emp_hint");
-  const emp = findRoleEmployeeByIdInput();
-  if(!emp){
-    hint.style.color = "var(--bad, #b02a37)";
-    hint.textContent = "No staff found with that ID. Use the name search below to find the correct ID.";
-    return;
-  }
-  proceedRoleForEmployee(emp);
-}
-
-// Name search helper — its only job is to help find the Employee ID. Scoped
-// to the Admin's own branches; Super Admin sees everyone. Does not pre-list
-// accounts by access; access is decided only after a staff member is chosen.
-function renderRoleNameSearch(){
-  const q = (document.getElementById("role_name_search").value || "").trim().toLowerCase();
-  const wrap = document.getElementById("role_name_results");
   if(!wrap) return;
-  if(!q){ wrap.innerHTML = ""; return; }
+  if(q.length < 1){ wrap.innerHTML = ""; return; }
+
   let pool = EMPLOYEES;
   if(ME.role === "admin"){
     const mine = new Set(ME.sectionNames || []);
     pool = pool.filter(e => e.branch && mine.has(e.branch));
   }
   const matches = pool.filter(e =>
-    (e.full_name||"").toLowerCase().indexOf(q) !== -1 ||
-    (e.employee_id||"").toLowerCase().indexOf(q) !== -1
+    (e.full_name||"").toLowerCase().includes(q) ||
+    (e.employee_id||"").toLowerCase().includes(q)
   ).slice(0, 40);
-  if(!matches.length){ wrap.innerHTML = "<p class='sub'>No staff match.</p>"; return; }
-  wrap.innerHTML = matches.map(e =>
-    "<div class=\"search-result-row\" onclick=\"pickRoleEmployee('" + e.id + "')\">" +
-      "<b>" + esc(e.full_name) + "</b> &nbsp; <span style=\"color:var(--muted);\">" + esc(e.employee_id) + "</span>" +
-    "</div>"
-  ).join("");
-}
 
-// Picking a name fills in its Employee ID and continues to the access decision.
+  if(!matches.length){ wrap.innerHTML = "<p class='sub' style='padding:8px 0;'>No staff match.</p>"; return; }
+
+  wrap.innerHTML = matches.map(e => {
+    const hasAcc = e.has_system_access && e.linked_profile_id;
+    const roleTag = hasAcc
+      ? "<span style='font-size:11px;color:var(--muted);background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:1px 8px;'>" + esc(e.linked_role||"user") + "</span>"
+      : "<span style='font-size:11px;color:var(--warn);'>No account yet</span>";
+    return "<div class='search-result-row' onclick='pickRoleEmployee(\"" + e.id + "\")'>" +
+      "<div style='display:flex;justify-content:space-between;align-items:center;gap:10px;'>" +
+        "<div><b>" + esc(e.full_name) + "</b> <span style='color:var(--muted);font-size:12px;'>" + esc(e.employee_id) + "</span>" +
+          (e.branch ? " <span style='color:var(--muted);font-size:11px;'>— " + esc(e.branch) + "</span>" : "") +
+        "</div>" + roleTag +
+      "</div>" +
+    "</div>";
+  }).join("");
+}
+window.renderRoleSearch = renderRoleSearch;
+
+// Clicking a result clears the list and immediately opens that person's panel.
 function pickRoleEmployee(empId){
   const emp = EMPLOYEES.find(e => String(e.id) === String(empId));
   if(!emp) return;
-  document.getElementById("role_emp_id_input").value = emp.employee_id;
-  onRoleEmpIdInput();
+  const wrap = document.getElementById("role_search_results");
+  if(wrap) wrap.innerHTML = "";
+  const input = document.getElementById("role_search");
+  if(input) input.value = emp.full_name + "  (" + emp.employee_id + ")";
   proceedRoleForEmployee(emp);
 }
 
