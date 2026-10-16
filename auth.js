@@ -161,21 +161,15 @@ const _RO_WRITE = /^(save|submit|add\b|create|delete|remove|approve|reject|compl
 const _RO_SAFE  = /^(search|filter|find|look|download|export|print|view|refresh|load|show|back|close|cancel|ok|got it|open report|preview|scan|lookup|check|select|go to|open detail|see|toggle|collapse|expand|branch|all branches|today|last|this week|this month|date|range|from|to|clear filter)/i;
 
 function _applyReadOnly(){
-  if(document.getElementById("rumbu-ro-banner")) return; // already applied
+  if(document.getElementById("rumbu-ro-active")) return; // already applied
 
-  // 1. Banner
-  const banner = document.createElement("div");
-  banner.id = "rumbu-ro-banner";
-  banner.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:99999;background:#1F3864;color:#fff;"
-    +"font-size:12px;font-weight:700;text-align:center;padding:7px 14px;letter-spacing:.3px;"
-    +"box-shadow:0 2px 6px rgba(0,0,0,.3);";
-  banner.textContent = "👁  Read-Only Access — You can view all data, apply filters, and download reports. Changes to the database are not permitted.";
-  document.body.prepend(banner);
-  // Push content down so banner doesn't overlap the page header
-  const existing = parseInt(document.body.style.paddingTop)||0;
-  if(existing < 34) document.body.style.setProperty("padding-top","34px","important");
+  // Silent marker — no visible banner
+  const marker = document.createElement("span");
+  marker.id = "rumbu-ro-active";
+  marker.style.display = "none";
+  document.body.appendChild(marker);
 
-  // 2. MutationObserver watches for dynamically rendered content
+  // MutationObserver watches for dynamically rendered content
   new MutationObserver(_roSweep).observe(document.body,{childList:true,subtree:true});
   _roSweep();
 }
