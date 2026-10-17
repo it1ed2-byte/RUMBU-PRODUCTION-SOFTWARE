@@ -125,6 +125,7 @@
     <div class="f"><label>Mat Type</label><select id="filt_mattype" onchange="loadAssets()"><option value="">All</option><option>No.1</option><option>No.2</option><option>No.3</option><option>No.4</option><option>Hajj Mat</option><option>Prayer Mat</option><option>Customize</option></select></div>
     <div class="f"><label>Search Asset / Unit</label><input type="text" id="filt_search" placeholder="e.g. WA-01" oninput="loadAssets()"></div>
     <div class="f f-min"><button id="btnAddAsset" onclick="openAddAsset()">+ Add New Asset</button></div>
+    <div class="f f-min"><button id="btnSwitchAll" class="btn-ghost" onclick="switchAllOperators()" title="Swap Group A and Group B operators for every unit listed below">⇄ Switch All A↔B</button></div>
   </div>
 
   <div class="table-wrap">
@@ -193,6 +194,7 @@ async function init(){
     if(!canWrite()){
       document.getElementById("roBanner").style.display = "block";
       document.getElementById("btnAddAsset").style.display = "none";
+      document.getElementById("btnSwitchAll").style.display = "none";
     }
 
     const { data: unitRows, error: uErr } = await sb.from("weaving_units")
@@ -613,6 +615,95 @@ async function switchOperators(unitCode){
     alert("Switch failed: " + e.message);
   }
 }
+
+// Switch Group A and Group B for EVERY unit currently listed (the Section / Shed / Mat Type / Search filters narrow
+// the list, so with no filter this is every unit). The inline "⇄ Switch" on each row is unchanged, for one unit.
+let SWITCH_ALL_BUSY = false;
+async function switchAllOperators(){
+  if(!canWrite() || SWITCH_ALL_BUSY) return;
+  // Several assets can share one unit. Each unit must be swapped exactly ONCE: swapping it twice would put everyone back.
+  const codes = [...new Set((ASSETS||[]).map(a=>a.unit_code).filter(Boolean))];
+  if(!codes.length){ alert("No units are listed. Adjust the filters first."); return; }
+
+  const filters = [];
+  const fs = document.getElementById("filt_section").value, fh = document.getElementById("filt_shed").value,
+        fm = document.getElementById("filt_mattype").value, fq = document.getElementById("filt_search").value.trim();
+  if(fs) filters.push("Section: " + fs); if(fh) filters.push("Shed: " + fh);
+  if(fm) filters.push("Mat Type: " + fm); if(fq) filters.push("Search: " + fq);
+  const filterText = filters.length ? filters.join(", ") : "none (every unit)";
+
+  SWITCH_ALL_BUSY = true;
+  const btn = document.getElementById("btnSwitchAll"); const btnText = btn.textContent; btn.disabled = true; btn.textContent = "Checking…";
+  try{
+    // Always read the current operators from the database, in small batches (never one huge request).
+    let rows = [];
+    for(let i=0; i<codes.length; i+=100){
+      const { data, error } = await sb.from("weaving_unit_operators")
+        .select("unit_code, group_name, operator_name, employee_id").in("unit_code", codes.slice(i, i+100));
+      if(error){ alert("Could not load operators: " + error.message); return; }
+      rows = rows.concat(data || []);
+    }
+    const ready = [], skipped = [];
+    codes.forEach(code=>{
+      const A = rows.filter(r=>r.unit_code===code && r.group_name==="A"), B = rows.filter(r=>r.unit_code===code && r.group_name==="B");
+      if(A.length>1 || B.length>1){ skipped.push(code + " (duplicate A/B rows)"); return; }
+      const nameA = A[0] && A[0].operator_name ? A[0].operator_name : "", nameB = B[0] && B[0].operator_name ? B[0].operator_name : "";
+      if(!nameA || !nameB){ skipped.push(code + " (" + (!nameA && !nameB ? "no operators" : (!nameA ? "no Group A operator" : "no Group B operator")) + ")"); return; }
+      ready.push({ code, nameA, nameB, empA: A[0].employee_id || null, empB: B[0].employee_id || null });
+    });
+    if(!ready.length){ alert("Nothing to switch. " + (skipped.length ? "These units are missing an operator or have duplicate rows:\n" + skipped.slice(0,15).join("\n") : "")); return; }
+
+    let msg = "Switch Group A and Group B for " + ready.length + " unit(s)?\n\nFilters applied: " + filterText +
+      "\n\nIn each unit, today's Group A operator becomes Group B and today's Group B operator becomes Group A.";
+    if(skipped.length) msg += "\n\n" + skipped.length + " unit(s) will be left unchanged:\n" + skipped.slice(0,10).join("\n") + (skipped.length>10 ? "\n…and " + (skipped.length-10) + " more" : "");
+    msg += "\n\nTo undo, press Switch All again with the same filters.";
+    if(!confirm(msg)) return;
+
+    const T = "weaving_unit_operators";
+    // One unit = two updates. Each must change exactly one row; if the second fails, the first is put back.
+    async function swapOne(u){
+      const upd = (group, name, emp) => sb.from(T).update({ operator_name: name, employee_id: emp }).eq("unit_code", u.code).eq("group_name", group).select("group_name");
+      const r1 = await upd("A", u.nameB, u.empB);
+      if(r1.error || !r1.data || r1.data.length !== 1){
+        if(!r1.error && r1.data && r1.data.length > 1) await upd("A", u.nameA, u.empA);
+        return { u, ok:false, why: r1.error ? r1.error.message : "Group A was not updated (no permission, or the row is missing)" };
+      }
+      const r2 = await upd("B", u.nameA, u.empA);
+      if(r2.error || !r2.data || r2.data.length !== 1){
+        if(!r2.error && r2.data && r2.data.length > 1) await upd("B", u.nameB, u.empB);
+        await upd("A", u.nameA, u.empA);   // put Group A back so nobody ends up listed twice
+        return { u, ok:false, why: r2.error ? r2.error.message : "Group B was not updated (no permission, or the row is missing)" };
+      }
+      return { u, ok:true };
+    }
+    const results = []; let next = 0, done = 0;
+    async function worker(){
+      while(next < ready.length){ const u = ready[next++]; results.push(await swapOne(u)); done++; btn.textContent = "Switching " + done + "/" + ready.length + "…"; }
+    }
+    await Promise.all([worker(), worker(), worker(), worker(), worker()]);
+
+    const okList = results.filter(r=>r.ok).map(r=>r.u), failed = results.filter(r=>!r.ok);
+    await loadAllOperators();   // show what the database really holds now
+    const verified = okList.filter(u=> OPS_MAP[u.code] && OPS_MAP[u.code].A === u.nameB && OPS_MAP[u.code].B === u.nameA).length;
+    await loadAssets();
+
+    if(okList.length){
+      const detail = okList.map(u=>u.code + ": " + u.nameA + " ↔ " + u.nameB).join("; ");
+      await logActivity("weaving_operator_changed",
+        ME.username + " switched Group A and Group B operators for " + okList.length + " unit(s) at once (filters: " + filterText + "). " +
+        detail.slice(0, 3000) + (detail.length > 3000 ? " …" : ""));
+    }
+    let out = "Switched " + okList.length + " unit(s)" + (okList.length ? " (" + verified + " checked in the database)" : "") + ".";
+    if(failed.length) out += "\n\nFAILED, left as they were (" + failed.length + "):\n" + failed.slice(0,10).map(r=>r.u.code + ": " + r.why).join("\n");
+    if(skipped.length) out += "\n\nSkipped (" + skipped.length + "):\n" + skipped.slice(0,10).join("\n");
+    alert(out);
+  }catch(e){
+    alert("Switch All failed: " + (e.message || e));
+  }finally{
+    SWITCH_ALL_BUSY = false; btn.disabled = false; btn.textContent = btnText;
+  }
+}
+window.switchAllOperators = switchAllOperators;
 
 init();
 </script>
