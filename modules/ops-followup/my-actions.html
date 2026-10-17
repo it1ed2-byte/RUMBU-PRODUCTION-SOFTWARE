@@ -21,11 +21,22 @@
 <script>
 /* Operations Follow-up: My Actions. The page owners use to respond to
    their follow-up items and attach evidence. Owners see only their own
-   open items, through ops_fu_my_items(); they cannot read the register. */
+   items, through ops_fu_my_items(); they cannot read the register.
+   Three tabs: Open Actions (open and overdue), In Progress, Completed
+   (verified closed by Group Operations). */
 (function () {
   var MAX_FILES = 5, MAX_BYTES = 10 * 1024 * 1024;
   var OK_EXT = ['jpg', 'jpeg', 'png', 'webp', 'heic', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'txt', 'csv'];
   var MY = [];
+  var TABS = [
+    { k: 'open', label: 'Open Actions', test: function (x) { return x.status === 'open' || x.status === 'overdue'; },
+      empty: 'You have no open actions waiting to be started. Thank you.', head: 'Open actions', note: 'Not started yet, or overdue. Most urgent first.' },
+    { k: 'progress', label: 'In Progress', test: function (x) { return x.status === 'in_progress'; },
+      empty: 'You have no actions in progress.', head: 'Actions in progress', note: 'Work has started. Most urgent first.' },
+    { k: 'done', label: 'Completed', test: function (x) { return x.status === 'verified_closed'; },
+      empty: 'No action of yours has been verified closed yet.', head: 'Completed actions', note: 'Verified closed by Group Operations. Most recent first.' }
+  ];
+  var TAB = TABS.some(function (t) { return t.k === OF.param('tab'); }) ? OF.param('tab') : 'open';
 
   function load() {
     return OF.rpc('ops_fu_my_access').then(function (acc) {
@@ -35,6 +46,44 @@
     }).then(function (items) { MY = items || []; });
   }
   function safeName(n) { return String(n).replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+/, '').slice(-80) || 'file'; }
+
+  // Previous responses (loaded on demand)
+  function prevBlock(it) {
+    var h = OF.h;
+    if (!it.last_response) return null;
+    var prevList = h('div', { class: 'prev-list', hidden: true });
+    var toggle = h('button', { class: 'link', type: 'button' }, 'Show your previous responses');
+    toggle.addEventListener('click', function () {
+      if (!prevList.hidden) { prevList.hidden = true; toggle.textContent = 'Show your previous responses'; return; }
+      prevList.hidden = false; toggle.textContent = 'Hide previous responses';
+      prevList.innerHTML = ''; prevList.appendChild(h('p', { class: 'muted' }, 'Loading.'));
+      OF.rpc('ops_fu_item_responses', { p_item: it.id }).then(function (list) {
+        prevList.innerHTML = '';
+        list.forEach(function (r) { prevList.appendChild(OF.responseEl(r)); });
+      }).catch(function (e) { prevList.innerHTML = ''; OF.handleErr(e); });
+    });
+    return h('div', { class: 'prev' }, toggle,
+      it.pending_responses ? h('span', { class: 'muted', style: 'font-size:12px;margin-left:10px' }, OF.plural(Number(it.pending_responses), 'response') + ' waiting for review') : null,
+      prevList);
+  }
+
+  // A finished item: read only, no response form.
+  function doneCard(it) {
+    var h = OF.h, add = OF.add;
+    var c = h('article', { class: 'mcard done p-' + String(it.priority).toLowerCase() });
+    add(c, h('div', { class: 'top' }, h('b', null, it.id), OF.prioTag(it.priority), OF.statusTag(it.status),
+      it.ceo_flag !== 'no' ? h('span', { class: 'pill ceo-' + it.ceo_flag }, 'Was on the CEO list') : null,
+      h('span', null, it.facility + ', ' + it.period)));
+    add(c, h('h4', null, it.issue));
+    add(c, h('dl', { class: 'mgrid' },
+      h('div', { class: 'wide' }, h('dt', null, 'What you were asked to do'), h('dd', null, it.action)),
+      h('div', null, h('dt', null, 'Was due'), h('dd', null, OF.fmt(it.due) || 'Not set')),
+      h('div', null, h('dt', null, 'Verified closed on'), h('dd', null, OF.fmtStamp(it.closed_at).slice(0, 11))),
+      it.ceo_decision ? h('div', { class: 'wide' }, h('dt', null, 'CEO decision'), h('dd', null, h('div', { class: 'decision' }, it.ceo_decision))) : null));
+    var prev = prevBlock(it);
+    if (prev) add(c, prev);
+    return c;
+  }
 
   function itemCard(it) {
     var h = OF.h, add = OF.add;
@@ -53,23 +102,8 @@
       it.ceo_decision ? h('div', { class: 'wide' }, h('dt', null, 'CEO decision'), h('dd', null, h('div', { class: 'decision' }, it.ceo_decision))) : null);
     add(c, dl);
 
-    // Previous responses (loaded on demand)
-    if (it.last_response) {
-      var prevList = h('div', { class: 'prev-list', hidden: true });
-      var toggle = h('button', { class: 'link', type: 'button' }, 'Show your previous responses');
-      toggle.addEventListener('click', function () {
-        if (!prevList.hidden) { prevList.hidden = true; toggle.textContent = 'Show your previous responses'; return; }
-        prevList.hidden = false; toggle.textContent = 'Hide previous responses';
-        prevList.innerHTML = ''; prevList.appendChild(h('p', { class: 'muted' }, 'Loading.'));
-        OF.rpc('ops_fu_item_responses', { p_item: it.id }).then(function (list) {
-          prevList.innerHTML = '';
-          list.forEach(function (r) { prevList.appendChild(OF.responseEl(r)); });
-        }).catch(function (e) { prevList.innerHTML = ''; OF.handleErr(e); });
-      });
-      add(c, h('div', { class: 'prev' }, toggle,
-        it.pending_responses ? h('span', { class: 'muted', style: 'font-size:12px;margin-left:10px' }, OF.plural(Number(it.pending_responses), 'response') + ' waiting for review') : null,
-        prevList));
-    }
+    var prev = prevBlock(it);
+    if (prev) add(c, prev);
 
     // Response form
     var pid = 'p-' + it.id, mid = 'm-' + it.id, fid = 'f-' + it.id;
@@ -140,9 +174,9 @@
           : 'Follow-up actions assigned to you.',
         stats: [
           { n: MY.filter(function (x) { return x.is_new; }).length, l: 'New for you' },
-          { n: MY.length, l: 'Open actions' },
+          { n: MY.filter(function (x) { return x.status !== 'verified_closed'; }).length, l: 'Outstanding' },
           { n: MY.filter(OF.isLate).length, l: 'Past due' },
-          { n: MY.filter(function (x) { return Number(x.pending_responses) > 0; }).length, l: 'Awaiting review' }
+          { n: MY.filter(function (x) { return x.status !== 'verified_closed' && Number(x.pending_responses) > 0; }).length, l: 'Awaiting review' }
         ]
       };
     },
@@ -154,20 +188,38 @@
         return root;
       }
       if (!MY.length) {
-        root.appendChild(h('div', { class: 'card-panel' }, h('div', { class: 'empty' }, 'You have no open follow-up actions. Thank you.')));
+        root.appendChild(h('div', { class: 'card-panel' }, h('div', { class: 'empty' }, 'You have no follow-up actions. Thank you.')));
         return root;
       }
-      var sorted = MY.slice().sort(OF.byAttention);
       var nNew = MY.filter(function (x) { return x.is_new; }).length, nUpd = MY.filter(function (x) { return x.is_updated; }).length;
       if (nNew || nUpd) root.appendChild(h('div', { class: 'status ok' },
         (nNew ? OF.plural(nNew, 'new action') + ' assigned to you' : '') + (nNew && nUpd ? ', and ' : '') +
         (nUpd ? OF.plural(nUpd, 'action') + ' updated by Group Operations since your last visit' : '') + '. They are marked below.'));
-      // Count them as seen once shown; the badges clear on the next visit.
-      var shownIds = sorted.filter(function (x) { return x.is_new || x.is_updated; }).map(function (x) { return x.id; });
+
+      // Tabs, each with its count and a green dot when something in it is new.
+      var tabBar = h('div', { class: 'mtabs', role: 'tablist', 'aria-label': 'My actions' }, TABS.map(function (t) {
+        var list = MY.filter(t.test), fresh = list.filter(function (x) { return x.is_new; }).length;
+        return h('button', { class: 'mtab' + (t.k === TAB ? ' active' : ''), type: 'button', role: 'tab', id: 'tab-' + t.k,
+          'aria-selected': String(t.k === TAB), 'aria-controls': 'tabpanel',
+          onclick: function () { TAB = t.k; OF.render(); } },
+          t.label, h('span', { class: 'tc' }, String(list.length)),
+          fresh ? h('span', { class: 'tn', title: OF.plural(fresh, 'new action') }, fresh + ' new') : null);
+      }));
+      root.appendChild(tabBar);
+
+      var cur = TABS.filter(function (t) { return t.k === TAB; })[0];
+      var list = MY.filter(cur.test);
+      if (cur.k === 'done') list.sort(function (a, b) { return String(b.closed_at || '') < String(a.closed_at || '') ? -1 : 1; });
+      else list.sort(OF.byAttention);
+      var panel = h('div', { role: 'tabpanel', id: 'tabpanel', 'aria-labelledby': 'tab-' + cur.k });
+      panel.appendChild(h('div', { class: 'sec-head' }, h('h3', null, cur.head + ' (' + list.length + ')'), h('p', null, cur.note)));
+      if (!list.length) panel.appendChild(h('div', { class: 'card-panel' }, h('div', { class: 'empty' }, cur.empty)));
+      list.forEach(function (it) { panel.appendChild(cur.k === 'done' ? doneCard(it) : itemCard(it)); });
+      root.appendChild(panel);
+
+      // Count the items on view as seen; their badges clear on the next visit.
+      var shownIds = list.filter(function (x) { return x.is_new || x.is_updated; }).map(function (x) { return x.id; });
       if (shownIds.length) setTimeout(function () { OF.rpc('ops_fu_mark_seen', { p_items: shownIds }).catch(function () {}); }, 2000);
-      root.appendChild(h('div', { class: 'sec-head' }, h('h3', null, 'Your open actions (' + sorted.length + ')'),
-        h('p', null, 'Most urgent first.')));
-      sorted.forEach(function (it) { root.appendChild(itemCard(it)); });
       return root;
     }
   });
