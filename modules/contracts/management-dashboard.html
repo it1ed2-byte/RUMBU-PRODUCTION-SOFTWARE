@@ -151,13 +151,13 @@
       <input class="srch flt" id="q" type="search" placeholder="🔍 Search…" oninput="render()" style="min-width:200px">
       <select class="flt" id="fStatus" onchange="render()">
         <option value="">All Statuses</option>
-        <option value="Pipeline">Pipeline</option>
-        <option value="Active">Active</option>
+        <option value="Pipeline">Pending</option>
+        <option value="Active">Ongoing</option>
         <option value="On Hold">On Hold</option>
         <option value="At Risk">At Risk</option>
         <option value="Delayed">Delayed</option>
         <option value="Practically Complete">Practically Complete</option>
-        <option value="Closed">Closed</option>
+        <option value="Closed">Completed</option>
         <option value="Cancelled">Cancelled</option>
       </select>
       <select class="flt" id="fRisk" onchange="render()">
@@ -177,11 +177,12 @@
         <table class="reg-tbl">
           <thead>
             <tr>
-              <th>Contract / Subcontractor</th>
+              <th>Contract</th>
+              <th>Contractor</th>
               <th>Risk</th>
-              <th>Agency</th>
-              <th>Value</th>
-              <th>Dates</th>
+              <th>Schedule</th>
+              <th>Cost</th>
+              <th>Performance</th>
               <th>Open Actions</th>
               <th>Status</th>
               <th>Escalation Flags</th>
@@ -428,7 +429,7 @@ function buildKPICards() {
       agencies.size + ' government agenc' + (agencies.size===1?'y':'ies') + ' and ' +
       companies.size + ' subcontractor' + (companies.size===1?'':'s') + '.</p>' +
       '<p style="margin:0;color:#6b7280">' +
-      '<strong style="color:#2E75B6">' + pipelineN + '</strong> contracts in pipeline &nbsp;·&nbsp; ' +
+      '<strong style="color:#2E75B6">' + pipelineN + '</strong> contracts pending &nbsp;·&nbsp; ' +
       '<strong style="color:#22c55e">' + activeN   + '</strong> active &nbsp;·&nbsp; ' +
       '<strong style="color:#94a3b8">' + closedN   + '</strong> closed' +
       (atRisk ? ' &nbsp;·&nbsp; <strong style="color:#ef4444">' + atRisk + '</strong> at risk / delayed' : '') +
@@ -495,34 +496,68 @@ function render() {
   };
 
   tbody.innerHTML = data.map(c => {
-    const fmtD = d => d ? new Date(d).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'2-digit'}) : '—';
+    const pp   = c.physical_progress_pct ?? 0;
+    const fp   = c.financial_progress_pct ?? 0;
+    const ppCol= pp >= 80 ? '#22c55e' : pp >= 40 ? '#2E75B6' : '#f59e0b';
+    const fpCol= fp >= 80 ? '#22c55e' : fp >= 40 ? '#2E75B6' : '#f59e0b';
     const [rCls, rLbl] = RISK_BADGE[c.risk_level ?? 'low'] ?? ['b-gray','—'];
     const _st = (c.status||'').toLowerCase();
     const sBadgeCls    = STATUS_BADGE[_st] ?? 'b-gray';
     const sLabel       = STATUS_LABEL[_st] ?? c.status;
     const openAct      = actionCountMap[c.id] ?? 0;
-
+    const ev           = evalMap[c.id];
+    const [evCls, evLbl] = ev ? (RATING_MAP[ev.rating] ?? ['none','—']) : ['none','No eval'];
     const flags        = getFlags(c);
+    const val          = c.original_value
+      ? 'NGN ' + fmtVal(c.original_value)
+      : '—';
 
-
-
+    // Schedule status
+    let schedStatus = '', schedCol = 'var(--muted)';
+    if (c.start_date && c.original_completion_date && c.status === 'active') {
+      const today   = new Date();
+      const elapsed = (today - new Date(c.start_date)) /
+                      (new Date(c.original_completion_date) - new Date(c.start_date)) * 100;
+      const variance = pp - elapsed;
+      if (new Date(c.original_completion_date) < today) {
+        schedStatus = 'Overdue'; schedCol = '#ef4444';
+      } else if (variance >= -5) {
+        schedStatus = 'On Track'; schedCol = '#22c55e';
+      } else if (variance >= -20) {
+        schedStatus = 'At Risk'; schedCol = '#f59e0b';
+      } else {
+        schedStatus = 'Behind'; schedCol = '#ef4444';
+      }
+    } else { schedStatus = '—'; }
 
     return `<tr style="cursor:pointer" onclick="showPanel('${c.id}')">
       <td>
         <div class="contract-ref">${esc(c.contract_id ?? '—')}</div>
         <div class="contract-name">${esc(c.title ?? '—')}</div>
-        <div class="subco-name">${esc(c.cnt_companies?.name ?? '—')}</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:2px">${val}</div>
       </td>
+      <td style="font-size:12px;color:var(--text)">${esc(c.cnt_companies?.name ?? '—')}</td>
       <td><span class="badge ${rCls}">${rLbl}</span></td>
-      <td style="font-size:12px;color:var(--text)">
-        ${esc(c.cnt_agencies?.name ?? '—')}
+      <td>
+        <div style="font-weight:600;font-size:12px;color:${schedCol};margin-bottom:4px">${schedStatus}</div>
+        <div class="dim-row" style="margin-bottom:2px">
+          <span style="width:26px;font-size:10px;color:var(--muted)">PP</span>
+          <div class="dim-bar"><div class="dim-fill" style="width:${pp}%;background:${ppCol}"></div></div>
+          <span class="dim-pct" style="color:${ppCol}">${pp}%</span>
+        </div>
       </td>
-      <td style="font-size:12px;font-weight:600;color:var(--text);white-space:nowrap">
-        ${c.original_value ? 'NGN&nbsp;' + fmtVal(c.original_value) : '—'}
+      <td>
+        <div class="dim-row">
+          <span style="width:26px;font-size:10px;color:var(--muted)">FP</span>
+          <div class="dim-bar"><div class="dim-fill" style="width:${Math.min(fp,100)}%;background:${fpCol}"></div></div>
+          <span class="dim-pct" style="color:${fpCol}">${fp}%</span>
+        </div>
+        ${fp > 100 ? `<div style="font-size:10px;color:#ef4444;font-weight:700;margin-top:3px">OVER BUDGET</div>` : ''}
       </td>
-      <td style="font-size:11px;color:var(--muted);white-space:nowrap">
-        <div>${fmtD(c.start_date)}</div>
-        <div style="color:var(--muted);margin-top:2px">→ ${fmtD(c.original_completion_date)}</div>
+      <td>
+        <span class="rbadge ${evCls}">${evLbl}</span>
+        ${ev ? `<div style="font-size:10px;color:var(--muted);margin-top:3px">
+          Score: ${ev.total_weighted_score?.toFixed(1) ?? '—'}%</div>` : ''}
       </td>
       <td style="text-align:center">
         <span style="font-size:18px;font-weight:800;color:${openAct > 3 ? '#ef4444' : openAct > 0 ? '#f59e0b' : '#22c55e'}">
