@@ -326,7 +326,7 @@
     try{
       const [{ data: modules, error: modErr }, { data: pages, error: pgErr }] = await Promise.all([
         sb.from("modules").select("id, name, sort_order").order("sort_order"),
-        sb.from("pages").select("id, name, module_path, module_id").order("name")
+        sb.from("pages").select("id, name, module_path, module_id, sort_order").order("name")
       ]);
       if(modErr) throw modErr;
       if(pgErr) throw pgErr;
@@ -336,6 +336,17 @@
         if(!p.module_path) return;
         if(!pagesByModule[p.module_id]) pagesByModule[p.module_id] = [];
         pagesByModule[p.module_id].push(p);
+      });
+
+      // A module can choose its own page order. When EVERY page in a module
+      // has a sort_order, its pages follow it (this feeds the side flyout and
+      // the pill bar above each page). Pages without one keep the alphabetical
+      // order from the query, so modules that never set it are unchanged.
+      Object.keys(pagesByModule).forEach(k=>{
+        const list = pagesByModule[k];
+        if(list.length > 1 && list.every(p => p.sort_order !== null && p.sort_order !== undefined)){
+          list.sort((a,b)=> a.sort_order - b.sort_order); // stable: ties keep name order
+        }
       });
 
       let html = "";
