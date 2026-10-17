@@ -38,8 +38,10 @@
 
   function itemCard(it) {
     var h = OF.h, add = OF.add;
-    var c = h('article', { class: 'mcard p-' + String(it.priority).toLowerCase() });
-    add(c, h('div', { class: 'top' }, h('b', null, it.id), OF.prioTag(it.priority), OF.statusTag(it.status),
+    var c = h('article', { class: 'mcard p-' + String(it.priority).toLowerCase() + (it.is_new ? ' is-new' : '') });
+    add(c, h('div', { class: 'top' }, h('b', null, it.id),
+      it.is_new ? h('span', { class: 'pill new' }, 'New') : it.is_updated ? h('span', { class: 'pill upd' }, 'Updated') : null,
+      OF.prioTag(it.priority), OF.statusTag(it.status),
       it.ceo_flag !== 'no' ? h('span', { class: 'pill ceo-' + it.ceo_flag }, 'On the CEO list') : null,
       h('span', null, it.facility + ', ' + it.period)));
     add(c, h('h4', null, it.issue));
@@ -137,9 +139,10 @@
         text: owners.length ? 'Actions assigned to ' + owners.join('; ') + '. Respond to each one and attach evidence. Group Operations reviews every response.'
           : 'Follow-up actions assigned to you.',
         stats: [
+          { n: MY.filter(function (x) { return x.is_new; }).length, l: 'New for you' },
           { n: MY.length, l: 'Open actions' },
           { n: MY.filter(OF.isLate).length, l: 'Past due' },
-          { n: MY.filter(function (x) { return Number(x.pending_responses) > 0; }).length, l: 'Waiting for review' }
+          { n: MY.filter(function (x) { return Number(x.pending_responses) > 0; }).length, l: 'Awaiting review' }
         ]
       };
     },
@@ -155,6 +158,13 @@
         return root;
       }
       var sorted = MY.slice().sort(OF.byAttention);
+      var nNew = MY.filter(function (x) { return x.is_new; }).length, nUpd = MY.filter(function (x) { return x.is_updated; }).length;
+      if (nNew || nUpd) root.appendChild(h('div', { class: 'status ok' },
+        (nNew ? OF.plural(nNew, 'new action') + ' assigned to you' : '') + (nNew && nUpd ? ', and ' : '') +
+        (nUpd ? OF.plural(nUpd, 'action') + ' updated by Group Operations since your last visit' : '') + '. They are marked below.'));
+      // Count them as seen once shown; the badges clear on the next visit.
+      var shownIds = sorted.filter(function (x) { return x.is_new || x.is_updated; }).map(function (x) { return x.id; });
+      if (shownIds.length) setTimeout(function () { OF.rpc('ops_fu_mark_seen', { p_items: shownIds }).catch(function () {}); }, 2000);
       root.appendChild(h('div', { class: 'sec-head' }, h('h3', null, 'Your open actions (' + sorted.length + ')'),
         h('p', null, 'Most urgent first.')));
       sorted.forEach(function (it) { root.appendChild(itemCard(it)); });

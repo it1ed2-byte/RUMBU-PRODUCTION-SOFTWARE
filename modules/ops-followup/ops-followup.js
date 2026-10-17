@@ -41,7 +41,7 @@
   ];
 
   /* ---------- state ---------- */
-  var S = OF.S = { me: null, access: {}, items: [], owners: [], facilities: [], settings: {}, today: '', pending: {} };
+  var S = OF.S = { me: null, access: {}, items: [], owners: [], facilities: [], settings: {}, today: '', pending: {}, ownerPeople: {} };
 
   /* ---------- DOM helper ---------- */
   function h(tag, p) {
@@ -201,12 +201,15 @@
         sb.from('ops_followup_owners').select('*').order('name'),
         sb.from('ops_followup_facilities').select('*').order('sort_order'),
         sb.from('ops_followup_settings').select('*'),
-        sb.from('ops_followup_responses').select('item_id').eq('review_status', 'pending')
+        sb.from('ops_followup_responses').select('item_id').eq('review_status', 'pending'),
+        sb.rpc('ops_fu_owner_people')
       ]);
     }).then(function (r) {
       [r[1], r[2], r[3]].forEach(function (x) { if (x.error) throw x.error; });
       S.pending = {};
       if (!r[4].error) (r[4].data || []).forEach(function (x) { S.pending[x.item_id] = (S.pending[x.item_id] || 0) + 1; });
+      S.ownerPeople = {};
+      if (!r[5].error) (r[5].data || []).forEach(function (x) { (S.ownerPeople[x.owner_id] = S.ownerPeople[x.owner_id] || []).push(x); });
       S.items = r[0];
       S.owners = r[1].data || [];
       S.facilities = r[2].data || [];
@@ -220,6 +223,30 @@
     if (i > -1) S.items[i] = item; else S.items.push(item);
   };
   OF.canEdit = function () { return !!S.access.can_edit; };
+
+  /* ---------- who an owner title goes to ---------- */
+  function personText(x) { return x.full_name ? x.full_name + ' (' + x.username + ')' : x.username; }
+  OF.goesTo = function (ownerId) {
+    return (S.ownerPeople[ownerId] || []).map(personText).join(', ');
+  };
+  var peopleP = null;
+  OF.people = function () {
+    if (!peopleP) peopleP = OF.rpc('ops_fu_people').catch(function (e) { peopleP = null; throw e; });
+    return peopleP;
+  };
+  // "Full Name (username)" or a bare username -> username
+  OF.usernameFrom = function (v) {
+    v = String(v || '').trim();
+    var m = /\(([^()]+)\)\s*$/.exec(v);
+    return m ? m[1].trim() : v;
+  };
+  OF.refreshOwnerPeople = function () {
+    return sb.rpc('ops_fu_owner_people').then(function (r) {
+      if (r.error) return;
+      S.ownerPeople = {};
+      (r.data || []).forEach(function (x) { (S.ownerPeople[x.owner_id] = S.ownerPeople[x.owner_id] || []).push(x); });
+    });
+  };
   OF.canManage = function () { return !!S.access.can_manage; };
 
   /* ---------- page shell ---------- */
@@ -448,6 +475,63 @@
       .map(function (o) { return [String(o.id), o.name + (o.active ? '' : ' (inactive)')]; }));
     var err = h('div', { class: 'err', role: 'alert' });
 
+    // Owner: job title, plus who that title goes to. Editors can set the
+    // person here; a new title can be added on the spot.
+    var ownerSel, goesBox, personIn, newTitleIn, personWrap, newWrap, changeMode = false;
+    function ownerField() {
+      ownerSel = sel('owner_id', ro ? ownOpts : ownOpts.concat([['__new', '+ New owner title...']]));
+      goesBox = h('div', { class: 'goes' });
+      personIn = h('input', { list: 'dl-people', placeholder: 'Start typing a name or username', 'aria-label': 'Person who holds this role', disabled: ro });
+      newTitleIn = h('input', { placeholder: 'Job title, for example Head of Quality Control, Agbara', 'aria-label': 'New owner title', disabled: ro });
+      personWrap = h('div', { class: 'goes-in', hidden: true }, h('label', null, 'Who holds this role?'), personIn,
+        h('span', { class: 'fh' }, 'They get the item on their My Actions page. You only do this once per role.'));
+      newWrap = h('div', { class: 'goes-in', hidden: true }, h('label', null, 'New owner title'), newTitleIn);
+      ownerSel.addEventListener('change', function () { changeMode = false; drawGoes(); });
+      drawGoes();
+      if (!ro) OF.people().then(function (list) {
+        if (sheetEl.querySelector('#dl-people')) return;
+        sheetEl.appendChild(h('datalist', { id: 'dl-people' }, list.map(function (x) {
+          return h('option', { value: x.full_name ? x.full_name + ' (' + x.username + ')' : x.username }, x.department || '');
+        })));
+      }).catch(function () {});
+      return h('div', { class: 'field' }, h('label', { for: 'f-owner_id' }, LABELS.owner_id), ownerSel, goesBox, newWrap, personWrap);
+    }
+    function drawGoes() {
+      var v = ownerSel.value, isNewTitle = v === '__new';
+      var who = (!v || isNewTitle) ? '' : OF.goesTo(v);
+      goesBox.innerHTML = '';
+      newWrap.hidden = !isNewTitle;
+      personWrap.hidden = ro || !(isNewTitle || (v && !who) || changeMode);
+      if (!v) return;
+      if (isNewTitle) return;
+      if (who) {
+        goesBox.appendChild(h('span', null, 'Goes to: ', h('b', null, who)));
+        if (!ro && !changeMode) goesBox.appendChild(h('button', { type: 'button', class: 'linkbtn', onclick: function () { changeMode = true; drawGoes(); personIn.focus(); } }, 'Change person'));
+      } else {
+        goesBox.appendChild(h('span', { class: 'warn' }, 'No one is linked to this role yet, so nobody will see it on My Actions.'));
+      }
+    }
+    // Runs before the item is saved: creates a new title and/or links a person.
+    function settleOwner() {
+      var v = ownerSel.value, user = OF.usernameFrom(personIn.value);
+      if (ro) return Promise.resolve({ ownerId: v, note: '' });
+      if (v === '__new') {
+        if (!newTitleIn.value.trim()) return Promise.reject(new Error('Enter the new owner title.'));
+        return OF.rpc('ops_fu_add_owner', { p_name: newTitleIn.value.trim(), p_username: user }).then(function (o) {
+          S.owners.push(o);
+          return OF.refreshOwnerPeople().then(function () {
+            return { ownerId: String(o.id), note: user ? '' : ' Nobody is linked to the new owner yet.' };
+          });
+        });
+      }
+      if (!personWrap.hidden && user) {
+        return OF.rpc('ops_fu_set_owner_person', { p_owner_id: Number(v), p_username: user }).then(function (m) {
+          return OF.refreshOwnerPeople().then(function () { return { ownerId: v, note: '', linked: m }; });
+        });
+      }
+      return Promise.resolve({ ownerId: v, note: v && !OF.goesTo(v) ? ' Nobody is linked to this owner yet, so no one will see it on My Actions.' : '' });
+    }
+
     var sub = isNew ? 'The ID is assigned when the item is created.'
       : it.facility + ', ' + it.period + ', updated ' + (it.updated_at ? fmtStamp(it.updated_at) : '-') + (it.updated_by ? ' by ' + it.updated_by : '');
     var head = h('div', { class: 'sh' },
@@ -463,7 +547,7 @@
         fld('action', ta('action', 3))),
       h('div', { class: 'group' }, h('h3', null, 'Ownership and status'),
         h('div', { class: 'form-row' },
-          fld('owner_id', sel('owner_id', ownOpts)),
+          ownerField(),
           fld('due', inp('due', 'date')),
           fld('priority', sel('priority', PRIORITIES.map(function (p) { return [p, p]; }))),
           fld('status', sel('status', Object.keys(STATUS).map(function (k) { return [k, STATUS[k]]; }))),
@@ -495,20 +579,29 @@
     function save(extra) {
       err.textContent = '';
       var p = Object.assign(collect(), extra || {});
+      if (p.owner_id === '__new') p.owner_id = 'new';
       var v = validate(p);
       if (v) { err.textContent = v; if (p.status === 'verified_closed' && F.closure_evidence) F.closure_evidence.focus(); return; }
-      if (!isNew) {
-        var patch = {};
-        Object.keys(p).forEach(function (k) { if (String(it[k] == null ? '' : it[k]) !== p[k]) patch[k] = p[k]; });
-        p = patch;
-        if (!Object.keys(p).length) { OF.toast('No changes to save.'); return; }
-      }
       saveBtn.disabled = true;
-      var call = isNew ? OF.rpc('ops_fu_add_item', { p_item: p })
-        : OF.rpc('ops_fu_save_item', { p_id: it.id, p_patch: p, p_expected_updated: it.updated_at || null });
-      call.then(function (r) {
-        OF.replaceItem(r.item);
-        OF.toast(isNew ? 'Created ' + r.item.id + '.' : 'Saved ' + r.item.id + ' (' + plural((r.changed || []).length, 'change') + ').');
+      var note = '', linked = '';
+      settleOwner().then(function (o) {
+        note = o.note || ''; linked = o.linked || '';
+        p.owner_id = o.ownerId;
+        if (!isNew) {
+          var patch = {};
+          Object.keys(p).forEach(function (k) { if (String(it[k] == null ? '' : it[k]) !== p[k]) patch[k] = p[k]; });
+          p = patch;
+          if (!Object.keys(p).length) return { item: null, changed: [] };
+        }
+        return isNew ? OF.rpc('ops_fu_add_item', { p_item: p })
+          : OF.rpc('ops_fu_save_item', { p_id: it.id, p_patch: p, p_expected_updated: it.updated_at || null });
+      }).then(function (r) {
+        if (r.item) OF.replaceItem(r.item);
+        var msg = isNew ? 'Created ' + r.item.id + '.'
+          : r.item ? 'Saved ' + r.item.id + ' (' + plural((r.changed || []).length, 'change') + ').'
+          : linked ? linked : 'No changes to save.';
+        if (isNew && linked) msg += ' ' + linked;
+        OF.toast(msg + note);
         closeDrawer(); OF.render();
       }).catch(function (e) { saveBtn.disabled = false; OF.handleErr(e, err); });
     }
