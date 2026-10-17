@@ -21,24 +21,31 @@
 <script>
 /* Operations Follow-up: CEO Desk (port of the Apps Script CEO desk tab) */
 OF.start({
-  title: 'CEO desk',
+  title: 'CEO Desk',
   sub: 'Escalated items waiting for a decision, and decisions still being carried out.',
+  hero: function () {
+    var pending = OF.S.items.filter(OF.ceoPending);
+    var urgent = pending.filter(function (x) { return OF.pr(x.priority) <= 1; }).length;
+    var decided = OF.S.items.filter(function (it) { return OF.outstanding(it) && it.ceo_flag !== 'no' && it.ceo_decision; }).length;
+    return {
+      text: pending.length ? OF.plural(pending.length, 'escalated item') + ' ' + (pending.length === 1 ? 'needs' : 'need') + ' a CEO decision. ' +
+        urgent + ' of ' + (pending.length === 1 ? 'it is' : 'these are') + ' emergency or critical.'
+        : 'No escalated item is waiting for a CEO decision.',
+      stats: [{ n: pending.length, l: 'Awaiting decision' }, { n: urgent, l: 'Emergency or critical' }, { n: decided, l: 'Decided, still open' }]
+    };
+  },
   render: function () {
     var h = OF.h, add = OF.add;
     var root = h('div');
     var pending = OF.S.items.filter(OF.ceoPending).sort(OF.byAttention);
     var decided = OF.S.items.filter(function (it) { return OF.outstanding(it) && it.ceo_flag !== 'no' && it.ceo_decision; }).sort(OF.byAttention);
-    var urgent = pending.filter(function (x) { return OF.pr(x.priority) <= 1; }).length;
-    root.appendChild(h('p', { class: 'brief', style: 'font-size:18px' },
-      pending.length ? OF.plural(pending.length, 'escalated item') + ' ' + (pending.length === 1 ? 'needs' : 'need') + ' a CEO decision. ' +
-        urgent + ' of ' + (pending.length === 1 ? 'it is' : 'these are') + ' emergency or critical.'
-        : 'No escalated item is waiting for a CEO decision.'));
 
     function card(it, isPending) {
-      var c = h('article', { class: 'card p-' + String(it.priority).toLowerCase() });
+      var c = h('article', { class: 'dcard p-' + String(it.priority).toLowerCase() });
       add(c, h('div', { class: 'top' }, h('b', null, it.id), OF.prioTag(it.priority), OF.statusTag(it.status),
-        h('span', null, it.ceo_flag === 'yes' ? 'Escalated' : 'Conditional escalation'), h('span', null, OF.lateText(it))));
-      add(c, h('h3', null, it.issue));
+        h('span', null, it.ceo_flag === 'yes' ? 'Escalated' : 'Conditional escalation'),
+        h('span', { class: OF.isLate(it) ? 'late' : '' }, OF.lateText(it))));
+      add(c, h('h4', null, it.issue));
       var dl = h('dl');
       [['Facility and owner', it.facility + ', ' + it.owner],
        ['Owner response', it.response_status + (it.response_summary ? '. ' + it.response_summary : '')],
@@ -67,17 +74,19 @@ OF.start({
         form = h('div', { class: 'cform', hidden: !isPending }, out, dir, err, btn);
         add(c, form);
       }
-      add(c, h('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' },
-        h('button', { class: 'btn', type: 'button', onclick: function () { OF.openItem(it.id); } }, 'Open full item'),
-        (!isPending && form) ? h('button', { class: 'btn', type: 'button', onclick: function () { form.hidden = !form.hidden; } }, 'Revise decision') : null));
+      add(c, h('div', { class: 'acts' },
+        h('button', { class: 'btn small', type: 'button', onclick: function () { OF.openItem(it.id); } }, 'Open full item'),
+        (!isPending && form) ? h('button', { class: 'btn small', type: 'button', onclick: function () { form.hidden = !form.hidden; } }, 'Revise decision') : null));
       return c;
     }
 
-    root.appendChild(h('section', null, h('h2', null, 'Awaiting decision (' + pending.length + ')'),
-      h('p', { class: 'hint' }, 'Each card shows the evidence and the recommended direction. Recording a decision dates it and adds it to the item history.'),
-      pending.length ? h('div', { class: 'cards' }, pending.map(function (it) { return card(it, true); })) : h('div', { class: 'empty' }, 'Nothing pending.')));
-    root.appendChild(h('section', { style: 'margin-top:22px' }, h('h2', null, 'Decided, still being carried out (' + decided.length + ')'),
-      decided.length ? h('div', { class: 'cards' }, decided.map(function (it) { return card(it, false); })) : h('div', { class: 'empty' }, 'No decided items are still open.')));
+    root.appendChild(h('div', { class: 'sec-head' }, h('h3', null, 'Awaiting decision (' + pending.length + ')'),
+      h('p', null, 'Recording a decision dates it and adds it to the item history.')));
+    root.appendChild(pending.length ? h('div', { class: 'cards' }, pending.map(function (it) { return card(it, true); }))
+      : h('div', { class: 'card-panel' }, h('div', { class: 'empty' }, 'Nothing is waiting for a decision.')));
+    root.appendChild(h('div', { class: 'sec-head', style: 'margin-top:10px' }, h('h3', null, 'Decided, still being carried out (' + decided.length + ')')));
+    root.appendChild(decided.length ? h('div', { class: 'cards' }, decided.map(function (it) { return card(it, false); }))
+      : h('div', { class: 'card-panel' }, h('div', { class: 'empty' }, 'No decided items are still open.')));
     return root;
   }
 });

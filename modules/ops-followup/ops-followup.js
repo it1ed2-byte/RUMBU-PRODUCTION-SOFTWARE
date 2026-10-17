@@ -217,7 +217,7 @@
   OF.canManage = function () { return !!S.access.can_manage; };
 
   /* ---------- page shell ---------- */
-  var CFG = null, mainEl = null, bannerEl = null;
+  var CFG = null, mainEl = null, bannerEl = null, heroEl = null;
   OF.param = function (k) { return new URLSearchParams(location.search).get(k) || ''; };
   OF.go = function (page, params) {
     var q = new URLSearchParams();
@@ -228,17 +228,11 @@
   OF.start = function (cfg) {
     CFG = cfg;
     var wrap = h('div', { class: 'of-wrap' });
-    var asAt = h('span', { id: 'of-asat' });
-    var role = h('span', { class: 'of-role', id: 'of-role' }, 'Loading');
-    var reloadBtn = h('button', { class: 'btn small', type: 'button', onclick: function () {
-      OF.reload().then(function () { OF.toast('Register reloaded.'); });
-    } }, 'Reload');
-    wrap.appendChild(h('header', { class: 'of-head' },
-      h('div', null, h('h1', null, cfg.title), cfg.sub ? h('p', { class: 'sub' }, cfg.sub) : null),
-      h('div', { class: 'of-who' }, asAt, role, reloadBtn)));
+    heroEl = h('section', { class: 'hero' },
+      h('div', { class: 'ht' }, h('h2', null, cfg.title), cfg.sub ? h('p', null, cfg.sub) : null));
     bannerEl = h('div');
-    mainEl = h('main', null, h('div', { class: 'loading' }, 'Loading the follow-up register.'));
-    wrap.appendChild(bannerEl); wrap.appendChild(mainEl);
+    mainEl = h('main', null, h('div', { class: 'of-loading' }, 'Loading the follow-up register...'));
+    wrap.appendChild(heroEl); wrap.appendChild(bannerEl); wrap.appendChild(mainEl);
     wrap.appendChild(h('p', { class: 'of-foot' }, 'Confidential, internal use only. Rumbu Industries Group, Group Operations Office. Every change to an item is recorded in its history.'));
     document.body.appendChild(wrap);
     buildDrawer();
@@ -256,10 +250,10 @@
   function showFatal(e) {
     mainEl.innerHTML = '';
     if (e && e.noAccess) {
-      mainEl.appendChild(h('div', { class: 'banner warn' },
+      mainEl.appendChild(h('div', { class: 'status warn' },
         'You do not have access to the operations follow-up register. Ask the Group Operations Office or IT to assign you a page in this module.'));
     } else {
-      mainEl.appendChild(h('div', { class: 'banner bad' }, 'The register could not be loaded. ' + errMsg(e)));
+      mainEl.appendChild(h('div', { class: 'status bad' }, 'The register could not be loaded. ' + errMsg(e)));
     }
   }
 
@@ -267,15 +261,36 @@
     return OF.load().then(OF.render).catch(showFatal);
   };
 
+  // Hero: page title, a one-line summary, review date, access level and
+  // two or three headline figures supplied by the page (cfg.hero).
+  function renderHero() {
+    var a = S.access, x = (CFG.hero && CFG.hero()) || {};
+    var reloadBtn = h('button', { class: 'btn small', type: 'button', onclick: function () {
+      OF.reload().then(function () { OF.toast('Register reloaded.'); });
+    } }, 'Reload');
+    var text = x.text != null ? x.text : CFG.sub;
+    heroEl.innerHTML = '';
+    heroEl.appendChild(h('div', { class: 'ht' },
+      h('h2', null, x.title || CFG.title),
+      text ? h('p', null, text) : null,
+      h('div', { class: 'meta' },
+        h('span', { class: 'tag' }, (a.as_at_fixed ? 'Review date ' : 'As at ') + fmt(S.today)),
+        h('span', { class: 'tag' + (a.can_edit ? ' edit' : '') }, a.can_manage ? 'Manager' : a.can_edit ? 'Editor' : 'View only'),
+        reloadBtn)));
+    if (x.stats && x.stats.length) {
+      heroEl.appendChild(h('div', { class: 'hs' }, x.stats.map(function (st) {
+        var inner = [h('span', { class: 'n' }, String(st.n)), h('span', { class: 'l' }, st.l)];
+        return st.go ? h('button', { class: 'hero-stat', type: 'button', onclick: st.go }, inner)
+                     : h('div', { class: 'hero-stat' }, inner);
+      })));
+    }
+  }
+
   OF.render = function () {
-    var a = S.access;
-    document.getElementById('of-asat').textContent = (a.as_at_fixed ? 'Review date ' : 'As at ') + fmt(S.today);
-    var role = document.getElementById('of-role');
-    role.textContent = a.can_manage ? 'Manager' : a.can_edit ? 'Editor' : 'View only';
-    role.className = 'of-role' + (a.can_edit ? ' edit' : '');
+    renderHero();
     bannerEl.innerHTML = '';
-    if (!a.can_edit && CFG.editHint !== false) {
-      bannerEl.appendChild(h('div', { class: 'banner' },
+    if (!S.access.can_edit && CFG.editHint !== false) {
+      bannerEl.appendChild(h('div', { class: 'status info' },
         'You have view-only access. Ask the Group Operations Office to make you an editor if you need to update items.'));
     }
     mainEl.innerHTML = '';
@@ -285,13 +300,21 @@
   /* ---------- item row ---------- */
   OF.rowEl = function (it) {
     var late = isLate(it);
-    return h('button', { class: 'row p-' + String(it.priority).toLowerCase(), type: 'button', onclick: function () { OF.openItem(it.id); } },
+    return h('button', { class: 'irow p-' + String(it.priority).toLowerCase(), type: 'button', onclick: function () { OF.openItem(it.id); } },
       h('span', { class: 'stripe', 'aria-hidden': 'true' }),
       h('span', { class: 'rid' }, it.id, h('small', null, it.period)),
       h('span', { class: 'rmain' }, h('span', { class: 'rissue' }, it.issue), h('span', { class: 'rmeta' }, it.owner + ', ' + it.facility)),
       h('span', { class: 'rdue' + (late ? ' late' : '') }, fmt(it.due) || 'No due date', h('small', null, lateText(it))),
       h('span', { class: 'rtags' }, OF.prioTag(it.priority), OF.statusTag(it.status), OF.ceoTag(it),
         isJoint(it.owner) ? h('span', { class: 'pill joint' }, 'Joint') : null));
+  };
+
+  // A list of items laid out like the app's tables, with a dark header row.
+  OF.itemList = function (list) {
+    return h('div', { class: 'ilist' },
+      h('div', { class: 'ihead', 'aria-hidden': 'true' },
+        h('span'), h('span', null, 'Item'), h('span', null, 'Issue and owner'), h('span', null, 'Due'), h('span', null, 'Priority and status')),
+      list.map(OF.rowEl));
   };
 
   /* ---------- CSV export ---------- */
@@ -363,7 +386,7 @@
       var e = h('textarea', { disabled: ro, rows: String(rows || 3), placeholder: ph || '', id: 'f-' + key });
       e.value = it[key] || ''; F[key] = e; return e;
     }
-    function fld(key, ctl, hint) { return h('label', { class: 'field', for: 'f-' + key }, LABELS[key], ctl, hint ? h('span', null, hint) : null); }
+    function fld(key, ctl, hint) { return h('div', { class: 'field' }, h('label', { for: 'f-' + key }, LABELS[key]), ctl, hint ? h('span', { class: 'fh' }, hint) : null); }
 
     var facOpts = [['', 'Choose a facility']].concat(S.facilities.filter(function (f) { return f.active || String(f.id) === String(it.facility_id); })
       .map(function (f) { return [String(f.id), f.name]; }));
@@ -379,13 +402,13 @@
 
     var body = h('div', { class: 'body' },
       h('div', { class: 'group' }, h('h3', null, 'The issue'),
-        h('div', { class: 'grid2' },
+        h('div', { class: 'form-row' },
           fld('facility_id', sel('facility_id', facOpts, { disabled: ro || !isNew })),
           fld('period', inp('period', 'text', { disabled: ro || !isNew, placeholder: 'Week 42' }))),
         fld('issue', ta('issue', 3)),
         fld('action', ta('action', 3))),
       h('div', { class: 'group' }, h('h3', null, 'Ownership and status'),
-        h('div', { class: 'grid2' },
+        h('div', { class: 'form-row' },
           fld('owner_id', sel('owner_id', ownOpts)),
           fld('due', inp('due', 'date')),
           fld('priority', sel('priority', PRIORITIES.map(function (p) { return [p, p]; }))),
@@ -401,7 +424,7 @@
         fld('closure_evidence', ta('closure_evidence', 3, 'The verifiable evidence that the issue is resolved')),
         fld('closed_source', inp('closed_source', 'text', { placeholder: 'Report, week and date the evidence comes from' }),
           'Both closure fields are required before an item can be marked Verified closed.')),
-      it.ceo_decision ? h('div', { class: 'group' }, h('h3', null, 'CEO decision'), h('p', { style: 'margin:0 0 10px' }, it.ceo_decision)) : null,
+      it.ceo_decision ? h('div', { class: 'group' }, h('h3', null, 'CEO decision'), h('div', { class: 'decision', style: 'margin-bottom:12px' }, it.ceo_decision)) : null,
       isNew ? null : h('div', { class: 'group' }, h('h3', null, 'Change history'), h('ul', { class: 'hist', id: 'hist' }, h('li', null, 'Loading history.'))));
 
     function collect() { var p = {}; Object.keys(F).forEach(function (k) { p[k] = F[k].value.trim(); }); return p; }
@@ -435,7 +458,7 @@
       }).catch(function (e) { saveBtn.disabled = false; OF.handleErr(e, err); });
     }
     var saveBtn = h('button', { class: 'btn primary', type: 'button', onclick: function () { save(); } }, isNew ? 'Create item' : 'Save changes');
-    var foot = h('div', { class: 'foot' }, h('div', { style: 'flex:1 1 100%' }, err),
+    var foot = h('div', { class: 'foot' }, err,
       h('button', { class: 'btn', type: 'button', onclick: closeDrawer }, ro ? 'Close' : 'Cancel'),
       (!ro && !isNew && it.status !== 'verified_closed') ? h('button', { class: 'btn ok', type: 'button', onclick: function () { F.status.value = 'verified_closed'; save(); } }, 'Mark verified closed') : null,
       ro ? null : saveBtn);

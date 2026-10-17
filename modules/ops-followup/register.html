@@ -54,25 +54,34 @@
   }
 
   OF.start({
-    title: 'Follow-up register',
+    title: 'Follow-up Register',
     sub: 'Every follow-up action raised in the weekly operations reviews.',
+    hero: function () {
+      var it = OF.S.items, out = it.filter(OF.outstanding);
+      return { stats: [
+        { n: out.length, l: 'Outstanding' },
+        { n: it.filter(OF.isLate).length, l: 'Past due' },
+        { n: it.length, l: 'Total items' }
+      ] };
+    },
     render: function () {
       var h = OF.h, items = OF.S.items;
       var root = h('div');
       function selCtl(label, key, opts) {
-        var s = h('select', { onchange: function () { F[key] = s.value; OF.render(); } },
+        var id = 'flt-' + key;
+        var s = h('select', { id: id, onchange: function () { F[key] = s.value; OF.render(); } },
           h('option', { value: '' }, 'All'), opts.map(function (o) { return h('option', { value: o[0] }, o[1]); }));
         s.value = F[key];
-        return h('label', { class: 'ctl' }, label, s);
+        return h('div', { class: 'f' }, h('label', { for: id }, label), s);
       }
       var opt = function (arr) { return arr.map(function (x) { return [x, x]; }); };
-      var search = h('input', { type: 'search', placeholder: 'ID, issue, owner, evidence', value: F.q,
+      var search = h('input', { id: 'flt-q', type: 'search', placeholder: 'ID, issue, owner, evidence', value: F.q,
         oninput: function () { F.q = search.value; drawList(); } });
       var filters = h('div', { class: 'filters' },
-        h('label', { class: 'ctl' }, 'Search', search),
-        h('button', { class: 'btn morebtn', type: 'button', 'aria-expanded': 'false', onclick: function (e) {
+        h('div', { class: 'f search' }, h('label', { for: 'flt-q' }, 'Search'), search),
+        h('div', { class: 'f f-min' }, h('button', { class: 'btn morebtn', type: 'button', 'aria-expanded': 'false', onclick: function (e) {
           var on = filters.classList.toggle('open'); e.currentTarget.setAttribute('aria-expanded', String(on));
-          e.currentTarget.textContent = on ? 'Hide filters' : 'More filters'; } }, 'More filters'),
+          e.currentTarget.textContent = on ? 'Hide filters' : 'More filters'; } }, 'More filters')),
         selCtl('Facility', 'facility', opt(OF.uniq(items.map(function (i) { return i.facility; })).sort())),
         selCtl('Review period', 'period', opt(OF.uniq(items.map(function (i) { return i.period; })).sort())),
         selCtl('Priority', 'priority', opt(OF.PRIORITIES)),
@@ -80,7 +89,7 @@
         selCtl('CEO escalation', 'ceo', Object.keys(OF.CEO).map(function (k) { return [k, OF.CEO[k]]; })),
         selCtl('Owner', 'owner', opt(OF.uniq(items.map(function (i) { return i.owner; })).sort())));
 
-      var sortSel = h('select', { class: 'btn', 'aria-label': 'Sort order', onchange: function () { sortBy = sortSel.value; drawList(); } },
+      var sortSel = h('select', { class: 'of-inline', 'aria-label': 'Sort order', onchange: function () { sortBy = sortSel.value; drawList(); } },
         h('option', { value: 'attention' }, 'Sort: priority, then lateness'), h('option', { value: 'due' }, 'Sort: due date'),
         h('option', { value: 'updated' }, 'Sort: last updated'), h('option', { value: 'id' }, 'Sort: item ID'));
       sortSel.value = sortBy;
@@ -101,15 +110,15 @@
         sortSel,
         h('button', { class: 'btn', type: 'button', onclick: function () { blank(); OF.render(); } }, 'Clear filters'),
         h('button', { class: 'btn', type: 'button', onclick: function () { OF.exportCsv(sorted(filtered())); } }, 'Export CSV'),
-        OF.canEdit() ? h('button', { class: 'btn primary', type: 'button', onclick: OF.openNew }, 'Add follow-up item') : null)));
+        OF.canEdit() ? h('button', { class: 'btn primary', type: 'button', onclick: OF.openNew }, '+ Add follow-up item') : null)));
 
-      var listBox = h('div', { class: 'panel listbox' });
+      var listBox = h('div');
       function drawList() {
         var l = sorted(filtered());
         countEl.textContent = OF.plural(l.length, 'item') + ' shown of ' + OF.S.items.length;
         listBox.innerHTML = '';
-        if (!l.length) listBox.appendChild(h('div', { class: 'empty', style: 'padding:18px' }, 'No items match these filters. Clear filters to see the full register.'));
-        else listBox.appendChild(h('div', { class: 'rows' }, l.map(OF.rowEl)));
+        if (!l.length) listBox.appendChild(h('div', { class: 'card-panel' }, h('div', { class: 'empty' }, 'No items match these filters. Clear filters to see the full register.')));
+        else listBox.appendChild(OF.itemList(l));
       }
       drawList();
       root.appendChild(listBox);

@@ -21,34 +21,39 @@
 <script>
 /* Operations Follow-up: Overview (port of the Apps Script Overview tab) */
 OF.start({
-  title: 'Operations follow-up overview',
+  title: 'Operations Follow-up',
   sub: 'Where the follow-up register stands across all facilities.',
   editHint: false,
-  render: function () {
-    var h = OF.h, add = OF.add, S = OF.S;
-    var it = S.items, out = it.filter(OF.outstanding), late = it.filter(OF.isLate);
+  hero: function () {
+    var h = OF.h, it = OF.S.items, out = it.filter(OF.outstanding), late = it.filter(OF.isLate);
     var emLate = late.filter(function (x) { return OF.pr(x.priority) <= 1; });
     var emNoResp = out.filter(function (x) { return OF.pr(x.priority) <= 1 && OF.noResp(x); });
-    var closed = it.length - out.length;
-    var pct = it.length ? Math.round(closed / it.length * 100) : 0;
+    var pct = it.length ? Math.round((it.length - out.length) / it.length * 100) : 0;
+    var text = !it.length ? 'The register is empty. Add the first follow-up item on the Register page.'
+      : h('span', null, h('b', null, OF.plural(late.length, 'action')), ' of ' + out.length + ' outstanding ' + (late.length === 1 ? 'is' : 'are') + ' past due. ',
+          h('b', null, String(emLate.length)), ' emergency or critical ' + (emLate.length === 1 ? 'item is' : 'items are') + ' late, and ',
+          h('b', null, String(emNoResp.length)), ' ' + (emNoResp.length === 1 ? 'has' : 'have') + ' no response from the owner.');
+    return {
+      text: text,
+      stats: [
+        { n: late.length, l: 'Past due', go: function () { OF.go('register', { view: 'overdue' }); } },
+        { n: it.filter(OF.ceoPending).length, l: 'Awaiting CEO', go: function () { OF.go('ceo-desk'); } },
+        { n: pct + '%', l: 'Verified closed' }
+      ]
+    };
+  },
+  render: function () {
+    var h = OF.h, S = OF.S;
+    var it = S.items, out = it.filter(OF.outstanding);
+    var pct = it.length ? Math.round((it.length - out.length) / it.length * 100) : 0;
     var root = h('div');
 
-    var brief = h('p', { class: 'brief' });
-    if (!it.length) brief.textContent = 'The register is empty. Add the first follow-up item on the Register page.';
-    else {
-      add(brief, [h('b', null, OF.plural(late.length, 'action')), ' of ' + out.length + ' outstanding ' + (late.length === 1 ? 'is' : 'are') + ' past due. ']);
-      add(brief, [h('b', null, String(emLate.length)), ' emergency or critical ' + (emLate.length === 1 ? 'item is' : 'items are') + ' late, and ']);
-      add(brief, [h('b', null, String(emNoResp.length)), ' emergency or critical ' + (emNoResp.length === 1 ? 'item has' : 'items have') + ' no response from the owner. ']);
-      add(brief, pct + '% of the register is verified closed.');
-    }
-    root.appendChild(brief);
-
-    var kp = [['outstanding', 't-prog'], ['overdue', 't-over'], ['emcrit', 't-crit'], ['ceo', 't-ceo'], ['noresp', 't-over'], ['closed', 't-closed']];
+    var kp = [['outstanding', 'k-prog'], ['overdue', 'k-over'], ['emcrit', 'k-emer'], ['ceo', 'k-ceo'], ['noresp', 'k-over'], ['closed', 'k-closed']];
     root.appendChild(h('div', { class: 'kpis' }, kp.map(function (k) {
       var n = it.filter(OF.VIEWS[k[0]].test).length;
       return h('button', { class: 'kpi ' + k[1], type: 'button', onclick: function () { OF.go('register', { view: k[0] }); } },
-        h('span', { class: 'n' }, String(n)), h('span', { class: 'l' }, OF.VIEWS[k[0]].label),
-        k[0] === 'closed' ? h('span', { class: 's' }, pct + '% of ' + it.length + ' items') : null);
+        h('span', { class: 'value' }, String(n)), h('span', { class: 'label' }, OF.VIEWS[k[0]].label),
+        k[0] === 'closed' ? h('span', { class: 'sub2' }, pct + '% of ' + it.length + ' items') : null);
     })));
 
     var counts = {}; OF.AGE.forEach(function (a) { counts[a.k] = 0; });
@@ -61,16 +66,16 @@ OF.start({
         onclick: function () { OF.go('register', { age: a.k, view: 'outstanding' }); } },
         counts[a.k] / Math.max(out.length, 1) > 0.06 ? String(counts[a.k]) : ''));
     });
-    var agePanel = h('section', { class: 'panel' },
-      h('h2', null, 'How late are the outstanding actions'),
-      h('p', { class: 'hint' }, 'Each band is the number of outstanding items by days past due. Select a band to list those items.'),
+    var agePanel = h('section', { class: 'card-panel' },
+      h('h3', null, 'How late are the outstanding actions'),
+      h('p', { class: 'sub' }, 'Outstanding items grouped by days past due. Select a band to list those items.'),
       out.length ? strip : h('div', { class: 'empty' }, 'No outstanding items.'),
       h('div', { class: 'legend' }, OF.AGE.filter(function (a) { return counts[a.k]; }).map(function (a) {
         return h('span', null, h('i', { style: 'background:' + a.col }), a.label + ' (' + counts[a.k] + ')');
       })));
 
-    var fac = h('section', { class: 'panel' }, h('h2', null, 'Progress by facility'),
-      h('p', { class: 'hint' }, 'Bar shows closed, in progress, open and overdue. Percentage is verified closed.'),
+    var fac = h('section', { class: 'card-panel' }, h('h3', null, 'Progress by facility'),
+      h('p', { class: 'sub' }, 'Closed, in progress, open and overdue. The figure is the share verified closed.'),
       OF.S.facilities.map(function (f) { return [f.name, it.filter(function (x) { return x.facility_id === f.id; })]; })
         .filter(function (g) { return g[1].length; }).map(function (g) {
         var c = { verified_closed: 0, in_progress: 0, open: 0, overdue: 0 };
@@ -84,13 +89,16 @@ OF.start({
             h('span', { style: 'flex:' + c.open + ';background:var(--of-open)' }),
             h('span', { style: 'flex:' + c.overdue + ';background:var(--of-over)' })),
           h('span', { class: 'pc' }, Math.round(c.verified_closed / n * 100) + '%'));
-      }));
-    root.appendChild(h('div', { class: 'cols' }, agePanel, fac));
+      }),
+      h('div', { class: 'legend' },
+        [['var(--of-closed)', 'Verified closed'], ['var(--of-prog)', 'In progress'], ['var(--of-open)', 'Open'], ['var(--of-over)', 'Overdue']]
+          .map(function (l) { return h('span', null, h('i', { style: 'background:' + l[0] }), l[1]); })));
+    root.appendChild(h('div', { class: 'grid2' }, agePanel, fac));
 
     var attention = out.filter(function (x) { return OF.pr(x.priority) <= 1 || OF.isLate(x); }).sort(OF.byAttention).slice(0, 10);
-    root.appendChild(h('section', { class: 'panel listwrap' }, h('h2', null, 'Deal with these first'),
-      h('p', { class: 'hint' }, 'Highest priority first, then longest past due. Select an item to see the full record.'),
-      attention.length ? h('div', { class: 'rows' }, attention.map(OF.rowEl)) : h('div', { class: 'empty' }, 'Nothing urgent is outstanding.')));
+    root.appendChild(h('section', { class: 'card-panel' }, h('h3', null, 'Deal with these first'),
+      h('p', { class: 'sub' }, 'Highest priority first, then longest past due. Select an item to see the full record.'),
+      attention.length ? OF.itemList(attention) : h('div', { class: 'empty' }, 'Nothing urgent is outstanding.')));
     return root;
   }
 });

@@ -24,6 +24,11 @@
   var SETTING_ORDER = ['autoOverdue', 'memoResponseDays', 'asAtDate', 'ceoEmail', 'opsEmail'];
   var SETTING_LABEL = { autoOverdue: 'Daily overdue sweep', memoResponseDays: 'Working days to respond to a memo',
     asAtDate: 'Fixed review date', ceoEmail: 'CEO email', opsEmail: 'Group Operations Office mailbox' };
+  var SETTING_DESC = { autoOverdue: 'Moves Open and In progress items past their due date to Overdue every day at 06:00 WAT.',
+    memoResponseDays: 'Sets the respond-by date printed on follow-up memos.',
+    asAtDate: 'Leave blank to use today. Set a date only to review the register as at a past date.',
+    ceoEmail: 'Shown with the CEO digest. Used for sending once email is added.',
+    opsEmail: 'Copied on owner reminders once email is added.' };
 
   function save(promise, okMsg, btn) {
     if (btn) btn.disabled = true;
@@ -33,26 +38,38 @@
       return OF.reload();
     }).catch(function (e) { if (btn) btn.disabled = false; OF.handleErr(e); });
   }
+  function table(head, body) {
+    var h = OF.h;
+    return h('div', { class: 'table-wrap' }, h('div', { class: 'table-scroll' }, h('table', null, head ? h('thead', null, h('tr', null, head)) : null, body)));
+  }
 
   OF.start({
-    title: 'Follow-up settings',
+    title: 'Follow-up Settings',
     sub: 'Owners, automation settings and who may edit the register.',
     editHint: false,
+    hero: function () {
+      var S = OF.S, active = S.owners.filter(function (o) { return o.active; });
+      return { stats: [
+        { n: active.length, l: 'Active owners' },
+        { n: active.filter(function (o) { return !o.email; }).length, l: 'Without email' },
+        { n: String(S.settings.autoOverdue || 'TRUE').toUpperCase() === 'FALSE' ? 'Off' : 'On', l: 'Daily sweep' }
+      ] };
+    },
     render: function () {
       var h = OF.h, S = OF.S, man = OF.canManage();
       var root = h('div');
-      if (!man) root.appendChild(h('div', { class: 'banner' }, 'Only managers can change these settings. You can see them below.'));
+      if (!man) root.appendChild(h('div', { class: 'status info' }, 'Only managers can change these settings. You can see them below.'));
 
       /* ---- Owners ---- */
       var used = {}; S.items.forEach(function (i) { used[i.owner_id] = (used[i.owner_id] || 0) + 1; });
       var tbody = h('tbody', null, S.owners.map(function (o) {
         var f = {};
         function cell(key, ph, type) {
-          f[key] = h('input', { class: 'inp', type: type || 'text', value: o[key] || '', placeholder: ph || '', disabled: !man, 'aria-label': key + ' for ' + o.name });
+          f[key] = h('input', { type: type || 'text', value: o[key] || '', placeholder: ph || '', disabled: !man, 'aria-label': key + ' for ' + o.name });
           return h('td', null, f[key]);
         }
         f.active = h('input', { type: 'checkbox', checked: o.active, disabled: !man, 'aria-label': 'Active' });
-        var btn = h('button', { class: 'btn small', type: 'button', disabled: !man }, 'Save');
+        var btn = h('button', { class: 'btn small primary', type: 'button', disabled: !man }, 'Save');
         btn.addEventListener('click', function () {
           var patch = { name: f.name.value.trim(), email: f.email.value.trim(), cc: f.cc.value.trim(),
             reports_to: f.reports_to.value.trim(), department: f.department.value.trim(), active: f.active.checked };
@@ -62,24 +79,26 @@
         return h('tr', null, cell('name'), cell('email', 'name@company', 'email'), cell('cc', 'Comma-separated'),
           cell('reports_to'), cell('department'), h('td', { class: 'n' }, String(used[o.id] || 0)), h('td', null, f.active), h('td', null, btn));
       }));
-      var ownersPanel = h('section', { class: 'panel' }, h('h2', null, 'Owners'),
-        h('p', { class: 'hint' }, 'Rename a generic owner to the named head, add emails for reminders, and switch off owners no longer in use. A rename shows on every item that owner holds.'),
-        h('div', { class: 'tscroll' }, h('table', { class: 'of-t' }, h('thead', null, h('tr', null,
-          h('th', null, 'Owner'), h('th', null, 'Email'), h('th', null, 'Copy to'), h('th', null, 'Reports to'),
-          h('th', null, 'Department'), h('th', { class: 'n' }, 'Items'), h('th', null, 'Active'), h('th', null, ''))), tbody)));
+      var ownersPanel = h('section', { class: 'card-panel' }, h('h3', null, 'Owners'),
+        h('p', { class: 'sub' }, 'Rename a generic owner to the named head, add emails for reminders, and switch off owners no longer in use. A rename shows on every item that owner holds.'),
+        table([h('th', null, 'Owner'), h('th', null, 'Email'), h('th', null, 'Copy to'), h('th', null, 'Reports to'),
+          h('th', null, 'Department'), h('th', { class: 'n' }, 'Items'), h('th', null, 'Active'), h('th', null, '')], tbody));
       if (man) {
-        var nName = h('input', { class: 'inp', placeholder: 'Owner name, for example Plant Manager, Kano Wash Plant', 'aria-label': 'New owner name' });
-        var nEmail = h('input', { class: 'inp', type: 'email', placeholder: 'Email', 'aria-label': 'New owner email' });
-        var addBtn = h('button', { class: 'btn primary', type: 'button' }, 'Add owner');
+        var nName = h('input', { placeholder: 'Owner name, for example Plant Manager, Kano Wash Plant', 'aria-label': 'New owner name' });
+        var nEmail = h('input', { type: 'email', placeholder: 'Email', 'aria-label': 'New owner email' });
+        var addBtn = h('button', { class: 'btn primary', type: 'button' }, '+ Add owner');
         addBtn.addEventListener('click', function () {
           if (!nName.value.trim()) { OF.toast('Enter the owner name.', true); return; }
           save(sb.from('ops_followup_owners').insert({ name: nName.value.trim(), email: nEmail.value.trim() }).select('id'), 'Added ' + nName.value.trim() + '.', addBtn);
         });
-        OF.add(ownersPanel, h('div', { class: 'toolbar', style: 'margin-top:12px' }, h('span', { class: 'left', style: 'flex:1' }, nName, nEmail, addBtn)));
+        OF.add(ownersPanel, h('div', { class: 'addbar' }, nName, nEmail, addBtn));
+      }
+      root.appendChild(ownersPanel);
 
+      if (man) {
         var opts = S.owners.filter(function (o) { return o.active; }).map(function (o) { return h('option', { value: String(o.id) }, o.name + ' (' + (used[o.id] || 0) + ')'); });
-        var from = h('select', { class: 'btn', 'aria-label': 'Owner to merge' }, h('option', { value: '' }, 'Move items from'), opts.map(function (x) { return x.cloneNode(true); }));
-        var into = h('select', { class: 'btn', 'aria-label': 'Owner to keep' }, h('option', { value: '' }, 'Into'), opts);
+        var from = h('select', { 'aria-label': 'Owner to merge' }, h('option', { value: '' }, 'Move items from'), opts.map(function (x) { return x.cloneNode(true); }));
+        var into = h('select', { 'aria-label': 'Owner to keep' }, h('option', { value: '' }, 'Into'), opts);
         var mBtn = h('button', { class: 'btn', type: 'button' }, 'Merge owners');
         mBtn.addEventListener('click', function () {
           if (!from.value || !into.value) { OF.toast('Choose both owners.', true); return; }
@@ -87,65 +106,62 @@
           if (!confirm('Move every item from ' + a + ' to ' + b + ', and switch ' + a + ' off?')) return;
           save(OF.rpc('ops_fu_merge_owner', { p_from: Number(from.value), p_into: Number(into.value) }), '', mBtn);
         });
-        OF.add(ownersPanel, [h('h2', { style: 'margin-top:16px' }, 'Merge two owners'),
-          h('p', { class: 'hint' }, 'Use this when one person appears under two names, for example "Plant Manager" and "Plant Manager, Rumbu Main and Mama Sannu". Each moved item records the change in its history.'),
-          h('div', { class: 'toolbar' }, h('span', { class: 'left' }, from, into, mBtn))]);
+        root.appendChild(h('section', { class: 'card-panel' }, h('h3', null, 'Merge two owners'),
+          h('p', { class: 'sub' }, 'Use this when one person appears under two names, for example "Plant Manager" and "Plant Manager, Rumbu Main and Mama Sannu". Each moved item records the change in its history.'),
+          h('div', { class: 'form-row' }, from, into),
+          h('div', { class: 'addbar' }, mBtn)));
       }
-      root.appendChild(ownersPanel);
 
       /* ---- Settings ---- */
-      var setRows = SETTING_ORDER.map(function (key) {
+      var setRows = h('tbody', null, SETTING_ORDER.map(function (key) {
         var v = S.settings[key] == null ? '' : S.settings[key], ctl;
-        if (key === 'autoOverdue') ctl = h('select', { class: 'inp', disabled: !man }, h('option', { value: 'TRUE' }, 'On'), h('option', { value: 'FALSE' }, 'Off'));
-        else if (key === 'memoResponseDays') ctl = h('input', { class: 'inp', type: 'number', min: '1', max: '30', disabled: !man });
-        else if (key === 'asAtDate') ctl = h('input', { class: 'inp', type: 'date', disabled: !man });
-        else ctl = h('input', { class: 'inp', type: 'email', disabled: !man });
+        if (key === 'autoOverdue') ctl = h('select', { disabled: !man, 'aria-label': SETTING_LABEL[key] }, h('option', { value: 'TRUE' }, 'On'), h('option', { value: 'FALSE' }, 'Off'));
+        else if (key === 'memoResponseDays') ctl = h('input', { type: 'number', min: '1', max: '30', disabled: !man, 'aria-label': SETTING_LABEL[key] });
+        else if (key === 'asAtDate') ctl = h('input', { type: 'date', disabled: !man, 'aria-label': SETTING_LABEL[key] });
+        else ctl = h('input', { type: 'email', disabled: !man, 'aria-label': SETTING_LABEL[key] });
         ctl.value = key === 'autoOverdue' ? (String(v).toUpperCase() === 'FALSE' ? 'FALSE' : 'TRUE') : v;
-        var btn = h('button', { class: 'btn small', type: 'button', disabled: !man }, 'Save');
+        var btn = h('button', { class: 'btn small primary', type: 'button', disabled: !man }, 'Save');
         btn.addEventListener('click', function () {
           var val = String(ctl.value || '').trim();
           if (key === 'memoResponseDays' && !(Number(val) >= 1)) { OF.toast('Enter a number of working days, 1 or more.', true); return; }
           save(sb.from('ops_followup_settings').update({ value: val }).eq('key', key).select('key'), SETTING_LABEL[key] + ' saved.', btn);
         });
-        var desc = { autoOverdue: 'Moves Open and In progress items past their due date to Overdue every day at 06:00 WAT.',
-          memoResponseDays: 'Sets the respond-by date printed on follow-up memos.',
-          asAtDate: 'Leave blank to use today. Set a date only to review the register as at a past date.',
-          ceoEmail: 'Shown with the CEO digest. Used for sending once email is added.',
-          opsEmail: 'Copied on owner reminders once email is added.' }[key];
-        return h('tr', null, h('td', null, SETTING_LABEL[key], h('div', { class: 'muted', style: 'font-size:12px' }, desc)), h('td', { style: 'min-width:220px' }, ctl), h('td', null, btn));
-      });
-      root.appendChild(h('section', { class: 'panel' }, h('h2', null, 'Settings'),
-        h('div', { class: 'tscroll' }, h('table', { class: 'of-t' }, h('tbody', null, setRows)))));
+        return h('tr', null, h('td', { class: 'owner-name' }, SETTING_LABEL[key], h('span', { class: 'set-desc' }, SETTING_DESC[key])),
+          h('td', { style: 'min-width:220px' }, ctl), h('td', { class: 'n' }, btn));
+      }));
+      root.appendChild(h('section', { class: 'card-panel' }, h('h3', null, 'Settings'),
+        h('p', { class: 'sub' }, 'How the register behaves. Changes apply straight away.'),
+        table([h('th', null, 'Setting'), h('th', null, 'Value'), h('th', null, '')], setRows)));
 
       /* ---- Editors ---- */
-      var edPanel = h('section', { class: 'panel' }, h('h2', null, 'Who may edit'),
-        h('p', { class: 'hint' }, 'Editors update items and record CEO decisions. Managers can also change this page. Everyone else with a page assigned can only view. The IT system administrator account is always a manager.'));
+      var edPanel = h('section', { class: 'card-panel' }, h('h3', null, 'Who may edit'),
+        h('p', { class: 'sub' }, 'Editors update items and record CEO decisions. Managers can also change this page. Everyone else with a page assigned can only view. The IT system administrator account is always a manager.'));
       if (man) {
         var list = h('div', null, h('div', { class: 'empty' }, 'Loading.'));
         OF.rpc('ops_fu_list_editors').then(function (rows) {
           list.innerHTML = '';
           if (!rows.length) { list.appendChild(h('div', { class: 'empty' }, 'No editors yet.')); return; }
-          list.appendChild(h('div', { class: 'tscroll' }, h('table', { class: 'of-t' },
-            h('thead', null, h('tr', null, h('th', null, 'Username'), h('th', null, 'Name'), h('th', null, 'Level'), h('th', null, 'Added'), h('th', null, ''))),
+          list.appendChild(table([h('th', null, 'Username'), h('th', null, 'Name'), h('th', null, 'Level'), h('th', null, 'Added'), h('th', null, '')],
             h('tbody', null, rows.map(function (r) {
               var rm = h('button', { class: 'btn small danger', type: 'button' }, 'Remove');
               rm.addEventListener('click', function () {
                 if (!confirm('Remove edit rights from ' + r.username + '?')) return;
                 save(OF.rpc('ops_fu_set_editor', { p_username: r.username, p_role: null }), '', rm);
               });
-              return h('tr', null, h('td', null, r.username), h('td', null, r.full_name || h('span', { class: 'muted' }, 'Not linked to a staff record')),
-                h('td', null, r.role === 'manager' ? 'Manager' : 'Editor'), h('td', null, OF.fmtStamp(r.added_at) + (r.added_by ? ', ' + r.added_by : '')), h('td', null, rm));
-            })))));
-        }).catch(function (e) { list.innerHTML = ''; list.appendChild(h('div', { class: 'banner bad' }, OF.errMsg(e))); });
-        var u = h('input', { class: 'inp', placeholder: 'App username, for example RD791', 'aria-label': 'Username' });
-        var lvl = h('select', { class: 'btn', 'aria-label': 'Level' }, h('option', { value: 'editor' }, 'Editor'), h('option', { value: 'manager' }, 'Manager'));
+              return h('tr', null, h('td', { class: 'owner-name' }, r.username), h('td', null, r.full_name || h('span', { class: 'muted' }, 'Not linked to a staff record')),
+                h('td', null, h('span', { class: 'pill ' + (r.role === 'manager' ? 'ceo-yes' : 'st-verified_closed') }, r.role === 'manager' ? 'Manager' : 'Editor')),
+                h('td', null, OF.fmtStamp(r.added_at) + (r.added_by ? ', ' + r.added_by : '')), h('td', { class: 'n' }, rm));
+            }))));
+        }).catch(function (e) { list.innerHTML = ''; list.appendChild(h('div', { class: 'status bad' }, OF.errMsg(e))); });
+        var u = h('input', { placeholder: 'App username, for example RD791', 'aria-label': 'Username' });
+        var lvl = h('select', { 'aria-label': 'Level' }, h('option', { value: 'editor' }, 'Editor'), h('option', { value: 'manager' }, 'Manager'));
         var addEd = h('button', { class: 'btn primary', type: 'button' }, 'Give access');
         addEd.addEventListener('click', function () {
           if (!u.value.trim()) { OF.toast('Enter the username.', true); return; }
           save(OF.rpc('ops_fu_set_editor', { p_username: u.value.trim(), p_role: lvl.value }), '', addEd);
         });
-        OF.add(edPanel, [list, h('div', { class: 'toolbar', style: 'margin-top:12px' }, h('span', { class: 'left' }, u, lvl, addEd)),
-          h('p', { class: 'hint', style: 'margin-top:8px' }, 'New editors also need the pages assigned to them in Manage Accounts, or the module will not appear in their sidebar.')]);
+        OF.add(edPanel, [list, h('div', { class: 'addbar' }, u, lvl, addEd),
+          h('p', { class: 'sub', style: 'margin:10px 0 0' }, 'New editors also need the pages assigned to them in Manage Accounts, or the module will not appear in their sidebar.')]);
       }
       root.appendChild(edPanel);
       return root;
