@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Operations Follow-up: My Actions</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<link rel="stylesheet" href="ops-followup.css">
+<script src="ops-followup.js"></script>
+</head>
+<body>
+<script>
+/* Operations Follow-up: My Actions. The page owners use to respond to
+   their follow-up items and attach evidence. Owners see only their own
+   open items, through ops_fu_my_items(); they cannot read the register. */
+(function () {
+  var MAX_FILES = 5, MAX_BYTES = 10 * 1024 * 1024;
+  var OK_EXT = ['jpg', 'jpeg', 'png', 'webp', 'heic', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'txt', 'csv'];
+  var MY = [];
+
+  function load() {
+    return OF.rpc('ops_fu_my_access').then(function (acc) {
+      OF.S.access = acc || {};
+      OF.S.today = OF.S.access.today || new Date().toISOString().slice(0, 10);
+      return OF.rpc('ops_fu_my_items');
+    }).then(function (items) { MY = items || []; });
+  }
+  function safeName(n) { return String(n).replace(/[^A-Za-z0-9._-]+/g, '_').replace(/^_+/, '').slice(-80) || 'file'; }
+
+  function itemCard(it) {
+    var h = OF.h, add = OF.add;
+    var c = h('article', { class: 'mcard p-' + String(it.priority).toLowerCase() });
+    add(c, h('div', { class: 'top' }, h('b', null, it.id), OF.prioTag(it.priority), OF.statusTag(it.status),
+      it.ceo_flag !== 'no' ? h('span', { class: 'pill ceo-' + it.ceo_flag }, 'On the CEO list') : null,
+      h('span', null, it.facility + ', ' + it.period)));
+    add(c, h('h4', null, it.issue));
+    var dl = h('dl', { class: 'mgrid' },
+      h('div', { class: 'wide' }, h('dt', null, 'What you are asked to do'), h('dd', null, it.action)),
+      h('div', null, h('dt', null, 'Due'), h('dd', { class: OF.isLate(it) ? 'late' : '' }, (OF.fmt(it.due) || 'Not set') + ' (' + OF.lateText(it).toLowerCase() + ')')),
+      h('div', null, h('dt', null, 'Response on file'), h('dd', null, it.response_status)),
+      it.resolution ? h('div', { class: 'wide' }, h('dt', null, 'Direction from Group Operations'), h('dd', null, it.resolution)) : null,
+      it.ceo_decision ? h('div', { class: 'wide' }, h('dt', null, 'CEO decision'), h('dd', null, h('div', { class: 'decision' }, it.ceo_decision))) : null);
+    add(c, dl);
+
+    // Previous responses (loaded on demand)
+    if (it.last_response) {
+      var prevList = h('div', { class: 'prev-list', hidden: true });
+      var toggle = h('button', { class: 'link', type: 'button' }, 'Show your previous responses');
+      toggle.addEventListener('click', function () {
+        if (!prevList.hidden) { prevList.hidden = true; toggle.textContent = 'Show your previous responses'; return; }
+        prevList.hidden = false; toggle.textContent = 'Hide previous responses';
+        prevList.innerHTML = ''; prevList.appendChild(h('p', { class: 'muted' }, 'Loading.'));
+        OF.rpc('ops_fu_item_responses', { p_item: it.id }).then(function (list) {
+          prevList.innerHTML = '';
+          list.forEach(function (r) { prevList.appendChild(OF.responseEl(r)); });
+        }).catch(function (e) { prevList.innerHTML = ''; OF.handleErr(e); });
+      });
+      add(c, h('div', { class: 'prev' }, toggle,
+        it.pending_responses ? h('span', { class: 'muted', style: 'font-size:12px;margin-left:10px' }, OF.plural(Number(it.pending_responses), 'response') + ' waiting for review') : null,
+        prevList));
+    }
+
+    // Response form
+    var pid = 'p-' + it.id, mid = 'm-' + it.id, fid = 'f-' + it.id;
+    var prog = h('select', { id: pid }, h('option', { value: '' }, 'Choose'),
+      Object.keys(OF.PROGRESS).map(function (k) { return h('option', { value: k }, OF.PROGRESS[k]); }));
+    var msg = h('textarea', { id: mid, rows: '4', placeholder: 'What has been done, figures where possible, who is responsible and the date it will be complete' });
+    var files = h('input', { id: fid, type: 'file', multiple: true, accept: '.' + OK_EXT.join(',.') });
+    var picked = h('div', { class: 'picked' });
+    files.addEventListener('change', function () {
+      picked.innerHTML = '';
+      Array.prototype.forEach.call(files.files, function (f) { picked.appendChild(h('span', null, f.name + ' (' + OF.fileSize(f.size) + ')')); });
+    });
+    var err = h('div', { class: 'err' });
+    var btn = h('button', { class: 'btn primary', type: 'button' }, 'Submit response');
+    btn.addEventListener('click', function () {
+      err.textContent = '';
+      var list = Array.prototype.slice.call(files.files || []);
+      if (!prog.value) { err.textContent = 'Choose where the action stands.'; return; }
+      if (!msg.value.trim()) { err.textContent = 'Write your response.'; return; }
+      if (list.length > MAX_FILES) { err.textContent = 'Attach at most ' + MAX_FILES + ' files.'; return; }
+      for (var i = 0; i < list.length; i++) {
+        var ext = (list[i].name.split('.').pop() || '').toLowerCase();
+        if (OK_EXT.indexOf(ext) < 0) { err.textContent = list[i].name + ' is not an allowed file type. Use photos, PDF, Word, Excel or text files.'; return; }
+        if (list[i].size > MAX_BYTES) { err.textContent = list[i].name + ' is larger than 10 MB.'; return; }
+      }
+      btn.disabled = true; btn.textContent = list.length ? 'Uploading files...' : 'Submitting...';
+      var uploaded = [];
+      list.reduce(function (p, f) {
+        return p.then(function () {
+          var path = it.id + '/' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '-' + safeName(f.name);
+          return sb.storage.from('ops-followup-files').upload(path, f, { contentType: f.type || undefined, upsert: false })
+            .then(function (r) {
+              if (r.error) throw new Error(f.name + ' could not be uploaded. ' + OF.errMsg(r.error));
+              uploaded.push({ path: path, name: f.name, size: f.size, type: f.type });
+            });
+        });
+      }, Promise.resolve()).then(function () {
+        btn.textContent = 'Submitting...';
+        return OF.rpc('ops_fu_submit_response', { p_item: it.id, p_progress: prog.value, p_message: msg.value, p_files: uploaded });
+      }).then(function () {
+        OF.toast('Response sent for ' + it.id + '. Group Operations will review it.');
+        return OF.reload();
+      }).catch(function (e) {
+        btn.disabled = false; btn.textContent = 'Submit response';
+        OF.handleErr(e, err);
+      });
+    });
+    add(c, h('div', { class: 'mform' },
+      h('div', { class: 'form-row' },
+        h('div', { class: 'field' }, h('label', { for: pid }, 'Where does this action stand?'), prog),
+        h('div', { class: 'field' }, h('label', { for: fid }, 'Evidence (optional)'), files,
+          h('span', { class: 'fh' }, 'Up to 5 files, 10 MB each: photos, PDF, Word, Excel or text.'), picked)),
+      h('div', { class: 'field' }, h('label', { for: mid }, 'Your response'), msg),
+      err, h('div', { class: 'acts' }, btn)));
+    return c;
+  }
+
+  OF.start({
+    title: 'My Actions',
+    sub: 'Follow-up actions assigned to you. Respond to each one and attach evidence.',
+    editHint: false,
+    load: load,
+    roleLabel: function () { return 'Owner'; },
+    hero: function () {
+      var owners = OF.S.access.owners || [];
+      return {
+        text: owners.length ? 'Actions assigned to ' + owners.join('; ') + '. Respond to each one and attach evidence. Group Operations reviews every response.'
+          : 'Follow-up actions assigned to you.',
+        stats: [
+          { n: MY.length, l: 'Open actions' },
+          { n: MY.filter(OF.isLate).length, l: 'Past due' },
+          { n: MY.filter(function (x) { return Number(x.pending_responses) > 0; }).length, l: 'Waiting for review' }
+        ]
+      };
+    },
+    render: function () {
+      var h = OF.h, root = h('div');
+      if (!(OF.S.access.owners || []).length) {
+        root.appendChild(h('div', { class: 'status warn' },
+          'Your account is not linked to a follow-up owner yet. Ask the Group Operations Office to link it on the Settings page of this module.'));
+        return root;
+      }
+      if (!MY.length) {
+        root.appendChild(h('div', { class: 'card-panel' }, h('div', { class: 'empty' }, 'You have no open follow-up actions. Thank you.')));
+        return root;
+      }
+      var sorted = MY.slice().sort(OF.byAttention);
+      root.appendChild(h('div', { class: 'sec-head' }, h('h3', null, 'Your open actions (' + sorted.length + ')'),
+        h('p', null, 'Most urgent first.')));
+      sorted.forEach(function (it) { root.appendChild(itemCard(it)); });
+      return root;
+    }
+  });
+})();
+</script>
+</body>
+</html>

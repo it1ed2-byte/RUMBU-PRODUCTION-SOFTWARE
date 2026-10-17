@@ -19,6 +19,8 @@
   var PRIORITIES = OF.PRIORITIES = ['Emergency', 'Critical', 'High', 'Medium', 'Low'];
   var PRANK = { Emergency: 0, Critical: 1, High: 2, Medium: 3, Low: 4 };
   var RESPONSES = OF.RESPONSES = ['No response received', 'Response received: partial', 'Response received: scope mismatch', 'Response received: complete'];
+  var PROGRESS = OF.PROGRESS = { done: 'Done, fixed', in_progress: 'In progress', need_help: 'Need help or a decision', update: 'Other update' };
+  var REVIEW = OF.REVIEW = { pending: 'Waiting for review', accepted: 'Accepted into the record', more_info: 'More information requested' };
   OF.OUTCOMES = ['Approve recommended direction', 'Approve with amendment', 'Request more information', 'Defer to next review', 'Reject'];
   var MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   var LABELS = OF.LABELS = {
@@ -39,7 +41,7 @@
   ];
 
   /* ---------- state ---------- */
-  var S = OF.S = { me: null, access: {}, items: [], owners: [], facilities: [], settings: {}, today: '' };
+  var S = OF.S = { me: null, access: {}, items: [], owners: [], facilities: [], settings: {}, today: '', pending: {} };
 
   /* ---------- DOM helper ---------- */
   function h(tag, p) {
@@ -140,7 +142,8 @@
     ceo: { label: 'Awaiting CEO decision', test: ceoPending },
     noresp: { label: 'No response from owner', test: noResp },
     joint: { label: 'Joint or cross-department', test: function (it) { return outstanding(it) && isJoint(it.owner); } },
-    closed: { label: 'Verified closed', test: function (it) { return it.status === 'verified_closed'; } }
+    closed: { label: 'Verified closed', test: function (it) { return it.status === 'verified_closed'; } },
+    review: { label: 'Owner responses to review', test: function (it) { return (S.pending[it.id] || 0) > 0; } }
   };
 
   /* ---------- tags ---------- */
@@ -197,10 +200,13 @@
         OF.fetchAll(function () { return sb.from('ops_followup_items_v').select('*').order('id'); }),
         sb.from('ops_followup_owners').select('*').order('name'),
         sb.from('ops_followup_facilities').select('*').order('sort_order'),
-        sb.from('ops_followup_settings').select('*')
+        sb.from('ops_followup_settings').select('*'),
+        sb.from('ops_followup_responses').select('item_id').eq('review_status', 'pending')
       ]);
     }).then(function (r) {
       [r[1], r[2], r[3]].forEach(function (x) { if (x.error) throw x.error; });
+      S.pending = {};
+      if (!r[4].error) (r[4].data || []).forEach(function (x) { S.pending[x.item_id] = (S.pending[x.item_id] || 0) + 1; });
       S.items = r[0];
       S.owners = r[1].data || [];
       S.facilities = r[2].data || [];
@@ -258,7 +264,7 @@
   }
 
   OF.reload = function () {
-    return OF.load().then(OF.render).catch(showFatal);
+    return ((CFG && CFG.load) || OF.load)().then(OF.render).catch(showFatal);
   };
 
   // Hero: page title, a one-line summary, review date, access level and
@@ -275,7 +281,7 @@
       text ? h('p', null, text) : null,
       h('div', { class: 'meta' },
         h('span', { class: 'tag' }, (a.as_at_fixed ? 'Review date ' : 'As at ') + fmt(S.today)),
-        h('span', { class: 'tag' + (a.can_edit ? ' edit' : '') }, a.can_manage ? 'Manager' : a.can_edit ? 'Editor' : 'View only'),
+        h('span', { class: 'tag' + (a.can_edit ? ' edit' : '') }, CFG.roleLabel ? CFG.roleLabel() : a.can_manage ? 'Manager' : a.can_edit ? 'Editor' : 'View only'),
         reloadBtn)));
     if (x.stats && x.stats.length) {
       heroEl.appendChild(h('div', { class: 'hs' }, x.stats.map(function (st) {
@@ -306,7 +312,8 @@
       h('span', { class: 'rmain' }, h('span', { class: 'rissue' }, it.issue), h('span', { class: 'rmeta' }, it.owner + ', ' + it.facility)),
       h('span', { class: 'rdue' + (late ? ' late' : '') }, fmt(it.due) || 'No due date', h('small', null, lateText(it))),
       h('span', { class: 'rtags' }, OF.prioTag(it.priority), OF.statusTag(it.status), OF.ceoTag(it),
-        isJoint(it.owner) ? h('span', { class: 'pill joint' }, 'Joint') : null));
+        isJoint(it.owner) ? h('span', { class: 'pill joint' }, 'Joint') : null,
+        S.pending[it.id] ? h('span', { class: 'pill resp' }, 'New response') : null));
   };
 
   // A list of items laid out like the app's tables, with a dark header row.
@@ -336,6 +343,53 @@
     var a = h('a', { href: URL.createObjectURL(blob), download: 'Rumbu_Ops_Followup_Register_' + S.today + '.csv' });
     document.body.appendChild(a); a.click(); a.remove();
     OF.toast('CSV exported with ' + plural(lines.length - 1, 'item') + '.');
+  };
+
+  /* ---------- owner responses and files ---------- */
+  OF.fileSize = function (b) { b = Number(b) || 0; return b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB'; };
+  // Files are private: open them through a link that works for 10 minutes.
+  OF.openFile = function (path) {
+    var win = window.open('', '_blank');
+    sb.storage.from('ops-followup-files').createSignedUrl(path, 600).then(function (r) {
+      if (r.error) throw r.error;
+      if (win) win.location = r.data.signedUrl; else window.location = r.data.signedUrl;
+    }).catch(function (e) { if (win) win.close(); OF.toast('The file could not be opened. ' + errMsg(e), true); });
+  };
+  // One response, as shown to editors (with review buttons) and owners.
+  OF.responseEl = function (r, opts) {
+    opts = opts || {};
+    var box = h('div', { class: 'resp-card rs-' + r.review_status },
+      h('div', { class: 'resp-top' },
+        h('b', null, r.submitted_by || 'Owner'), h('span', null, fmtStamp(r.submitted_at)),
+        h('span', { class: 'pill pg-' + r.progress }, PROGRESS[r.progress] || r.progress),
+        h('span', { class: 'pill rv-' + r.review_status }, REVIEW[r.review_status] || r.review_status)),
+      h('p', { class: 'resp-msg' }, r.message),
+      (r.files || []).length ? h('div', { class: 'files' }, r.files.map(function (f) {
+        return h('button', { class: 'file', type: 'button', title: 'Open ' + f.name, onclick: function () { OF.openFile(f.path); } },
+          h('span', { class: 'fi' }, (f.name.split('.').pop() || 'file').slice(0, 4).toUpperCase()), h('span', null, f.name, h('small', null, OF.fileSize(f.size))));
+      })) : null,
+      r.review_status !== 'pending' ? h('p', { class: 'resp-review' },
+        (r.review_status === 'accepted' ? 'Accepted' : 'More information requested') + ' by ' + (r.reviewed_by || 'editor') + ', ' + fmtStamp(r.reviewed_at) +
+        (r.review_note ? '. ' + r.review_note : '.')) : null);
+    if (opts.review && r.review_status === 'pending' && OF.canEdit()) {
+      var note = h('textarea', { rows: '2', placeholder: 'Note to the owner (required when asking for more)', 'aria-label': 'Note to the owner' });
+      var err = h('div', { class: 'err' });
+      var go = function (decision, btn) {
+        err.textContent = '';
+        btn.disabled = true;
+        OF.rpc('ops_fu_review_response', { p_response_id: r.id, p_decision: decision, p_note: note.value })
+          .then(function (x) {
+            OF.toast(decision === 'accepted' ? 'Response accepted into the record.' : 'The owner has been asked for more.');
+            if (opts.onDone) opts.onDone(x);
+          }).catch(function (e) { btn.disabled = false; OF.handleErr(e, err); });
+      };
+      var acc = h('button', { class: 'btn small ok', type: 'button' }, 'Accept into record');
+      var more = h('button', { class: 'btn small', type: 'button' }, 'Ask for more');
+      acc.addEventListener('click', function () { go('accepted', acc); });
+      more.addEventListener('click', function () { go('more_info', more); });
+      OF.add(box, h('div', { class: 'resp-act' }, note, err, h('div', { class: 'acts' }, acc, more)));
+    }
+    return box;
   };
 
   /* ---------- drawer (view, edit, create) ---------- */
@@ -425,6 +479,7 @@
         fld('closed_source', inp('closed_source', 'text', { placeholder: 'Report, week and date the evidence comes from' }),
           'Both closure fields are required before an item can be marked Verified closed.')),
       it.ceo_decision ? h('div', { class: 'group' }, h('h3', null, 'CEO decision'), h('div', { class: 'decision', style: 'margin-bottom:12px' }, it.ceo_decision)) : null,
+      isNew ? null : h('div', { class: 'group' }, h('h3', null, 'Owner responses'), h('div', { id: 'resp' }, h('p', { class: 'muted' }, 'Loading responses.'))),
       isNew ? null : h('div', { class: 'group' }, h('h3', null, 'Change history'), h('ul', { class: 'hist', id: 'hist' }, h('li', null, 'Loading history.'))));
 
     function collect() { var p = {}; Object.keys(F).forEach(function (k) { p[k] = F[k].value.trim(); }); return p; }
@@ -463,8 +518,25 @@
       (!ro && !isNew && it.status !== 'verified_closed') ? h('button', { class: 'btn ok', type: 'button', onclick: function () { F.status.value = 'verified_closed'; save(); } }, 'Mark verified closed') : null,
       ro ? null : saveBtn);
 
-    if (!isNew) loadHistory(it.id);
+    if (!isNew) { loadHistory(it.id); loadResponses(it.id); }
     return h('div', { style: 'display:contents' }, head, body, foot);
+  }
+
+  function loadResponses(id) {
+    OF.rpc('ops_fu_item_responses', { p_item: id }).then(function (list) {
+      var box = sheetEl.querySelector('#resp'); if (!box) return;
+      box.innerHTML = '';
+      if (!list.length) { box.appendChild(h('p', { class: 'muted', style: 'margin:0 0 12px' }, 'The owner has not responded in the app yet.')); return; }
+      list.forEach(function (r) {
+        box.appendChild(OF.responseEl(r, { review: true, onDone: function (x) {
+          if (x && x.item) OF.replaceItem(x.item);
+          S.pending[id] = Math.max(0, (S.pending[id] || 1) - 1);
+          OF.render(); OF.openItem(id);
+        } }));
+      });
+    }).catch(function (e) {
+      var box = sheetEl.querySelector('#resp'); if (box) box.innerHTML = '<p class="muted">Responses could not be loaded.</p>';
+    });
   }
 
   function loadHistory(id) {
@@ -483,7 +555,8 @@
           return v;
         };
         r.data.forEach(function (x) {
-          var text = x.field === 'created' ? 'Item created'
+          var text = x.field === 'owner_response' ? 'Owner response: "' + short(x.new_value) + '"'
+            : x.field === 'created' ? 'Item created'
             : x.field === 'deleted' ? 'Item deleted'
             : (LABELS[x.field] || x.field) + ' changed from "' + short(show(x.field, x.old_value)) + '" to "' + short(show(x.field, x.new_value)) + '"';
           ul.appendChild(h('li', null, text, h('small', null, fmtStamp(x.at) + ', ' + (x.actor || 'unknown') + (x.note ? '. ' + x.note : ''))));
@@ -507,6 +580,7 @@
       L.push('The ' + pool.length + ' item(s) below remain outstanding on the operations follow-up register as at ' + fmt(today) + '.');
       L.push('Provide a written response for each item by ' + fmt(respondBy) + '. Each response must state the action taken, the evidence attached, the responsible person and a dated completion target.');
       L.push('Items cannot be closed without verifiable closure evidence and its source.');
+      L.push('Respond in the Rumbu app under Operations Follow-up > My Actions, and attach photographs or documents as evidence.');
       var groups = owner ? [[owner, pool]] : groupBy(pool, function (i) { return i.owner; });
       groups.forEach(function (g) {
         if (!owner) { L.push(''); L.push('OWNER: ' + g[0]); }
