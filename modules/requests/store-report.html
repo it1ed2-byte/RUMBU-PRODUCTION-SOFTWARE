@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Store Report</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme",t); }
+    window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+  *{ box-sizing:border-box; }
+  body{ font-family:var(--sans); background:var(--bg); margin:0; padding:16px; }
+  .card{ background:var(--card); width:100%; max-width:1150px; margin:0 auto 16px; padding:20px; border-radius:12px; box-shadow:0 4px 12px rgba(0,0,0,.11); }
+  h2{ text-align:center; color:var(--heading); border-bottom:2px solid var(--heading); padding-bottom:10px; margin:0 0 16px; font-size:18px; }
+  h3{ color:var(--heading); font-size:14px; margin:0 0 10px; display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; }
+  #connStatus{ font-size:12px; text-align:center; color:#666; margin-bottom:10px; }
+  .filters{ display:grid; grid-template-columns:2fr 1.5fr 1fr 1fr auto; gap:10px; align-items:end; }
+  label{ font-size:12px; font-weight:600; color:#555; margin-bottom:4px; display:block; }
+  input,select{ width:100%; padding:9px 12px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:13px; outline:none; }
+  button{ padding:9px 16px; border:none; border-radius:8px; font-weight:700; font-size:13px; cursor:pointer; background:var(--heading); color:#fff; white-space:nowrap; }
+  .btn-sm{ padding:5px 10px; font-size:12px; } .btn-ghost{ background:var(--bg); color:var(--heading); border:1px solid var(--line); }
+  .chips{ display:flex; gap:10px; flex-wrap:wrap; }
+  .chip{ padding:10px 16px; border-radius:10px; font-size:12px; font-weight:700; min-width:120px; }
+  .chip b{ display:block; font-size:20px; }
+  .c1{ background:#e8f0fb; color:#1F3864; } .c2{ background:#dcfce7; color:#15803d; } .c3{ background:#fff7ed; color:#c2410c; }
+  .c4{ background:#dbeafe; color:#1d4ed8; } .c5{ background:#fee2e2; color:#dc2626; } .c6{ background:#f3e8ff; color:#7e22ce; }
+  .table-wrap{ overflow-x:auto; }
+  table{ border-collapse:collapse; width:100%; font-size:12.5px; }
+  th{ background:var(--heading); color:#fff; padding:8px; text-align:left; white-space:nowrap; }
+  td{ padding:7px 8px; border-bottom:1px solid var(--line); }
+  .num{ text-align:right; }
+  .empty{ color:#888; font-size:13px; margin:0; }
+  .grid2{ display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+  .grid2 .card{ margin:0; max-width:none; }
+  .print-head{ display:none; }
+  @media(max-width:800px){ .filters,.grid2{ grid-template-columns:1fr; } }
+  @media print{
+    body{ background:#fff; padding:0; font-family:Arial, sans-serif; }
+    .no-print{ display:none !important; }
+    .card{ box-shadow:none; padding:8px 0; max-width:none; break-inside:avoid; }
+    .print-head{ display:block; font-size:11px; margin-bottom:8px; }
+    th{ background:#1F3864 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+    .chip{ -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="store-access.js"></script>
+</head>
+<body>
+<div class="card no-print">
+  <h2>📊 Store Report</h2>
+  <div id="connStatus">Connecting...</div>
+  <div class="filters">
+    <div><label>Store</label><select id="storeSel" onchange="loadTypes()"></select></div>
+    <div><label>Request Type</label><select id="typeSel"><option value="">All types</option></select></div>
+    <div><label>From</label><input type="date" id="fromDate"></div>
+    <div><label>To</label><input type="date" id="toDate"></div>
+    <div><button onclick="runReport()">Generate</button></div>
+  </div>
+</div>
+
+<div id="report" style="display:none;">
+  <div class="card">
+    <div class="print-head"><b>RUMBU INDUSTRIES GROUP</b> · Store Report</div>
+    <h3><span id="repTitle"></span>
+      <span class="no-print" style="display:flex;gap:8px;">
+        <button class="btn-sm btn-ghost" onclick="window.print()">🖨️ Print</button>
+      </span>
+    </h3>
+    <p style="font-size:12px;color:#777;margin:-4px 0 14px;" id="repSub"></p>
+    <div class="chips" id="chips"></div>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <h3>🏢 Requests by Department</h3>
+      <div class="table-wrap" id="byDept"></div>
+    </div>
+    <div class="card">
+      <h3>📦 Items Released (totals)</h3>
+      <div class="table-wrap" id="byItem"></div>
+    </div>
+  </div>
+  <div style="height:16px;"></div>
+
+  <div class="card">
+    <h3>🧾 Release Log <button class="btn-sm btn-ghost no-print" onclick="exportCSV('releases')">⬇ CSV</button></h3>
+    <div class="table-wrap" id="relLog"></div>
+  </div>
+
+  <div class="card">
+    <h3>📋 Requests Received <button class="btn-sm btn-ghost no-print" onclick="exportCSV('requests')">⬇ CSV</button></h3>
+    <div class="table-wrap" id="reqList"></div>
+  </div>
+</div>
+
+<script>
+let ACCESS_TOKEN=null;
+let ME=null, STORES=[], REQS=[], RELS=[], STORE=null;
+function authHeaders(e){ return Object.assign({"apikey":SUPABASE_ANON_KEY,"Authorization":"Bearer "+(ACCESS_TOKEN||SUPABASE_ANON_KEY),"Content-Type":"application/json"},e||{}); }
+function esc(s){ return String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+function fmtDate(d){ return d?new Date(d).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"}):"—"; }
+function fmtTime(d){ return d?new Date(d).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}):"—"; }
+function q2(v){ return Math.round((Number(v)||0)*100)/100; }
+function iso(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); } // local date, not UTC
+function statusLabel(s){ return String(s||"").replace(/_/g," "); }
+
+async function loadStores(){
+  const all=await rsGet("request_stores?select=id,name,branch,is_active&order=name");
+  if(ME.role==="super_admin"||ME.role==="admin"){ STORES=all; }
+  else{
+    // Approvers see the stores where they approve at least one type
+    const ids=await rsApproverTypeIds(ME);
+    if(!ids.length){ STORES=[]; }
+    else{
+      const types=await rsGet("request_store_types?select=store_id&id=in.("+ids.join(",")+")");
+      const sids=new Set(types.map(t=>t.store_id));
+      STORES=all.filter(s=>sids.has(s.id));
+    }
+  }
+  const sel=document.getElementById("storeSel");
+  if(!STORES.length){ sel.innerHTML="<option value=''>No store available to you</option>"; sel.disabled=true;
+    document.getElementById("connStatus").textContent="Reports are available to store approvers and admins. You are not an approver for any store."; return false; }
+  sel.innerHTML=STORES.map(s=>`<option value="${s.id}">${esc(s.name)}${s.is_active?"":" (inactive)"}</option>`).join("");
+  await loadTypes(); return true;
+}
+
+async function loadTypes(){
+  const id=document.getElementById("storeSel").value;
+  const types=id?await rsStoreTypes(id):[];
+  document.getElementById("typeSel").innerHTML='<option value="">All types</option>'+types.map(t=>`<option value="${t.id}">${esc(t.type_name)}</option>`).join("");
+}
+
+async function runReport(){
+  const sid=Number(document.getElementById("storeSel").value);
+  STORE=STORES.find(s=>s.id===sid); if(!STORE) return;
+  const typeId=document.getElementById("typeSel").value;
+  const typeName=typeId?document.getElementById("typeSel").selectedOptions[0].text:"All types";
+  const from=document.getElementById("fromDate").value, to=document.getElementById("toDate").value;
+  if(!from||!to||from>to){ alert("Choose a valid date range."); return; }
+  const fromTs=new Date(from+"T00:00:00").toISOString();
+  const toTs=new Date(new Date(to+"T00:00:00").getTime()+86400000).toISOString();
+  const tf=typeId?"&store_type_id=eq."+typeId:"";
+  document.getElementById("connStatus").textContent="Generating…";
+  try{
+    // Requests sent to this store in the period (drafts excluded)
+    REQS=await rsGet("requests?select=id,request_number,title,department,requester_username,store_type_name,priority,status,submitted_at,created_at,released_at"+
+      "&store_id=eq."+sid+"&status=neq.draft"+tf+
+      "&submitted_at=gte."+encodeURIComponent(fromTs)+"&submitted_at=lt."+encodeURIComponent(toTs)+"&order=submitted_at");
+    // Every release made by this store in the period (including for older requests)
+    RELS=await rsGet("request_releases?select=released_at,qty_released,collector_name,collector_id,released_by_name,released_by_id,"+
+      "requests!inner(store_id,store_type_id,request_number,department),request_items(item_name,unit)"+
+      "&requests.store_id=eq."+sid+(typeId?"&requests.store_type_id=eq."+typeId:"")+
+      "&released_at=gte."+encodeURIComponent(fromTs)+"&released_at=lt."+encodeURIComponent(toTs)+"&order=released_at");
+    render(typeName,from,to);
+    document.getElementById("connStatus").textContent="Report generated "+new Date().toLocaleString("en-GB");
+  }catch(e){ document.getElementById("connStatus").textContent="❌ "+e.message; }
+}
+
+function render(typeName,from,to){
+  document.getElementById("repTitle").textContent=STORE.name+" — Activity Report";
+  document.getElementById("repSub").textContent="Branch: "+(STORE.branch||"—")+" · Type: "+typeName+" · Period: "+fmtDate(from)+" to "+fmtDate(to);
+  const c={total:REQS.length,released:0,partial:0,open:0,rejected:0};
+  REQS.forEach(r=>{
+    if(r.status==="released"||r.status==="closed") c.released++;
+    else if(r.status==="partially_released") c.partial++;
+    else if(r.status==="rejected") c.rejected++;
+    else c.open++;
+  });
+  const reqsServed=new Set(RELS.map(r=>r.requests.request_number)).size;
+  document.getElementById("chips").innerHTML=
+    `<div class="chip c1"><b>${c.total}</b>Requests received</div>
+     <div class="chip c2"><b>${c.released}</b>Fully released</div>
+     <div class="chip c3"><b>${c.partial}</b>Partially released</div>
+     <div class="chip c4"><b>${c.open}</b>Not yet released</div>
+     <div class="chip c5"><b>${c.rejected}</b>Rejected</div>
+     <div class="chip c6"><b>${RELS.length}</b>Release entries (${reqsServed} request${reqsServed===1?"":"s"})</div>`;
+
+  // By department
+  const dep={};
+  REQS.forEach(r=>{ const k=r.department||"—"; dep[k]=dep[k]||{n:0,rel:0,par:0,open:0,rej:0}; dep[k].n++;
+    if(r.status==="released"||r.status==="closed") dep[k].rel++; else if(r.status==="partially_released") dep[k].par++;
+    else if(r.status==="rejected") dep[k].rej++; else dep[k].open++; });
+  const dk=Object.keys(dep).sort((a,b)=>dep[b].n-dep[a].n);
+  document.getElementById("byDept").innerHTML=dk.length?`<table><thead><tr><th>Department</th><th class="num">Requests</th><th class="num">Released</th><th class="num">Partial</th><th class="num">Open</th><th class="num">Rejected</th></tr></thead><tbody>`+
+    dk.map(k=>`<tr><td>${esc(k)}</td><td class="num">${dep[k].n}</td><td class="num">${dep[k].rel}</td><td class="num">${dep[k].par}</td><td class="num">${dep[k].open}</td><td class="num">${dep[k].rej}</td></tr>`).join("")+"</tbody></table>"
+    :"<p class='empty'>No requests in this period.</p>";
+
+  // Items released totals
+  const it={};
+  RELS.forEach(r=>{ const n=(r.request_items&&r.request_items.item_name)||"—", u=(r.request_items&&r.request_items.unit)||"";
+    const k=n.trim().toUpperCase()+"|"+u; it[k]=it[k]||{n,u,q:0,times:0}; it[k].q+=Number(r.qty_released)||0; it[k].times++; });
+  const ik=Object.keys(it).sort((a,b)=>it[a].n.localeCompare(it[b].n));
+  document.getElementById("byItem").innerHTML=ik.length?`<table><thead><tr><th>Item</th><th class="num">Qty Released</th><th>Unit</th><th class="num">Times</th></tr></thead><tbody>`+
+    ik.map(k=>`<tr><td>${esc(it[k].n)}</td><td class="num">${q2(it[k].q)}</td><td>${esc(it[k].u)}</td><td class="num">${it[k].times}</td></tr>`).join("")+"</tbody></table>"
+    :"<p class='empty'>Nothing released in this period.</p>";
+
+  // Release log
+  document.getElementById("relLog").innerHTML=RELS.length?`<table><thead><tr><th>Date</th><th>Time</th><th>Request</th><th>Department</th><th>Item</th><th class="num">Qty</th><th>Collected By</th><th>Released By</th></tr></thead><tbody>`+
+    RELS.map(r=>`<tr><td>${fmtDate(r.released_at)}</td><td>${fmtTime(r.released_at)}</td><td>${esc(r.requests.request_number)}</td><td>${esc(r.requests.department)}</td>
+      <td>${esc(r.request_items&&r.request_items.item_name)}</td><td class="num">${q2(r.qty_released)} ${esc(r.request_items&&r.request_items.unit)}</td>
+      <td>${esc(r.collector_name)} (${esc(r.collector_id)})</td><td>${esc(r.released_by_name)} (${esc(r.released_by_id)})</td></tr>`).join("")+"</tbody></table>"
+    :"<p class='empty'>No releases in this period.</p>";
+
+  // Requests list
+  document.getElementById("reqList").innerHTML=REQS.length?`<table><thead><tr><th>Number</th><th>Submitted</th><th>Title</th><th>Type</th><th>Department</th><th>Requester</th><th>Priority</th><th>Status</th><th>Fully Released</th></tr></thead><tbody>`+
+    REQS.map(r=>`<tr><td><b>${esc(r.request_number)}</b></td><td>${fmtDate(r.submitted_at||r.created_at)}</td><td>${esc(r.title)}</td><td>${esc(r.store_type_name||"—")}</td>
+      <td>${esc(r.department)}</td><td>${esc(r.requester_username)}</td><td>${esc(r.priority)}</td><td>${esc(statusLabel(r.status))}</td><td>${fmtDate(r.released_at)}</td></tr>`).join("")+"</tbody></table>"
+    :"<p class='empty'>No requests in this period.</p>";
+
+  document.getElementById("report").style.display="block";
+}
+
+function exportCSV(kind){
+  const cell=v=>{ const s=String(v??""); return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s; };
+  let rows;
+  if(kind==="releases"){
+    rows=[["Date","Time","Request","Department","Item","Qty","Unit","Collector Name","Collector ID","Released By","Released By ID"]].concat(
+      RELS.map(r=>[fmtDate(r.released_at),fmtTime(r.released_at),r.requests.request_number,r.requests.department,
+        r.request_items&&r.request_items.item_name,q2(r.qty_released),r.request_items&&r.request_items.unit,
+        r.collector_name,r.collector_id,r.released_by_name,r.released_by_id]));
+  } else {
+    rows=[["Number","Submitted","Title","Type","Department","Requester","Priority","Status","Fully Released"]].concat(
+      REQS.map(r=>[r.request_number,fmtDate(r.submitted_at||r.created_at),r.title,r.store_type_name,r.department,r.requester_username,r.priority,statusLabel(r.status),r.released_at?fmtDate(r.released_at):""]));
+  }
+  const csv="\ufeff"+rows.map(r=>r.map(cell).join(",")).join("\r\n");
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"}));
+  a.download=(STORE.name+"_"+(kind==="releases"?"Release_Log":"Requests")+"_"+document.getElementById("fromDate").value+"_to_"+document.getElementById("toDate").value).replace(/\s+/g,"_")+".csv";
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
+async function init(){
+  const s=document.getElementById("connStatus");
+  try{
+    ME=await requireAuth("../../login.html");
+    if(!ME) return;
+    { const { data:{ session } } = await sb.auth.getSession(); ACCESS_TOKEN = session ? session.access_token : null; }
+    sb.auth.onAuthStateChange((ev, sess)=>{ if(sess) ACCESS_TOKEN = sess.access_token; });
+    const now=new Date();
+    document.getElementById("fromDate").value=iso(new Date(now.getFullYear(),now.getMonth(),1));
+    document.getElementById("toDate").value=iso(now);
+    s.style.color="#15803d"; s.textContent="Connected as "+ME.username;
+    if(await loadStores()) await runReport();
+  }catch(e){ s.style.color="#dc2626"; s.textContent="Error: "+e.message; }
+}
+init();
+</script>
+</body>
+</html>

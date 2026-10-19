@@ -25,7 +25,7 @@
   .chip-partial{ background:#fff7ed; color:#c2410c; }
   .chip-rejected{ background:#fee2e2; color:#dc2626; }
   .chip-closed{ background:#f3f4f6; color:#374151; }
-  .filter-grid{ display:grid; grid-template-columns:1fr 1fr auto auto auto; gap:10px; align-items:center; margin-bottom:12px; flex-wrap:wrap; }
+  .filter-grid{ display:grid; grid-template-columns:2fr 1fr 1fr auto auto auto; gap:10px; align-items:center; margin-bottom:12px; flex-wrap:wrap; }
   .filter-grid input,.filter-grid select{ padding:9px 12px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:13px; outline:none; width:100%; }
   .count-label{ font-size:12px; color:#666; white-space:nowrap; }
   .table-wrap{ overflow-x:auto; }
@@ -64,6 +64,7 @@
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="../../auth.js"></script>
+<script src="store-access.js"></script>
 </head>
 <body>
 <div class="card">
@@ -72,6 +73,7 @@
   <div class="summary-row" id="summaryRow"></div>
   <div class="filter-grid">
     <input type="text" id="searchBox" placeholder="🔍 Search title, number, department..." oninput="onSearch()">
+    <select id="filterStore" onchange="onSearch()"><option value="">All My Stores</option></select>
     <select id="filterStatus" onchange="onSearch()">
       <option value="">All Completed</option>
       <option value="released">Released</option>
@@ -108,7 +110,7 @@
 
 <script>
 let ACCESS_TOKEN=null;
-let ME=null, ALL_ROWS=[], FILTERED=[], currentPage=1, LAST_REL_AT={};
+let ME=null, ALL_ROWS=[], FILTERED=[], currentPage=1, LAST_REL_AT={}, MY_TYPE_IDS=[];
 const DONE_STATUSES=["released","partially_released","rejected","closed"];
 function esc(s){ return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
 function authHeaders(){ return {"apikey":SUPABASE_ANON_KEY,"Authorization":"Bearer "+(ACCESS_TOKEN||SUPABASE_ANON_KEY)}; }
@@ -122,9 +124,20 @@ function priBadge(p){ return `<span class="pri-${p}">${p==="Critical"?"🔴":p==
 async function loadData(){
   document.getElementById("tableArea").innerHTML="Loading...";
   try{
-    const res=await fetch(SUPABASE_URL+"/rest/v1/requests?select=*&status=in.("+DONE_STATUSES.join(",")+")"+"&order=updated_at.desc",
+    MY_TYPE_IDS=await rsApproverTypeIds(ME);
+    const scope=rsApproverFilter(MY_TYPE_IDS);
+    if(scope===null){
+      ALL_ROWS=[]; document.getElementById("summaryRow").innerHTML="";
+      document.getElementById("tableArea").innerHTML="<p style='color:#92400e;font-weight:600;font-size:13px;'>You are not an approver for any store type, so there are no store records to show. An admin can add you in Store Setup.</p>";
+      return;
+    }
+    const res=await fetch(SUPABASE_URL+"/rest/v1/requests?select=*&status=in.("+DONE_STATUSES.join(",")+")"+scope+"&order=updated_at.desc",
       {headers:Object.assign({},authHeaders(),{"Range-Unit":"items","Range":"0-9999"})});
     ALL_ROWS=await res.json();
+    const stores=[...new Set(ALL_ROWS.map(r=>r.store_name||"(no store)"))].sort();
+    const fs=document.getElementById("filterStore"), keep=fs.value;
+    fs.innerHTML='<option value="">All My Stores</option>'+stores.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join("");
+    if(stores.includes(keep)) fs.value=keep;
     LAST_REL_AT={};
     const rr=await fetch(SUPABASE_URL+"/rest/v1/request_releases?select=request_id,released_at&order=released_at.desc",
       {headers:Object.assign({},authHeaders(),{"Range-Unit":"items","Range":"0-49999"})});
@@ -147,10 +160,12 @@ function onRowsChange(){ currentPage=1; applyFilter(); }
 function applyFilter(){
   const q=document.getElementById("searchBox").value.trim().toLowerCase();
   const st=document.getElementById("filterStatus").value;
+  const store=document.getElementById("filterStore").value;
   const from=document.getElementById("fromDate").value;
   const to=document.getElementById("toDate").value;
   FILTERED=ALL_ROWS.filter(r=>{
     if(st&&r.status!==st) return false;
+    if(store&&(r.store_name||"(no store)")!==store) return false;
     const d=(relDate(r)||r.updated_at||"").slice(0,10);
     if(from&&d<from) return false;
     if(to&&d>to) return false;
@@ -167,9 +182,10 @@ function renderTable(){
   const start=(currentPage-1)*rpp,end=Math.min(start+rpp,total);
   document.getElementById("countLabel").textContent=total+" record"+(total!==1?"s":"");
   if(!FILTERED.length){ document.getElementById("tableArea").innerHTML="<p style='color:#666;padding:10px 0;font-size:13px;'>No records found.</p>"; document.getElementById("paginationArea").innerHTML=""; return; }
-  let html="<table><thead><tr><th>#</th><th>Number</th><th>Title</th><th>Department</th><th>Requester</th><th>Priority</th><th>Status</th><th>Date Requested</th><th>Last Released</th><th>Action</th></tr></thead><tbody>";
+  let html="<table><thead><tr><th>#</th><th>Number</th><th>Title</th><th>Store / Type</th><th>Department</th><th>Requester</th><th>Priority</th><th>Status</th><th>Date Requested</th><th>Last Released</th><th>Action</th></tr></thead><tbody>";
   FILTERED.slice(start,end).forEach((r,i)=>{
     html+=`<tr><td>${start+i+1}</td><td><b>${esc(r.request_number)}</b></td><td>${esc(r.title)}</td>
+      <td>${esc(r.store_name||"—")}<br><span style="font-size:11px;color:#888;">${esc(r.store_type_name||"no type")}</span></td>
       <td>${esc(r.department)}</td><td>${esc(r.requester_username)}</td>
       <td>${priBadge(r.priority)}</td><td>${statusBadge(r.status)}</td>
       <td>${fmtDate(r.created_at)}</td><td>${fmtDate(relDate(r))}</td>
@@ -192,6 +208,7 @@ async function openDetail(id){
   const req=ALL_ROWS.find(r=>r.id===id); if(!req) return;
   document.getElementById("dTitle").textContent=req.request_number+" — "+req.title;
   document.getElementById("dInfo").innerHTML=`
+    <div class="info-item"><label>Store</label><span>${esc(req.store_name||"—")} / ${esc(req.store_type_name||"—")}</span></div>
     <div class="info-item"><label>Department</label><span>${esc(req.department)}</span></div>
     <div class="info-item"><label>Requester</label><span>${esc(req.requester_username)}</span></div>
     <div class="info-item"><label>Priority</label><span>${req.priority}</span></div>

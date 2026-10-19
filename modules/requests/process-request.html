@@ -58,6 +58,7 @@
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="../../auth.js"></script>
+<script src="store-access.js"></script>
 </head>
 <body>
 <div class="card" id="loadingCard">
@@ -132,7 +133,7 @@
 
 <script>
 let ACCESS_TOKEN=null;
-let ME=null, REQUEST=null, ITEMS=[], RELEASES=[], ME_NAME="", BUSY=false;
+let ME=null, REQUEST=null, ITEMS=[], RELEASES=[], ME_NAME="", BUSY=false, MY_TYPE_IDS=[];
 const OPEN_STATUSES=["submitted","acknowledged","in_progress","partially_released"];
 const EPS=1e-9;
 
@@ -183,6 +184,8 @@ async function loadRequest(){
   const pri=REQUEST.priority;
   document.getElementById("reqInfo").innerHTML=`
     <div class="info-item"><label>Title</label><span>${esc(REQUEST.title)}</span></div>
+    <div class="info-item"><label>Store</label><span>${esc(REQUEST.store_name||"—")}</span></div>
+    <div class="info-item"><label>Request Type</label><span>${esc(REQUEST.store_type_name||"—")}</span></div>
     <div class="info-item"><label>Department</label><span>${esc(REQUEST.department)}</span></div>
     <div class="info-item"><label>Requester</label><span>${esc(REQUEST.requester_username)}</span></div>
     <div class="info-item"><label>Priority</label><span class="pri-${pri}">${pri==="Critical"?"🔴":pri==="Urgent"?"🟡":"🔵"} ${esc(pri)}</span></div>
@@ -193,11 +196,15 @@ async function loadRequest(){
 
   renderItems(); renderHistory();
 
-  const open=OPEN_STATUSES.includes(REQUEST.status);
+  const isOpen=OPEN_STATUSES.includes(REQUEST.status);
+  const mine=rsCanProcess(MY_TYPE_IDS, REQUEST);
+  const open=isOpen && mine;
   document.getElementById("actionArea").style.display=open?"block":"none";
   const note=document.getElementById("closedNote");
   document.getElementById("closedArea").style.display=open?"none":"block";
-  if(!open){
+  if(isOpen && !mine){
+    note.textContent="🔒 You can view this request, but only approvers of "+(REQUEST.store_name||"this store")+" / "+(REQUEST.store_type_name||"its type")+" can release or reject it.";
+  } else if(!open){
     note.textContent = REQUEST.status==="released" ? "✅ This request has been fully released." :
                        REQUEST.status==="rejected" ? "❌ This request was rejected. Reason: "+(REQUEST.rejected_reason||"—") :
                        "This request is "+REQUEST.status.replace(/_/g," ")+" and cannot be processed.";
@@ -248,6 +255,7 @@ function msg(t,cls){ const m=document.getElementById("actionMsg"); m.className="
 
 async function releaseItems(){
   if(BUSY) return;
+  if(!rsCanProcess(MY_TYPE_IDS, REQUEST)){ msg("❌ You are not an approver for this store type.","err"); return; }
   const colId=document.getElementById("colId").value.trim();
   const colName=document.getElementById("colName").value.trim();
   if(!colId || !colName){ msg("❌ Enter the collector's ID and name.","err"); return; }
@@ -307,6 +315,7 @@ function toggleReject(){
 
 async function confirmReject(){
   if(BUSY) return;
+  if(!rsCanProcess(MY_TYPE_IDS, REQUEST)){ msg("❌ You are not an approver for this store type.","err"); return; }
   const reason=document.getElementById("rejectReason").value.trim();
   if(!reason){ msg("❌ Please state a rejection reason.","err"); return; }
   setBusy(true); msg("Rejecting...","");
@@ -328,6 +337,7 @@ async function init(){
     if(!ME) return;
     { const { data:{ session } } = await sb.auth.getSession(); ACCESS_TOKEN = session ? session.access_token : null; }
     sb.auth.onAuthStateChange((ev, sess)=>{ if(sess) ACCESS_TOKEN = sess.access_token; });
+    MY_TYPE_IDS=await rsApproverTypeIds(ME);
     ME_NAME=await findEmployeeName(ME.username);
     document.getElementById("relBy").value=(ME_NAME||ME.username)+" ("+ME.username+")";
     await loadRequest();

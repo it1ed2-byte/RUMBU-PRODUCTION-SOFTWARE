@@ -58,6 +58,7 @@
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="../../auth.js"></script>
+<script src="store-access.js"></script>
 </head>
 <body>
 <div class="card">
@@ -84,6 +85,15 @@
     <div class="form-group">
       <label>Department</label>
       <input type="text" id="f_dept" class="readonly" readonly>
+    </div>
+    <div class="form-group">
+      <label>Store <span style="color:#dc2626;">*</span></label>
+      <select id="f_store" onchange="onStoreChange()"><option value="">Loading stores…</option></select>
+      <div id="storeHint" style="font-size:11px;color:#888;margin-top:3px;"></div>
+    </div>
+    <div class="form-group">
+      <label>Request Type <span style="color:#dc2626;">*</span></label>
+      <select id="f_type"><option value="">— select a store first —</option></select>
     </div>
     <div class="form-group full">
       <label>Request Title</label>
@@ -126,6 +136,7 @@ let ACCESS_TOKEN=null;
 let ME = null;
 let PRIORITY = 'Normal';
 let SAVING = false;
+let MY_STORES = [], STORE_TYPES = [];
 let EDIT_ID = new URLSearchParams(window.location.search).get("draft");
 let ITEM_COUNT = 0;
 const UNITS = ['pcs','kg','litres','rolls','metres','bags','boxes','sets','pairs','sheets','bottles','cartons'];
@@ -182,6 +193,12 @@ async function saveRequest(status){
   const title = document.getElementById("f_title").value.trim();
   if(!title){ msg.className="msg err"; msg.textContent="❌ Request title is required."; return; }
   const items = getItems();
+  const storeId = document.getElementById("f_store").value;
+  const typeId  = document.getElementById("f_type").value;
+  const store   = MY_STORES.find(x=>String(x.id)===String(storeId));
+  const stype   = STORE_TYPES.find(x=>String(x.id)===String(typeId));
+  if(!store){ msg.className="msg err"; msg.textContent="❌ Select the store this request goes to."; return; }
+  if(!stype){ msg.className="msg err"; msg.textContent="❌ Select a request type."; return; }
   if(!items.length){ msg.className="msg err"; msg.textContent="❌ Add at least one item."; return; }
 
   if(SAVING) return;               // ignore repeat clicks while a save is running
@@ -197,6 +214,10 @@ async function saveRequest(status){
       requester_username: ME.username,
       department: ME.departmentNames?.[0] || null,
       section: ME.sectionName || null,
+      store_id: store.id,
+      store_name: store.name,
+      store_type_id: stype.id,
+      store_type_name: stype.type_name,
       submitted_at: status==='submitted' ? new Date().toISOString() : null,
       updated_at: new Date().toISOString()
     };
@@ -270,6 +291,33 @@ function resetForm(){
   addItemRow();
 }
 
+async function loadMyStores(){
+  const sel=document.getElementById("f_store");
+  MY_STORES=await rsRequestableStores(ME);
+  if(!MY_STORES.length){
+    sel.innerHTML='<option value="">No store available to you</option>'; sel.disabled=true;
+    document.getElementById("storeHint").textContent="Your branch has no store yet, and you have not been granted access to another store. Contact your admin.";
+    lockButtons(true); return;
+  }
+  sel.innerHTML=(MY_STORES.length>1?'<option value="">— select store —</option>':'')+
+    MY_STORES.map(st=>`<option value="${st.id}">${esc(st.name)}${st.via==="granted"?" (granted access)":""}</option>`).join("");
+  await onStoreChange();
+}
+
+async function onStoreChange(selectTypeId){
+  const storeId=document.getElementById("f_store").value;
+  const tsel=document.getElementById("f_type"), hint=document.getElementById("storeHint");
+  STORE_TYPES=[];
+  if(!storeId){ tsel.innerHTML='<option value="">— select a store first —</option>'; hint.textContent=""; return; }
+  const st=MY_STORES.find(x=>String(x.id)===String(storeId));
+  hint.textContent=st&&st.branch?"Serves "+st.branch:"";
+  tsel.innerHTML='<option value="">Loading…</option>';
+  STORE_TYPES=await rsStoreTypes(storeId);
+  if(!STORE_TYPES.length){ tsel.innerHTML='<option value="">This store has no request types yet</option>'; return; }
+  tsel.innerHTML='<option value="">— select type —</option>'+STORE_TYPES.map(t=>`<option value="${t.id}">${esc(t.type_name)}</option>`).join("");
+  if(selectTypeId) tsel.value=String(selectTypeId);
+}
+
 async function loadDraft(id){
   const s = document.getElementById("connStatus");
   const res = await fetch(SUPABASE_URL+"/rest/v1/requests?id=eq."+id+"&select=*", { headers:authHeaders() });
@@ -287,6 +335,10 @@ async function loadDraft(id){
   document.getElementById("f_desc").value = r.description || "";
   document.getElementById("f_reqno").value = r.request_number || "";
   setPriority(r.priority || "Normal");
+  if(r.store_id && MY_STORES.some(x=>x.id===r.store_id)){
+    document.getElementById("f_store").value=String(r.store_id);
+    await onStoreChange(r.store_type_id);
+  }
   const items = await fetch(SUPABASE_URL+"/rest/v1/request_items?request_id=eq."+id+"&order=created_at", { headers:authHeaders() }).then(x=>x.json());
   document.getElementById("itemsBody").innerHTML=""; ITEM_COUNT=0;
   (items||[]).forEach(i=>addItemRow(i.item_name, i.quantity, i.unit, i.remarks||""));
@@ -306,6 +358,7 @@ async function init(){
     document.getElementById("f_userid").value = ME.username;
     document.getElementById("f_dept").value = ME.departmentNames?.[0] || ME.sectionName || "—";
     s.style.color="#1e7a34"; s.textContent="Connected as "+ME.username;
+    await loadMyStores();
     if(EDIT_ID) await loadDraft(EDIT_ID);
     else addItemRow(); // start with one empty row
   }catch(e){ s.style.color="#dc2626"; s.textContent="Error: "+e.message; }

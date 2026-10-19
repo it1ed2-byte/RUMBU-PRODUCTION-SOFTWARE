@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Store Setup</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme",t); }
+    window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+  *{ box-sizing:border-box; }
+  body{ font-family:var(--sans); background:var(--bg); margin:0; padding:16px; }
+  .card{ background:var(--card); width:100%; max-width:1000px; margin:0 auto 16px; padding:22px; border-radius:12px; box-shadow:0 4px 12px rgba(0,0,0,.11); }
+  h2{ text-align:center; color:var(--heading); border-bottom:2px solid var(--heading); padding-bottom:10px; margin:0 0 16px; font-size:18px; }
+  h3{ color:var(--heading); font-size:14px; margin:0 0 6px; }
+  .sub{ font-size:12px; color:#777; margin:0 0 12px; }
+  #connStatus{ font-size:12px; text-align:center; color:#666; margin-bottom:10px; }
+  label{ font-size:12px; font-weight:600; color:#555; margin-bottom:4px; display:block; }
+  input,select{ width:100%; padding:9px 12px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:13px; outline:none; }
+  input:focus,select:focus{ border-color:var(--accent); }
+  button{ padding:9px 16px; border:none; border-radius:8px; font-weight:700; font-size:13px; cursor:pointer; background:var(--heading); color:#fff; white-space:nowrap; }
+  button:disabled{ opacity:.5; cursor:not-allowed; }
+  .btn-sm{ padding:6px 12px; font-size:12px; }
+  .btn-accent{ background:var(--accent); } .btn-danger{ background:#dc2626; } .btn-ghost{ background:var(--bg); color:var(--heading); border:1px solid var(--line); }
+  .inline{ display:flex; gap:8px; align-items:center; }
+  .type-box{ border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:12px; }
+  .type-head{ display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:10px; flex-wrap:wrap; }
+  .type-name{ font-weight:800; color:var(--heading); font-size:14px; }
+  .chips{ display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; min-height:20px; }
+  .chip{ display:inline-flex; align-items:center; gap:6px; background:var(--bg); border:1px solid var(--line); border-radius:20px; padding:4px 6px 4px 12px; font-size:12px; font-weight:600; }
+  .chip button{ background:#dc2626; color:#fff; border-radius:50%; width:20px; height:20px; padding:0; font-size:12px; line-height:20px; }
+  .none{ font-size:12px; color:#b45309; font-weight:600; }
+  .msg{ margin-top:10px; font-size:13px; font-weight:600; min-height:18px; }
+  .msg.ok{ color:#15803d; } .msg.err{ color:#dc2626; }
+  .readonly-note{ background:#fffbeb; border:1px solid #fcd34d; color:#92400e; border-radius:8px; padding:10px 14px; font-size:13px; font-weight:600; margin-bottom:12px; }
+  .ro .edit-only{ display:none !important; }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="store-access.js"></script>
+</head>
+<body>
+<datalist id="userList"></datalist>
+
+<div class="card">
+  <h2>⚙️ Store Setup</h2>
+  <div id="connStatus">Connecting...</div>
+  <div class="readonly-note" id="roNote" style="display:none;">Only Admins and Super Admins can change store setup. You can view it.</div>
+  <label>Store</label>
+  <select id="storeSel" onchange="loadStore()"></select>
+  <p class="sub" id="storeInfo" style="margin-top:8px;"></p>
+  <div class="msg" id="msg"></div>
+</div>
+
+<div id="storeArea" style="display:none;">
+  <div class="card">
+    <h3>🗂️ Request Types &amp; Approvers</h3>
+    <p class="sub">Requesters pick a type when sending a request to this store. The approvers of that type process and release it. A type with no approvers can be requested, but only a Super Admin can process it.</p>
+    <div class="inline edit-only" style="margin-bottom:14px;">
+      <input type="text" id="newType" placeholder="New type name, e.g. Spare Parts" onkeydown="if(event.key==='Enter') addType()">
+      <button onclick="addType()">+ Add Type</button>
+    </div>
+    <div id="typesArea"></div>
+  </div>
+
+  <div class="card">
+    <h3>👥 Extra Requesters</h3>
+    <p class="sub">Everyone in <b id="branchName"></b> can already request from this store. Add people from <b>other branches</b> here to let them request from it too.</p>
+    <div class="chips" id="extraChips"></div>
+    <div class="inline edit-only">
+      <input type="text" id="extraPick" list="userList" placeholder="Search user by name or username">
+      <button onclick="addExtra()">+ Add Requester</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let ACCESS_TOKEN=null;
+let ME=null, CAN_EDIT=false, STORES=[], STORE=null, TYPES=[], USERS=[], USER_BY_LABEL={}, USER_BY_ID={}, BUSY=false;
+function authHeaders(e){ return Object.assign({"apikey":SUPABASE_ANON_KEY,"Authorization":"Bearer "+(ACCESS_TOKEN||SUPABASE_ANON_KEY),"Content-Type":"application/json"},e||{}); }
+function esc(s){ return String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+function js(s){ return String(s??"").replace(/\\/g,"\\\\").replace(/'/g,"\\'"); }
+function setMsg(t,c){ const m=document.getElementById("msg"); m.className="msg"+(c?" "+c:""); m.textContent=t; if(t&&c) window.scrollTo(0,0); }
+function friendly(t){
+  if(/23505|duplicate/i.test(t)) return "That entry already exists.";
+  if(/23503|foreign key/i.test(t)) return "This type is already used by requests, so it cannot be deleted. Rename it instead.";
+  try{ return JSON.parse(t).message; }catch(e){ return t; }
+}
+async function send(path,method,body){
+  const r=await fetch(SUPABASE_URL+"/rest/v1/"+path,{method,headers:authHeaders({"Prefer":"return=representation"}),body:body?JSON.stringify(body):undefined});
+  const txt=await r.text();
+  if(!r.ok) throw new Error(friendly(txt)||("HTTP "+r.status));
+  const rows=txt?JSON.parse(txt):[];
+  if(!rows.length) throw new Error("Nothing was saved. Your account does not have permission to change store setup.");
+  return rows;
+}
+async function guard(fn){ if(BUSY||!CAN_EDIT) return; BUSY=true; try{ await fn(); }catch(e){ setMsg("❌ "+e.message,"err"); } finally{ BUSY=false; } }
+function userLabel(id){ const u=USER_BY_ID[id]; return u?u.label:"(removed user)"; }
+
+async function loadUsers(){
+  const [profs,emps]=await Promise.all([
+    rsGet("profiles?select=id,username,role&order=username"),
+    rsGet("employees?select=linked_profile_id,full_name&linked_profile_id=not.is.null").catch(()=>[])
+  ]);
+  const nameOf={}; emps.forEach(e=>nameOf[e.linked_profile_id]=e.full_name);
+  USERS=profs.map(p=>({id:p.id, label: nameOf[p.id] ? nameOf[p.id]+" ("+p.username+")" : p.username}));
+  USER_BY_LABEL={}; USER_BY_ID={};
+  USERS.forEach(u=>{ USER_BY_LABEL[u.label.toLowerCase()]=u; USER_BY_ID[u.id]=u; });
+  document.getElementById("userList").innerHTML=USERS.map(u=>`<option value="${esc(u.label)}">`).join("");
+}
+function pickUser(inputId){
+  const v=document.getElementById(inputId).value.trim().toLowerCase();
+  return USER_BY_LABEL[v] || USERS.find(u=>u.label.toLowerCase().endsWith("("+v+")")) || null;
+}
+
+async function loadStores(){
+  STORES=await rsGet("request_stores?select=*&order=name");
+  const sel=document.getElementById("storeSel");
+  if(!STORES.length){ sel.innerHTML="<option value=''>No stores yet. Add one in Manage Stores.</option>"; return; }
+  sel.innerHTML=STORES.map(s=>`<option value="${s.id}">${esc(s.name)}${s.is_active?"":" (inactive)"}</option>`).join("");
+  await loadStore();
+}
+
+async function loadStore(){
+  const id=Number(document.getElementById("storeSel").value);
+  STORE=STORES.find(s=>s.id===id);
+  if(!STORE){ document.getElementById("storeArea").style.display="none"; return; }
+  document.getElementById("storeInfo").innerHTML=`Serves branch <b>${esc(STORE.branch||"—")}</b> · ${STORE.is_active?"Active":"<span style='color:#b45309'>Inactive: hidden from Fill Request</span>"}`;
+  document.getElementById("branchName").textContent=STORE.branch||"its branch";
+  const [types,extras,used]=await Promise.all([
+    rsGet("request_store_types?select=id,type_name&store_id=eq."+id+"&order=type_name"),
+    rsGet("request_store_extra_requesters?select=id,profile_id&store_id=eq."+id),
+    rsGet("requests?select=store_type_id&store_id=eq."+id+"&store_type_id=not.is.null")
+  ]);
+  const apprs = types.length
+    ? await rsGet("request_store_type_approvers?select=id,type_id,profile_id&type_id=in.("+types.map(t=>t.id).join(",")+")")
+    : [];
+  const usedCount={}; used.forEach(r=>usedCount[r.store_type_id]=(usedCount[r.store_type_id]||0)+1);
+  TYPES=types.map(t=>Object.assign(t,{approvers:apprs.filter(a=>a.type_id===t.id), used:usedCount[t.id]||0}));
+  renderTypes();
+  document.getElementById("extraChips").innerHTML = extras.length
+    ? extras.map(x=>`<span class="chip">${esc(userLabel(x.profile_id))}<button class="edit-only" title="Remove" onclick="removeExtra(${x.id})">✕</button></span>`).join("")
+    : "<span class='none' style='color:#888'>None. Only "+esc(STORE.branch||"branch")+" staff can request from this store.</span>";
+  document.getElementById("storeArea").style.display="block";
+}
+
+function renderTypes(){
+  const area=document.getElementById("typesArea");
+  if(!TYPES.length){ area.innerHTML="<p class='none'>No types yet. Add at least one, otherwise nobody can send requests to this store.</p>"; return; }
+  area.innerHTML=TYPES.map(t=>`
+    <div class="type-box">
+      <div class="type-head">
+        <span class="type-name">${esc(t.type_name)} <span style="font-weight:600;color:#888;font-size:12px;">· ${t.used} request(s)</span></span>
+        <span class="inline edit-only">
+          <button class="btn-sm btn-accent" onclick="renameType(${t.id},'${js(t.type_name)}')">Rename</button>
+          <button class="btn-sm btn-danger" onclick="deleteType(${t.id},'${js(t.type_name)}',${t.used})">Delete</button>
+        </span>
+      </div>
+      <label>Approvers</label>
+      <div class="chips">${t.approvers.length
+        ? t.approvers.map(a=>`<span class="chip">${esc(userLabel(a.profile_id))}<button class="edit-only" title="Remove" onclick="removeApprover(${a.id})">✕</button></span>`).join("")
+        : "<span class='none'>⚠️ No approvers yet</span>"}</div>
+      <div class="inline edit-only">
+        <input type="text" id="ap_${t.id}" list="userList" placeholder="Search user by name or username">
+        <button class="btn-sm" onclick="addApprover(${t.id})">+ Add Approver</button>
+      </div>
+    </div>`).join("");
+}
+
+function addType(){ guard(async()=>{
+  const name=document.getElementById("newType").value.trim().replace(/\s+/g," ");
+  if(!name) throw new Error("Enter a type name.");
+  await send("request_store_types","POST",{store_id:STORE.id,type_name:name});
+  document.getElementById("newType").value=""; setMsg("✅ Type "+name+" added to "+STORE.name+". Now add its approvers.","ok"); await loadStore();
+}); }
+
+function renameType(id,old){ guard(async()=>{
+  const name=(prompt("Rename type "+old+" to:",old)||"").trim().replace(/\s+/g," ");
+  if(!name||name===old) return;
+  await send("request_store_types?id=eq."+id,"PATCH",{type_name:name});
+  await fetch(SUPABASE_URL+"/rest/v1/requests?store_type_id=eq."+id,{method:"PATCH",headers:authHeaders(),body:JSON.stringify({store_type_name:name})});
+  setMsg("✅ Type renamed to "+name+".","ok"); await loadStore();
+}); }
+
+function deleteType(id,name,used){ guard(async()=>{
+  if(used>0) throw new Error(name+" is used by "+used+" request(s), so it cannot be deleted. Rename it instead.");
+  if(!confirm("Delete type "+name+" and its approver list?")) return;
+  await send("request_store_types?id=eq."+id,"DELETE");
+  setMsg("✅ Type "+name+" deleted.","ok"); await loadStore();
+}); }
+
+function addApprover(typeId){ guard(async()=>{
+  const u=pickUser("ap_"+typeId);
+  if(!u) throw new Error("Pick a user from the list.");
+  await send("request_store_type_approvers","POST",{type_id:typeId,profile_id:u.id});
+  setMsg("✅ "+u.label+" can now process this type.","ok"); await loadStore();
+}); }
+
+function removeApprover(id){ guard(async()=>{
+  if(!confirm("Remove this approver?")) return;
+  await send("request_store_type_approvers?id=eq."+id,"DELETE");
+  setMsg("✅ Approver removed.","ok"); await loadStore();
+}); }
+
+function addExtra(){ guard(async()=>{
+  const u=pickUser("extraPick");
+  if(!u) throw new Error("Pick a user from the list.");
+  await send("request_store_extra_requesters","POST",{store_id:STORE.id,profile_id:u.id});
+  document.getElementById("extraPick").value="";
+  setMsg("✅ "+u.label+" can now send requests to "+STORE.name+".","ok"); await loadStore();
+}); }
+
+function removeExtra(id){ guard(async()=>{
+  if(!confirm("Remove this person's access to "+STORE.name+"?")) return;
+  await send("request_store_extra_requesters?id=eq."+id,"DELETE");
+  setMsg("✅ Requester removed.","ok"); await loadStore();
+}); }
+
+async function init(){
+  const s=document.getElementById("connStatus");
+  try{
+    ME=await requireAuth("../../login.html");
+    if(!ME) return;
+    { const { data:{ session } } = await sb.auth.getSession(); ACCESS_TOKEN = session ? session.access_token : null; }
+    sb.auth.onAuthStateChange((ev, sess)=>{ if(sess) ACCESS_TOKEN = sess.access_token; });
+    CAN_EDIT = ME.role==="admin" || ME.role==="super_admin";
+    if(!CAN_EDIT){ document.body.classList.add("ro"); document.getElementById("roNote").style.display="block"; }
+    s.style.color="#15803d"; s.textContent="Connected as "+ME.username;
+    await loadUsers(); await loadStores();
+  }catch(e){ s.style.color="#dc2626"; s.textContent="Error: "+e.message; }
+}
+init();
+</script>
+</body>
+</html>
