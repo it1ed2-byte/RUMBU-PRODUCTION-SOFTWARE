@@ -86,14 +86,10 @@
       <label>Department</label>
       <input type="text" id="f_dept" class="readonly" readonly>
     </div>
-    <div class="form-group">
+    <div class="form-group full">
       <label>Store <span style="color:#dc2626;">*</span></label>
       <select id="f_store" onchange="onStoreChange()"><option value="">Loading stores…</option></select>
       <div id="storeHint" style="font-size:11px;color:#888;margin-top:3px;"></div>
-    </div>
-    <div class="form-group">
-      <label>Request Type <span style="color:#dc2626;">*</span></label>
-      <select id="f_type"><option value="">— select a store first —</option></select>
     </div>
     <div class="form-group full">
       <label>Request Title</label>
@@ -136,7 +132,7 @@ let ACCESS_TOKEN=null;
 let ME = null;
 let PRIORITY = 'Normal';
 let SAVING = false;
-let MY_STORES = [], STORE_TYPES = [];
+let MY_STORES = [];
 let EDIT_ID = new URLSearchParams(window.location.search).get("draft");
 let ITEM_COUNT = 0;
 const UNITS = ['pcs','kg','litres','rolls','metres','bags','boxes','sets','pairs','sheets','bottles','cartons'];
@@ -194,11 +190,9 @@ async function saveRequest(status){
   if(!title){ msg.className="msg err"; msg.textContent="❌ Request title is required."; return; }
   const items = getItems();
   const storeId = document.getElementById("f_store").value;
-  const typeId  = document.getElementById("f_type").value;
   const store   = MY_STORES.find(x=>String(x.id)===String(storeId));
-  const stype   = STORE_TYPES.find(x=>String(x.id)===String(typeId));
   if(!store){ msg.className="msg err"; msg.textContent="❌ Select the store this request goes to."; return; }
-  if(!stype){ msg.className="msg err"; msg.textContent="❌ Select a request type."; return; }
+
   if(!items.length){ msg.className="msg err"; msg.textContent="❌ Add at least one item."; return; }
 
   if(SAVING) return;               // ignore repeat clicks while a save is running
@@ -216,8 +210,6 @@ async function saveRequest(status){
       section: ME.sectionName || null,
       store_id: store.id,
       store_name: store.name,
-      store_type_id: stype.id,
-      store_type_name: stype.type_name,
       submitted_at: status==='submitted' ? new Date().toISOString() : null,
       updated_at: new Date().toISOString()
     };
@@ -296,26 +288,19 @@ async function loadMyStores(){
   MY_STORES=await rsRequestableStores(ME);
   if(!MY_STORES.length){
     sel.innerHTML='<option value="">No store available to you</option>'; sel.disabled=true;
-    document.getElementById("storeHint").textContent="Your branch has no store yet, and you have not been granted access to another store. Contact your admin.";
+    document.getElementById("storeHint").textContent="No store is linked to your branch, and you have not been granted access to one. Contact your admin.";
     lockButtons(true); return;
   }
   sel.innerHTML=(MY_STORES.length>1?'<option value="">— select store —</option>':'')+
     MY_STORES.map(st=>`<option value="${st.id}">${esc(st.name)}${st.via==="granted"?" (granted access)":""}</option>`).join("");
-  await onStoreChange();
+  onStoreChange();
 }
 
-async function onStoreChange(selectTypeId){
+function onStoreChange(){
   const storeId=document.getElementById("f_store").value;
-  const tsel=document.getElementById("f_type"), hint=document.getElementById("storeHint");
-  STORE_TYPES=[];
-  if(!storeId){ tsel.innerHTML='<option value="">— select a store first —</option>'; hint.textContent=""; return; }
   const st=MY_STORES.find(x=>String(x.id)===String(storeId));
-  hint.textContent=st&&st.branch?"Serves "+st.branch:"";
-  tsel.innerHTML='<option value="">Loading…</option>';
-  STORE_TYPES=await rsStoreTypes(storeId);
-  if(!STORE_TYPES.length){ tsel.innerHTML='<option value="">This store has no request types yet</option>'; return; }
-  tsel.innerHTML='<option value="">— select type —</option>'+STORE_TYPES.map(t=>`<option value="${t.id}">${esc(t.type_name)}</option>`).join("");
-  if(selectTypeId) tsel.value=String(selectTypeId);
+  document.getElementById("storeHint").textContent = !st ? "" :
+    st.via==="granted" ? "You have been granted access to this store." : "This store serves your branch.";
 }
 
 async function loadDraft(id){
@@ -337,7 +322,7 @@ async function loadDraft(id){
   setPriority(r.priority || "Normal");
   if(r.store_id && MY_STORES.some(x=>x.id===r.store_id)){
     document.getElementById("f_store").value=String(r.store_id);
-    await onStoreChange(r.store_type_id);
+    onStoreChange();
   }
   const items = await fetch(SUPABASE_URL+"/rest/v1/request_items?request_id=eq."+id+"&order=created_at", { headers:authHeaders() }).then(x=>x.json());
   document.getElementById("itemsBody").innerHTML=""; ITEM_COUNT=0;

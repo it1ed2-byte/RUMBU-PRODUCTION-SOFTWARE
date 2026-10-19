@@ -19,7 +19,7 @@
   h2{ text-align:center; color:var(--heading); border-bottom:2px solid var(--heading); padding-bottom:10px; margin:0 0 16px; font-size:18px; }
   h3{ color:var(--heading); font-size:14px; margin:0 0 12px; }
   #connStatus{ font-size:12px; text-align:center; color:#666; margin-bottom:10px; }
-  .form-grid{ display:grid; grid-template-columns:2fr 2fr 1fr auto; gap:10px; align-items:end; }
+  .form-grid{ display:grid; grid-template-columns:3fr 1fr auto; gap:10px; align-items:end; }
   label{ font-size:12px; font-weight:600; color:#555; margin-bottom:4px; display:block; }
   input,select{ width:100%; padding:9px 12px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:13px; outline:none; }
   input:focus,select:focus{ border-color:var(--accent); }
@@ -51,7 +51,6 @@
   <h3 id="formTitle">➕ Add Store</h3>
   <div class="form-grid" id="formGrid">
     <div><label>Store Name</label><input type="text" id="f_name" placeholder="e.g. Rumbu Store"></div>
-    <div><label>Branch it serves</label><select id="f_branch"></select></div>
     <div><label>Status</label><select id="f_active"><option value="true">Active</option><option value="false">Inactive</option></select></div>
     <div style="display:flex;gap:8px;">
       <button id="btnSave" onclick="saveStore()">Add Store</button>
@@ -64,7 +63,7 @@
 <div class="card">
   <h3>🏬 Stores</h3>
   <div class="table-wrap"><div id="tableArea">Loading...</div></div>
-  <p style="font-size:12px;color:#888;margin:12px 0 0;">A store that already has requests cannot be deleted, so its history stays intact. Set it to <b>Inactive</b> instead: it disappears from Fill Request but its records remain. Types, approvers and extra requesters are set in <b>Store Setup</b>.</p>
+  <p style="font-size:12px;color:#888;margin:12px 0 0;">A store that already has requests cannot be deleted, so its history stays intact. Set it to <b>Inactive</b> instead: it disappears from Fill Request but its records remain. Linked branches, approvers and extra requesters are set in <b>Store Setup</b>.</p>
 </div>
 
 <script>
@@ -88,34 +87,31 @@ function friendly(t){
   try{ return JSON.parse(t).message; }catch(e){ return t; }
 }
 
-async function loadBranches(){
-  const rows=await rsGet("app_sections?select=name&order=name");
-  document.getElementById("f_branch").innerHTML='<option value="">— select branch —</option>'+rows.map(r=>`<option value="${esc(r.name)}">${esc(r.name)}</option>`).join("");
-}
-
 async function loadStores(){
   document.getElementById("tableArea").innerHTML="Loading...";
   try{
-    const [stores,types,reqs]=await Promise.all([
+    const [stores,links,apprs,reqs]=await Promise.all([
       rsGet("request_stores?select=*&order=name"),
-      rsGet("request_store_types?select=store_id"),
+      rsGet("request_store_branches?select=store_id,branch&order=branch"),
+      rsGet("request_store_approvers?select=store_id"),
       rsGet("requests?select=store_id&store_id=not.is.null")
     ]);
-    const tc={}, rc={};
-    types.forEach(t=>tc[t.store_id]=(tc[t.store_id]||0)+1);
+    const br={}, ac={}, rc={};
+    links.forEach(l=>(br[l.store_id]=br[l.store_id]||[]).push(l.branch));
+    apprs.forEach(a=>ac[a.store_id]=(ac[a.store_id]||0)+1);
     reqs.forEach(r=>rc[r.store_id]=(rc[r.store_id]||0)+1);
-    STORES=stores.map(s=>Object.assign(s,{types:tc[s.id]||0,requests:rc[s.id]||0}));
+    STORES=stores.map(s=>Object.assign(s,{branches:br[s.id]||[],approvers:ac[s.id]||0,requests:rc[s.id]||0}));
     render();
   }catch(e){ document.getElementById("tableArea").innerHTML="❌ "+esc(e.message); }
 }
 
 function render(){
   if(!STORES.length){ document.getElementById("tableArea").innerHTML="<p style='color:#666;font-size:13px;'>No stores yet.</p>"; return; }
-  let h="<table><thead><tr><th>Store</th><th>Branch</th><th>Status</th><th>Types</th><th>Requests</th>"+(CAN_EDIT?"<th>Actions</th>":"")+"</tr></thead><tbody>";
+  let h="<table><thead><tr><th>Store</th><th>Branches Served</th><th>Status</th><th>Approvers</th><th>Requests</th>"+(CAN_EDIT?"<th>Actions</th>":"")+"</tr></thead><tbody>";
   STORES.forEach(s=>{
-    h+=`<tr><td><b>${esc(s.name)}</b></td><td>${esc(s.branch||"—")}</td>
+    h+=`<tr><td><b>${esc(s.name)}</b></td><td>${s.branches.length?esc(s.branches.join(", ")):"<span style='color:#b45309;font-weight:600'>None linked</span>"}</td>
       <td><span class="badge ${s.is_active?"on":"off"}">${s.is_active?"Active":"Inactive"}</span></td>
-      <td>${s.types}</td><td>${s.requests}</td>`;
+      <td>${s.approvers||"<span style='color:#b45309;font-weight:600'>0</span>"}</td><td>${s.requests}</td>`;
     if(CAN_EDIT) h+=`<td><div class="actions">
       <button class="btn-sm btn-accent" onclick="editStore(${s.id})">Edit</button>
       <button class="btn-sm btn-danger" onclick="deleteStore(${s.id},'${js(s.name)}',${s.requests})">Delete</button></div></td>`;
@@ -128,7 +124,6 @@ function editStore(id){
   const s=STORES.find(x=>x.id===id); if(!s) return;
   EDIT_ID=id;
   document.getElementById("f_name").value=s.name;
-  document.getElementById("f_branch").value=s.branch||"";
   document.getElementById("f_active").value=String(!!s.is_active);
   document.getElementById("formTitle").textContent="✏️ Edit Store";
   document.getElementById("btnSave").textContent="Save Changes";
@@ -139,7 +134,6 @@ function editStore(id){
 function resetForm(){
   EDIT_ID=null;
   document.getElementById("f_name").value="";
-  document.getElementById("f_branch").value="";
   document.getElementById("f_active").value="true";
   document.getElementById("formTitle").textContent="➕ Add Store";
   document.getElementById("btnSave").textContent="Add Store";
@@ -149,23 +143,21 @@ function resetForm(){
 async function saveStore(){
   if(BUSY||!CAN_EDIT) return;
   const name=document.getElementById("f_name").value.trim().replace(/\s+/g," ");
-  const branch=document.getElementById("f_branch").value;
   const is_active=document.getElementById("f_active").value==="true";
   if(!name){ setMsg("❌ Store name is required.","err"); return; }
-  if(!branch){ setMsg("❌ Select the branch this store serves.","err"); return; }
   BUSY=true; document.getElementById("btnSave").disabled=true; setMsg("Saving...","");
   try{
     if(EDIT_ID){
       const old=STORES.find(s=>s.id===EDIT_ID);
-      await send("request_stores?id=eq."+EDIT_ID,"PATCH",{name,branch,is_active});
+      await send("request_stores?id=eq."+EDIT_ID,"PATCH",{name,is_active});
       // keep the store name copied on its requests in step with a rename
       if(old && old.name!==name){
         await fetch(SUPABASE_URL+"/rest/v1/requests?store_id=eq."+EDIT_ID,{method:"PATCH",headers:authHeaders(),body:JSON.stringify({store_name:name})});
       }
       setMsg("✅ Store updated.","ok");
     } else {
-      await send("request_stores","POST",{name,branch,is_active});
-      setMsg("✅ Store "+name+" added. Next, open Store Setup to add its types and approvers.","ok");
+      await send("request_stores","POST",{name,is_active});
+      setMsg("✅ Store "+name+" added. Next, open Store Setup to link its branches and add approvers.","ok");
     }
     resetForm(); await loadStores();
   }catch(e){ setMsg("❌ "+e.message,"err"); }
@@ -175,7 +167,7 @@ async function saveStore(){
 async function deleteStore(id,name,reqCount){
   if(!CAN_EDIT) return;
   if(reqCount>0){ setMsg("❌ "+name+" has "+reqCount+" request(s), so it cannot be deleted. Edit it and set it to Inactive instead.","err"); return; }
-  if(!confirm("Delete "+name+"? Its types, approvers and extra requesters will also be removed.")) return;
+  if(!confirm("Delete "+name+"? Its branch links, approvers and extra requesters will also be removed.")) return;
   try{ await send("request_stores?id=eq."+id,"DELETE"); setMsg("✅ "+name+" deleted.","ok"); if(EDIT_ID===id) resetForm(); await loadStores(); }
   catch(e){ setMsg("❌ "+e.message,"err"); }
 }
@@ -190,7 +182,7 @@ async function init(){
     CAN_EDIT = ME.role==="admin" || ME.role==="super_admin";
     if(!CAN_EDIT){ document.getElementById("roNote").style.display="block"; document.getElementById("formGrid").style.display="none"; document.getElementById("formTitle").style.display="none"; }
     s.style.color="#15803d"; s.textContent="Connected as "+ME.username;
-    await loadBranches(); await loadStores();
+    await loadStores();
   }catch(e){ s.style.color="#dc2626"; s.textContent="Error: "+e.message; }
 }
 init();

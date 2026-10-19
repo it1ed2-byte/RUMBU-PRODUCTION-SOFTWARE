@@ -19,7 +19,7 @@
   h2{ text-align:center; color:var(--heading); border-bottom:2px solid var(--heading); padding-bottom:10px; margin:0 0 16px; font-size:18px; }
   h3{ color:var(--heading); font-size:14px; margin:0 0 10px; display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; }
   #connStatus{ font-size:12px; text-align:center; color:#666; margin-bottom:10px; }
-  .filters{ display:grid; grid-template-columns:2fr 1.5fr 1fr 1fr auto; gap:10px; align-items:end; }
+  .filters{ display:grid; grid-template-columns:2fr 1fr 1fr auto; gap:10px; align-items:end; }
   label{ font-size:12px; font-weight:600; color:#555; margin-bottom:4px; display:block; }
   input,select{ width:100%; padding:9px 12px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:13px; outline:none; }
   button{ padding:9px 16px; border:none; border-radius:8px; font-weight:700; font-size:13px; cursor:pointer; background:var(--heading); color:#fff; white-space:nowrap; }
@@ -57,8 +57,7 @@
   <h2>📊 Store Report</h2>
   <div id="connStatus">Connecting...</div>
   <div class="filters">
-    <div><label>Store</label><select id="storeSel" onchange="loadTypes()"></select></div>
-    <div><label>Request Type</label><select id="typeSel"><option value="">All types</option></select></div>
+    <div><label>Store</label><select id="storeSel"></select></div>
     <div><label>From</label><input type="date" id="fromDate"></div>
     <div><label>To</label><input type="date" id="toDate"></div>
     <div><button onclick="runReport()">Generate</button></div>
@@ -112,60 +111,51 @@ function iso(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0
 function statusLabel(s){ return String(s||"").replace(/_/g," "); }
 
 async function loadStores(){
-  const all=await rsGet("request_stores?select=id,name,branch,is_active&order=name");
+  const [all,links]=await Promise.all([
+    rsGet("request_stores?select=id,name,is_active&order=name"),
+    rsGet("request_store_branches?select=store_id,branch&order=branch")
+  ]);
+  const br={}; links.forEach(l=>(br[l.store_id]=br[l.store_id]||[]).push(l.branch));
+  all.forEach(s=>s.branches=br[s.id]||[]);
   if(ME.role==="super_admin"||ME.role==="admin"){ STORES=all; }
   else{
-    // Approvers see the stores where they approve at least one type
-    const ids=await rsApproverTypeIds(ME);
-    if(!ids.length){ STORES=[]; }
-    else{
-      const types=await rsGet("request_store_types?select=store_id&id=in.("+ids.join(",")+")");
-      const sids=new Set(types.map(t=>t.store_id));
-      STORES=all.filter(s=>sids.has(s.id));
-    }
+    // Approvers see the stores they approve
+    const ids=await rsApproverStoreIds(ME);
+    STORES=all.filter(s=>ids.includes(s.id));
   }
   const sel=document.getElementById("storeSel");
   if(!STORES.length){ sel.innerHTML="<option value=''>No store available to you</option>"; sel.disabled=true;
     document.getElementById("connStatus").textContent="Reports are available to store approvers and admins. You are not an approver for any store."; return false; }
   sel.innerHTML=STORES.map(s=>`<option value="${s.id}">${esc(s.name)}${s.is_active?"":" (inactive)"}</option>`).join("");
-  await loadTypes(); return true;
-}
-
-async function loadTypes(){
-  const id=document.getElementById("storeSel").value;
-  const types=id?await rsStoreTypes(id):[];
-  document.getElementById("typeSel").innerHTML='<option value="">All types</option>'+types.map(t=>`<option value="${t.id}">${esc(t.type_name)}</option>`).join("");
+  return true;
 }
 
 async function runReport(){
   const sid=Number(document.getElementById("storeSel").value);
   STORE=STORES.find(s=>s.id===sid); if(!STORE) return;
-  const typeId=document.getElementById("typeSel").value;
-  const typeName=typeId?document.getElementById("typeSel").selectedOptions[0].text:"All types";
   const from=document.getElementById("fromDate").value, to=document.getElementById("toDate").value;
   if(!from||!to||from>to){ alert("Choose a valid date range."); return; }
   const fromTs=new Date(from+"T00:00:00").toISOString();
   const toTs=new Date(new Date(to+"T00:00:00").getTime()+86400000).toISOString();
-  const tf=typeId?"&store_type_id=eq."+typeId:"";
   document.getElementById("connStatus").textContent="Generating…";
   try{
     // Requests sent to this store in the period (drafts excluded)
-    REQS=await rsGet("requests?select=id,request_number,title,department,requester_username,store_type_name,priority,status,submitted_at,created_at,released_at"+
-      "&store_id=eq."+sid+"&status=neq.draft"+tf+
+    REQS=await rsGet("requests?select=id,request_number,title,department,requester_username,priority,status,submitted_at,created_at,released_at"+
+      "&store_id=eq."+sid+"&status=neq.draft"+
       "&submitted_at=gte."+encodeURIComponent(fromTs)+"&submitted_at=lt."+encodeURIComponent(toTs)+"&order=submitted_at");
     // Every release made by this store in the period (including for older requests)
     RELS=await rsGet("request_releases?select=released_at,qty_released,collector_name,collector_id,released_by_name,released_by_id,"+
-      "requests!inner(store_id,store_type_id,request_number,department),request_items(item_name,unit)"+
-      "&requests.store_id=eq."+sid+(typeId?"&requests.store_type_id=eq."+typeId:"")+
+      "requests!inner(store_id,request_number,department),request_items(item_name,unit)"+
+      "&requests.store_id=eq."+sid+
       "&released_at=gte."+encodeURIComponent(fromTs)+"&released_at=lt."+encodeURIComponent(toTs)+"&order=released_at");
-    render(typeName,from,to);
+    render(from,to);
     document.getElementById("connStatus").textContent="Report generated "+new Date().toLocaleString("en-GB");
   }catch(e){ document.getElementById("connStatus").textContent="❌ "+e.message; }
 }
 
-function render(typeName,from,to){
+function render(from,to){
   document.getElementById("repTitle").textContent=STORE.name+" — Activity Report";
-  document.getElementById("repSub").textContent="Branch: "+(STORE.branch||"—")+" · Type: "+typeName+" · Period: "+fmtDate(from)+" to "+fmtDate(to);
+  document.getElementById("repSub").textContent="Serves: "+(STORE.branches.length?STORE.branches.join(", "):"no linked branch")+" · Period: "+fmtDate(from)+" to "+fmtDate(to);
   const c={total:REQS.length,released:0,partial:0,open:0,rejected:0};
   REQS.forEach(r=>{
     if(r.status==="released"||r.status==="closed") c.released++;
@@ -209,8 +199,8 @@ function render(typeName,from,to){
     :"<p class='empty'>No releases in this period.</p>";
 
   // Requests list
-  document.getElementById("reqList").innerHTML=REQS.length?`<table><thead><tr><th>Number</th><th>Submitted</th><th>Title</th><th>Type</th><th>Department</th><th>Requester</th><th>Priority</th><th>Status</th><th>Fully Released</th></tr></thead><tbody>`+
-    REQS.map(r=>`<tr><td><b>${esc(r.request_number)}</b></td><td>${fmtDate(r.submitted_at||r.created_at)}</td><td>${esc(r.title)}</td><td>${esc(r.store_type_name||"—")}</td>
+  document.getElementById("reqList").innerHTML=REQS.length?`<table><thead><tr><th>Number</th><th>Submitted</th><th>Title</th><th>Department</th><th>Requester</th><th>Priority</th><th>Status</th><th>Fully Released</th></tr></thead><tbody>`+
+    REQS.map(r=>`<tr><td><b>${esc(r.request_number)}</b></td><td>${fmtDate(r.submitted_at||r.created_at)}</td><td>${esc(r.title)}</td>
       <td>${esc(r.department)}</td><td>${esc(r.requester_username)}</td><td>${esc(r.priority)}</td><td>${esc(statusLabel(r.status))}</td><td>${fmtDate(r.released_at)}</td></tr>`).join("")+"</tbody></table>"
     :"<p class='empty'>No requests in this period.</p>";
 
@@ -226,8 +216,8 @@ function exportCSV(kind){
         r.request_items&&r.request_items.item_name,q2(r.qty_released),r.request_items&&r.request_items.unit,
         r.collector_name,r.collector_id,r.released_by_name,r.released_by_id]));
   } else {
-    rows=[["Number","Submitted","Title","Type","Department","Requester","Priority","Status","Fully Released"]].concat(
-      REQS.map(r=>[r.request_number,fmtDate(r.submitted_at||r.created_at),r.title,r.store_type_name,r.department,r.requester_username,r.priority,statusLabel(r.status),r.released_at?fmtDate(r.released_at):""]));
+    rows=[["Number","Submitted","Title","Department","Requester","Priority","Status","Fully Released"]].concat(
+      REQS.map(r=>[r.request_number,fmtDate(r.submitted_at||r.created_at),r.title,r.department,r.requester_username,r.priority,statusLabel(r.status),r.released_at?fmtDate(r.released_at):""]));
   }
   const csv="\ufeff"+rows.map(r=>r.map(cell).join(",")).join("\r\n");
   const a=document.createElement("a");

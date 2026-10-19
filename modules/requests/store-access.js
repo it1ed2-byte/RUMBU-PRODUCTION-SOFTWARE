@@ -4,12 +4,13 @@
 //
 //  Who can REQUEST from a store:
 //    • Super Admin: every active store
-//    • Everyone else: active stores serving their branch(es),
-//      plus stores they were granted in Store Setup (extra requesters)
+//    • Everyone else: active stores linked to any of their branches
+//      (Store Setup → Branches), plus stores they were granted
+//      as an extra requester
 //
-//  Who can PROCESS a request:
-//    • Super Admin: every request
-//    • Everyone else: requests whose store type lists them as an approver
+//  Who can PROCESS a store's requests:
+//    • Super Admin: every store
+//    • Everyone else: stores that list them as an approver
 // ─────────────────────────────────────────────────────────────────────
 
 async function rsGet(path){
@@ -26,46 +27,41 @@ function rsInList(values){
 function rsIsSuper(ME){ return ME && ME.role === "super_admin"; }
 
 // Stores this user may send requests to, sorted by name.
+// Each store gets via: "branch" (linked to their branch) or "granted".
 async function rsRequestableStores(ME){
   if(rsIsSuper(ME)){
-    return rsGet("request_stores?select=id,name,branch&is_active=eq.true&order=name");
+    return rsGet("request_stores?select=id,name&is_active=eq.true&order=name");
   }
-  const byId = {};
+  const via = {};
   const branches = ME.sectionNames || [];
   if(branches.length){
-    const own = await rsGet("request_stores?select=id,name,branch&is_active=eq.true&branch=in." +
-                            encodeURIComponent(rsInList(branches)));
-    own.forEach(s => byId[s.id] = Object.assign(s, { via: "branch" }));
+    const links = await rsGet("request_store_branches?select=store_id&branch=in." + encodeURIComponent(rsInList(branches)));
+    links.forEach(l => via[l.store_id] = "branch");
   }
   const extra = await rsGet("request_store_extra_requesters?select=store_id&profile_id=eq." + ME.id);
-  const extraIds = extra.map(x => x.store_id).filter(id => !byId[id]);
-  if(extraIds.length){
-    const more = await rsGet("request_stores?select=id,name,branch&is_active=eq.true&id=in.(" + extraIds.join(",") + ")");
-    more.forEach(s => byId[s.id] = Object.assign(s, { via: "granted" }));
-  }
-  return Object.values(byId).sort((a, b) => a.name.localeCompare(b.name));
+  extra.forEach(x => { if(!via[x.store_id]) via[x.store_id] = "granted"; });
+  const ids = Object.keys(via);
+  if(!ids.length) return [];
+  const stores = await rsGet("request_stores?select=id,name&is_active=eq.true&id=in.(" + ids.join(",") + ")&order=name");
+  return stores.map(s => Object.assign(s, { via: via[s.id] }));
 }
 
-async function rsStoreTypes(storeId){
-  return rsGet("request_store_types?select=id,type_name&store_id=eq." + storeId + "&order=type_name");
-}
-
-// Type ids this user approves. Returns null for Super Admin, meaning "all".
-async function rsApproverTypeIds(ME){
+// Store ids this user approves. Returns null for Super Admin, meaning "all".
+async function rsApproverStoreIds(ME){
   if(rsIsSuper(ME)) return null;
-  const rows = await rsGet("request_store_type_approvers?select=type_id&profile_id=eq." + ME.id);
-  return [...new Set(rows.map(r => r.type_id))];
+  const rows = await rsGet("request_store_approvers?select=store_id&profile_id=eq." + ME.id);
+  return [...new Set(rows.map(r => r.store_id))];
 }
 
-// PostgREST filter fragment limiting requests to what this user may process.
-// Returns "" for Super Admin, or null when the user approves nothing.
-function rsApproverFilter(typeIds){
-  if(typeIds === null) return "";
-  if(!typeIds.length) return null;
-  return "&store_type_id=in.(" + typeIds.join(",") + ")";
+// PostgREST filter fragment limiting requests to the stores this user approves.
+// Returns "" for Super Admin, or null when the user approves no store.
+function rsApproverFilter(storeIds){
+  if(storeIds === null) return "";
+  if(!storeIds.length) return null;
+  return "&store_id=in.(" + storeIds.join(",") + ")";
 }
 
-function rsCanProcess(typeIds, request){
-  if(typeIds === null) return true;
-  return request && request.store_type_id != null && typeIds.indexOf(request.store_type_id) !== -1;
+function rsCanProcess(storeIds, request){
+  if(storeIds === null) return true;
+  return request && request.store_id != null && storeIds.indexOf(request.store_id) !== -1;
 }
