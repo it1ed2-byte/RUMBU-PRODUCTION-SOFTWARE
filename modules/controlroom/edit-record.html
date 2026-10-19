@@ -40,7 +40,7 @@
     <!-- SEARCH -->
     <div class="card-panel">
       <h2>Edit Record</h2>
-      <p class="sub">Search a record by Work Order to view, edit, or delete it. Only the fields you change are saved. Times are shown and saved in Nigerian time. Records older than 1 day can only be changed by a Super Admin.</p>
+      <p class="sub">Search a record by Work Order to view, edit, or delete it. Only the fields you change are saved. Times are shown and saved in Nigerian time. Records older than <span id="lockDays">7</span> days can only be changed by a Super Admin.</p>
       <div class="form-row">
         <div class="field"><label>Work Order</label><input type="text" id="woInput" placeholder="Enter Work Order number"></div>
         <div class="field" style="align-self:end;"><button onclick="searchWO()">Search</button></div>
@@ -107,18 +107,26 @@ async function init(){
   if(!ME) return;
   document.getElementById("statusBox").style.display = "none";
   document.getElementById("appArea").style.display = "block";
+  document.getElementById("lockDays").textContent = LOCK_DAYS;
 }
 
 function isSuperAdmin(){ return ME && ME.role === "super_admin"; }
 
-// A record is "locked" (read-only) if it is more than 1 day old, unless super admin.
+// A record can be edited or deleted by anyone allowed on this page for LOCK_DAYS days after its date.
+// After that only a Super Admin can change it. (A record dated 7 days ago is still open; 8 days ago is locked.)
+const LOCK_DAYS = 7;
+// Today's date in Nigeria (Africa/Lagos), whatever time zone this device is set to: "YYYY-MM-DD".
+function todayWAT(){
+  const p = {};
+  new Intl.DateTimeFormat("en-CA", { timeZone:"Africa/Lagos", year:"numeric", month:"2-digit", day:"2-digit" })
+    .formatToParts(new Date()).forEach(x => { p[x.type] = x.value; });
+  return p.year + "-" + p.month + "-" + p.day;
+}
+function ageInDays(ymd){ return Math.round((Date.parse(todayWAT() + "T00:00:00Z") - Date.parse(ymd + "T00:00:00Z")) / 86400000); }
 function isLocked(row){
   if(isSuperAdmin()) return false;
   if(!row || !row.date) return false;
-  const recDate = new Date(row.date + "T00:00:00");
-  const today = new Date(); today.setHours(0,0,0,0);
-  const diffDays = Math.floor((today - recDate) / 86400000);
-  return diffDays > 1;
+  return ageInDays(row.date) > LOCK_DAYS;
 }
 
 // Times are shown and saved in Nigerian time (Africa/Lagos, UTC+1, no daylight saving), whatever the device's own time zone is.
@@ -140,6 +148,72 @@ function fromLocalInput(v){
   return isNaN(d) ? null : d.toISOString();
 }
 
+// ---- Checking that a save really stuck ----
+// The page saves with one request and the database answers with the row it just wrote. That answer cannot show a change
+// made AFTER the write (a database trigger, a sync job, an out-of-date copy being read). So after every save the page
+// reads the row again from the database (never from a cached copy), and checks again a little later.
+let SAVE_SEQ = 0;                                  // changes whenever another record is opened, so a late check never touches the wrong record
+const RECHECK_AFTER_MS = [5000, 30000];
+async function readFresh(id){
+  const res = await fetch(SUPABASE_URL + "/rest/v1/control?select=*&id=eq." + id + "&limit=1", { headers: authHeaders(), cache: "no-store" });
+  if(!res.ok) throw new Error("HTTP " + res.status);
+  const rows = await res.json();
+  return rows[0] || null;
+}
+function sameStored(want, have){
+  if(want === null) return have === null || have === undefined || have === "";
+  if(have === null || have === undefined) return false;
+  if(typeof want === "number") return Number(have) === want;
+  if(/^\d{4}-\d{2}-\d{2}T/.test(String(want))) return Date.parse(have) === Date.parse(want);   // a time: compare the instants
+  return String(have) === String(want);
+}
+function notKept(payload, row){
+  return Object.keys(payload).map(col => FIELDS.find(f => f.col === col)).filter(f => f && !(row && sameStored(payload[f.col], row[f.col])))
+    .map(f => ({ f, want: payload[f.col], have: row ? row[f.col] : undefined }));
+}
+function shownValue(f, v){
+  if(v === null || v === undefined || v === "") return "(empty)";
+  return f.type === "datetime-local" ? toLocalInput(v).replace("T", " ") + " Nigerian time" : String(v);
+}
+function describeDifferences(list, row){
+  if(!row) return "The record can no longer be found in the database.";
+  return list.map(x => x.f.label + ": you saved " + shownValue(x.f, x.want) + ", the database holds " + shownValue(x.f, x.have)).join("\n");
+}
+function hasUnsavedEdits(){
+  return Array.from(document.querySelectorAll("#editFields input[data-col]")).some(el => !el.disabled && el.value !== el.getAttribute("data-orig"));
+}
+function showMsg(color, text){ const m = document.getElementById("editMsg"); m.style.color = color; m.style.whiteSpace = "pre-line"; m.innerText = text; }
+
+// Called once after a save has been accepted. Reads the row back now, and again after each RECHECK_AFTER_MS delay.
+async function confirmSave(id, payload, seq, nChanged){
+  const t0 = Date.now(); let seenKept = false;
+  const label = "Record updated (" + nChanged + " field" + (nChanged === 1 ? "" : "s") + " changed)";
+  const checks = [0].concat(RECHECK_AFTER_MS);
+  for(let i = 0; i < checks.length; i++){
+    if(i > 0) await new Promise(r => setTimeout(r, checks[i] - checks[i-1]));
+    if(seq !== SAVE_SEQ) return;                                 // another record was opened meanwhile
+    let row;
+    try{ row = await readFresh(id); }catch(e){ if(i === 0) showMsg("var(--warn)", "✅ " + label + ", but the page could not read it back to confirm (" + e.message + ")."); continue; }
+    if(seq !== SAVE_SEQ) return;
+    const bad = notKept(payload, row);
+    if(!bad.length){
+      if(i === 0 || !seenKept) showMsg("var(--ok)", "✅ " + label + " and confirmed in the database" + (i > 0 ? " (the first read was out of date)." : "."));
+      seenKept = true; continue;
+    }
+    const secs = Math.round((Date.now() - t0) / 1000);
+    if(!seenKept && i === 0){          // not there on the first read: may just be a slow copy, so check again before raising the alarm
+      showMsg("var(--warn)", "⚠ Saved, but the database does not show your change yet. Checking again in " + Math.round(checks[1] / 1000) + " seconds...\n" + describeDifferences(bad, row));
+      continue;
+    }
+    // Kept earlier and now gone, or still missing on the re-check: the database really does not have it.
+    SAVE_SEQ++;
+    if(row && !hasUnsavedEdits()){ CURRENT = row; renderEdit(row); }
+    showMsg("var(--bad)", "❌ NOT KEPT. " + (seenKept ? "The change was saved, then changed back about " + secs + " seconds later." : "The change was accepted but the database does not hold it.") + "\n" + describeDifferences(bad, row) +
+      "\nThis page wrote the value correctly, so something else is changing it back: a database trigger, a sync job, or another program that writes to this table. Please tell IT and show them this message.");
+    return;
+  }
+}
+
 async function searchWO(){
   const wo = document.getElementById("woInput").value.trim();
   const msg = document.getElementById("searchMsg");
@@ -147,14 +221,20 @@ async function searchWO(){
   document.getElementById("editCard").style.display = "none";
   if(!wo){ msg.style.color="var(--bad)"; msg.innerText="Please enter a Work Order number."; return; }
 
+  SAVE_SEQ++;
   try{
-    const url = SUPABASE_URL + "/rest/v1/control?select=*&work_order=eq." + encodeURIComponent(wo) + "&limit=1";
-    const res = await fetch(url, { headers: authHeaders() });
+    // Newest first, so the same record always comes back; "no-store" so the answer is never a cached copy.
+    const url = SUPABASE_URL + "/rest/v1/control?select=*&work_order=eq." + encodeURIComponent(wo) + "&order=id.desc&limit=5";
+    const res = await fetch(url, { headers: authHeaders(), cache: "no-store" });
     if(!res.ok) throw new Error("HTTP " + res.status);
     const rows = await res.json();
     if(!rows.length){ msg.style.color="var(--bad)"; msg.innerText="No record found for that Work Order."; return; }
     CURRENT = rows[0];
     renderEdit(CURRENT);
+    if(rows.length > 1){
+      msg.style.color = "var(--warn)";
+      msg.innerText = "⚠ " + rows.length + " records share this Work Order (IDs " + rows.map(r => r.id).join(", ") + "). Showing the newest one (ID " + rows[0].id + "). Use \"Find Duplicates by Date\" below to open the others.";
+    }
   }catch(e){ msg.style.color="var(--bad)"; msg.innerText="❌ "+e.message; }
 }
 
@@ -162,7 +242,7 @@ function renderEdit(row){
   const locked = isLocked(row);
   const note = document.getElementById("lockNote");
   note.innerHTML = locked
-    ? `<div class="locked-note">This record is more than 1 day old. Only a Super Admin can edit or delete it.</div>`
+    ? `<div class="locked-note">This record is more than ${LOCK_DAYS} days old. Only a Super Admin can edit or delete it.</div>`
     : "";
 
   document.getElementById("editFields").innerHTML = FIELDS.map(f=>{
@@ -189,7 +269,7 @@ function renderEdit(row){
 async function saveRecord(){
   const msg = document.getElementById("editMsg");
   if(!CURRENT){ return; }
-  if(isLocked(CURRENT)){ msg.style.color="var(--bad)"; msg.innerText="Locked: only a Super Admin can edit records older than 1 day."; return; }
+  if(isLocked(CURRENT)){ msg.style.color="var(--bad)"; msg.innerText="Locked: only a Super Admin can edit records older than " + LOCK_DAYS + " days."; return; }
 
   // Only the fields that were actually changed are sent (like the original Apps Script, which updated one
   // field at a time). Untouched fields - including the exact seconds on the times - are never rewritten.
@@ -223,17 +303,20 @@ async function saveRecord(){
     const updated = await res.json();
     if(!updated || !updated.length) throw new Error("No row was updated. Check the record still exists and that you are allowed to change it.");
     CURRENT = updated[0];
-    renderEdit(CURRENT);                                           // show what is really stored now
+    renderEdit(CURRENT);                                           // show what the database answered with
     const n = Object.keys(payload).length;
-    msg.style.color="var(--ok)"; msg.innerText="✅ Record updated (" + n + " field" + (n === 1 ? "" : "s") + " changed).";
+    const seq = ++SAVE_SEQ;
+    showMsg("var(--muted)", "Saved. Checking the database...");
+    confirmSave(CURRENT.id, payload, seq, n);                      // read it back, and look again a little later
   }catch(e){ msg.style.color="var(--bad)"; msg.innerText="❌ "+e.message; }
 }
 
 async function deleteRecord(){
   const msg = document.getElementById("editMsg");
   if(!CURRENT){ return; }
-  if(isLocked(CURRENT)){ msg.style.color="var(--bad)"; msg.innerText="Locked: only a Super Admin can delete records older than 1 day."; return; }
+  if(isLocked(CURRENT)){ msg.style.color="var(--bad)"; msg.innerText="Locked: only a Super Admin can delete records older than " + LOCK_DAYS + " days."; return; }
   if(!confirm("Delete this record permanently? This cannot be undone.")) return;
+  SAVE_SEQ++;
 
   try{
     const res = await fetch(SUPABASE_URL + "/rest/v1/control?id=eq." + CURRENT.id, {
@@ -257,7 +340,7 @@ async function findDuplicates(){
 
   try{
     const url = SUPABASE_URL + "/rest/v1/control?select=*&date=eq." + date + "&order=work_order,inserted_timestamp";
-    const res = await fetch(url, { headers: authHeaders() });
+    const res = await fetch(url, { headers: authHeaders(), cache: "no-store" });
     if(!res.ok) throw new Error("HTTP " + res.status);
     const rows = await res.json();
 
@@ -284,8 +367,9 @@ async function findDuplicates(){
 
 async function loadById(id){
   try{
+    SAVE_SEQ++;
     const url = SUPABASE_URL + "/rest/v1/control?select=*&id=eq." + id + "&limit=1";
-    const res = await fetch(url, { headers: authHeaders() });
+    const res = await fetch(url, { headers: authHeaders(), cache: "no-store" });
     if(!res.ok) throw new Error("HTTP " + res.status);
     const rows = await res.json();
     if(!rows.length) return;

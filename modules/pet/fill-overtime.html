@@ -1,0 +1,910 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Overtime — Fill</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;--amber:#d97706;}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:22px 18px;color:var(--text);}
+  .wrap{max-width:920px;margin:0 auto;}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:14px;color:var(--muted);}
+
+  .form-head{text-align:center;margin-bottom:16px;}
+  .form-head .co{font-size:15px;font-weight:800;letter-spacing:.4px;color:var(--navy);}
+  .form-head .ti{font-size:12px;font-weight:700;letter-spacing:2px;color:var(--blue);margin-top:2px;text-transform:uppercase;}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 22px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.04);}
+  .card > h3{color:var(--navy);margin:0 0 2px;font-size:14px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;}
+  .card > .sub{color:var(--muted);font-size:12px;margin:0 0 16px;}
+  h4{color:var(--navy);margin:18px 0 6px;font-size:13px;}
+
+  label{display:block;font-size:11.5px;font-weight:700;color:var(--text);margin:0 0 5px;}
+  input,select,textarea{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;background:var(--card);color:var(--text);}
+  input:focus,select:focus,textarea:focus{outline:2px solid var(--blue);border-color:var(--blue);}
+  input:disabled{background:var(--bg);}
+  textarea{resize:vertical;min-height:60px;}
+  .row{display:flex;gap:12px;flex-wrap:wrap;}
+  .row > div{flex:1;min-width:160px;}
+
+  button{padding:10px 15px;border:none;border-radius:8px;font-weight:700;font-size:13px;cursor:pointer;background:var(--blue);color:#fff;}
+  button:hover{background:var(--blue-dark);}
+  button.mini{padding:6px 11px;font-size:12px;}
+  button.green{background:var(--green);} button.green:hover{background:#166a2c;}
+  button.red{background:var(--red);} button.red:hover{background:#96242e;}
+  button.grey{background:#6b7280;} button.grey:hover{background:#565d68;}
+  .link-btn{background:none;border:none;color:var(--blue);font-weight:700;cursor:pointer;font-size:13px;padding:0;text-decoration:underline;}
+  .toolbar{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:6px;}
+  .toolbar .grow{flex:1;min-width:200px;}
+  .btnbar{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px;}
+  .backbar{margin-bottom:10px;}
+
+  .status{margin-top:10px;font-weight:700;font-size:13px;min-height:16px;}
+  .status.ok{color:var(--green);} .status.err{color:var(--red);}
+  .loading,.empty{font-size:12.5px;color:var(--muted);}
+
+  table{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px;}
+  th,td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top;}
+  thead th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.3px;border-bottom:2px solid var(--line);}
+  tbody tr:hover td{background:var(--bg);}
+  .clickrow{cursor:pointer;}
+
+  .tag{display:inline-block;padding:2px 9px;border-radius:10px;font-size:11px;font-weight:700;color:#fff;}
+  .tag.new{background:var(--amber);}
+  .tag.progress{background:var(--blue);}
+  .tag.rejected{background:var(--red);}
+  .tag.done{background:var(--green);}
+  .tag.mid{background:var(--blue);}
+  .noaccess{color:var(--red);font-weight:bold;text-align:center;padding:30px;}
+  .rejbox{background:#fdecea;border:1px solid var(--red);border-radius:8px;padding:10px 14px;margin-bottom:14px;color:#7a1f1f;font-size:13px;}
+  .infobox{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:13px;line-height:1.7;}
+  .found-name{color:var(--green)!important;font-weight:700;}
+  tr.flagged td{background:#fdecea !important;}
+  .flagbox{background:#fdecea;border:1px solid var(--red);border-radius:8px;padding:12px 14px;margin-top:12px;color:#7a1f1f;font-size:13px;line-height:1.6;}
+  .flagbox ul{margin:6px 0 0 18px;padding:0;}
+  .not-found{color:var(--red)!important;font-weight:700;}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<div id="connStatus">Loading…</div>
+
+<div class="form-head">
+  <div class="co">Rumbu Industries Limited</div>
+  <div class="ti">Overtime Fill &bull; Step 2</div>
+</div>
+
+<div id="appArea" style="display:none;">
+
+  <!-- ============ QUEUE: incomplete entries only ============ -->
+  <div id="queueView">
+    <div class="card">
+      <h3>Overtime to Fill</h3>
+      <p class="sub" id="scopeNote"></p>
+      <div class="toolbar">
+        <div class="grow"><label>Scope</label><select id="scopeFilter" onchange="loadQueue()"><option value="all">All my assigned scopes</option></select></div>
+        <div style="flex:0 0 auto;"><button class="mini grey" onclick="loadQueue()">Refresh</button></div>
+        <div style="flex:0 0 auto;padding-bottom:8px;"><button class="link-btn" onclick="openCompletedList()">View completed forms →</button></div>
+      </div>
+      <div id="queueWrap"></div>
+    </div>
+  </div>
+
+  <!-- ============ FILL: work on one entry ============ -->
+  <div id="fillView" style="display:none;">
+    <div class="backbar"><button class="mini grey" onclick="backToQueue()">← Back to list</button></div>
+    <div class="card">
+      <h3 id="workTitle">Fill Overtime</h3>
+      <div id="rejBanner"></div>
+      <div id="entryInfo"></div>
+
+      <h4>Employees on this request</h4>
+      <div id="employeesListWrap"></div>
+
+      <h4>Add an Employee</h4>
+      <div class="row">
+        <div><label>Employee ID</label><input type="text" id="empIdInput" placeholder="Type employee ID" oninput="lookupEmployee()"></div>
+        <div><label>Name of Employee</label><input type="text" id="empNameDisplay" disabled></div>
+      </div>
+      <label style="margin-top:10px;">Reason for Overtime</label>
+      <textarea id="reasonInput" placeholder="Why this employee is doing overtime"></textarea>
+      <button class="mini" style="margin-top:10px;" onclick="addEmployeeToEntry()">+ Add Employee</button>
+      <div class="status" id="addStatus"></div>
+
+      <h4>Overtime List (photo or PDF) <span style="color:var(--red);">*</span></h4>
+      <p class="sub" style="margin:0 0 8px;"><b>Required.</b> You must attach a picture or PDF of the overtime list before you can submit (JPG, PNG, WEBP, HEIC or PDF, up to 10 MB each). Staff must still be added above. Every approver can see this file.</p>
+      <div id="attachListWrap"></div>
+      <div class="row" style="align-items:flex-end;margin-top:8px;">
+        <div><label>Choose file(s)</label><input type="file" id="attachInput" accept="image/*,application/pdf" multiple></div>
+        <div style="flex:0 0 auto;"><button class="mini" id="attachBtn" onclick="uploadAttachments()">⬆ Upload</button></div>
+      </div>
+      <div class="status" id="attachStatus"></div>
+
+      <div id="responseNoteWrap" style="display:none;margin-top:8px;">
+        <label>Response to Rejection <span style="color:var(--red);">*</span></label>
+        <textarea id="responseNoteInput" placeholder="Explain what was corrected before resubmitting"></textarea>
+      </div>
+
+      <div class="btnbar">
+        <button class="green" onclick="submitEntry()">Submit for Approval</button>
+        <button onclick="saveAndContinueLater()">Save &amp; Continue Later</button>
+        <button class="grey" onclick="backToQueue()">Cancel</button>
+      </div>
+      <div class="status" id="submitStatus"></div>
+    </div>
+  </div>
+
+  <!-- ============ COMPLETED LIST ============ -->
+  <div id="completedView" style="display:none;">
+    <div class="backbar"><button class="mini grey" onclick="backToQueue()">← Back to Fill list</button></div>
+    <div class="card">
+      <h3>Completed Forms</h3>
+      <p class="sub">Forms you have already submitted. Click any row to view it.</p>
+      <div class="toolbar">
+        <div><label>From Date</label><input type="date" id="fromDate"></div>
+        <div><label>To Date</label><input type="date" id="toDate"></div>
+        <div style="flex:0 0 auto;"><button class="mini grey" onclick="loadCompleted()">Refresh</button></div>
+      </div>
+      <div id="completedWrap"></div>
+    </div>
+  </div>
+
+  <!-- ============ COMPLETED DETAIL (read-only) ============ -->
+  <div id="completedDetailView" style="display:none;">
+    <div class="backbar"><button class="mini grey" onclick="openCompletedList()">← Back to Completed</button></div>
+    <div class="card">
+      <div id="completedDetailBody"></div>
+      <div class="btnbar"><button class="mini" onclick="printCurrentCompleted()">Print / PDF</button></div>
+    </div>
+  </div>
+
+</div>
+
+<div id="noAccess" class="noaccess" style="display:none;">
+  You are not assigned as a Step 2 filler for any Branch/Department. Ask your Super Admin to assign you in Overtime Approver Setup.
+</div>
+</div>
+
+<script>
+let ME = null;
+let MY_SCOPES = [];
+let IS_SUPER_ADMIN_BLANKET = false;
+let EMPLOYEES = [];
+let CURRENT_ENTRY = null;
+let CURRENT_EMPLOYEES = [];
+let COMPLETED_ROWS = [];
+let CURRENT_COMPLETED = null;
+const COMPANY = "Rumbu Industries Limited";
+const INCOMPLETE = ["awaiting_step2","rejected_to_step2"];
+const EMPLOYEE_COLS = "id, employee_id, full_name, department, branch, unit";
+
+function esc(s){
+  if(s === null || s === undefined) return "";
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+}
+function fmtDate(iso){
+  if(!iso) return "";
+  const p = String(iso).split("-"); if(p.length !== 3) return iso;
+  const months=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return p[2] + " " + (months[parseInt(p[1],10)-1] || p[1]) + " " + p[0];
+}
+function prettyStatus(s){
+  const map = {
+    awaiting_step2:"Awaiting Fill", awaiting_step3:"Awaiting Step 3 Approval",
+    awaiting_step4:"Awaiting Step 4 Review", awaiting_step5:"Awaiting Step 5 Disbursement",
+    awaiting_step6:"Awaiting ED1", completed:"Completed",
+    rejected_to_step2:"Needs Correction", rejected_to_step3:"Rejected to Step 3",
+    rejected_to_step4:"Rejected to Step 4", rejected_to_step5:"Rejected to Step 5"
+  };
+  return map[s] || s;
+}
+function statusTagClass(s){
+  if(s === "completed") return "done";
+  if(s.indexOf("rejected") === 0) return "rejected";
+  return "mid";
+}
+
+async function logActivity(actionType, description){
+  try{
+    await sb.from("activity_log").insert({
+      actor_id: ME.id, actor_username: ME.username, actor_role: ME.role,
+      section_id: ME.sectionId, action_type: actionType, description: description
+    });
+  }catch(e){ console.warn("Activity log write failed (non-fatal):", e); }
+}
+
+function showView(id){
+  ["queueView","fillView","completedView","completedDetailView"].forEach(v=>{
+    const el = document.getElementById(v); if(el) el.style.display = (v === id) ? "block" : "none";
+  });
+  try{ window.scrollTo({ top:0, behavior:"smooth" }); }catch(e){}
+}
+
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    await loadEmployees();
+    await loadMyScopes();
+
+    // Shows how many staff records this login could load. If this number is
+    // lower than the employees table count, Row Level Security is hiding rows.
+    const loadedNote = "Connected. " + EMPLOYEES.length.toLocaleString() + " staff records loaded.";
+    console.info("[fill-overtime] employees loaded:", EMPLOYEES.length);
+
+    if(!MY_SCOPES.length && !IS_SUPER_ADMIN_BLANKET){
+      status.textContent = loadedNote;
+      document.getElementById("noAccess").style.display = "block";
+      return;
+    }
+    document.getElementById("appArea").style.display = "block";
+    document.getElementById("scopeNote").textContent = IS_SUPER_ADMIN_BLANKET
+      ? "Super Admin — showing every Branch/Department."
+      : "Your assigned scope(s): " + MY_SCOPES.map(s=>s.section+" / "+s.department).join(", ");
+    populateScopeFilter();
+    status.textContent = loadedNote;
+    await loadQueue();
+  }catch(e){
+    status.style.color = "#c0392b"; status.textContent = "❌ " + e.message;
+    console.error(e);
+  }
+}
+
+// Loads every row of a query in pages.
+// Supabase caps each response at the project's "Max Rows" setting (1,000 by
+// default, but it can be set lower). The previous loop stopped as soon as a
+// page returned fewer than 1,000 rows, so with a lower cap it stopped after
+// the first page and most staff were never loaded. This loop advances by the
+// number of rows actually returned and stops only on an empty page, so it
+// loads everything whatever the cap is.
+async function fetchAllRows(query){
+  const PAGE_SIZE = 1000;
+  const MAX_PAGES = 1000;              // safety stop: never loop forever
+  let all = [], from = 0, pages = 0;
+  while(pages++ < MAX_PAGES){
+    const { data, error } = await query.range(from, from + PAGE_SIZE - 1);
+    if(error) throw error;
+    const rows = data || [];
+    if(!rows.length) break;
+    all = all.concat(rows);
+    from += rows.length;
+  }
+  return all;
+}
+
+async function loadEmployees(){
+  EMPLOYEES = await fetchAllRows(
+    sb.from("employees").select(EMPLOYEE_COLS).order("id")
+  );
+}
+
+// "MST-101", "mst101" and " MST 101 " all reduce to the same key.
+function normId(s){ return String(s||"").toUpperCase().replace(/[^A-Z0-9]/g,""); }
+
+// Safety net: if a typed ID is not in the preloaded EMPLOYEES list, ask the
+// database for it directly and add what comes back to the list. findEmployee()
+// then applies the same exact/loose matching and Branch/Department checks.
+async function ensureEmployeeLoaded(idVal){
+  const typed = String(idVal||"").trim();
+  const key = normId(typed);
+  if(!key) return;
+  if(EMPLOYEES.some(e => normId(e.employee_id) === key)) return;
+
+  const addRows = rows => (rows||[]).forEach(r => {
+    if(!EMPLOYEES.some(e => e.id === r.id)) EMPLOYEES.push(r);
+  });
+
+  try{
+    // 1) Same text, ignoring capitals.
+    const safe = typed.replace(/[\\%_]/g, c => "\\" + c);
+    const exact = await sb.from("employees").select(EMPLOYEE_COLS).ilike("employee_id", safe).limit(50);
+    if(exact.error) throw exact.error;
+    addRows(exact.data);
+    if(EMPLOYEES.some(e => normId(e.employee_id) === key)) return;
+
+    // 2) Same letters/digits in the same order, ignoring hyphens and spaces
+    //    (e.g. typed "MST101" vs stored "MST-101"). Results are filtered so
+    //    only true matches are kept.
+    const pattern = key.split("").join("%");
+    const loose = await sb.from("employees").select(EMPLOYEE_COLS).ilike("employee_id", pattern).limit(1000);
+    if(loose.error) throw loose.error;
+    addRows((loose.data||[]).filter(r => normId(r.employee_id) === key));
+  }catch(e){
+    console.warn("[fill-overtime] direct employee lookup failed:", e);
+  }
+}
+
+// Finds the employee for a typed ID inside this entry's scope.
+// 1) exact match (ignoring case/spaces) wins; 2) otherwise a match that
+// ignores hyphens/punctuation, but only when it is unambiguous.
+// Returns { emp, reason } where reason is "", "outofscope" or "ambiguous".
+function findEmployee(idVal){
+  const typed = String(idVal||"").trim();
+  const key = normId(typed);
+  if(!key) return { emp:null, reason:"" };
+  const exactAll = EMPLOYEES.filter(e => String(e.employee_id||"").trim().toLowerCase() === typed.toLowerCase());
+  const looseAll = EMPLOYEES.filter(e => normId(e.employee_id) === key);
+  const exact = exactAll.filter(empInEntryScope);
+  if(exact.length === 1) return { emp:exact[0], reason:"" };
+  const loose = looseAll.filter(empInEntryScope);
+  if(loose.length === 1) return { emp:loose[0], reason:"" };
+  if(loose.length > 1 || exact.length > 1) return { emp:null, reason:"ambiguous" };
+  if(looseAll.length) return { emp:null, reason:"outofscope", cand:(exactAll[0] || looseAll[0]) };
+  return { emp:null, reason:"" };
+}
+
+// True only when an employee belongs to the current entry's Branch and
+// Department. The Unit is deliberately NOT checked: any staff registered
+// under this Branch + Department is accepted, whatever their Unit.
+// Compared ignoring capitals, extra spaces and punctuation differences in spacing,
+// so "Technical", "TECHNICAL " and "technical" count as the same.
+function normText(s){ return String(s||"").toLowerCase().replace(/\s+/g," ").trim(); }
+function empInEntryScope(emp){
+  if(!CURRENT_ENTRY || !emp) return false;
+  if(normText(emp.branch) !== normText(CURRENT_ENTRY.section)) return false;
+  if(normText(emp.department) !== normText(CURRENT_ENTRY.department)) return false;
+  return true;
+}
+
+async function loadMyScopes(){
+  MY_SCOPES = [];
+  if(ME.role === "super_admin"){ IS_SUPER_ADMIN_BLANKET = true; return; }
+  const { data: emp } = await sb.from("employees").select("id").eq("linked_profile_id", ME.id).maybeSingle();
+  if(!emp) return;
+  const { data: scopes } = await sb.from("overtime_step2_fillers").select("section, department").eq("employee_id", emp.id);
+  MY_SCOPES = scopes || [];
+}
+
+function populateScopeFilter(){
+  const sel = document.getElementById("scopeFilter");
+  sel.innerHTML = '<option value="all">All my assigned scopes</option>' +
+    MY_SCOPES.map(s => `<option value="${esc(s.section)}||${esc(s.department)}">${esc(s.section)} / ${esc(s.department)}</option>`).join("");
+}
+
+function scopeNarrow(rows){
+  if(IS_SUPER_ADMIN_BLANKET) return rows;
+  const allowed = new Set(MY_SCOPES.map(s => s.section + "||" + s.department));
+  return rows.filter(r => allowed.has(r.section + "||" + r.department));
+}
+
+// ─────────── QUEUE: incomplete entries only ───────────
+async function loadQueue(){
+  showView("queueView");
+  const wrap = document.getElementById("queueWrap");
+  wrap.innerHTML = "<p class='loading'>Loading…</p>";
+  try{
+    let q = sb.from("overtime_department_entries")
+      .select("*, overtime_initiations(form_number, overtime_date, propose_hours)")
+      .in("status", INCOMPLETE)
+      .order("created_at", { ascending: false });
+
+    if(!IS_SUPER_ADMIN_BLANKET){
+      const scopeFilter = document.getElementById("scopeFilter").value;
+      if(scopeFilter !== "all"){
+        const [sec, dept] = scopeFilter.split("||");
+        q = q.eq("section", sec).eq("department", dept);
+      } else if(MY_SCOPES.length){
+        q = q.in("section", [...new Set(MY_SCOPES.map(s=>s.section))]);
+      }
+    }
+    const { data, error } = await q;
+    if(error) throw error;
+    const rows = scopeNarrow(data || []);
+
+    if(!rows.length){ wrap.innerHTML = "<p class='empty'>Nothing to fill right now. New requests and any sent back for correction will appear here.</p>"; return; }
+
+    // Count employees already added per entry, so a form that has been started
+    // (and possibly "Saved & continue later") shows as INCOMPLETE, not NEW.
+    const ids = rows.map(r=>r.id);
+    let countByEntry = {};
+    if(ids.length){
+      const { data: emps } = await sb.from("overtime_employees").select("department_entry_id").in("department_entry_id", ids);
+      (emps||[]).forEach(e=>{ countByEntry[e.department_entry_id] = (countByEntry[e.department_entry_id]||0) + 1; });
+    }
+
+    let html = "<table><thead><tr><th>Form No.</th><th>Department</th><th>Units</th><th>Overtime Date</th><th>Staff</th><th>Status</th><th></th></tr></thead><tbody>";
+    rows.forEach(r=>{
+      const count = countByEntry[r.id] || 0;
+      let tagClass, tagText;
+      if(r.status === "rejected_to_step2"){ tagClass = "rejected"; tagText = "NEEDS CORRECTION"; }
+      else if(count > 0){ tagClass = "progress"; tagText = "INCOMPLETE"; }
+      else { tagClass = "new"; tagText = "NEW"; }
+      html += "<tr class=\"clickrow\" onclick=\"openEntry(" + r.id + ")\">" +
+        "<td><b>" + esc(r.overtime_initiations?.form_number||"") + "</b></td>" +
+        "<td>" + esc(r.department) + "</td>" +
+        "<td>" + esc(r.units || "ALL") + "</td>" +
+        "<td>" + fmtDate(r.overtime_initiations?.overtime_date||"") + "</td>" +
+        "<td>" + count + "</td>" +
+        "<td><span class=\"tag " + tagClass + "\">" + tagText + "</span></td>" +
+        "<td><button class=\"mini\" onclick=\"event.stopPropagation();openEntry(" + r.id + ")\">Open</button></td>" +
+        "</tr>";
+    });
+    html += "</tbody></table>";
+    wrap.innerHTML = html;
+  }catch(e){
+    wrap.innerHTML = "<p class='status err'>❌ " + esc(e.message) + "</p>";
+  }
+}
+
+// ─────────── FILL an entry ───────────
+async function openEntry(entryId){
+  const { data: entry, error } = await sb.from("overtime_department_entries")
+    .select("*, overtime_initiations(form_number, form_date, overtime_date, propose_hours, section)")
+    .eq("id", entryId).single();
+  if(error){ alert("Could not open entry: " + error.message); return; }
+
+  CURRENT_ENTRY = entry;
+  showView("fillView");
+  document.getElementById("workTitle").textContent = "Fill " + (entry.overtime_initiations?.form_number||"") + " — " + entry.department;
+  document.getElementById("entryInfo").innerHTML = "<div class=\"infobox\">" +
+    "<b>Form No.:</b> " + esc(entry.overtime_initiations?.form_number||"") + " &nbsp;|&nbsp; " +
+    "<b>Department:</b> " + esc(entry.department) + " &nbsp;|&nbsp; " +
+    "<b>Units:</b> " + esc(entry.units || "ALL") + "<br>" +
+    "<b>Overtime Date:</b> " + fmtDate(entry.overtime_initiations?.overtime_date||"") + " &nbsp;|&nbsp; " +
+    "<b>Propose Hours:</b> " + esc(entry.overtime_initiations?.propose_hours||"") +
+  "</div>";
+
+  const rejBanner = document.getElementById("rejBanner");
+  const responseWrap = document.getElementById("responseNoteWrap");
+  if(entry.status === "rejected_to_step2"){
+    const { data: rej } = await sb.from("overtime_approvals").select("reason, approver_username, decided_at")
+      .eq("department_entry_id", entryId).eq("step", 3).eq("decision", "rejected")
+      .order("decided_at", { ascending: false }).limit(1).maybeSingle();
+    rejBanner.innerHTML = "<div class=\"rejbox\"><b>⚠ Sent back by " + esc(rej?.approver_username||"Step 3") + ":</b> " + esc(rej?.reason || "No reason given.") + "</div>";
+    responseWrap.style.display = "block";
+  } else {
+    rejBanner.innerHTML = "";
+    responseWrap.style.display = "none";
+  }
+  document.getElementById("responseNoteInput").value = "";
+  ["empIdInput","empNameDisplay","reasonInput"].forEach(id=>document.getElementById(id).value="");
+  document.getElementById("empNameDisplay").className = "";
+  document.getElementById("addStatus").textContent = "";
+  document.getElementById("submitStatus").textContent = "";
+
+  document.getElementById("attachInput").value = "";
+  document.getElementById("attachStatus").textContent = "";
+  await loadEntryEmployees(entryId);
+  await loadAttachments(entryId);
+}
+
+function backToQueue(){
+  CURRENT_ENTRY = null;
+  loadQueue();
+}
+
+async function loadEntryEmployees(entryId){
+  const { data, error } = await sb.from("overtime_employees").select("*").eq("department_entry_id", entryId).order("created_at");
+  const wrap = document.getElementById("employeesListWrap");
+  if(error){ wrap.innerHTML = "<p class='status err'>❌ " + esc(error.message) + "</p>"; return; }
+  CURRENT_EMPLOYEES = data || [];
+  if(!CURRENT_EMPLOYEES.length){ wrap.innerHTML = "<p class='empty'>No employees added yet.</p>"; return; }
+
+  let html = "<table><thead><tr><th>ID</th><th>Name</th><th>Reason</th><th></th></tr></thead><tbody>";
+  CURRENT_EMPLOYEES.forEach(e=>{
+    html += "<tr id=\"emprow_" + e.id + "\"><td>" + esc(e.employee_code) + "</td><td>" + esc(e.employee_name) + "</td>" +
+      "<td id=\"reasoncell_" + e.id + "\">" + esc(e.reason_for_overtime) + "</td>" +
+      "<td><button class=\"mini\" onclick=\"editReason(" + e.id + ")\">Edit</button> " +
+      "<button class=\"mini red\" onclick=\"removeEmployeeFromEntry(" + e.id + ")\">Remove</button></td></tr>";
+  });
+  html += "</tbody></table>";
+  wrap.innerHTML = html;
+}
+
+function editReason(rowId){
+  const emp = CURRENT_EMPLOYEES.find(e=>e.id===rowId);
+  if(!emp) return;
+  const cell = document.getElementById("reasoncell_" + rowId);
+  cell.innerHTML = "<textarea id=\"reasonEdit_" + rowId + "\" style=\"min-height:50px;\">" + esc(emp.reason_for_overtime) + "</textarea>" +
+    "<button class=\"mini green\" style=\"margin-top:6px;\" onclick=\"saveReason(" + rowId + ")\">Save</button> " +
+    "<button class=\"mini grey\" style=\"margin-top:6px;\" onclick=\"loadEntryEmployees(CURRENT_ENTRY.id)\">Cancel</button>";
+}
+
+async function saveReason(rowId){
+  const newReason = document.getElementById("reasonEdit_" + rowId).value.trim();
+  if(!newReason){ alert("Reason cannot be empty."); return; }
+  try{
+    const { error } = await sb.from("overtime_employees").update({ reason_for_overtime: newReason }).eq("id", rowId);
+    if(error) throw error;
+    await loadEntryEmployees(CURRENT_ENTRY.id);
+  }catch(e){ alert("Could not save: " + e.message); }
+}
+
+// Each keystroke gets a number; only the latest one is allowed to write to the
+// name field, so a slow database reply for an old keystroke cannot overwrite it.
+let LOOKUP_SEQ = 0;
+
+async function lookupEmployee(){
+  const seq = ++LOOKUP_SEQ;
+  const idVal = document.getElementById("empIdInput").value.trim();
+  const nameField = document.getElementById("empNameDisplay");
+  const noteEl = document.getElementById("addStatus");
+  if(noteEl && noteEl.className.indexOf("err") !== -1) noteEl.textContent = "";
+  if(!idVal){ nameField.value = ""; nameField.className = ""; return; }
+
+  // Not in the preloaded list: wait for typing to pause, then ask the database.
+  const key = normId(idVal);
+  if(key && !EMPLOYEES.some(e => normId(e.employee_id) === key)){
+    nameField.value = "Searching…"; nameField.className = "";
+    await new Promise(res => setTimeout(res, 300));
+    if(seq !== LOOKUP_SEQ) return;
+    await ensureEmployeeLoaded(idVal);
+    if(seq !== LOOKUP_SEQ) return;
+  }
+
+  // Only match staff who belong to this entry's Department/Unit scope.
+  const r = findEmployee(idVal);
+  if(r.emp){ nameField.value = r.emp.full_name; nameField.className = "found-name"; }
+  else if(r.reason === "outofscope"){
+    nameField.value = "ID exists, but not in this branch/department"; nameField.className = "not-found";
+    const c = r.cand || {}, st = document.getElementById("addStatus");
+    st.className = "status err";
+    st.textContent = (c.full_name ? c.full_name + " is registered under " : "This ID is registered under ") +
+      "Branch: \"" + (c.branch || "(blank)") + "\", Department: \"" + (c.department || "(blank)") + "\". " +
+      "This request is for Branch: \"" + (CURRENT_ENTRY ? CURRENT_ENTRY.section : "") + "\", Department: \"" + (CURRENT_ENTRY ? CURRENT_ENTRY.department : "") + "\".";
+  }
+  else if(r.reason === "ambiguous"){ nameField.value = "More than one staff share this ID"; nameField.className = "not-found"; }
+  else { nameField.value = "No staff found"; nameField.className = "not-found"; }
+}
+
+async function addEmployeeToEntry(){
+  const status = document.getElementById("addStatus");
+  if(!CURRENT_ENTRY) return;
+  const idVal = document.getElementById("empIdInput").value.trim();
+  const reason = document.getElementById("reasonInput").value.trim();
+  await ensureEmployeeLoaded(idVal);
+  const found = findEmployee(idVal);
+  const match = found.emp;
+
+  if(!idVal || !match){
+    status.className="status err"; status.textContent = "No staff found for that ID in " + (CURRENT_ENTRY ? CURRENT_ENTRY.department : "this department") + ".";
+    return;
+  }
+  if(!reason){ status.className="status err"; status.textContent="Enter a Reason for Overtime."; return; }
+  if(CURRENT_EMPLOYEES.some(e => String(e.employee_id) === String(match.id))){
+    status.className="status err"; status.textContent = match.full_name + " is already on this request."; return;
+  }
+
+  status.className="status"; status.textContent="Adding…";
+  try{
+    const { error } = await sb.from("overtime_employees").insert({
+      department_entry_id: CURRENT_ENTRY.id,
+      employee_id: match.id, employee_code: match.employee_id,
+      employee_name: match.full_name, reason_for_overtime: reason
+    });
+    if(error) throw error;
+    status.className = "status ok"; status.textContent = "✅ Added.";
+    ["empIdInput","empNameDisplay","reasonInput"].forEach(id=>document.getElementById(id).value="");
+    document.getElementById("empNameDisplay").className = "";
+    await loadEntryEmployees(CURRENT_ENTRY.id);
+  }catch(e){
+    status.className = "status err"; status.textContent = "❌ " + e.message;
+  }
+}
+
+async function removeEmployeeFromEntry(rowId){
+  if(!confirm("Remove this employee from the overtime request?")) return;
+  try{
+    const { error } = await sb.from("overtime_employees").delete().eq("id", rowId);
+    if(error) throw error;
+    await loadEntryEmployees(CURRENT_ENTRY.id);
+  }catch(e){ alert("Could not remove: " + e.message); }
+}
+
+// Save & Continue Later — every employee is already persisted as it is added,
+// so this simply keeps the entry in the Fill queue (status unchanged) and
+// returns to the list. The person can reopen and finish any time.
+async function saveAndContinueLater(){
+  if(!CURRENT_ENTRY) return;
+  const status = document.getElementById("submitStatus");
+  status.className = "status ok";
+  status.textContent = "✅ Progress saved. This form is still in your Fill list to finish later.";
+  await logActivity("overtime_step2_saved", ME.username + " saved progress on overtime entry #" + CURRENT_ENTRY.id + " (" + CURRENT_ENTRY.section + " / " + CURRENT_ENTRY.department + ") — " + CURRENT_EMPLOYEES.length + " employee(s) so far");
+  setTimeout(backToQueue, 700);
+}
+
+async function submitEntry(){
+  const status = document.getElementById("submitStatus");
+  if(!CURRENT_ENTRY) return;
+  if(!CURRENT_EMPLOYEES.length){ status.className="status err"; status.textContent="Add at least one employee before submitting."; return; }
+
+  const isCorrection = CURRENT_ENTRY.status === "rejected_to_step2";
+  const responseNote = document.getElementById("responseNoteInput").value.trim();
+  if(isCorrection && !responseNote){ status.className="status err"; status.textContent="Enter a Response to Rejection before resubmitting."; return; }
+
+  // The overtime list photo/PDF is mandatory. Count from the database, not the screen.
+  status.className="status"; status.textContent="Checking attached list…";
+  try{
+    const { count, error: attErr } = await sb.from("overtime_attachments")
+      .select("id", { count:"exact", head:true }).eq("department_entry_id", CURRENT_ENTRY.id);
+    if(attErr) throw attErr;
+    if(!count){
+      status.className = "status err";
+      status.textContent = "Attach a picture or PDF of the overtime list before submitting.";
+      try{ document.getElementById("attachInput").scrollIntoView({ behavior:"smooth", block:"center" }); }catch(e){}
+      return;
+    }
+  }catch(e){
+    status.className = "status err";
+    status.textContent = "Could not check the attached list (" + (e.message || e) + "). Nothing was submitted.";
+    return;
+  }
+
+  status.className="status"; status.textContent="Checking salary records…";
+  try{
+    // Block the submission if any listed staff has no salary on record.
+    const missing = await findStaffWithoutSalary();
+    renderEmployeeFlags(missing);
+    if(missing.length){
+      const lines = missing.map(m => "<li><b>" + esc(m.code || "(no ID)") + "</b>" + (m.name ? " — " + esc(m.name) : "") + "</li>").join("");
+      status.className = "status err";
+      status.innerHTML = "<div class=\"flagbox\"><b>Not submitted.</b> " + missing.length + " staff member(s) have no salary on record. " +
+        "Remove them from this request or ask HR to add their salary, then submit again:<ul>" + lines + "</ul></div>";
+      await logActivity("overtime_step2_blocked_no_salary", ME.username + " tried to submit overtime entry #" + CURRENT_ENTRY.id + " but it was blocked: no salary on record for " + missing.map(m=>m.code).join(", "));
+      return;
+    }
+
+    status.textContent="Submitting…";
+    const updateFields = { status: "awaiting_step3", updated_at: new Date().toISOString() };
+    if(isCorrection) updateFields.correction_note = responseNote;
+    const { error } = await sb.from("overtime_department_entries").update(updateFields).eq("id", CURRENT_ENTRY.id);
+    if(error) throw error;
+
+    await logActivity("overtime_step2_submitted", ME.username + " submitted overtime entry #" + CURRENT_ENTRY.id + " (" + CURRENT_ENTRY.section + " / " + CURRENT_ENTRY.department + ") with " + CURRENT_EMPLOYEES.length + " employee(s)" + (isCorrection ? ". Response: " + responseNote : ""));
+    status.className = "status ok"; status.textContent = "✅ Submitted for Step 3 approval.";
+    setTimeout(backToQueue, 800);
+  }catch(e){
+    status.className = "status err"; status.textContent = "❌ " + e.message;
+  }
+}
+
+// ─────────── OVERTIME LIST ATTACHMENTS (photo / PDF) ───────────
+// Files live in the private "overtime-attachments" bucket; one row per file
+// in overtime_attachments links it to the entry. Needs overtime_attachments.sql.
+const ATTACH_BUCKET = "overtime-attachments";
+const ATTACH_MAX_BYTES = 10 * 1024 * 1024;
+const ATTACH_EXT = { jpg:"image/jpeg", jpeg:"image/jpeg", png:"image/png", webp:"image/webp", heic:"image/heic", heif:"image/heif", pdf:"application/pdf" };
+let CURRENT_ATTACHMENTS = [];
+
+function attachExt(name){ const m = /\.([A-Za-z0-9]+)$/.exec(name||""); return m ? m[1].toLowerCase() : ""; }
+function attachType(file){
+  const byExt = ATTACH_EXT[attachExt(file.name)];
+  if(file.type && Object.values(ATTACH_EXT).indexOf(file.type.toLowerCase()) !== -1) return file.type.toLowerCase();
+  return byExt || "";
+}
+function safeFileName(n){ return String(n||"file").replace(/[^A-Za-z0-9._-]+/g,"_").slice(-80); }
+function fmtSize(b){ b = Number(b)||0; return b >= 1048576 ? (b/1048576).toFixed(1) + " MB" : Math.max(1, Math.round(b/1024)) + " KB"; }
+
+async function loadAttachments(entryId){
+  const wrap = document.getElementById("attachListWrap");
+  const { data, error } = await sb.from("overtime_attachments").select("*").eq("department_entry_id", entryId).order("created_at");
+  if(error){
+    CURRENT_ATTACHMENTS = [];
+    wrap.innerHTML = "<p class='status err'>❌ Could not load attachments (" + esc(error.message) + "). Has overtime_attachments.sql been run in Supabase?</p>";
+    return;
+  }
+  CURRENT_ATTACHMENTS = data || [];
+  if(!CURRENT_ATTACHMENTS.length){ wrap.innerHTML = "<p class='empty'>No file attached yet.</p>"; return; }
+  let html = "<table><thead><tr><th>File</th><th>Size</th><th>Uploaded by</th><th></th></tr></thead><tbody>";
+  CURRENT_ATTACHMENTS.forEach(a=>{
+    html += "<tr><td>" + esc(a.file_name) + "</td><td>" + fmtSize(a.size_bytes) + "</td><td>" + esc(a.uploaded_by_username||"") + "</td>" +
+      "<td><button class=\"mini\" onclick=\"viewAttachment(" + a.id + ")\">View</button> " +
+      "<button class=\"mini red\" onclick=\"removeAttachment(" + a.id + ")\">Remove</button></td></tr>";
+  });
+  html += "</tbody></table>";
+  wrap.innerHTML = html;
+}
+
+async function uploadAttachments(){
+  const status = document.getElementById("attachStatus");
+  const input = document.getElementById("attachInput");
+  const btn = document.getElementById("attachBtn");
+  if(!CURRENT_ENTRY) return;
+  const files = Array.from(input.files || []);
+  if(!files.length){ status.className = "status err"; status.textContent = "Choose a photo or PDF first."; return; }
+
+  const problems = [];
+  files.forEach(f=>{
+    if(!attachType(f)) problems.push(f.name + ": only JPG, PNG, WEBP, HEIC or PDF files are allowed");
+    else if(f.size > ATTACH_MAX_BYTES) problems.push(f.name + ": larger than 10 MB (" + fmtSize(f.size) + ")");
+    else if(f.size === 0) problems.push(f.name + ": file is empty");
+  });
+  if(problems.length){ status.className = "status err"; status.innerHTML = problems.map(esc).join("<br>"); return; }
+
+  btn.disabled = true;
+  let ok = 0; const failed = [];
+  for(let i = 0; i < files.length; i++){
+    const f = files[i];
+    status.className = "status"; status.textContent = "Uploading " + (i+1) + " of " + files.length + "…";
+    const path = "entry-" + CURRENT_ENTRY.id + "/" + Date.now() + "_" + i + "_" + safeFileName(f.name);
+    try{
+      const up = await sb.storage.from(ATTACH_BUCKET).upload(path, f, { contentType: attachType(f), upsert: false });
+      if(up.error) throw up.error;
+      const ins = await sb.from("overtime_attachments").insert({
+        department_entry_id: CURRENT_ENTRY.id, file_path: path, file_name: f.name,
+        mime_type: attachType(f), size_bytes: f.size, uploaded_by_username: ME.username
+      });
+      if(ins.error){ await sb.storage.from(ATTACH_BUCKET).remove([path]); throw ins.error; }
+      ok++;
+    }catch(e){ failed.push(f.name + ": " + (e.message || e)); }
+  }
+  btn.disabled = false;
+  input.value = "";
+  if(ok) await logActivity("overtime_step2_attachment_added", ME.username + " attached " + ok + " file(s) to overtime entry #" + CURRENT_ENTRY.id);
+  await loadAttachments(CURRENT_ENTRY.id);
+  if(failed.length){
+    status.className = "status err";
+    status.innerHTML = (ok ? "✅ " + ok + " uploaded. " : "") + "❌ " + failed.length + " failed:<br>" + failed.map(esc).join("<br>");
+  } else {
+    status.className = "status ok"; status.textContent = "✅ " + ok + " file(s) uploaded.";
+  }
+}
+
+async function viewAttachment(id){
+  const a = CURRENT_ATTACHMENTS.find(x=>x.id===id); if(!a) return;
+  const w = window.open("", "_blank");   // open first so pop-up blockers allow it
+  const { data, error } = await sb.storage.from(ATTACH_BUCKET).createSignedUrl(a.file_path, 300);
+  if(error || !data){ if(w) w.close(); alert("Could not open the file: " + (error ? error.message : "no link returned")); return; }
+  if(w) w.location.href = data.signedUrl; else window.location.href = data.signedUrl;
+}
+
+async function removeAttachment(id){
+  const a = CURRENT_ATTACHMENTS.find(x=>x.id===id); if(!a) return;
+  if(!confirm("Remove \"" + a.file_name + "\" from this request?")) return;
+  try{
+    const rm = await sb.storage.from(ATTACH_BUCKET).remove([a.file_path]);
+    if(rm.error) throw rm.error;
+    const del = await sb.from("overtime_attachments").delete().eq("id", id);
+    if(del.error) throw del.error;
+    await logActivity("overtime_step2_attachment_removed", ME.username + " removed attachment \"" + a.file_name + "\" from overtime entry #" + CURRENT_ENTRY.id);
+    await loadAttachments(CURRENT_ENTRY.id);
+  }catch(e){ alert("Could not remove: " + (e.message || e)); }
+}
+
+// ─────────── SALARY CHECK (used on Submit) ───────────
+// Salary amounts are Super-Admin-only, so the check runs in the database and
+// returns ONLY the IDs that have no usable salary (missing row, blank or 0).
+// Needs the function in overtime_salary_check.sql to be created once.
+async function findStaffWithoutSalary(){
+  const linked = CURRENT_EMPLOYEES.filter(e => e.employee_id !== null && e.employee_id !== undefined);
+  const orphans = CURRENT_EMPLOYEES.filter(e => e.employee_id === null || e.employee_id === undefined)
+    .map(e => ({ code:e.employee_code, name:e.employee_name }));
+  let flagged = [];
+  if(linked.length){
+    const { data, error } = await sb.rpc("overtime_employees_missing_salary", { p_employee_ids: linked.map(e => String(e.employee_id)) });
+    if(error) throw new Error("Salary check could not run (" + error.message + "). Nothing was submitted.");
+    const bad = new Set((data||[]).map(r => String(r.employee_id !== undefined ? r.employee_id : r)));
+    flagged = linked.filter(e => bad.has(String(e.employee_id))).map(e => ({ code:e.employee_code, name:e.employee_name }));
+  }
+  return orphans.concat(flagged);
+}
+
+function renderEmployeeFlags(missing){
+  const codes = new Set(missing.map(m => m.code));
+  CURRENT_EMPLOYEES.forEach(e => {
+    const row = document.getElementById("emprow_" + e.id);
+    if(row) row.classList.toggle("flagged", codes.has(e.employee_code));
+  });
+}
+
+// ─────────── COMPLETED FORMS (already submitted) ───────────
+function openCompletedList(){
+  showView("completedView");
+  loadCompleted();
+}
+
+async function loadCompleted(){
+  const wrap = document.getElementById("completedWrap");
+  wrap.innerHTML = "<p class='loading'>Loading…</p>";
+  const from = document.getElementById("fromDate").value;
+  const to = document.getElementById("toDate").value;
+  try{
+    let q = sb.from("overtime_department_entries")
+      .select("*, overtime_initiations(form_number, form_date, overtime_date, propose_hours)")
+      .not("status", "in", "(" + INCOMPLETE.join(",") + ")")
+      .order("updated_at", { ascending: false });
+    if(!IS_SUPER_ADMIN_BLANKET && MY_SCOPES.length){
+      q = q.in("section", [...new Set(MY_SCOPES.map(s=>s.section))]);
+    }
+    const { data, error } = await q;
+    if(error) throw error;
+    let rows = scopeNarrow(data || []);
+    if(from) rows = rows.filter(r => (r.overtime_initiations?.overtime_date||"") >= from);
+    if(to)   rows = rows.filter(r => (r.overtime_initiations?.overtime_date||"") <= to);
+    COMPLETED_ROWS = rows;
+
+    if(!rows.length){ wrap.innerHTML = "<p class='empty'>No completed forms yet.</p>"; return; }
+
+    let html = "<table><thead><tr><th>Form No.</th><th>Department</th><th>Units</th><th>Overtime Date</th><th>Status</th><th></th></tr></thead><tbody>";
+    rows.forEach(r=>{
+      html += "<tr class=\"clickrow\" onclick=\"openCompletedDetail(" + r.id + ")\">" +
+        "<td><b>" + esc(r.overtime_initiations?.form_number||"") + "</b></td>" +
+        "<td>" + esc(r.department) + "</td>" +
+        "<td>" + esc(r.units || "ALL") + "</td>" +
+        "<td>" + fmtDate(r.overtime_initiations?.overtime_date||"") + "</td>" +
+        "<td><span class=\"tag " + statusTagClass(r.status) + "\">" + esc(prettyStatus(r.status)) + "</span></td>" +
+        "<td><button class=\"mini\" onclick=\"event.stopPropagation();openCompletedDetail(" + r.id + ")\">View</button></td>" +
+        "</tr>";
+    });
+    html += "</tbody></table>";
+    wrap.innerHTML = html;
+  }catch(e){
+    wrap.innerHTML = "<p class='status err'>❌ " + esc(e.message) + "</p>";
+  }
+}
+
+async function openCompletedDetail(entryId){
+  const r = COMPLETED_ROWS.find(x=>x.id===entryId);
+  if(!r) return;
+  CURRENT_COMPLETED = r;
+  showView("completedDetailView");
+  const body = document.getElementById("completedDetailBody");
+  body.innerHTML = "<p class='loading'>Loading…</p>";
+  const { data: emps } = await sb.from("overtime_employees").select("*").eq("department_entry_id", entryId).order("created_at");
+  const list = emps || [];
+  const showPay = list.some(e => e.actual_amount != null);
+
+  let html = "<h3>" + esc(r.overtime_initiations?.form_number||"") + " — " + esc(r.department) + "</h3>";
+  html += "<div class=\"infobox\">" +
+    "<b>Section:</b> " + esc(r.section) + " &nbsp;|&nbsp; <b>Department:</b> " + esc(r.department) + " &nbsp;|&nbsp; <b>Units:</b> " + esc(r.units || "ALL") + "<br>" +
+    "<b>Overtime Date:</b> " + fmtDate(r.overtime_initiations?.overtime_date||"") + " &nbsp;|&nbsp; " +
+    "<b>Propose Hours:</b> " + esc(r.overtime_initiations?.propose_hours||"") + " &nbsp;|&nbsp; " +
+    "<b>Status:</b> " + esc(prettyStatus(r.status)) +
+  "</div>";
+  html += "<table><thead><tr><th>ID</th><th>Name</th><th>Reason</th>" + (showPay ? "<th>Hours</th><th>Amount (₦)</th>" : "") + "</tr></thead><tbody>";
+  if(!list.length){
+    html += "<tr><td colspan=\"" + (showPay?5:3) + "\" class=\"empty\">No employees on this form.</td></tr>";
+  } else {
+    list.forEach(e=>{
+      html += "<tr><td>" + esc(e.employee_code) + "</td><td>" + esc(e.employee_name) + "</td><td>" + esc(e.reason_for_overtime) + "</td>" +
+        (showPay ? ("<td>" + esc(e.hours_worked ?? "") + "</td><td>" + (e.actual_amount != null ? Number(e.actual_amount).toLocaleString() : "") + "</td>") : "") +
+        "</tr>";
+    });
+  }
+  html += "</tbody></table>";
+  body.innerHTML = html;
+}
+
+function printCurrentCompleted(){
+  const r = CURRENT_COMPLETED;
+  if(!r) return;
+  sb.from("overtime_employees").select("*").eq("department_entry_id", r.id).order("created_at").then(({data})=>{
+    const list = data || [];
+    const showPay = list.some(e => e.actual_amount != null);
+    const rowsHtml = list.map(e=>"<tr><td>" + esc(e.employee_code) + "</td><td>" + esc(e.employee_name) + "</td><td>" + esc(e.reason_for_overtime) + "</td>" +
+      (showPay ? ("<td>" + esc(e.hours_worked ?? "") + "</td><td>" + (e.actual_amount != null ? Number(e.actual_amount).toLocaleString() : "") + "</td>") : "") + "</tr>").join("");
+    const html = "<html><head><style>" +
+      "@page{size:A4;margin:40pt 50pt;} body{font-family:'Times New Roman',serif;font-size:12pt;margin:0;padding:40px;color:#000;}" +
+      "h2{text-align:center;font-size:18pt;margin:0 0 4px;} h3{text-align:center;font-size:14pt;margin:0 0 20px;letter-spacing:2px;}" +
+      "table{width:100%;border-collapse:collapse;margin-top:10px;} td,th{padding:8px 10px;border:1px solid #000;text-align:left;vertical-align:top;}" +
+      "</style></head><body>" +
+      "<h2>" + esc(COMPANY) + "</h2><h3>OVERTIME — DEPARTMENT SUBMISSION</h3>" +
+      "<p><b>Form No.:</b> " + esc(r.overtime_initiations?.form_number||"") + " &nbsp; <b>Section:</b> " + esc(r.section) + " &nbsp; <b>Department:</b> " + esc(r.department) + " &nbsp; <b>Units:</b> " + esc(r.units||"ALL") + "</p>" +
+      "<p><b>Overtime Date:</b> " + fmtDate(r.overtime_initiations?.overtime_date||"") + " &nbsp; <b>Status:</b> " + esc(prettyStatus(r.status)) + "</p>" +
+      "<table><thead><tr><th>ID</th><th>Name</th><th>Reason</th>" + (showPay?"<th>Hours</th><th>Amount</th>":"") + "</tr></thead><tbody>" + rowsHtml + "</tbody></table>" +
+      "</body></html>";
+    const w = window.open("", "_blank");
+    if(!w){ alert("Please allow pop-ups to print."); return; }
+    w.document.write(html); w.document.close();
+    w.onload = function(){ w.focus(); w.print(); };
+  });
+}
+
+init();
+</script>
+<script src="../../assets/letterhead.js"></script>
+</body>
+</html>
