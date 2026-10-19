@@ -8,7 +8,6 @@
 <link rel="stylesheet" href="contracts.css">
 <style>
 .contract-title{font-weight:600;font-size:13.5px;color:var(--heading);margin-top:3px}
-.agency-name{font-size:12.5px;color:var(--muted)}
 td.clickable{cursor:pointer}
 </style>
 </head>
@@ -22,7 +21,7 @@ td.clickable{cursor:pointer}
     </div>
   </div>
   <div class="ph-right">
-    <button class="btn btn-hdr" onclick="openNew()">＋ New Contract</button>
+    <button class="btn btn-hdr" id="new-btn" style="display:none" onclick="openNew()">＋ New Contract</button>
     <button class="btn btn-hdr" id="admin-btn" style="display:none" onclick="goAdmin()">⚙ Manage Users</button>
   </div>
 </div>
@@ -37,7 +36,6 @@ td.clickable{cursor:pointer}
   </div>
 
   <div id="app" style="display:none">
-    <!-- Stats -->
     <div class="stats">
       <div class="stat-card">
         <span class="stat-icon">📄</span>
@@ -66,7 +64,6 @@ td.clickable{cursor:pointer}
       </div>
     </div>
 
-    <!-- Toolbar -->
     <div class="toolbar">
       <input class="srch" id="q" type="search" placeholder="🔍  Search by title or reference…" oninput="render()">
       <select class="flt" id="fAgency" onchange="render()"><option value="">All Agencies</option></select>
@@ -90,21 +87,13 @@ td.clickable{cursor:pointer}
       </select>
     </div>
 
-    <!-- Table -->
     <div class="tbl-wrap">
       <div class="tbl-scroll">
         <table>
           <thead>
             <tr>
-              <th>Contractor</th>
-              <th>Contract</th>
-              <th>Risk</th>
-              <th>Agency</th>
-              <th>Value</th>
-              <th>Dates</th>
-              <th>Open Actions</th>
-              <th>Status</th>
-              <th>Escalation Flags</th>
+              <th>Contractor</th><th>Contract</th><th>Risk</th><th>Agency</th>
+              <th>Value</th><th>Dates</th><th>Open Actions</th><th>Status</th><th>Escalation Flags</th>
             </tr>
           </thead>
           <tbody id="tbody"></tbody>
@@ -115,67 +104,91 @@ td.clickable{cursor:pointer}
 </div>
 
 <script>
-let sb, rows = [];
+// ── Globals ───────────────────────────────────────────────────────
+var sb, rows = [];
+var _myProfileId = null;
+var _myRoles     = new Set();
+var _isSupervisor = false;
+var _canEdit      = false;  // based on role only; _canEditThis (window) includes per-contract HoC check
 
+// ── Init ──────────────────────────────────────────────────────────
 async function init() {
   try {
-    const auth = await guardPage();
+    var auth = await guardPage();
     if (!auth) return;
     sb = auth.sb;
-    window._sb = sb;
+    window._sb       = sb;
+    _myProfileId     = auth.profile.id;
+
+    // Fetch this user's CNT roles
+    var rolesQry = await sb.from('cnt_profile_roles')
+      .select('cnt_roles(name)').eq('profile_id', _myProfileId);
+    _myRoles = new Set((rolesQry.data || []).map(function(r){ return r.cnt_roles && r.cnt_roles.name; }).filter(Boolean));
+    _isSupervisor = _myRoles.has('SiteSupervisor');
+    _canEdit = _myRoles.has('CEO') || _myRoles.has('ContractAdmin') || _myRoles.has('HeadOfContract');
 
     if (auth.permissions.has('users.manage'))
       document.getElementById('admin-btn').style.display = 'inline-flex';
+    if (!_isSupervisor)
+      document.getElementById('new-btn').style.display = 'inline-flex';
 
     document.getElementById('ph-sub').textContent =
-      'Welcome, ' + (auth.profile.full_name ?? 'Contractor') +
-      ' · ' + new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'long',year:'numeric'});
+      'Welcome, ' + (auth.profile.full_name || 'User') + ' · ' +
+      new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'long',year:'numeric'});
 
-    const [cRes, aRes] = await Promise.all([
-      sb.from('cnt_contracts').select(`
-        id,contract_id,title,status,risk_level,original_value,
-        start_date,original_completion_date,physical_progress_pct,financial_progress_pct,
-        cnt_agencies(id,name),cnt_companies(id,name)
-      `).order('created_at',{ascending:false}),
+    // Supervisors only see contracts assigned to them
+    var qry = sb.from('cnt_contracts').select(
+      'id,contract_id,title,status,risk_level,original_value,' +
+      'start_date,original_completion_date,revised_completion_date,' +
+      'physical_progress_pct,financial_progress_pct,' +
+      'site_supervisor_id,state,lga,risk_notes,notes,agency_id,' +
+      'cnt_agencies(id,name),cnt_companies(id,name)'
+    ).order('created_at',{ascending:false});
+
+    if (_isSupervisor) qry = qry.eq('site_supervisor_id', _myProfileId);
+
+    var [cRes, aRes] = await Promise.all([
+      qry,
       sb.from('cnt_agencies').select('id,name').order('name')
     ]);
 
-    rows = cRes.data ?? [];
+    rows = cRes.data || [];
     window._contracts = rows;
-    // Populate status totals bar
-    (function() {
-      const norm = s => (s||'').toLowerCase();
-      const counts = {};
-      rows.forEach(c => { const s = norm(c.status); counts[s] = (counts[s]||0)+1; });
-      const LABELS = {active:'Active',pipeline:'Pipeline',completed:'Completed',
-                      on_hold:'On Hold',terminated:'Terminated',closeout:'Closeout'};
-      const COLORS = {active:'#22c55e',pipeline:'#2E75B6',completed:'#10b981',
-                      on_hold:'#f59e0b',terminated:'#ef4444',closeout:'#6b7280'};
-      const el = document.getElementById('stat-bar');
+
+    // Status distribution bar
+    (function(){
+      var norm = function(s){ return (s||'').toLowerCase(); };
+      var counts = {};
+      rows.forEach(function(c){ var s = norm(c.status); counts[s] = (counts[s]||0)+1; });
+      var LABELS = {active:'Ongoing',pipeline:'Pending',closed:'Completed','on hold':'On Hold',
+                    'at risk':'At Risk',delayed:'Delayed',cancelled:'Cancelled','practically complete':'Practically Complete'};
+      var COLORS = {active:'#22c55e',pipeline:'#2E75B6',closed:'#10b981','on hold':'#f59e0b',
+                    'at risk':'#f97316',delayed:'#ef4444',cancelled:'#6b7280','practically complete':'#8b5cf6'};
+      var el = document.getElementById('stat-bar');
       if (!el) return;
-      const pill = (lbl,val,col) =>
-        '<div style="background:'+col+'11;border:1px solid '+col+'44;border-radius:7px;'+
-        'padding:6px 14px;display:flex;gap:8px;align-items:center">'+
-        '<span style="font-size:18px;font-weight:900;color:'+col+'">'+val+'</span>'+
-        '<span style="font-size:12px;color:#374151;font-weight:600">'+lbl+'</span></div>';
-      el.innerHTML = pill('Total Contracts', rows.length, '#1F3864') +
-        Object.entries(counts).map(([s,n]) =>
-          pill(LABELS[s]||s, n, COLORS[s]||'#6b7280')).join('');
+      var pill = function(lbl,val,col){
+        return '<div style="background:'+col+'11;border:1px solid '+col+'44;border-radius:7px;'+
+          'padding:6px 14px;display:flex;gap:8px;align-items:center">'+
+          '<span style="font-size:18px;font-weight:900;color:'+col+'">'+val+'</span>'+
+          '<span style="font-size:12px;color:#374151;font-weight:600">'+lbl+'</span></div>';
+      };
+      el.innerHTML = pill('Total', rows.length, '#1F3864') +
+        Object.entries(counts).map(function(kv){ return pill(LABELS[kv[0]]||kv[0], kv[1], COLORS[kv[0]]||'#6b7280'); }).join('');
     })();
 
-    (aRes.data ?? []).forEach(a => {
-      const o = document.createElement('option');
+    (aRes.data || []).forEach(function(a){
+      var o = document.createElement('option');
       o.value = a.id; o.textContent = a.name;
       document.getElementById('fAgency').appendChild(o);
     });
 
-    const totalVal = rows.reduce((s,r) => s + (r.original_value ?? 0), 0);
-    document.getElementById('s-total').textContent     = rows.length;
-    const norm = s => (s||'').toLowerCase().replace(' ','_');
-    document.getElementById('s-active').textContent    = rows.filter(r=>norm(r.status)==='active').length;
-    document.getElementById('s-pipeline').textContent  = rows.filter(r=>['pipeline','on_hold','on hold'].includes(norm(r.status))).length;
-    document.getElementById('s-completed').textContent = rows.filter(r=>norm(r.status)==='closed').length;
-    document.getElementById('s-value').textContent     = totalVal >= 1e9
+    var norm = function(s){ return (s||'').toLowerCase(); };
+    var totalVal = rows.reduce(function(s,r){ return s + (r.original_value || 0); }, 0);
+    document.getElementById('s-total').textContent    = rows.length;
+    document.getElementById('s-active').textContent   = rows.filter(function(r){ return norm(r.status)==='active'; }).length;
+    document.getElementById('s-pipeline').textContent = rows.filter(function(r){ return ['pipeline','on hold','on_hold'].includes(norm(r.status)); }).length;
+    document.getElementById('s-completed').textContent= rows.filter(function(r){ return ['closed','completed'].includes(norm(r.status)); }).length;
+    document.getElementById('s-value').textContent    = totalVal >= 1e9
       ? 'NGN ' + (totalVal/1e9).toFixed(2) + 'B'
       : totalVal >= 1e6
       ? 'NGN ' + (totalVal/1e6).toFixed(2) + 'M'
@@ -183,47 +196,48 @@ async function init() {
 
     render();
     document.getElementById('loading').style.display = 'none';
-    document.getElementById('app').style.display = 'block';
+    document.getElementById('app').style.display     = 'block';
   } catch(e) {
     document.getElementById('loading').innerHTML =
-      `<div style="color:var(--bad);text-align:center;padding:40px">
-        <div style="font-size:32px;margin-bottom:10px">⚠️</div>
-        <strong>Failed to load contracts</strong><br>
-        <span style="font-size:12px;color:var(--muted)">${e.message}</span>
-      </div>`;
+      '<div style="color:var(--bad);text-align:center;padding:40px">' +
+      '<div style="font-size:32px;margin-bottom:10px">⚠️</div>' +
+      '<strong>Failed to load contracts</strong><br>' +
+      '<span style="font-size:12px;color:var(--muted)">'+e.message+'</span></div>';
     console.error(e);
   }
 }
 
-const STATUS_BADGE = {
-  pipeline:  ['b-navy',  'Pipeline'],
-  awarded:   ['b-info',  'Awarded'],
-  active:    ['b-ok',    'Active'],
-  on_hold:   ['b-warn',  'On Hold'],
-  completed: ['b-gray',  'Completed'],
-  terminated:['b-bad',   'Terminated'],
-  closeout:  ['b-gold',  'Closeout'],
+// ── Badge maps ────────────────────────────────────────────────────
+var STATUS_BADGE = {
+  pipeline:               ['b-navy',   'Pending'],
+  active:                 ['b-ok',     'Ongoing'],
+  'on hold':              ['b-warn',   'On Hold'],
+  'at risk':              ['b-orange', 'At Risk'],
+  delayed:                ['b-bad',    'Delayed'],
+  'practically complete': ['b-gold',   'Practically Complete'],
+  closed:                 ['b-gray',   'Completed'],
+  cancelled:              ['b-bad',    'Cancelled']
 };
-
-const RISK_BADGE = {
-  low:      ['b-ok',   '🟢 Low'],
-  medium:   ['b-warn', '🟡 Medium'],
+var RISK_BADGE = {
+  low:      ['b-ok',    '🟢 Low'],
+  medium:   ['b-warn',  '🟡 Medium'],
   high:     ['b-orange','🟠 High'],
-  critical: ['b-bad',  '🔴 Critical'],
+  critical: ['b-bad',   '🔴 Critical']
 };
 
-function esc(s) {
-  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;')
+function esc(s){
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// ── Render table ──────────────────────────────────────────────────
 function render() {
-  const q  = document.getElementById('q').value.toLowerCase();
-  const st = document.getElementById('fStatus').value;
-  const ag = document.getElementById('fAgency').value;
-  const rk = document.getElementById('fRisk').value;
+  var q  = document.getElementById('q').value.toLowerCase();
+  var st = document.getElementById('fStatus').value;
+  var ag = document.getElementById('fAgency').value;
+  var rk = document.getElementById('fRisk').value;
 
-  const data = rows.filter(r => {
+  var data = rows.filter(function(r){
     if (q && !r.title?.toLowerCase().includes(q) && !r.contract_id?.toLowerCase().includes(q)) return false;
     if (st && r.status !== st) return false;
     if (ag && r.cnt_agencies?.id !== ag) return false;
@@ -231,291 +245,470 @@ function render() {
     return true;
   });
 
-  const tbody = document.getElementById('tbody');
+  var tbody = document.getElementById('tbody');
   if (!data.length) {
-    tbody.innerHTML = `<tr><td colspan="9">
-      <div class="empty-state">
-        <span class="e-icon">📋</span>
-        <p>${rows.length ? 'No contracts match your filters.' : 'No contracts yet. Click <strong>New Contract</strong> to create the first one.'}</p>
-      </div></td></tr>`;
+    tbody.innerHTML = '<tr><td colspan="9"><div class="empty-state">' +
+      '<span class="e-icon">📋</span><p>' +
+      (rows.length ? 'No contracts match your filters.' : 'No contracts yet.') +
+      '</p></div></td></tr>';
     return;
   }
 
-  tbody.innerHTML = data.map(r => {
-    const norm       = s => (s||'').toLowerCase();
-    const _st        = norm(r.status);
-    const [rCls, rLbl]        = RISK_BADGE[norm(r.risk_level)] ?? ['b-gray','—'];
-    const [sBadgeCls, sLabel] = STATUS_BADGE[_st] ?? ['b-gray', r.status ?? '—'];
-    const STATUS_DISPLAY_MAP  = {pipeline:'Pending',active:'Ongoing',closed:'Completed'};
-    const sLabelDisplay = STATUS_DISPLAY_MAP[_st] || sLabel;
-    const fmtD = d => d ? new Date(d).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'2-digit'}) : '—';
-    const val   = r.original_value
-      ? 'NGN ' + (r.original_value >= 1e9
-          ? (r.original_value/1e9).toFixed(2)+'B'
-          : (r.original_value/1e6).toFixed(1)+'M')
+  tbody.innerHTML = data.map(function(r){
+    var norm = function(s){ return (s||'').toLowerCase(); };
+    var _st  = norm(r.status);
+    var rb   = RISK_BADGE[norm(r.risk_level)]   || ['b-gray','—'];
+    var sb2  = STATUS_BADGE[_st]                || ['b-gray', r.status||'—'];
+    var fmtD = function(d){ return d ? new Date(d).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'2-digit'}) : '—'; };
+    var val  = r.original_value
+      ? ('NGN ' + (r.original_value >= 1e9 ? (r.original_value/1e9).toFixed(2)+'B' : (r.original_value/1e6).toFixed(1)+'M'))
       : '—';
-    const start = fmtD(r.start_date);
-    const end   = fmtD(r.original_completion_date);
-    const openAct = 0;
-    const flags   = [];
-    return `<tr onclick="openDetail('${r.id}')" style="cursor:pointer">
-      <td style="font-size:12px;color:var(--text)">${esc(r.cnt_companies?.name ?? '—')}</td>
-      <td>
-        <span class="ref">${r.contract_id ?? '—'}</span>
-        <div class="contract-title">${r.title ?? '—'}</div>
-      </td>
-      <td><span class="badge ${rCls}">${rLbl}</span></td>
-      <td style="font-size:12px;color:var(--text)">${r.cnt_agencies?.name ?? '—'}</td>
-      <td style="font-size:12px;font-weight:600;white-space:nowrap">${val}</td>
-      <td style="font-size:11px;color:var(--muted);white-space:nowrap">
-        <div>${start}</div>
-        <div style="margin-top:2px">→ ${end}</div>
-      </td>
-      <td style="text-align:center;font-weight:700">${openAct}</td>
-      <td><span class="badge ${sBadgeCls}">${sLabelDisplay}</span></td>
-      <td>
-        ${flags.length
-          ? `<div class="esc-wrap">${flags.map(f => `<span class="esc-flag">${f}</span>`).join('')}</div>`
-          : '<span style="font-size:12px;color:#22c55e;font-weight:600">✅ None</span>'}
-      </td>
-    </tr>`;
-  
-}).join('');
+    return '<tr onclick="openDetail(\''+r.id+'\')" style="cursor:pointer">'
+      + '<td style="font-size:12px">'+esc(r.cnt_companies?.name||'—')+'</td>'
+      + '<td><span class="ref">'+esc(r.contract_id||'—')+'</span>'
+      + '<div class="contract-title">'+esc(r.title||'—')+'</div></td>'
+      + '<td><span class="badge '+rb[0]+'">'+rb[1]+'</span></td>'
+      + '<td style="font-size:12px">'+esc(r.cnt_agencies?.name||'—')+'</td>'
+      + '<td style="font-size:12px;font-weight:600;white-space:nowrap">'+val+'</td>'
+      + '<td style="font-size:11px;color:var(--muted);white-space:nowrap">'
+      + '<div>'+fmtD(r.start_date)+'</div>'
+      + '<div style="margin-top:2px">→ '+fmtD(r.original_completion_date)+'</div></td>'
+      + '<td style="text-align:center;font-weight:700">0</td>'
+      + '<td><span class="badge '+sb2[0]+'">'+sb2[1]+'</span></td>'
+      + '<td><span style="font-size:12px;color:#22c55e;font-weight:600">✅ None</span></td>'
+      + '</tr>';
+  }).join('');
 }
 
 function openDetail(id){
-  const c = (window._contracts || []).find(r => r.id === id);
-  if (c) { openDetail_overlay(c); }
+  var c = (window._contracts||[]).find(function(r){ return r.id===id; });
+  if (c) openDetail_overlay(c);
 }
-function openNew()     { location.href = 'new-contract.html'; }
-function goAdmin()     { location.href = 'admin-users.html'; }
+function openNew()  { location.href = 'new-contract.html'; }
+function goAdmin()  { location.href = 'admin-users.html';  }
 
 init();
 </script>
-<!-- CONTRACT DETAIL OVERLAY -->
+
+<!-- ═══════════════════════════════════════════════
+     CONTRACT DETAIL OVERLAY
+     ═══════════════════════════════════════════════ -->
 <div id="dl-ov" style="display:none;position:fixed;inset:0;z-index:500;
      background:#f4f6fa;overflow-y:auto"></div>
 
 <style>
 .dlt{background:none;border:none;padding:11px 15px;font-size:13px;font-weight:600;
-  cursor:pointer;color:#6b7280;border-bottom:3px solid transparent}
+  cursor:pointer;color:#6b7280;border-bottom:3px solid transparent;white-space:nowrap}
 .dlt.on{color:#1F3864;border-bottom-color:#1F3864}
 .dlt:hover{color:#1F3864}
 .dlcard{background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:14px}
-.dllabel{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;
-  color:#6b7280;margin-bottom:4px}
+.dllabel{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#6b7280;margin-bottom:4px}
 .dlval{font-size:13px;font-weight:600;color:#1F3864}
 .dltbl{width:100%;border-collapse:collapse;font-size:13px}
 .dltbl th{background:#f8fafc;padding:8px 12px;text-align:left;font-size:11px;
   font-weight:700;text-transform:uppercase;color:#6b7280;border-bottom:1px solid #e2e8f0}
 .dltbl td{padding:9px 12px;border-bottom:1px solid #f1f5f9;color:#374151}
 .dlsec{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:18px;margin-bottom:14px}
+.media-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;margin-top:12px}
+.media-item{border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;background:#fff}
+.media-thumb{width:100%;height:110px;object-fit:cover;display:block;background:#f1f5f9}
+.media-info{padding:8px;font-size:11px;color:#6b7280}
+.remark-item{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-bottom:10px}
+.remark-date{font-size:11px;color:#6b7280;font-weight:600;margin-bottom:4px}
+.remark-text{font-size:13px;color:#374151;line-height:1.6}
+.remark-author{font-size:11px;color:#9ca3af;margin-top:5px}
 </style>
 
 <script>
-var _dlC = null;
+var _dlC    = null;
 var _dlDone = {};
 
-function openDetail_overlay(c) {
-  _dlC = c;
+async function openDetail_overlay(c) {
+  _dlC    = c;
   _dlDone = {};
 
+  var ov = document.getElementById('dl-ov');
+  ov.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;' +
+    'height:200px;color:#6b7280;font-size:13px">Loading…</div>';
+  ov.style.display = 'block';
+  ov.scrollTop = 0;
+  try { closePanel(); } catch(e) {}
+
+  // ── Async: supervisor name ────────────────────────────────────
+  var supervisorName = '—';
+  if (c.site_supervisor_id) {
+    try {
+      var svR = await window._sb.from('cnt_profiles')
+        .select('full_name').eq('id', c.site_supervisor_id).maybeSingle();
+      supervisorName = (svR.data && svR.data.full_name) || '—';
+    } catch(e) {}
+  }
+
+  // ── Can this user edit this contract? ─────────────────────────
+  var canEditThis = _canEdit;
+  if (!canEditThis && _myProfileId) {
+    try {
+      var hocR = await window._sb.from('cnt_contract_staff')
+        .select('id').eq('contract_id', c.id).eq('profile_id', _myProfileId)
+        .ilike('role_on_contract', '%head%').maybeSingle();
+      canEditThis = !!(hocR.data);
+    } catch(e) {}
+  }
+  window._canEditThis = canEditThis;
+
+  // ── Build HTML ────────────────────────────────────────────────
   var RCOL = {low:'#22c55e',medium:'#f59e0b',high:'#f97316',critical:'#ef4444'};
   var SCOL = {Active:'#22c55e','On Hold':'#f59e0b','At Risk':'#f97316',
-              Delayed:'#ef4444',Closed:'#6b7280','Pipeline':'#2E75B6'};
+              Delayed:'#ef4444',Closed:'#6b7280',Pipeline:'#2E75B6',
+              Cancelled:'#6b7280','Practically Complete':'#8b5cf6'};
+  var SDISP= {Pipeline:'Pending',Active:'Ongoing',Closed:'Completed'};
   var rc = RCOL[c.risk_level] || '#f59e0b';
   var sc = SCOL[c.status]     || '#1F3864';
-
   function fmtV(v){ return v!=null ? 'NGN '+Number(v).toLocaleString('en-NG',{maximumFractionDigits:0}) : '\u2014'; }
   function fmtD(v){ return v ? new Date(v).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) : '\u2014'; }
   function card(lbl,val){ return '<div class="dlcard"><div class="dllabel">'+lbl+'</div><div class="dlval">'+val+'</div></div>'; }
 
-  var ov = document.getElementById('dl-ov');
-
-  // Build header
-  var hdr = '<div style="background:#1F3864;color:#fff;padding:12px 20px;display:flex;'
-          + 'align-items:center;gap:14px;position:sticky;top:0;z-index:10;'
-          + 'box-shadow:0 2px 8px rgba(0,0,0,.25)">'
-          + '<button onclick="closeDetail()" style="background:rgba(255,255,255,.15);'
-          + 'border:none;color:#fff;cursor:pointer;border-radius:6px;padding:6px 14px;'
-          + 'font-size:13px;font-weight:700">\u2190 Dashboard</button>'
-          + '<button onclick="editContract()" style="background:#2E75B6;border:1px solid rgba(255,255,255,.3);color:#fff;cursor:pointer;border-radius:6px;padding:6px 14px;font-size:13px;font-weight:700">\u270E Edit</button>'
-          + '<div style="flex:1;min-width:0">'
-          + '<div style="font-size:11px;font-weight:700;opacity:.7;letter-spacing:.07em">'
-          + (c.contract_id||'') + '</div>'
-          + '<div style="font-size:15px;font-weight:700">' + (c.title||'\u2014') + '</div>'
-          + '</div>'
-          + '<span style="background:'+sc+';color:#fff;padding:3px 12px;border-radius:20px;'
-          + 'font-size:12px;font-weight:700">'+({Pipeline:'Pending',Active:'Ongoing',Closed:'Completed'}[c.status]||c.status||'\u2014')+'</span>'
-          + '<span style="background:'+rc+'22;color:'+rc+';border:1px solid '+rc+'55;'
-          + 'padding:3px 12px;border-radius:20px;font-size:12px;font-weight:700">'
-          + 'Risk: '+((c.risk_level||'').charAt(0).toUpperCase()+(c.risk_level||'').slice(1)||'\u2014')+'</span>'
-          + '</div>';
-
-  // Tabs
-  var tabs = '<div style="background:#fff;border-bottom:1px solid #e2e8f0;padding:0 20px;'
-           + 'display:flex;overflow-x:auto">'
-           + '<button class="dlt on"  onclick="dlTab(\'ov\',this)">Overview</button>'
-           + '<button class="dlt"     onclick="dlTab(\'pr\',this)">Progress</button>'
-           + '<button class="dlt"     onclick="dlTab(\'kp\',this)">KPIs</button>'
-           + '<button class="dlt"     onclick="dlTab(\'tm\',this)">Team</button>'
-           + '<button class="dlt"     onclick="dlTab(\'ca\',this)">Corrective Actions</button>'
-           + '<button class="dlt"     onclick="dlTab(\'nc\',this)">NCRs</button>'
-           + '<button class="dlt"     onclick="dlTab(\'mb\',this)">Mobilisation</button>'
-           + '</div>';
-
-  // Overview content
-  var pp = Math.min(100, c.physical_progress_pct  || 0);
-  var fp = Math.min(100, c.financial_progress_pct || 0);
-  var agency  = (c.cnt_agencies  && c.cnt_agencies.name)  ? c.cnt_agencies.name  : '\u2014';
-  var company = (c.cnt_companies && c.cnt_companies.name) ? c.cnt_companies.name : '\u2014';
-
-  var overview = '<div id="dl-ov-pane" style="max-width:920px;margin:0 auto;padding:20px">'
-    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">'
-    + card('Agency', agency)
-    + card('Contractor', company)
-    + card('Contract Value', fmtV(c.original_value))
-    + card('Start Date', fmtD(c.start_date))
-    + card('End Date', fmtD(c.original_completion_date))
-    + card('Status', ({Pipeline:'Pending',Active:'Ongoing',Closed:'Completed'}[c.status]||c.status||'\u2014'))
-    + card('Risk Level', ((c.risk_level||'').charAt(0).toUpperCase()+(c.risk_level||'').slice(1))||'\u2014')
-    + card('Location', [c.lga,c.state].filter(Boolean).join(', ')||'\u2014')
+  // Header
+  var hdr = '<div style="background:#1F3864;color:#fff;padding:12px 20px;display:flex;' +
+    'align-items:center;gap:12px;position:sticky;top:0;z-index:10;box-shadow:0 2px 8px rgba(0,0,0,.25)">'
+    + '<button onclick="closeDetail()" style="background:rgba(255,255,255,.15);border:none;color:#fff;'
+    + 'cursor:pointer;border-radius:6px;padding:6px 14px;font-size:13px;font-weight:700">← Back</button>';
+  if (canEditThis) {
+    hdr += '<button onclick="editContract()" style="background:#2E75B6;border:1px solid rgba(255,255,255,.3);'
+      + 'color:#fff;cursor:pointer;border-radius:6px;padding:6px 14px;font-size:13px;font-weight:700">✎ Edit</button>';
+  }
+  hdr += '<div style="flex:1;min-width:0">'
+    + '<div style="font-size:11px;font-weight:700;opacity:.7;letter-spacing:.07em">'+(c.contract_id||'')+'</div>'
+    + '<div style="font-size:15px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+(c.title||'—')+'</div>'
+    + '</div>'
+    + '<span style="background:'+sc+';color:#fff;padding:3px 12px;border-radius:20px;font-size:12px;font-weight:700;white-space:nowrap">'+(SDISP[c.status]||c.status||'—')+'</span>'
+    + '<span style="background:'+rc+'22;color:'+rc+';border:1px solid '+rc+'55;padding:3px 12px;border-radius:20px;font-size:12px;font-weight:700;white-space:nowrap">'
+    + 'Risk: '+((c.risk_level||'').charAt(0).toUpperCase()+(c.risk_level||'').slice(1)||'—')+'</span>'
     + '</div>';
 
-  // Risk notice
+  // Tabs
+  var tabs = '<div style="background:#fff;border-bottom:1px solid #e2e8f0;padding:0 20px;display:flex;overflow-x:auto">'
+    + '<button class="dlt on" onclick="dlTab(\'ov\',this)">Overview</button>'
+    + '<button class="dlt"    onclick="dlTab(\'pr\',this)">Progress</button>'
+    + '<button class="dlt"    onclick="dlTab(\'kp\',this)">KPIs</button>'
+    + '<button class="dlt"    onclick="dlTab(\'tm\',this)">Team</button>'
+    + '<button class="dlt"    onclick="dlTab(\'ca\',this)">Corrective Actions</button>'
+    + '<button class="dlt"    onclick="dlTab(\'nc\',this)">NCRs</button>'
+    + '<button class="dlt"    onclick="dlTab(\'mb\',this)">Mobilisation</button>'
+    + '<button class="dlt"    onclick="dlTab(\'md\',this)">Media &amp; Remarks</button>'
+    + '</div>';
+
+  // Overview pane
+  var pp = Math.min(100, c.physical_progress_pct  || 0);
+  var fp = Math.min(100, c.financial_progress_pct || 0);
+  var agency  = (c.cnt_agencies  && c.cnt_agencies.name)  ? c.cnt_agencies.name  : '—';
+  var company = (c.cnt_companies && c.cnt_companies.name) ? c.cnt_companies.name : '—';
+  var loc = [c.lga, c.state].filter(Boolean).join(', ') || '—';
+
+  var ov_pane = '<div id="dl-ov-pane" style="max-width:920px;margin:0 auto;padding:20px">'
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">'
+    + card('Agency', agency) + card('Contractor', company)
+    + card('Contract Value', fmtV(c.original_value))
+    + card('Start Date', fmtD(c.start_date))
+    + card('Original End Date', fmtD(c.original_completion_date))
+    + (c.revised_completion_date ? card('Revised End Date', fmtD(c.revised_completion_date)) : '')
+    + card('Status', SDISP[c.status]||c.status||'—')
+    + card('Risk Level', ((c.risk_level||'').charAt(0).toUpperCase()+(c.risk_level||'').slice(1))||'—')
+    + card('Location', loc)
+    + card('Site Supervisor', supervisorName)
+    + '</div>';
+
   if (c.risk_level === 'high' || c.risk_level === 'critical') {
-    overview += '<div style="background:'+rc+'11;border:1.5px solid '+rc+';color:'+rc
+    ov_pane += '<div style="background:'+rc+'11;border:1.5px solid '+rc+';color:'+rc
       + ';border-radius:8px;padding:12px 16px;font-size:13px;margin-bottom:16px">'
       + (c.risk_level==='critical'
-         ? '\uD83D\uDD34 <strong>Critical risk</strong> \u2014 Immediate executive intervention required.'
-         : '\uD83D\uDFE0 <strong>High risk</strong> \u2014 Management escalation required.')
+         ? '🔴 <strong>Critical risk</strong> — Immediate executive intervention required.'
+         : '🟠 <strong>High risk</strong> — Management escalation required.')
       + '</div>';
   }
 
-  // Progress
-  overview += '<div class="dlsec"><div style="font-size:11px;font-weight:700;'
-    + 'text-transform:uppercase;letter-spacing:.07em;color:#6b7280;margin-bottom:12px">Progress</div>'
+  ov_pane += '<div class="dlsec">'
+    + '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#6b7280;margin-bottom:12px">Progress</div>'
     + '<div style="margin-bottom:10px">'
-    + '<div style="display:flex;justify-content:space-between;font-size:13px;font-weight:600;margin-bottom:4px">'
-    + '<span>Physical</span><span>'+pp+'%</span></div>'
+    + '<div style="display:flex;justify-content:space-between;font-size:13px;font-weight:600;margin-bottom:4px"><span>Physical</span><span>'+pp+'%</span></div>'
     + '<div style="height:10px;background:#f1f5f9;border-radius:5px;overflow:hidden">'
     + '<div style="height:100%;width:'+pp+'%;background:#2E75B6;border-radius:5px"></div></div></div>'
     + '<div>'
-    + '<div style="display:flex;justify-content:space-between;font-size:13px;font-weight:600;margin-bottom:4px">'
-    + '<span>Financial</span><span>'+fp+'%</span></div>'
+    + '<div style="display:flex;justify-content:space-between;font-size:13px;font-weight:600;margin-bottom:4px"><span>Financial</span><span>'+fp+'%</span></div>'
     + '<div style="height:10px;background:#f1f5f9;border-radius:5px;overflow:hidden">'
     + '<div style="height:100%;width:'+fp+'%;background:#10b981;border-radius:5px"></div></div>'
     + '</div></div>';
 
   if (c.risk_notes) {
-    overview += '<div class="dlsec"><div class="dllabel">Risk Notes</div>'
-      + '<div style="font-size:13px;line-height:1.7;color:#374151">' + c.risk_notes + '</div></div>';
+    ov_pane += '<div class="dlsec"><div class="dllabel">Risk Notes</div>'
+      + '<div style="font-size:13px;line-height:1.7;color:#374151">'+esc(c.risk_notes)+'</div></div>';
   }
+  if (c.notes) {
+    ov_pane += '<div class="dlsec"><div class="dllabel">Notes</div>'
+      + '<div style="font-size:13px;line-height:1.7;color:#374151">'+esc(c.notes)+'</div></div>';
+  }
+  ov_pane += '</div>';
 
-  overview += '</div>';
+  // Placeholder panes for other tabs
+  var panes = ['pr','kp','tm','ca','nc','mb','md'].map(function(t){
+    return '<div id="dl-'+t+'-pane" style="display:none;max-width:920px;margin:0 auto;padding:20px">'
+      + '<div style="text-align:center;padding:40px;color:#6b7280;font-size:13px">Loading…</div></div>';
+  }).join('');
 
-  // Other tab placeholders
-  var panes = '<div id="dl-pr-pane" style="display:none;max-width:920px;margin:0 auto;padding:20px">'
-    + '<div style="text-align:center;padding:40px;color:#6b7280;font-size:13px">Loading\u2026</div></div>'
-    + '<div id="dl-kp-pane" style="display:none;max-width:920px;margin:0 auto;padding:20px">'
-    + '<div style="text-align:center;padding:40px;color:#6b7280;font-size:13px">Loading\u2026</div></div>'
-    + '<div id="dl-tm-pane" style="display:none;max-width:920px;margin:0 auto;padding:20px">'
-    + '<div style="text-align:center;padding:40px;color:#6b7280;font-size:13px">Loading\u2026</div></div>'
-    + '<div id="dl-ca-pane" style="display:none;max-width:920px;margin:0 auto;padding:20px">'
-    + '<div style="text-align:center;padding:40px;color:#6b7280;font-size:13px">Loading\u2026</div></div>'
-    + '<div id="dl-nc-pane" style="display:none;max-width:920px;margin:0 auto;padding:20px">'
-    + '<div style="text-align:center;padding:40px;color:#6b7280;font-size:13px">Loading\u2026</div></div>'
-    + '<div id="dl-mb-pane" style="display:none;max-width:920px;margin:0 auto;padding:20px">'
-    + '<div style="text-align:center;padding:40px;color:#6b7280;font-size:13px">Loading\u2026</div></div>';
-
-  ov.innerHTML = hdr + tabs + overview + panes;
-  ov.style.display = 'block';
+  ov.innerHTML = hdr + tabs + ov_pane + panes;
   ov.scrollTop = 0;
-  closePanel();
 }
 
-function closeDetail() {
-  document.getElementById('dl-ov').style.display = 'none';
-}
+function closeDetail() { document.getElementById('dl-ov').style.display = 'none'; }
 
 function dlTab(name, btn) {
-  ['ov','pr','kp','tm','ca','nc','mb'].forEach(function(t) {
-    document.getElementById('dl-'+t+'-pane').style.display = (t===name?'block':'none');
+  ['ov','pr','kp','tm','ca','nc','mb','md'].forEach(function(t){
+    document.getElementById('dl-'+t+'-pane').style.display = (t===name ? 'block' : 'none');
   });
   document.querySelectorAll('.dlt').forEach(function(b){ b.classList.remove('on'); });
   btn.classList.add('on');
-  if (name !== 'ov' && !_dlDone[name]) { _dlDone[name]=true; dlLoad(name); }
+  if (name !== 'ov' && !_dlDone[name]) { _dlDone[name] = true; dlLoad(name); }
 }
 
 async function dlLoad(name) {
-  var sb  = window._sb;
+  var sb2 = window._sb;
   var cid = _dlC && _dlC.id;
   var el  = document.getElementById('dl-'+name+'-pane');
-  if (!sb || !cid || !el) return;
-  function noData(msg){ el.innerHTML='<div style="text-align:center;padding:40px;color:#6b7280;font-size:13px">'+msg+'</div>'; }
-  function tbl(headers, rows) {
+  if (!sb2 || !cid || !el) return;
+  function noData(m){ el.innerHTML='<div style="text-align:center;padding:40px;color:#6b7280;font-size:13px">'+m+'</div>'; }
+  function tbl(headers, rowsData){
+    if (!rowsData.length){ noData('No records found.'); return; }
     var h = headers.map(function(t){ return '<th>'+t+'</th>'; }).join('');
-    var r = rows.map(function(cols){
-      return '<tr>'+cols.map(function(v){ return '<td>'+(v||'\u2014')+'</td>'; }).join('')+'</tr>';
+    var r = rowsData.map(function(cols){
+      return '<tr>'+cols.map(function(v){ return '<td>'+(v||'—')+'</td>'; }).join('')+'</tr>';
     }).join('');
-    return '<div class="dlsec"><table class="dltbl"><thead><tr>'+h+'</tr></thead><tbody>'+r+'</tbody></table></div>';
+    el.innerHTML = '<div class="dlsec"><table class="dltbl"><thead><tr>'+h+'</tr></thead><tbody>'+r+'</tbody></table></div>';
   }
-  function fmtD(v){ return v ? new Date(v).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) : '\u2014'; }
+  function fmtD(v){ return v ? new Date(v).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) : '—'; }
 
   try {
     if (name === 'pr') {
-      var r = await sb.from('cnt_progress_reports').select('*').eq('contract_id',cid).order('report_date',{ascending:false});
-      if (!r.data || !r.data.length) { noData('No progress reports yet.'); return; }
-      el.innerHTML = tbl(['Date','Physical %','Financial %','Description'],
-        r.data.map(function(x){ return [fmtD(x.report_date), (x.physical_progress_pct||0)+'%', (x.financial_progress_pct||0)+'%', x.description||'']; }));
+      var r = await sb2.from('cnt_progress_reports').select('*').eq('contract_id',cid).order('report_date',{ascending:false});
+      if (!r.data||!r.data.length){ noData('No progress reports yet.'); return; }
+      tbl(['Date','Physical %','Financial %','Description'],
+        r.data.map(function(x){ return [fmtD(x.report_date),(x.physical_progress_pct||0)+'%',(x.financial_progress_pct||0)+'%',esc(x.description||'')]; }));
     }
     else if (name === 'kp') {
-      var r = await sb.from('cnt_kpis').select('*').eq('contract_id',cid);
-      if (!r.data || !r.data.length) { noData('No KPIs recorded.'); return; }
-      el.innerHTML = tbl(['KPI','Target','Actual','Status'],
-        r.data.map(function(x){ return [x.name||x.kpi_name, x.target_value, x.actual_value, x.status]; }));
+      // Try cnt_kpi_records first (as per KPI review page), fall back to cnt_kpis
+      var r = await sb2.from('cnt_kpi_records').select('*').eq('contract_id',cid);
+      if (r.error) r = await sb2.from('cnt_kpis').select('*').eq('contract_id',cid);
+      if (!r.data||!r.data.length){ noData('No KPI records found.'); return; }
+      tbl(['KPI','Target','Actual','Score','Status'],
+        r.data.map(function(x){ return [esc(x.kpi_name||x.name),x.target_value,x.actual_value,x.score,x.status]; }));
     }
     else if (name === 'tm') {
-      var r = await sb.from('cnt_contract_staff').select('id,role_on_contract,start_date,cnt_profiles(full_name,email)').eq('contract_id',cid);
-      if (!r.data || !r.data.length) { noData('No team members recorded.'); return; }
-      el.innerHTML = tbl(['Name','Role','Email','Start Date'],
-        r.data.map(function(x){ return [x.cnt_profiles&&x.cnt_profiles.full_name, x.role_on_contract, x.cnt_profiles&&x.cnt_profiles.email, fmtD(x.start_date)]; }));
+      var r = await sb2.from('cnt_contract_staff')
+        .select('id,role_on_contract,start_date,cnt_profiles(full_name,email)').eq('contract_id',cid);
+      if (!r.data||!r.data.length){ noData('No team members recorded.'); return; }
+      tbl(['Name','Role','Email','Start Date'],
+        r.data.map(function(x){ return [x.cnt_profiles&&x.cnt_profiles.full_name,x.role_on_contract,x.cnt_profiles&&x.cnt_profiles.email,fmtD(x.start_date)]; }));
     }
     else if (name === 'ca') {
-      var r = await sb.from('cnt_corrective_actions').select('*').eq('contract_id',cid).order('created_at',{ascending:false});
-      if (!r.data || !r.data.length) { noData('No corrective actions recorded.'); return; }
-      el.innerHTML = tbl(['Title','Status','Due Date','Priority'],
-        r.data.map(function(x){ return [x.title||x.description, x.status, fmtD(x.due_date), x.priority]; }));
+      var r = await sb2.from('cnt_corrective_actions').select('*').eq('contract_id',cid).order('created_at',{ascending:false});
+      if (!r.data||!r.data.length){ noData('No corrective actions recorded.'); return; }
+      tbl(['Title','Status','Due Date','Priority'],
+        r.data.map(function(x){ return [esc(x.title||x.description),x.status,fmtD(x.due_date),x.priority]; }));
     }
     else if (name === 'nc') {
-      var r = await sb.from('cnt_ncrs').select('*').eq('contract_id',cid).order('created_at',{ascending:false});
-      if (!r.data || !r.data.length) { noData('No NCRs raised.'); return; }
-      el.innerHTML = tbl(['Reference','Title','Status','Date'],
-        r.data.map(function(x){ return [x.ncr_ref||x.reference_number, x.title, x.status, fmtD(x.created_at)]; }));
+      var r = await sb2.from('cnt_ncrs').select('*').eq('contract_id',cid).order('created_at',{ascending:false});
+      if (!r.data||!r.data.length){ noData('No NCRs raised.'); return; }
+      tbl(['Reference','Title','Status','Date'],
+        r.data.map(function(x){ return [x.ncr_ref||x.reference_number,esc(x.title),x.status,fmtD(x.created_at)]; }));
     }
     else if (name === 'mb') {
-      var r = await sb.from('cnt_mobilization').select('*').eq('contract_id',cid).maybeSingle();
+      var r = await sb2.from('cnt_mobilization').select('*').eq('contract_id',cid).maybeSingle();
       var d = r.data;
-      if (!d) { noData('No mobilisation record found.'); return; }
-      var keys = ['personnel','equipment','materials','procedures','hse','insurance'];
+      if (!d){ noData('No mobilisation record found.'); return; }
+      var keys   = ['personnel','equipment','materials','procedures','hse','insurance'];
       var labels = ['Approved personnel available','Equipment available','Materials planned',
                     'Work procedures reviewed','HSE plan in place','Insurance documents submitted'];
-      el.innerHTML = tbl(['Item','Status'],
-        keys.map(function(k,i){
-          var v = d[k]==='yes' ? '<span style="color:#22c55e;font-weight:700">\u2713 Yes</span>'
-                : d[k]==='no'  ? '<span style="color:#ef4444;font-weight:700">\u2717 No</span>'
-                : '\u2014';
-          return [labels[i], v];
-        }));
+      tbl(['Item','Status'], keys.map(function(k,i){
+        var v = d[k]==='yes' ? '<span style="color:#22c55e;font-weight:700">✓ Yes</span>'
+              : d[k]==='no'  ? '<span style="color:#ef4444;font-weight:700">✗ No</span>' : '—';
+        return [labels[i], v];
+      }));
+    }
+    else if (name === 'md') {
+      await loadMediaTab(cid, el);
     }
   } catch(e) {
-    el.innerHTML = '<div style="text-align:center;padding:40px;color:#dc2626;font-size:13px">Error: '+e.message+'</div>';
+    el.innerHTML = '<div style="text-align:center;padding:40px;color:#dc2626;font-size:13px">Error: '+esc(e.message)+'</div>';
   }
 }
+
+// ── Media & Remarks tab ───────────────────────────────────────────
+async function loadMediaTab(cid, el) {
+  var sb2 = window._sb;
+  var canUpload = _isSupervisor || _myRoles.has('CEO') || _myRoles.has('ContractAdmin') || _myRoles.has('HeadOfContract');
+  var canRemark = _myRoles.has('CEO') || _myRoles.has('ContractAdmin') || _myRoles.has('HeadOfContract');
+
+  var results = await Promise.all([
+    sb2.from('cnt_contract_remarks')
+      .select('id,remark_text,visit_date,created_at,cnt_profiles(full_name)')
+      .eq('contract_id',cid).order('created_at',{ascending:false}),
+    sb2.from('cnt_contract_media')
+      .select('id,file_name,file_url,caption,mime_type,upload_type,created_at,cnt_profiles(full_name)')
+      .eq('contract_id',cid).order('created_at',{ascending:false})
+  ]);
+  var remarks = results[0].data || [];
+  var media   = results[1].data || [];
+
+  var html = '<div>';
+
+  // ── Forms ──
+  if (canUpload || canRemark) {
+    html += '<div class="dlsec">';
+    if (canUpload) {
+      html += '<div class="dllabel" style="margin-bottom:10px">Upload Evidence / Media</div>'
+        + '<div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end;margin-bottom:'+(canRemark?'0':'4px')+'">'
+        + '<div>'
+        + '<input type="file" id="md-file" accept="image/*,video/*,application/pdf,.doc,.docx,.xlsx,.xls"'
+        + ' style="display:block;width:100%;box-sizing:border-box;border:1px solid #e2e8f0;'
+        + 'border-radius:7px;padding:8px 12px;font-size:13px;margin-bottom:8px">'
+        + '<input id="md-caption" placeholder="Caption (optional)"'
+        + ' style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;'
+        + 'padding:9px 12px;font-size:13px;outline:none">'
+        + '</div>'
+        + '<button onclick="uploadMedia(\''+cid+'\')" id="upload-btn"'
+        + ' style="padding:10px 18px;border:none;border-radius:7px;background:#2E75B6;'
+        + 'color:#fff;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;height:42px">Upload</button>'
+        + '</div>';
+    }
+    if (canRemark) {
+      html += '<div style="'+(canUpload?'border-top:1px solid #e2e8f0;padding-top:14px;margin-top:14px':'')+'">'
+        + '<div class="dllabel" style="margin-bottom:10px">Add Site Visit Remark</div>'
+        + '<div style="display:grid;grid-template-columns:1fr 160px;gap:10px;margin-bottom:10px">'
+        + '<textarea id="md-remark" rows="2" placeholder="Describe site observations…"'
+        + ' style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;'
+        + 'padding:9px 12px;font-size:13px;resize:vertical;outline:none"></textarea>'
+        + '<div>'
+        + '<label style="font-size:11px;color:#6b7280;font-weight:600;display:block;margin-bottom:4px">Visit Date</label>'
+        + '<input type="date" id="md-visit-date"'
+        + ' style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;padding:9px 12px;font-size:13px;outline:none">'
+        + '</div>'
+        + '</div>'
+        + '<button onclick="addRemark(\''+cid+'\')"'
+        + ' style="padding:9px 18px;border:none;border-radius:7px;background:#1F3864;'
+        + 'color:#fff;font-size:13px;font-weight:700;cursor:pointer">Save Remark</button>'
+        + '</div>';
+    }
+    html += '</div>';
+  }
+
+  // ── Remarks list ──
+  html += '<div class="dlsec"><div class="dllabel" style="margin-bottom:12px">Site Remarks ('+remarks.length+')</div>';
+  if (!remarks.length) {
+    html += '<div style="color:#6b7280;font-size:13px;text-align:center;padding:16px">No remarks recorded yet.</div>';
+  } else {
+    remarks.forEach(function(rem){
+      var vd = rem.visit_date ? new Date(rem.visit_date).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}) : '';
+      html += '<div class="remark-item">'
+        + (vd ? '<div class="remark-date">📅 Site Visit: '+vd+'</div>' : '')
+        + '<div class="remark-text">'+esc(rem.remark_text)+'</div>'
+        + '<div class="remark-author">— '+(rem.cnt_profiles&&rem.cnt_profiles.full_name||'Unknown')
+        + ' · '+new Date(rem.created_at).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+'</div>'
+        + '</div>';
+    });
+  }
+  html += '</div>';
+
+  // ── Media grid ──
+  html += '<div class="dlsec"><div class="dllabel" style="margin-bottom:12px">Media Files ('+media.length+')</div>';
+  if (!media.length) {
+    html += '<div style="color:#6b7280;font-size:13px;text-align:center;padding:16px">No media uploaded yet.</div>';
+  } else {
+    html += '<div class="media-grid">';
+    media.forEach(function(m){
+      var isImg = m.mime_type && m.mime_type.startsWith('image/');
+      html += '<div class="media-item">'
+        + '<a href="'+m.file_url+'" target="_blank" style="display:block;text-decoration:none">'
+        + (isImg
+          ? '<img src="'+m.file_url+'" class="media-thumb" alt="'+esc(m.file_name)+'" onerror="this.style.background=\'#f1f5f9\'">'
+          : '<div style="height:80px;display:flex;align-items:center;justify-content:center;font-size:28px;background:#f8fafc">📎</div>')
+        + '</a>'
+        + '<div class="media-info">'
+        + '<div style="font-weight:600;color:#374151;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:2px">'+esc(m.file_name)+'</div>'
+        + (m.caption ? '<div style="margin-bottom:2px">'+esc(m.caption)+'</div>' : '')
+        + '<div>'+new Date(m.created_at).toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'})+'</div>'
+        + '</div></div>';
+    });
+    html += '</div>';
+  }
+  html += '</div></div>';
+  el.innerHTML = html;
+}
+
+async function uploadMedia(cid) {
+  var sb2    = window._sb;
+  var file   = document.getElementById('md-file') && document.getElementById('md-file').files[0];
+  var caption= document.getElementById('md-caption') ? document.getElementById('md-caption').value.trim() : '';
+  if (!file) { toast('Select a file first', 'warn'); return; }
+
+  var btn = document.getElementById('upload-btn');
+  if (btn) { btn.textContent = 'Uploading…'; btn.disabled = true; }
+
+  try {
+    var safeName = file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
+    var path = cid + '/' + Date.now() + '-' + safeName;
+
+    var upRes = await sb2.storage.from('contract-media').upload(path, file, {upsert:false});
+    if (upRes.error) throw new Error('Storage: ' + upRes.error.message);
+
+    var urlRes = sb2.storage.from('contract-media').getPublicUrl(path);
+    var publicUrl = urlRes.data && urlRes.data.publicUrl;
+
+    var dbRes = await sb2.from('cnt_contract_media').insert({
+      contract_id: cid,
+      uploaded_by: _myProfileId,
+      file_name:   file.name,
+      file_url:    publicUrl,
+      file_size:   file.size,
+      mime_type:   file.type || 'application/octet-stream',
+      caption:     caption || null,
+      upload_type: 'evidence'
+    });
+    if (dbRes.error) throw new Error('DB: ' + dbRes.error.message);
+
+    toast('File uploaded', 'ok');
+    if (document.getElementById('md-file')) document.getElementById('md-file').value = '';
+    if (document.getElementById('md-caption')) document.getElementById('md-caption').value = '';
+    _dlDone['md'] = false;
+    await loadMediaTab(cid, document.getElementById('dl-md-pane'));
+  } catch(e) {
+    toast('Upload failed: ' + e.message, 'err');
+  } finally {
+    if (btn) { btn.textContent = 'Upload'; btn.disabled = false; }
+  }
+}
+
+async function addRemark(cid) {
+  var text = document.getElementById('md-remark') ? document.getElementById('md-remark').value.trim() : '';
+  var date = document.getElementById('md-visit-date') ? document.getElementById('md-visit-date').value : '';
+  if (!text) { toast('Enter a remark first', 'warn'); return; }
+
+  var res = await window._sb.from('cnt_contract_remarks').insert({
+    contract_id: cid,
+    author_id:   _myProfileId,
+    remark_text: text,
+    visit_date:  date || null
+  });
+  if (res.error) { toast(res.error.message, 'err'); return; }
+  toast('Remark saved', 'ok');
+  if (document.getElementById('md-remark')) document.getElementById('md-remark').value = '';
+  if (document.getElementById('md-visit-date')) document.getElementById('md-visit-date').value = '';
+  _dlDone['md'] = false;
+  await loadMediaTab(cid, document.getElementById('dl-md-pane'));
+}
 </script>
-<!-- ═══════════════════════════════════════════════════
+
+<!-- ═══════════════════════════════════════════════
      EDIT CONTRACT MODAL
-     ═══════════════════════════════════════════════════ -->
+     ═══════════════════════════════════════════════ -->
 <div id="ec-backdrop" onclick="closeEdit()"
      style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:600"></div>
 
@@ -524,7 +717,6 @@ async function dlLoad(name) {
             z-index:601;background:#fff;border-radius:12px;width:min(680px,95vw);
             max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.3)">
 
-  <!-- Modal header -->
   <div style="background:#1F3864;color:#fff;padding:14px 20px;border-radius:12px 12px 0 0;
               display:flex;align-items:center;justify-content:space-between">
     <div>
@@ -536,89 +728,73 @@ async function dlLoad(name) {
                    cursor:pointer;border-radius:6px;padding:5px 12px;font-size:18px">×</button>
   </div>
 
-  <!-- Form body -->
   <div style="padding:22px">
 
-    <!-- Reference & Status row -->
+    <!-- Reference & Status -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px">
       <div>
-        <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-                      color:#6b7280;display:block;margin-bottom:5px">Reference Number</label>
-        <input id="ec-contract-id" placeholder="NDDC/PU/…"
-               style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
-                      padding:9px 12px;font-size:13px;outline:none">
+        <label class="ec-lbl">Reference Number</label>
+        <input id="ec-contract-id" placeholder="NDDC/PU/…" class="ec-inp">
       </div>
       <div>
-        <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-                      color:#6b7280;display:block;margin-bottom:5px">Status</label>
-        <select id="ec-status"
-                style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
-                       padding:9px 12px;font-size:13px;outline:none;background:#fff">
-          <option>Pending</option>
-          <option>Ongoing</option>
-          <option>On Hold</option>
-          <option>At Risk</option>
-          <option>Delayed</option>
-          <option>Practically Complete</option>
-          <option>Completed</option>
-          <option>Cancelled</option>
+        <label class="ec-lbl">Status</label>
+        <select id="ec-status" class="ec-sel">
+          <option value="Pipeline">Pending</option>
+          <option value="Active">Ongoing</option>
+          <option value="On Hold">On Hold</option>
+          <option value="At Risk">At Risk</option>
+          <option value="Delayed">Delayed</option>
+          <option value="Practically Complete">Practically Complete</option>
+          <option value="Closed">Completed</option>
+          <option value="Cancelled">Cancelled</option>
         </select>
       </div>
     </div>
 
     <!-- Title -->
     <div style="margin-bottom:16px">
-      <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-                    color:#6b7280;display:block;margin-bottom:5px">Contract Title</label>
-      <textarea id="ec-title" rows="2"
-                style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
-                       padding:9px 12px;font-size:13px;resize:vertical;outline:none"></textarea>
+      <label class="ec-lbl">Contract Title</label>
+      <textarea id="ec-title" rows="2" class="ec-ta"></textarea>
     </div>
 
-    <!-- Agency & Company -->
+    <!-- Agency (read-only) & Subcontractor -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px">
       <div>
-        <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-                      color:#6b7280;display:block;margin-bottom:5px">Agency</label>
-        <select id="ec-agency"
-                style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
-                       padding:9px 12px;font-size:13px;outline:none;background:#fff">
-          <option value="">— select —</option>
-        </select>
+        <label class="ec-lbl">Agency</label>
+        <div id="ec-agency-display"
+             style="padding:9px 12px;background:#f8fafc;border:1px solid #e2e8f0;
+                    border-radius:7px;font-size:13px;color:#6b7280;font-weight:600;min-height:38px">—</div>
+        <div style="font-size:11px;color:#9ca3af;margin-top:3px">Agency cannot be changed after creation.</div>
       </div>
       <div>
-        <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-                      color:#6b7280;display:block;margin-bottom:5px">Subcontractor</label>
-        <select id="ec-company"
-                style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
-                       padding:9px 12px;font-size:13px;outline:none;background:#fff">
+        <label class="ec-lbl">Subcontractor</label>
+        <select id="ec-company" class="ec-sel">
           <option value="">— select —</option>
         </select>
       </div>
+    </div>
+
+    <!-- Site Supervisor -->
+    <div style="margin-bottom:16px">
+      <label class="ec-lbl">Site Supervisor</label>
+      <select id="ec-supervisor" class="ec-sel">
+        <option value="">— None assigned —</option>
+      </select>
     </div>
 
     <!-- Value, State, Risk -->
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:16px">
       <div>
-        <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-                      color:#6b7280;display:block;margin-bottom:5px">Contract Value (NGN)</label>
-        <input id="ec-value" type="number" placeholder="0"
-               style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
-                      padding:9px 12px;font-size:13px;outline:none">
+        <label class="ec-lbl">Contract Value (NGN)</label>
+        <input id="ec-value" type="number" placeholder="0" class="ec-inp">
       </div>
       <div>
-        <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-                      color:#6b7280;display:block;margin-bottom:5px">State</label>
-        <input id="ec-state" placeholder="e.g. Lagos"
-               style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
-                      padding:9px 12px;font-size:13px;outline:none">
+        <label class="ec-lbl">State</label>
+        <input id="ec-state" placeholder="e.g. Rivers" class="ec-inp">
       </div>
       <div>
-        <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-                      color:#6b7280;display:block;margin-bottom:5px">Risk Level</label>
-        <select id="ec-risk"
-                style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
-                       padding:9px 12px;font-size:13px;outline:none;background:#fff">
+        <label class="ec-lbl">Risk Level</label>
+        <select id="ec-risk" class="ec-sel">
           <option value="low">Low</option>
           <option value="medium">Medium</option>
           <option value="high">High</option>
@@ -630,133 +806,132 @@ async function dlLoad(name) {
     <!-- Dates -->
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:16px">
       <div>
-        <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-                      color:#6b7280;display:block;margin-bottom:5px">Start Date</label>
-        <input id="ec-start" type="date"
-               style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
-                      padding:9px 12px;font-size:13px;outline:none">
+        <label class="ec-lbl">Start Date</label>
+        <input id="ec-start" type="date" class="ec-inp">
       </div>
       <div>
-        <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-                      color:#6b7280;display:block;margin-bottom:5px">End Date</label>
-        <input id="ec-end" type="date"
-               style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
-                      padding:9px 12px;font-size:13px;outline:none">
+        <label class="ec-lbl">End Date</label>
+        <input id="ec-end" type="date" class="ec-inp">
       </div>
       <div>
-        <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-                      color:#6b7280;display:block;margin-bottom:5px">Revised End Date</label>
-        <input id="ec-revised" type="date"
-               style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
-                      padding:9px 12px;font-size:13px;outline:none">
+        <label class="ec-lbl">Revised End Date</label>
+        <input id="ec-revised" type="date" class="ec-inp">
       </div>
     </div>
 
     <!-- Progress -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px">
       <div>
-        <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-                      color:#6b7280;display:block;margin-bottom:5px">Physical Progress %</label>
-        <input id="ec-pp" type="number" min="0" max="100" placeholder="0"
-               style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
-                      padding:9px 12px;font-size:13px;outline:none">
+        <label class="ec-lbl">Physical Progress %</label>
+        <input id="ec-pp" type="number" min="0" max="100" placeholder="0" class="ec-inp">
       </div>
       <div>
-        <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-                      color:#6b7280;display:block;margin-bottom:5px">Financial Progress %</label>
-        <input id="ec-fp" type="number" min="0" max="100" placeholder="0"
-               style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
-                      padding:9px 12px;font-size:13px;outline:none">
+        <label class="ec-lbl">Financial Progress %</label>
+        <input id="ec-fp" type="number" min="0" max="100" placeholder="0" class="ec-inp">
       </div>
     </div>
 
     <!-- Risk Notes -->
     <div style="margin-bottom:16px">
-      <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-                    color:#6b7280;display:block;margin-bottom:5px">Risk Notes</label>
-      <textarea id="ec-risk-notes" rows="2"
-                style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
-                       padding:9px 12px;font-size:13px;resize:vertical;outline:none"></textarea>
+      <label class="ec-lbl">Risk Notes</label>
+      <textarea id="ec-risk-notes" rows="2" class="ec-ta"></textarea>
     </div>
 
     <!-- General Notes -->
     <div style="margin-bottom:20px">
-      <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-                    color:#6b7280;display:block;margin-bottom:5px">Notes</label>
-      <textarea id="ec-notes" rows="2"
-                style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
-                       padding:9px 12px;font-size:13px;resize:vertical;outline:none"></textarea>
+      <label class="ec-lbl">Notes</label>
+      <textarea id="ec-notes" rows="2" class="ec-ta"></textarea>
     </div>
 
-    <!-- Error message -->
     <div id="ec-err" style="display:none;background:#fef2f2;border:1px solid #fca5a5;
          color:#dc2626;border-radius:7px;padding:10px 14px;font-size:13px;margin-bottom:14px"></div>
 
-    <!-- Actions -->
     <div style="display:flex;gap:10px;justify-content:flex-end">
       <button onclick="closeEdit()"
               style="padding:10px 22px;border:1px solid #e2e8f0;border-radius:7px;
-                     background:#fff;cursor:pointer;font-size:13px;font-weight:600;color:#374151">
-        Cancel
-      </button>
-      <button onclick="saveContract()"
-              id="ec-save-btn"
+                     background:#fff;cursor:pointer;font-size:13px;font-weight:600;color:#374151">Cancel</button>
+      <button onclick="saveContract()" id="ec-save-btn"
               style="padding:10px 28px;border:none;border-radius:7px;
-                     background:#1F3864;color:#fff;cursor:pointer;
-                     font-size:13px;font-weight:700">
-        Save Changes
-      </button>
+                     background:#1F3864;color:#fff;cursor:pointer;font-size:13px;font-weight:700">Save Changes</button>
     </div>
   </div>
 </div>
 
+<style>
+.ec-lbl{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
+  color:#6b7280;display:block;margin-bottom:5px}
+.ec-inp{width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
+  padding:9px 12px;font-size:13px;outline:none}
+.ec-sel{width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
+  padding:9px 12px;font-size:13px;outline:none;background:#fff}
+.ec-ta{width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
+  padding:9px 12px;font-size:13px;resize:vertical;outline:none}
+</style>
+
 <script>
-/* ── Edit Contract ────────────────────────────────────────────────────────── */
-var _ecId = null;   // UUID of contract being edited
+var _ecId = null;
 
 async function editContract() {
   var c = _dlC;
   if (!c) return;
+  if (!window._canEditThis) { toast('You do not have permission to edit this contract.', 'warn'); return; }
+
   _ecId = c.id;
 
-  document.getElementById('ec-ref').textContent    = c.contract_id || 'New Contract';
-  document.getElementById('ec-contract-id').value  = c.contract_id || '';
-  document.getElementById('ec-title').value        = c.title       || '';
-  document.getElementById('ec-status').value       = c.status      || 'Pipeline';
-  document.getElementById('ec-value').value        = c.original_value || '';
-  document.getElementById('ec-state').value        = c.state       || '';
-  document.getElementById('ec-risk').value         = c.risk_level  || 'medium';
-  document.getElementById('ec-start').value        = c.start_date  ? c.start_date.slice(0,10) : '';
-  document.getElementById('ec-end').value          = c.original_completion_date  ? c.original_completion_date.slice(0,10)  : '';
-  document.getElementById('ec-revised').value      = c.revised_completion_date   ? c.revised_completion_date.slice(0,10)   : '';
-  document.getElementById('ec-pp').value           = c.physical_progress_pct  ?? 0;
-  document.getElementById('ec-fp').value           = c.financial_progress_pct ?? 0;
-  document.getElementById('ec-risk-notes').value   = c.risk_notes  || '';
-  document.getElementById('ec-notes').value        = c.notes       || '';
-  document.getElementById('ec-err').style.display  = 'none';
-  document.getElementById('ec-save-btn').textContent = 'Save Changes';
+  document.getElementById('ec-ref').textContent          = c.contract_id || 'Contract';
+  document.getElementById('ec-contract-id').value        = c.contract_id || '';
+  document.getElementById('ec-title').value              = c.title || '';
+  document.getElementById('ec-status').value             = c.status || 'Pipeline';
+  document.getElementById('ec-value').value              = c.original_value || '';
+  document.getElementById('ec-state').value              = c.state || '';
+  document.getElementById('ec-risk').value               = c.risk_level || 'medium';
+  document.getElementById('ec-start').value              = c.start_date               ? c.start_date.slice(0,10)               : '';
+  document.getElementById('ec-end').value                = c.original_completion_date ? c.original_completion_date.slice(0,10) : '';
+  document.getElementById('ec-revised').value            = c.revised_completion_date  ? c.revised_completion_date.slice(0,10)  : '';
+  document.getElementById('ec-pp').value                 = c.physical_progress_pct  ?? 0;
+  document.getElementById('ec-fp').value                 = c.financial_progress_pct ?? 0;
+  document.getElementById('ec-risk-notes').value         = c.risk_notes || '';
+  document.getElementById('ec-notes').value              = c.notes || '';
+  document.getElementById('ec-err').style.display        = 'none';
+  document.getElementById('ec-save-btn').textContent     = 'Save Changes';
+  document.getElementById('ec-save-btn').disabled        = false;
 
-  // Load agencies dropdown
-  var agSel = document.getElementById('ec-agency');
-  agSel.innerHTML = '<option value="">— select —</option>';
-  var agRes = await window._sb.from('cnt_agencies').select('id,name').order('name');
-  (agRes.data || []).forEach(function(a) {
-    var o = document.createElement('option');
-    o.value = a.id; o.textContent = a.name;
-    if (a.id === c.agency_id) o.selected = true;
-    agSel.appendChild(o);
-  });
+  // Agency — read-only
+  document.getElementById('ec-agency-display').textContent =
+    (c.cnt_agencies && c.cnt_agencies.name) ? c.cnt_agencies.name : '—';
 
-  // Load companies dropdown
+  // Companies dropdown
   var coSel = document.getElementById('ec-company');
   coSel.innerHTML = '<option value="">— select —</option>';
   var coRes = await window._sb.from('cnt_companies').select('id,name').order('name');
-  (coRes.data || []).forEach(function(co) {
+  (coRes.data || []).forEach(function(co){
     var o = document.createElement('option');
     o.value = co.id; o.textContent = co.name;
     if (co.id === c.assigned_company_id) o.selected = true;
     coSel.appendChild(o);
   });
+
+  // Site Supervisor dropdown — users with SiteSupervisor role
+  var svSel = document.getElementById('ec-supervisor');
+  svSel.innerHTML = '<option value="">— None assigned —</option>';
+  try {
+    var svRoleR = await window._sb.from('cnt_roles').select('id').eq('name','SiteSupervisor').maybeSingle();
+    var svRoleId = svRoleR.data && svRoleR.data.id;
+    if (svRoleId) {
+      var svPrR = await window._sb.from('cnt_profile_roles')
+        .select('profile_id, cnt_profiles(id,full_name)')
+        .eq('role_id', svRoleId);
+      (svPrR.data || []).forEach(function(pr){
+        if (pr.cnt_profiles) {
+          var o = document.createElement('option');
+          o.value = pr.cnt_profiles.id;
+          o.textContent = pr.cnt_profiles.full_name;
+          if (pr.cnt_profiles.id === c.site_supervisor_id) o.selected = true;
+          svSel.appendChild(o);
+        }
+      });
+    }
+  } catch(e) { /* non-critical */ }
 
   document.getElementById('ec-backdrop').style.display = 'block';
   document.getElementById('ec-modal').style.display    = 'block';
@@ -771,18 +946,18 @@ async function saveContract() {
   var btn = document.getElementById('ec-save-btn');
   var err = document.getElementById('ec-err');
   err.style.display = 'none';
-  btn.textContent = 'Saving…';
-  btn.disabled = true;
+  btn.textContent   = 'Saving…';
+  btn.disabled      = true;
 
-  function v(id) { return document.getElementById(id).value.trim() || null; }
-  function n(id) { var x = parseFloat(document.getElementById(id).value); return isNaN(x) ? null : x; }
+  function v(id){ return document.getElementById(id).value.trim() || null; }
+  function n(id){ var x = parseFloat(document.getElementById(id).value); return isNaN(x) ? null : x; }
 
   var payload = {
     contract_id:              v('ec-contract-id'),
     title:                    v('ec-title'),
     status:                   v('ec-status'),
-    agency_id:                v('ec-agency')  || null,
     assigned_company_id:      v('ec-company') || null,
+    site_supervisor_id:       v('ec-supervisor') || null,
     original_value:           n('ec-value'),
     state:                    v('ec-state'),
     risk_level:               v('ec-risk'),
@@ -792,44 +967,42 @@ async function saveContract() {
     physical_progress_pct:    n('ec-pp'),
     financial_progress_pct:   n('ec-fp'),
     risk_notes:               v('ec-risk-notes'),
-    notes:                    v('ec-notes'),
+    notes:                    v('ec-notes')
+    // agency_id intentionally omitted — it is read-only
   };
 
-  // Remove null dates (PostgREST needs omit, not null, for date fields)
-  ['start_date','original_completion_date','revised_completion_date'].forEach(function(k) {
+  // Remove null date fields to avoid PostgREST type errors
+  ['start_date','original_completion_date','revised_completion_date'].forEach(function(k){
     if (!payload[k]) delete payload[k];
   });
 
   var res = await window._sb.from('cnt_contracts').update(payload).eq('id', _ecId);
 
   if (res.error) {
-    err.textContent = 'Save failed: ' + res.error.message;
+    err.textContent   = 'Save failed: ' + res.error.message;
     err.style.display = 'block';
-    btn.textContent = 'Save Changes';
-    btn.disabled = false;
+    btn.textContent   = 'Save Changes';
+    btn.disabled      = false;
     return;
   }
 
-  // Update in-memory contract so overlay reflects changes immediately
-  var idx = (window._contracts || []).findIndex(function(c) { return c.id === _ecId; });
+  // Update in-memory record
+  var idx = (window._contracts || []).findIndex(function(c){ return c.id === _ecId; });
   if (idx >= 0) {
     Object.assign(window._contracts[idx], payload);
-    _dlC = window._contracts[idx];
+    _dlC  = window._contracts[idx];
+    rows  = window._contracts;
   }
 
   btn.textContent = 'Saved ✓';
-  setTimeout(function() {
+  setTimeout(function(){
     closeEdit();
-    // Re-open overlay with updated data
-    openDetail(_dlC);
+    openDetail_overlay(_dlC);
     btn.disabled = false;
   }, 700);
 }
 
-// Close modal on Escape
-document.addEventListener('keydown', function(e) {
-  if (e.key === 'Escape') closeEdit();
-});
+document.addEventListener('keydown', function(e){ if (e.key === 'Escape') closeEdit(); });
 </script>
 </body>
 </html>
