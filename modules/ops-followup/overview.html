@@ -19,89 +19,248 @@
 </head>
 <body>
 <script>
-/* Operations Follow-up: Overview (port of the Apps Script Overview tab) */
-OF.start({
-  title: 'Operations Follow-up',
-  sub: 'Where the follow-up register stands across all facilities.',
-  editHint: false,
-  hero: function () {
-    var h = OF.h, it = OF.S.items, out = it.filter(OF.outstanding), late = it.filter(OF.isLate);
-    var emLate = late.filter(function (x) { return OF.pr(x.priority) <= 1; });
-    var emNoResp = out.filter(function (x) { return OF.pr(x.priority) <= 1 && OF.noResp(x); });
-    var pct = it.length ? Math.round((it.length - out.length) / it.length * 100) : 0;
-    var text = !it.length ? 'The register is empty. Add the first follow-up item on the Register page.'
-      : h('span', null, h('b', null, OF.plural(late.length, 'action')), ' of ' + out.length + ' outstanding ' + (late.length === 1 ? 'is' : 'are') + ' past due. ',
-          h('b', null, String(emLate.length)), ' emergency or critical ' + (emLate.length === 1 ? 'item is' : 'items are') + ' late, and ',
-          h('b', null, String(emNoResp.length)), ' ' + (emNoResp.length === 1 ? 'has' : 'have') + ' no response from the owner.');
-    return {
-      text: text,
-      stats: [
-        { n: late.length, l: 'Past due', go: function () { OF.go('register', { view: 'overdue' }); } },
-        { n: it.filter(OF.ceoPending).length, l: 'Awaiting CEO', go: function () { OF.go('ceo-desk'); } },
-        { n: pct + '%', l: 'Verified closed' }
-      ]
-    };
-  },
-  render: function () {
-    var h = OF.h, S = OF.S;
-    var it = S.items, out = it.filter(OF.outstanding);
-    var pct = it.length ? Math.round((it.length - out.length) / it.length * 100) : 0;
-    var root = h('div');
+/* Operations Follow-up: Overview (v6, dashboard).
+   KPI tiles, status donut, lateness and review-week column charts, facility /
+   priority / owner bars and the latest owner responses. Charts are plain
+   SVG and CSS (no library), follow the app theme and every bar is a link
+   into the Register or the Responses page. */
+(function () {
+  var NS = 'http://www.w3.org/2000/svg';
+  var LATEST = [];
 
-    var kp = [['outstanding', 'k-prog'], ['overdue', 'k-over'], ['emcrit', 'k-emer'], ['ceo', 'k-ceo'], ['review', ''], ['noresp', 'k-over'], ['closed', 'k-closed']];
-    root.appendChild(h('div', { class: 'kpis' }, kp.map(function (k) {
-      var n = it.filter(OF.VIEWS[k[0]].test).length;
-      return h('button', { class: 'kpi ' + k[1], type: 'button', onclick: function () { OF.go('register', { view: k[0] }); } },
-        h('span', { class: 'value' }, String(n)), h('span', { class: 'label' }, OF.VIEWS[k[0]].label),
-        k[0] === 'closed' ? h('span', { class: 'sub2' }, pct + '% of ' + it.length + ' items') : null);
-    })));
+  var ICONS = {
+    list: '<path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>',
+    clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    alert: '<path d="M12 3 2 20h20L12 3z"/><path d="M12 10v4M12 17.5v.01"/>',
+    user: '<circle cx="9" cy="8" r="4"/><path d="M2 21c0-4 3-6 7-6s7 2 7 6"/><path d="M16 11l2 2 4-4"/>',
+    chat: '<path d="M21 12a8 8 0 0 1-11.6 7.1L3 21l1.9-5.4A8 8 0 1 1 21 12z"/>',
+    slash: '<circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/>',
+    check: '<circle cx="12" cy="12" r="9"/><path d="M8 12.5l3 3 5-6"/>'
+  };
+  function icon(name) {
+    var s = document.createElementNS(NS, 'svg');
+    s.setAttribute('viewBox', '0 0 24 24'); s.setAttribute('aria-hidden', 'true');
+    s.innerHTML = ICONS[name];
+    return s;
+  }
+  function sv(tag, attrs) {
+    var e = document.createElementNS(NS, tag);
+    Object.keys(attrs || {}).forEach(function (k) { e.setAttribute(k, attrs[k]); });
+    return e;
+  }
 
-    var counts = {}; OF.AGE.forEach(function (a) { counts[a.k] = 0; });
-    out.forEach(function (x) { counts[OF.ageKey(x)]++; });
-    var strip = h('div', { class: 'age', role: 'group', 'aria-label': 'Outstanding items by days past due' });
-    OF.AGE.forEach(function (a) {
-      if (!counts[a.k]) return;
-      strip.appendChild(h('button', { type: 'button', class: a.dark ? 'dk' : '', style: 'flex:' + counts[a.k] + ';background:' + a.col,
-        title: a.label + ': ' + counts[a.k], 'aria-label': a.label + ': ' + counts[a.k],
-        onclick: function () { OF.go('register', { age: a.k, view: 'outstanding' }); } },
-        counts[a.k] / Math.max(out.length, 1) > 0.06 ? String(counts[a.k]) : ''));
-    });
-    var agePanel = h('section', { class: 'card-panel' },
-      h('h3', null, 'How late are the outstanding actions'),
-      h('p', { class: 'sub' }, 'Outstanding items grouped by days past due. Select a band to list those items.'),
-      out.length ? strip : h('div', { class: 'empty' }, 'No outstanding items.'),
-      h('div', { class: 'legend' }, OF.AGE.filter(function (a) { return counts[a.k]; }).map(function (a) {
-        return h('span', null, h('i', { style: 'background:' + a.col }), a.label + ' (' + counts[a.k] + ')');
+  var STATUS_META = [
+    { k: 'verified_closed', label: 'Verified closed', col: 'var(--of-closed)' },
+    { k: 'in_progress', label: 'In progress', col: 'var(--of-prog)' },
+    { k: 'open', label: 'Open', col: 'var(--of-open)' },
+    { k: 'overdue', label: 'Overdue', col: 'var(--of-over)' }
+  ];
+  var PRIO_COL = { Emergency: 'var(--of-emer)', Critical: 'var(--of-crit)', High: 'var(--of-high)', Medium: 'var(--of-med)', Low: 'var(--of-low)' };
+  var AGE_LABEL = { nd: 'No due date', ny: 'Not yet due', a1: '1 to 7 days', a2: '8 to 14 days', a3: '15 to 30 days', a4: 'Over 30 days' };
+
+  function initials(name) {
+    var p = String(name || '?').split(/[\s._-]+/).filter(Boolean);
+    return ((p[0] || '?')[0] + (p.length > 1 ? p[1][0] : '')).toUpperCase();
+  }
+  function countBy(list) {
+    var c = { verified_closed: 0, in_progress: 0, open: 0, overdue: 0 };
+    list.forEach(function (x) { c[x.status] = (c[x.status] || 0) + 1; });
+    return c;
+  }
+
+  OF.start({
+    title: 'Operations Follow-up',
+    sub: 'Where the follow-up register stands across all facilities.',
+    editHint: false,
+    load: function () {
+      return OF.load().then(function () {
+        return sb.from('ops_followup_responses').select('item_id, submitted_by, progress, review_status, submitted_at')
+          .order('submitted_at', { ascending: false }).order('id', { ascending: false }).limit(5);
+      }).then(function (r) { LATEST = r.error ? [] : (r.data || []); });
+    },
+    hero: function () {
+      var h = OF.h, it = OF.S.items, out = it.filter(OF.outstanding), late = it.filter(OF.isLate);
+      var emLate = late.filter(function (x) { return OF.pr(x.priority) <= 1; });
+      var emNoResp = out.filter(function (x) { return OF.pr(x.priority) <= 1 && OF.noResp(x); });
+      var pct = it.length ? Math.round((it.length - out.length) / it.length * 100) : 0;
+      var text = !it.length ? 'The register is empty. Add the first follow-up item on the Register page.'
+        : h('span', null, h('b', null, OF.plural(late.length, 'action')), ' of ' + out.length + ' outstanding ' + (late.length === 1 ? 'is' : 'are') + ' past due. ',
+            h('b', null, String(emLate.length)), ' emergency or critical ' + (emLate.length === 1 ? 'item is' : 'items are') + ' late, and ',
+            h('b', null, String(emNoResp.length)), ' ' + (emNoResp.length === 1 ? 'has' : 'have') + ' no response from the owner.');
+      return {
+        text: text,
+        stats: [
+          { n: late.length, l: 'Past due', go: function () { OF.go('register', { view: 'overdue' }); } },
+          { n: it.filter(OF.ceoPending).length, l: 'Awaiting CEO', go: function () { OF.go('ceo-desk'); } },
+          { n: pct + '%', l: 'Verified closed' }
+        ]
+      };
+    },
+    render: function () {
+      var h = OF.h, add = OF.add, S = OF.S;
+      var it = S.items, out = it.filter(OF.outstanding), late = it.filter(OF.isLate);
+      var total = it.length, closed = total - out.length;
+      var pct = total ? Math.round(closed / total * 100) : 0;
+      var root = h('div');
+
+      function card(span, title, sub, extra) {
+        var head = h('div', { class: 'ov-head' }, h('div', null, h('h3', { class: 'ov-title' }, title), sub ? h('p', { class: 'ov-sub' }, sub) : null), extra || null);
+        var c = h('section', { class: 'ov-card ' + span }, head);
+        for (var i = 4; i < arguments.length; i++) add(c, arguments[i]);
+        return c;
+      }
+
+      /* ---------- KPI tiles ---------- */
+      var nCeoPend = it.filter(OF.ceoPending).length;
+      var nRev = it.filter(OF.VIEWS.review.test).length;
+      var nNoResp = it.filter(OF.noResp).length;
+      var nEmcrit = it.filter(OF.VIEWS.emcrit.test).length;
+      var nEmcritLate = out.filter(function (x) { return OF.pr(x.priority) <= 1 && OF.isLate(x); }).length;
+      var tiles = [
+        { k: 'k-prog', ic: 'list', label: 'Outstanding', v: out.length, sub: 'of ' + total + ' items', go: function () { OF.go('register', { view: 'outstanding' }); } },
+        { k: 'k-over', ic: 'clock', label: 'Past due', v: late.length, sub: (out.length ? Math.round(late.length / out.length * 100) : 0) + '% of outstanding', go: function () { OF.go('register', { view: 'overdue' }); } },
+        { k: 'k-emer', ic: 'alert', label: 'Emergency and critical', v: nEmcrit, sub: nEmcritLate + ' past due', go: function () { OF.go('register', { view: 'emcrit' }); } },
+        { k: 'k-ceo', ic: 'user', label: 'Awaiting CEO', v: nCeoPend, sub: 'decisions pending', go: function () { OF.go('ceo-desk'); } },
+        { k: 'k-resp', ic: 'chat', label: 'Responses to review', v: nRev, sub: 'owner replies waiting', go: function () { OF.go('responses', { tab: 'pending' }); } },
+        { k: 'k-muted', ic: 'slash', label: 'No owner response', v: nNoResp, sub: 'yet to reply', go: function () { OF.go('register', { view: 'noresp' }); } },
+        { k: 'k-closed', ic: 'check', label: 'Verified closed', v: closed, sub: pct + '% of the register', go: function () { OF.go('register', { view: 'closed' }); } }
+      ];
+      root.appendChild(h('div', { class: 'ov-kpis' }, tiles.map(function (t) {
+        return h('button', { class: 'ov-kpi ' + t.k, type: 'button', onclick: t.go },
+          h('span', { class: 'kt' }, h('span', { class: 'kl' }, t.label), h('span', { class: 'ki' }, icon(t.ic))),
+          h('span', { class: 'kv' }, String(t.v)), h('span', { class: 'ks' }, t.sub));
       })));
 
-    var fac = h('section', { class: 'card-panel' }, h('h3', null, 'Progress by facility'),
-      h('p', { class: 'sub' }, 'Closed, in progress, open and overdue. The figure is the share verified closed.'),
-      OF.S.facilities.map(function (f) { return [f.name, it.filter(function (x) { return x.facility_id === f.id; })]; })
-        .filter(function (g) { return g[1].length; }).map(function (g) {
-        var c = { verified_closed: 0, in_progress: 0, open: 0, overdue: 0 };
-        g[1].forEach(function (x) { c[x.status] = (c[x.status] || 0) + 1; });
-        var n = g[1].length, lateN = g[1].filter(OF.isLate).length;
-        return h('button', { class: 'fac', type: 'button', onclick: function () { OF.go('register', { facility: g[0] }); } },
-          h('span', { class: 'nm' }, g[0], h('small', null, OF.plural(n, 'item') + ', ' + lateN + ' past due')),
-          h('span', { class: 'stack', 'aria-hidden': 'true' },
-            h('span', { style: 'flex:' + c.verified_closed + ';background:var(--of-closed)' }),
-            h('span', { style: 'flex:' + c.in_progress + ';background:var(--of-prog)' }),
-            h('span', { style: 'flex:' + c.open + ';background:var(--of-open)' }),
-            h('span', { style: 'flex:' + c.overdue + ';background:var(--of-over)' })),
-          h('span', { class: 'pc' }, Math.round(c.verified_closed / n * 100) + '%'));
-      }),
-      h('div', { class: 'legend' },
-        [['var(--of-closed)', 'Verified closed'], ['var(--of-prog)', 'In progress'], ['var(--of-open)', 'Open'], ['var(--of-over)', 'Overdue']]
-          .map(function (l) { return h('span', null, h('i', { style: 'background:' + l[0] }), l[1]); })));
-    root.appendChild(h('div', { class: 'grid2' }, agePanel, fac));
+      var grid = h('div', { class: 'ov-grid' });
+      root.appendChild(grid);
 
-    var attention = out.filter(function (x) { return OF.pr(x.priority) <= 1 || OF.isLate(x); }).sort(OF.byAttention).slice(0, 10);
-    root.appendChild(h('section', { class: 'card-panel' }, h('h3', null, 'Deal with these first'),
-      h('p', { class: 'sub' }, 'Highest priority first, then longest past due. Select an item to see the full record.'),
-      attention.length ? OF.itemList(attention) : h('div', { class: 'empty' }, 'Nothing urgent is outstanding.')));
-    return root;
-  }
-});
+      /* ---------- Status donut ---------- */
+      var sc = countBy(it);
+      var donut;
+      if (!total) donut = h('div', { class: 'ov-empty' }, 'No items in the register yet.');
+      else {
+        var R = 72, C = 2 * Math.PI * R, acc = 0, segs = STATUS_META.filter(function (m) { return sc[m.k] > 0; });
+        var svg = sv('svg', { viewBox: '0 0 200 200', role: 'img', 'aria-label': 'Register status: ' + STATUS_META.map(function (m) { return sc[m.k] + ' ' + m.label.toLowerCase(); }).join(', ') });
+        // Drawn with plain SVG attributes (not only CSS) so the ring never depends on the stylesheet.
+        var ring = sv('g', { transform: 'rotate(-90 100 100)' });
+        var trk = sv('circle', { class: 'trk', cx: 100, cy: 100, r: R, fill: 'none', 'stroke-width': 24 });
+        trk.style.stroke = 'var(--line)';
+        ring.appendChild(trk);
+        segs.forEach(function (m) {
+          var len = sc[m.k] / total * C, gap = segs.length > 1 ? 3 : 0, vis = Math.max(len - gap, 0.5);
+          var c = sv('circle', { class: 'seg', cx: 100, cy: 100, r: R, fill: 'none', 'stroke-width': 24, 'stroke-dasharray': vis + ' ' + (C - vis), 'stroke-dashoffset': -acc });
+          c.style.stroke = m.col;
+          var tt = sv('title'); tt.textContent = m.label + ': ' + sc[m.k]; c.appendChild(tt);
+          c.addEventListener('click', function () { OF.go('register', { status: m.k }); });
+          ring.appendChild(c); acc += len;
+        });
+        svg.appendChild(ring);
+        donut = h('div', { class: 'ov-donut' },
+          h('div', { class: 'ov-ring' }, svg, h('div', { class: 'mid' }, h('b', null, pct + '%'), h('span', null, 'verified closed'))),
+          h('div', { class: 'ov-legend' }, STATUS_META.map(function (m) {
+            return h('button', { class: 'ov-lg', type: 'button', onclick: function () { OF.go('register', { status: m.k }); } },
+              h('i', { style: 'background:' + m.col }), h('span', null, m.label), h('span', { class: 'n' }, String(sc[m.k])),
+              h('span', { class: 'p' }, Math.round(sc[m.k] / total * 100) + '%'));
+          })));
+      }
+      grid.appendChild(card('ov-c4', 'Register status', 'All ' + total + ' items by where they stand. Select a slice to list them.', null, donut));
+
+      /* ---------- Lateness columns ---------- */
+      var ac = {}; OF.AGE.forEach(function (a) { ac[a.k] = 0; });
+      out.forEach(function (x) { ac[OF.ageKey(x)]++; });
+      var amax = Math.max.apply(null, OF.AGE.map(function (a) { return ac[a.k]; }).concat([1]));
+      var lateCols = out.length ? h('div', { class: 'ov-cols' }, OF.AGE.map(function (a) {
+        var n = ac[a.k];
+        return h('button', { class: 'ov-col', type: 'button', title: AGE_LABEL[a.k] + ': ' + n, 'aria-label': AGE_LABEL[a.k] + ': ' + n,
+          onclick: function () { OF.go('register', { age: a.k, view: 'outstanding' }); } },
+          h('span', { class: 'v' }, String(n)),
+          h('span', { class: 'bar', style: 'height:' + (n ? Math.max(8, Math.round(n / amax * 140)) : 3) + 'px;background:' + a.col }),
+          h('span', { class: 'l' }, AGE_LABEL[a.k]));
+      })) : h('div', { class: 'ov-empty' }, 'No outstanding items.');
+      grid.appendChild(card('ov-c4', 'How late are outstanding actions', 'Outstanding items by days past due.', null, lateCols));
+
+      /* ---------- Progress by review week ---------- */
+      var periods = OF.uniq(it.map(function (x) { return x.period; })).sort(function (a, b) {
+        return (parseInt(a.replace(/\D/g, ''), 10) || 0) - (parseInt(b.replace(/\D/g, ''), 10) || 0);
+      }).slice(-8);
+      var pmax = Math.max.apply(null, periods.map(function (p) { return it.filter(function (x) { return x.period === p; }).length; }).concat([1]));
+      var weekCols = periods.length ? h('div', { class: 'ov-cols' }, periods.map(function (p) {
+        var list = it.filter(function (x) { return x.period === p; }), c = countBy(list), n = list.length;
+        return h('button', { class: 'ov-col', type: 'button', title: p + ': ' + n + ' items, ' + c.verified_closed + ' closed',
+          'aria-label': p + ': ' + n + ' items, ' + c.verified_closed + ' verified closed', onclick: function () { OF.go('register', { period: p }); } },
+          h('span', { class: 'v' }, String(n)),
+          h('span', { class: 'bar', style: 'height:' + Math.max(10, Math.round(n / pmax * 140)) + 'px' },
+            STATUS_META.map(function (m) { return c[m.k] ? h('span', { style: 'height:' + (c[m.k] / n * 100) + '%;background:' + m.col }) : null; })),
+          h('span', { class: 'l' }, p.replace('Week ', 'Wk ')));
+      })) : h('div', { class: 'ov-empty' }, 'No items yet.');
+      grid.appendChild(card('ov-c4', 'Progress by review week', 'Each weekly review, split by status.', null, weekCols,
+        h('div', { class: 'ov-key' }, STATUS_META.map(function (m) { return h('span', null, h('i', { style: 'background:' + m.col }), m.label); }))));
+
+      /* ---------- Facilities ---------- */
+      var facRows = S.facilities.map(function (f) { return [f, it.filter(function (x) { return x.facility_id === f.id; })]; })
+        .filter(function (g) { return g[1].length; }).map(function (g) {
+          var c = countBy(g[1]), n = g[1].length, lateN = g[1].filter(OF.isLate).length;
+          return h('button', { class: 'ov-row', type: 'button', onclick: function () { OF.go('register', { facility: g[0].name }); },
+            title: g[0].name + ': ' + c.verified_closed + ' closed, ' + c.in_progress + ' in progress, ' + c.open + ' open, ' + c.overdue + ' overdue' },
+            h('span', { class: 'nm' }, g[0].name, h('small', null, OF.plural(n, 'item') + ', ' + lateN + ' past due')),
+            h('span', { class: 'trk stk' }, STATUS_META.map(function (m) { return c[m.k] ? h('span', { style: 'flex:' + c[m.k] + ';background:' + m.col }) : null; })),
+            h('span', { class: 'val' }, Math.round(c.verified_closed / n * 100) + '%', h('small', null, 'closed')));
+        });
+      grid.appendChild(card('ov-c6', 'Progress by facility', 'The mix of statuses at each facility. The figure is the share verified closed.', null,
+        facRows.length ? h('div', { class: 'ov-rows' }, facRows) : h('div', { class: 'ov-empty' }, 'No items yet.'),
+        h('div', { class: 'ov-key' }, STATUS_META.map(function (m) { return h('span', null, h('i', { style: 'background:' + m.col }), m.label); }))));
+
+      /* ---------- Priority ---------- */
+      var pmx = Math.max.apply(null, OF.PRIORITIES.map(function (p) { return out.filter(function (x) { return x.priority === p; }).length; }).concat([1]));
+      var prRows = OF.PRIORITIES.map(function (p) {
+        var l = out.filter(function (x) { return x.priority === p; }), n = l.length, lt = l.filter(OF.isLate).length;
+        return h('button', { class: 'ov-row', type: 'button', title: p + ': ' + n + ' outstanding, ' + lt + ' past due',
+          onclick: function () { OF.go('register', { priority: p, view: 'outstanding' }); } },
+          h('span', { class: 'nm' }, p),
+          h('span', { class: 'trk' }, n ? h('span', { style: 'width:' + Math.max(3, n / pmx * 100) + '%;background:' + PRIO_COL[p] + ';border-radius:7px' }) : null),
+          h('span', { class: 'val' }, String(n), h('small', null, lt + ' late')));
+      });
+      grid.appendChild(card('ov-c6', 'Outstanding by priority', 'How many open items sit at each priority, and how many of those are late.', null,
+        out.length ? h('div', { class: 'ov-rows' }, prRows) : h('div', { class: 'ov-empty' }, 'No outstanding items.')));
+
+      /* ---------- Owners furthest behind ---------- */
+      var byOwner = OF.groupBy(it, function (x) { return x.owner; }).map(function (g) {
+        return { name: g[0], out: g[1].filter(OF.outstanding).length, late: g[1].filter(OF.isLate).length };
+      }).filter(function (o) { return o.late > 0; }).sort(function (a, b) { return b.late - a.late || b.out - a.out; }).slice(0, 6);
+      var omax = Math.max.apply(null, byOwner.map(function (o) { return o.late; }).concat([1]));
+      grid.appendChild(card('ov-c6', 'Owners furthest behind', 'The six owners with the most items past due.',
+        h('button', { class: 'ov-link', type: 'button', onclick: function () { OF.go('owners'); } }, 'All owners'),
+        byOwner.length ? h('div', { class: 'ov-rows' }, byOwner.map(function (o) {
+          return h('button', { class: 'ov-row', type: 'button', title: o.name, onclick: function () { OF.go('register', { owner: o.name, view: 'overdue' }); } },
+            h('span', { class: 'nm' }, o.name),
+            h('span', { class: 'trk' }, h('span', { style: 'width:' + Math.max(4, o.late / omax * 100) + '%;background:var(--of-over);border-radius:7px' })),
+            h('span', { class: 'val' }, o.late + ' late', h('small', null, 'of ' + o.out + ' open')));
+        })) : h('div', { class: 'ov-empty' }, 'No owner has anything past due.')));
+
+      /* ---------- Latest owner responses ---------- */
+      var byId = {}; it.forEach(function (x) { byId[x.id] = x; });
+      var feed = LATEST.filter(function (r) { return byId[r.item_id]; });
+      grid.appendChild(card('ov-c6', 'Latest owner responses', 'The five most recent replies from owners.',
+        h('button', { class: 'ov-link', type: 'button', onclick: function () { OF.go('responses'); } }, 'View all'),
+        feed.length ? h('div', { class: 'ov-feed' }, feed.map(function (r) {
+          var x = byId[r.item_id];
+          return h('button', { class: 'ov-fi', type: 'button', onclick: function () { OF.go('responses', { item: x.id }); } },
+            h('span', { class: 'av', 'aria-hidden': 'true' }, initials(r.submitted_by)),
+            h('span', { class: 'tx' }, h('b', null, x.id + '  ' + x.issue), h('span', null, (r.submitted_by || 'Owner') + ', ' + x.owner + ', ' + (OF.PROGRESS[r.progress] || r.progress))),
+            h('span', { class: 'tm' }, h('span', { class: 'pill rv-' + r.review_status }, r.review_status === 'pending' ? 'To review' : r.review_status === 'accepted' ? 'Accepted' : 'More info'),
+              h('span', { style: 'display:block' }, OF.ago(r.submitted_at))));
+        })) : h('div', { class: 'ov-empty' }, 'No owner has responded yet.')));
+
+      /* ---------- Needs attention ---------- */
+      var attention = out.filter(function (x) { return OF.pr(x.priority) <= 1 || OF.isLate(x); }).sort(OF.byAttention).slice(0, 8);
+      grid.appendChild(card('ov-c12', 'Deal with these first', 'Highest priority first, then longest past due. Select an item to see the full record.',
+        h('button', { class: 'ov-link', type: 'button', onclick: function () { OF.go('register', { view: 'outstanding' }); } }, 'Open the register'),
+        attention.length ? OF.itemList(attention) : h('div', { class: 'ov-empty' }, 'Nothing urgent is outstanding.')));
+
+      return root;
+    }
+  });
+})();
 </script>
 </body>
 </html>

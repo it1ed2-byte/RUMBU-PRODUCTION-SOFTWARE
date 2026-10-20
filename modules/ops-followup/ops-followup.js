@@ -135,6 +135,27 @@
     byAttention: byAttention, uniq: uniq, plural: plural, groupBy: groupBy
   });
 
+  /* ---------- relative times (all in West Africa Time) ---------- */
+  var DAYFMT = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Lagos', year: 'numeric', month: '2-digit', day: '2-digit' });
+  // yyyy-mm-dd of a timestamp, in WAT
+  OF.dayOf = function (ts) { var d = new Date(ts); return isNaN(d) ? '' : DAYFMT.format(d); };
+  // "Today", "Yesterday" or "16 Oct 2026"
+  OF.dayLabel = function (iso) {
+    if (iso === S.today) return 'Today';
+    if (iso === addDays(S.today, -1)) return 'Yesterday';
+    return fmt(iso);
+  };
+  // "just now", "12 min ago", "3 h ago", "2 days ago", then the date
+  OF.ago = function (ts) {
+    var d = new Date(ts); if (isNaN(d)) return '';
+    var m = Math.floor((Date.now() - d.getTime()) / 60000);
+    if (m < 1) return 'just now';
+    if (m < 60) return m + ' min ago';
+    if (m < 1440) return Math.floor(m / 60) + ' h ago';
+    if (m < 10080) { var n = Math.floor(m / 1440); return n + (n === 1 ? ' day ago' : ' days ago'); }
+    return fmt(OF.dayOf(ts));
+  };
+
   OF.VIEWS = {
     outstanding: { label: 'Outstanding', test: outstanding },
     overdue: { label: 'Past due', test: isLate },
