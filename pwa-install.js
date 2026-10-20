@@ -1,83 +1,122 @@
 // pwa-install.js
 // -----------------------------------------------------------
-// Shows an install prompt automatically whenever the site is opened by
-// someone who doesn't already have it installed as an app. Included on
-// login.html and index.html — the two pages anyone not yet installed is
-// most likely to land on.
-//
-// Browsers do not allow a truly automatic (zero-tap) install — Chrome/
-// Edge/Android require one tap on a real button before the native
-// install dialog can appear, and iOS Safari has no programmatic install
-// at all (Apple only allows Share -> Add to Home Screen by hand). This
-// gets as close to "automatic" as each platform allows: the banner
-// itself appears with no action needed, and installing takes exactly
-// one tap on Android/Chrome/Edge, or the person is shown exactly what
-// to tap on iOS.
+// Shows a centred install modal after login (index.html).
+// One tap on Android/Chrome/Edge installs the app directly.
+// iOS users see Share → Add to Home Screen instructions.
+// Already-installed (standalone) users never see it.
 // -----------------------------------------------------------
 (function(){
   function isStandalone(){
-    return window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+    return window.matchMedia("(display-mode: standalone)").matches ||
+           window.navigator.standalone === true;
   }
-  if(isStandalone()) return; // already installed and running as an app — nothing to do
+  if(isStandalone()) return;
 
   const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.MSStream;
   let deferredPrompt = null;
 
-  function buildBanner(){
-    const bar = document.createElement("div");
-    bar.id = "pwaInstallBar";
-    bar.style.cssText = "position:fixed;left:0;right:0;bottom:0;z-index:9999;background:#12203c;color:#fff;padding:8px 12px;display:flex;align-items:center;gap:10px;box-shadow:0 -4px 16px rgba(0,0,0,.25);font-family:inherit;box-sizing:border-box;min-height:0;";
+  function buildModal(onInstall){
+    // Backdrop
+    const overlay = document.createElement("div");
+    overlay.id = "pwaOverlay";
+    overlay.style.cssText = [
+      "position:fixed;inset:0;z-index:99998",
+      "background:rgba(0,0,0,.55)",
+      "display:flex;align-items:center;justify-content:center",
+      "padding:20px;box-sizing:border-box"
+    ].join(";");
 
-    const text = document.createElement("div");
-    text.style.cssText = "flex:1 1 auto;min-width:0;font-size:12.5px;line-height:1.3;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
-    text.innerHTML = '<b>Install RumbuApp</b> <span id="pwaInstallText" style="opacity:.8;">— add to home screen</span>';
-    bar.appendChild(text);
+    // Card
+    const card = document.createElement("div");
+    card.style.cssText = [
+      "position:relative",
+      "background:#fff;border-radius:14px",
+      "padding:32px 28px 24px",
+      "max-width:360px;width:100%",
+      "box-shadow:0 8px 40px rgba(0,0,0,.28)",
+      "text-align:center;font-family:inherit",
+      "box-sizing:border-box"
+    ].join(";");
 
+    // Close ×
+    const close = document.createElement("button");
+    close.setAttribute("aria-label","Close");
+    close.style.cssText = [
+      "position:absolute;top:10px;right:12px",
+      "background:none;border:none;cursor:pointer",
+      "font-size:22px;line-height:1;color:#666",
+      "padding:4px 6px;margin:0;width:auto;height:auto"
+    ].join(";");
+    close.innerHTML = "&times;";
+    close.onclick = () => overlay.remove();
+
+    // Icon
+    const icon = document.createElement("img");
+    icon.src = "icon-192.png";
+    icon.alt = "";
+    icon.style.cssText = "width:64px;height:64px;border-radius:14px;margin-bottom:14px;display:block;margin-left:auto;margin-right:auto;";
+    icon.onerror = () => { icon.style.display="none"; };
+
+    // Heading
+    const h = document.createElement("h3");
+    h.style.cssText = "margin:0 0 8px;font-size:17px;color:#1F3864;font-weight:800;";
+    h.textContent = "Install RumbuApp";
+
+    // Body text
+    const p = document.createElement("p");
+    p.id = "pwaModalMsg";
+    p.style.cssText = "margin:0 0 20px;font-size:13px;color:#555;line-height:1.5;";
+
+    if(isIOS){
+      p.innerHTML = 'Tap the <b>Share</b> button in your browser, then choose <b>"Add to Home Screen"</b> to install RumbuApp.';
+    } else {
+      p.textContent = "Add RumbuApp to your home screen for quick access — works offline and feels like a native app.";
+    }
+
+    // Install button
     const btn = document.createElement("button");
-    btn.id = "pwaInstallBtn";
-    // Explicit overrides for every property a page's own button{} rule
-    // (e.g. login.html's full-width login button) could otherwise leak
-    // through onto this one, since unset properties still fall through
-    // to the page's stylesheet even with inline styles applied.
-    btn.style.cssText = "flex:0 0 auto;width:auto;height:auto;min-height:0;margin:0;background:#c8a34e;color:#12203c;border:0;padding:6px 14px;border-radius:6px;font-size:12.5px;font-weight:700;cursor:pointer;white-space:nowrap;";
-    btn.textContent = "Install";
-    bar.appendChild(btn);
+    btn.style.cssText = [
+      "display:block;width:100%;margin:0",
+      "background:#1F3864;color:#fff",
+      "border:none;border-radius:8px",
+      "padding:12px 0;font-size:14px;font-weight:700",
+      "cursor:pointer;letter-spacing:.3px"
+    ].join(";");
 
-    const dismiss = document.createElement("button");
-    dismiss.id = "pwaInstallDismiss";
-    dismiss.setAttribute("aria-label", "Dismiss");
-    dismiss.style.cssText = "flex:0 0 auto;width:auto;height:auto;min-height:0;margin:0;background:transparent;color:#fff;border:0;font-size:17px;line-height:1;cursor:pointer;padding:2px 4px;";
-    dismiss.innerHTML = "&times;";
-    bar.appendChild(dismiss);
+    if(isIOS){
+      btn.textContent = "Got it";
+      btn.onclick = () => overlay.remove();
+    } else {
+      btn.textContent = "Install App";
+      btn.onclick = async () => {
+        overlay.remove();
+        if(!deferredPrompt) return;
+        deferredPrompt.prompt();
+        try{ await deferredPrompt.userChoice; }catch(e){}
+        deferredPrompt = null;
+      };
+    }
 
-    document.body.appendChild(bar);
-    dismiss.onclick = function(){ bar.remove(); };
-    return bar;
+    card.appendChild(close);
+    card.appendChild(icon);
+    card.appendChild(h);
+    card.appendChild(p);
+    card.appendChild(btn);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+
+    // Close on backdrop click
+    overlay.addEventListener("click", e => { if(e.target === overlay) overlay.remove(); });
   }
 
   if(isIOS){
-    // No programmatic install on iOS — show instructions instead, as soon
-    // as the page loads, every time, until the person installs it.
-    const bar = buildBanner();
-    document.getElementById("pwaInstallText").textContent =
-      'Tap the Share button, then "Add to Home Screen".';
-    document.getElementById("pwaInstallBtn").style.display = "none";
+    buildModal();
     return;
   }
 
-  // Chrome / Edge / Android: capture the real install prompt the moment
-  // the browser offers it, and show the banner immediately — no need to
-  // wait for a click anywhere else on the page first.
   window.addEventListener("beforeinstallprompt", function(e){
     e.preventDefault();
     deferredPrompt = e;
-    const bar = buildBanner();
-    document.getElementById("pwaInstallBtn").onclick = async function(){
-      bar.remove();
-      if(!deferredPrompt) return;
-      deferredPrompt.prompt();
-      try{ await deferredPrompt.userChoice; }catch(e){}
-      deferredPrompt = null;
-    };
+    buildModal();
   });
 })();
