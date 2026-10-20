@@ -263,8 +263,10 @@ function repairsByAssetShift(f){
 /* =========================================================
    QUICK VIEW — mirrors getAdvancedReportHTML: raw Total/Target
    per shift, no downtime adjustment.
-   NOTE: made async so it loads its own data — the old version
-   pre-loaded everything in init(); this version uses lazy loading.
+   When a specific shift (Morning / Night) is selected the report
+   shows a single-column "Group A" or "Group B" table so the user
+   sees complete, meaningful data.  The two-column Morning-vs-Night
+   comparison only appears when Shift = All (Group = All).
    ========================================================= */
 async function viewQuick(){
   const f = getFilters();
@@ -290,13 +292,54 @@ async function viewQuick(){
     return;
   }
   const repairs = repairsByAssetShift(f);
+  function color(p){ return p==null ? "#000" : (p>=90 ? "green" : "red"); }
 
+  /* ── Single-group view (Morning or Night selected) ─────────────────────
+     filterProd has already kept only the rows for this shift/group.
+     Aggregate straight to Shed + Asset — no Morning/Night split needed.
+     The Night column will NOT appear, so the report is complete and clear. */
+  if(f.shift !== "All"){
+    const label = f.shift === "Morning" ? "Group A (Morning)" : "Group B (Night)";
+
+    const base = {};
+    prod.forEach(r=>{
+      const key = r.shed + "||" + r.assets;
+      if(!base[key]) base[key] = { shed:r.shed, assets:r.assets, total:0, target:0 };
+      base[key].total  += Number(r.total||0);
+      base[key].target += Number(r.target||0);
+    });
+
+    const sheds = {};
+    Object.values(base).forEach(b=>{
+      b.pct  = b.target ? (b.total / b.target) * 100 : null;
+      b.reps = repairs[b.assets + "||" + f.shift] || 0;
+      if(!sheds[b.shed]) sheds[b.shed] = [];
+      sheds[b.shed].push(b);
+    });
+
+    let html = `<div class="card"><h2>📊 Asset Report — ${label}</h2>
+      <p style="text-align:center;font-size:12px;">${f.fromDate} to ${f.toDate} | ${label} | Section: ${f.section}</p>`;
+    Object.keys(sheds).forEach((shed,shedIdx)=>{
+      html += `<h3${shedIdx>0?' class="shed-break"':''}>SHED ${shed}</h3>`;
+      html += `<table><tr><th>Asset</th><th>${label} %</th><th>Repairs</th></tr>`;
+      sheds[shed].forEach(r=>{
+        const pct = r.pct!=null ? Math.round(r.pct) : "-";
+        html += `<tr><td>${r.assets}</td><td style="color:${color(r.pct)}">${pct}</td><td>${r.reps}</td></tr>`;
+      });
+      html += "</table>";
+    });
+    html += "</div>";
+    document.getElementById("quickArea").innerHTML = html;
+    return;
+  }
+
+  /* ── Both shifts / All groups — Morning-vs-Night comparison ────────── */
   // base: per Shed+Assets+Shift, sum Total/Target
   const base = {};
   prod.forEach(r=>{
     const key = [r.shed, r.assets, r.shift].join("||");
     if(!base[key]) base[key] = { shed:r.shed, assets:r.assets, shift:r.shift, total:0, target:0 };
-    base[key].total += Number(r.total||0);
+    base[key].total  += Number(r.total||0);
     base[key].target += Number(r.target||0);
   });
 
@@ -307,17 +350,16 @@ async function viewQuick(){
     if(!calc[key]) calc[key] = { shed:b.shed, assets:b.assets, P_M:null, P_N:null, R_M:0, R_N:0 };
     const pct = b.target ? (b.total/b.target)*100 : null;
     if(b.shift === "Morning"){ calc[key].P_M = pct; calc[key].R_M = repairs[b.assets+"||Morning"] || 0; }
-    if(b.shift === "Night"){ calc[key].P_N = pct; calc[key].R_N = repairs[b.assets+"||Night"] || 0; }
+    if(b.shift === "Night"){   calc[key].P_N = pct; calc[key].R_N = repairs[b.assets+"||Night"]   || 0; }
   });
 
   const sheds = {};
   Object.values(calc).forEach(c=>{ if(!sheds[c.shed]) sheds[c.shed]=[]; sheds[c.shed].push(c); });
 
-  function color(p){ return p==null ? "#000" : (p>=90 ? "green" : "red"); }
-
-  let html = `<div class="card"><h2>📊 Advanced Asset Report (Quick View)</h2>`;
+  let html = `<div class="card"><h2>📊 Advanced Asset Report (Quick View) — All Groups</h2>`;
   Object.keys(sheds).forEach((shed,shedIdx)=>{
-    html += `<h3${shedIdx>0?' class="shed-break"':''}>SHED ${shed}</h3><table><tr><th>Asset</th><th>Morning %</th><th>Night %</th><th>Rep M</th><th>Rep N</th></tr>`;
+    html += `<h3${shedIdx>0?' class="shed-break"':''}>SHED ${shed}</h3>`;
+    html += `<table><tr><th>Asset</th><th>Group A (Morning) %</th><th>Group B (Night) %</th><th>Rep A</th><th>Rep B</th></tr>`;
     sheds[shed].forEach(r=>{
       const pM = r.P_M!=null ? Math.round(r.P_M) : "-";
       const pN = r.P_N!=null ? Math.round(r.P_N) : "-";
