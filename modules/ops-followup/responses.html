@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Operations Follow-up: Responses</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<link rel="stylesheet" href="ops-followup.css">
+<script src="ops-followup.js"></script>
+</head>
+<body>
+<script>
+/* Operations Follow-up: Responses (replaces the old Memos page).
+   Tracks every item that has at least one owner response, newest first.
+   Each item shows its latest reply; expanding it shows the whole thread
+   with files, and editors can accept a reply into the record or ask the
+   owner for more, right here. */
+(function () {
+  var PAGE = 50;
+  var RESP = [];        // every response, newest first
+  var BYITEM = {};      // item id -> its responses, newest first
+  var TAB = ['all', 'pending', 'accepted', 'more_info'].indexOf(OF.param('tab')) > -1 ? OF.param('tab') : 'all';
+  var Q = OF.param('item') || '', FAC = '', OWN = '', LIMIT = PAGE;
+  var OPEN = {};
+  if (OF.param('item')) OPEN[OF.param('item')] = true;
+
+  var TABS = [
+    { k: 'all', label: 'All responses' },
+    { k: 'pending', label: 'Waiting for review' },
+    { k: 'accepted', label: 'Accepted' },
+    { k: 'more_info', label: 'More info requested' }
+  ];
+
+  function load() {
+    return OF.load().then(function () {
+      return Promise.all([
+        OF.fetchAll(function () { return sb.from('ops_followup_responses').select('*').order('submitted_at', { ascending: false }).order('id', { ascending: false }); }),
+        OF.fetchAll(function () { return sb.from('ops_followup_response_files').select('*').order('id'); })
+      ]);
+    }).then(function (r) {
+      var files = {};
+      r[1].forEach(function (f) { (files[f.response_id] = files[f.response_id] || []).push({ path: f.storage_path, name: f.file_name, size: f.size_bytes, type: f.mime_type }); });
+      RESP = r[0].map(function (x) { x.files = files[x.id] || []; return x; });
+      BYITEM = {};
+      RESP.forEach(function (x) { (BYITEM[x.item_id] = BYITEM[x.item_id] || []).push(x); });
+    });
+  }
+
+  // One row per item that has responses, newest reply first.
+  function rows() {
+    var byId = {}; OF.S.items.forEach(function (it) { byId[it.id] = it; });
+    var out = [];
+    Object.keys(BYITEM).forEach(function (id) {
+      var it = byId[id]; if (!it) return;
+      var list = BYITEM[id], latest = list[0];
+      var pend = list.filter(function (r) { return r.review_status === 'pending'; }).length;
+      out.push({ it: it, list: list, latest: latest, pend: pend,
+        state: pend ? 'pending' : latest.review_status,
+        files: list.reduce(function (n, r) { return n + r.files.length; }, 0) });
+    });
+    out.sort(function (a, b) { return a.latest.submitted_at < b.latest.submitted_at ? 1 : a.latest.submitted_at > b.latest.submitted_at ? -1 : 0; });
+    return out;
+  }
+  function visible(all) {
+    var q = Q.trim().toLowerCase();
+    return all.filter(function (g) {
+      if (TAB !== 'all' && g.state !== TAB) return false;
+      if (FAC && g.it.facility !== FAC) return false;
+      if (OWN && g.it.owner !== OWN) return false;
+      if (q) {
+        var hay = [g.it.id, g.it.issue, g.it.owner, g.it.facility, g.it.period, g.list.map(function (r) { return r.message + ' ' + r.submitted_by; }).join(' ')].join(' ').toLowerCase();
+        if (hay.indexOf(q) < 0) return false;
+      }
+      return true;
+    });
+  }
+
+  OF.start({
+    title: 'Responses',
+    sub: 'Every owner response, newest first. Review each reply and accept it into the record, or ask the owner for more.',
+    editHint: false,
+    load: load,
+    hero: function () {
+      var all = rows(), weekAgo = OF.addDays(OF.S.today, -7);
+      return { stats: [
+        { n: all.length, l: 'Items with responses' },
+        { n: all.filter(function (g) { return g.state === 'pending'; }).length, l: 'Waiting for review', go: function () { TAB = 'pending'; LIMIT = PAGE; OF.render(); } },
+        { n: RESP.filter(function (r) { return OF.dayOf(r.submitted_at) >= weekAgo; }).length, l: 'Replies in 7 days' }
+      ] };
+    },
+    render: function () {
+      var h = OF.h, add = OF.add;
+      var root = h('div');
+      var all = rows();
+
+      if (!RESP.length) {
+        root.appendChild(h('div', { class: 'card-panel' }, h('div', { class: 'empty' },
+          'No owner has responded to an item yet. Replies sent from My Actions will appear here, newest first.')));
+        return root;
+      }
+
+      // Tabs with counts
+      var counts = { all: all.length, pending: 0, accepted: 0, more_info: 0 };
+      all.forEach(function (g) { counts[g.state] = (counts[g.state] || 0) + 1; });
+      root.appendChild(h('div', { class: 'mtabs', role: 'tablist', 'aria-label': 'Responses' }, TABS.map(function (t) {
+        return h('button', { class: 'mtab' + (t.k === TAB ? ' active' : ''), type: 'button', role: 'tab', 'aria-selected': String(t.k === TAB),
+          onclick: function () { TAB = t.k; LIMIT = PAGE; OF.render(); } }, t.label, h('span', { class: 'tc' }, String(counts[t.k] || 0)));
+      })));
+
+      // Filters
+      var search = h('input', { id: 'rsp-q', type: 'search', placeholder: 'Item ID, issue, owner or words in a reply', value: Q,
+        oninput: function () { Q = search.value; LIMIT = PAGE; drawList(); } });
+      function sel(id, label, opts, get, set) {
+        var s = h('select', { id: id, onchange: function () { set(s.value); LIMIT = PAGE; OF.render(); } },
+          h('option', { value: '' }, 'All'), opts.map(function (o) { return h('option', { value: o }, o); }));
+        s.value = get();
+        return h('div', { class: 'f' }, h('label', { for: id }, label), s);
+      }
+      var facs = OF.uniq(all.map(function (g) { return g.it.facility; })).sort();
+      var owns = OF.uniq(all.map(function (g) { return g.it.owner; })).sort();
+      root.appendChild(h('div', { class: 'filters rsp-tools' },
+        h('div', { class: 'f search' }, h('label', { for: 'rsp-q' }, 'Search'), search),
+        sel('rsp-fac', 'Facility', facs, function () { return FAC; }, function (v) { FAC = v; }),
+        sel('rsp-own', 'Owner', owns, function () { return OWN; }, function (v) { OWN = v; })));
+
+      var listBox = h('div');
+      root.appendChild(listBox);
+
+      function card(g) {
+        var it = g.it, r = g.latest;
+        var thread = h('div', { class: 'rsp-thread', hidden: !OPEN[it.id] });
+        function fillThread() {
+          thread.innerHTML = '';
+          thread.appendChild(h('h5', null, OF.plural(g.list.length, 'response') + ' on ' + it.id + ', newest first'));
+          g.list.forEach(function (x) {
+            thread.appendChild(OF.responseEl(x, { review: true, onDone: function () { OF.reload(); } }));
+          });
+        }
+        if (OPEN[it.id]) fillThread();
+        var toggle = h('button', { class: 'btn small' + (g.pend ? ' primary' : ''), type: 'button', 'aria-expanded': String(!!OPEN[it.id]) },
+          (OPEN[it.id] ? 'Hide' : g.pend && OF.canEdit() ? 'Review' : 'View') + ' ' + (g.list.length === 1 ? 'response' : g.list.length + ' responses'));
+        toggle.addEventListener('click', function () {
+          OPEN[it.id] = !OPEN[it.id];
+          thread.hidden = !OPEN[it.id];
+          if (OPEN[it.id]) fillThread();
+          toggle.setAttribute('aria-expanded', String(!!OPEN[it.id]));
+          toggle.textContent = (OPEN[it.id] ? 'Hide' : g.pend && OF.canEdit() ? 'Review' : 'View') + ' ' + (g.list.length === 1 ? 'response' : g.list.length + ' responses');
+        });
+        var body = h('div', { class: 'rsp-body' },
+          h('div', { class: 'rsp-top' }, h('b', null, it.id), OF.prioTag(it.priority), OF.statusTag(it.status),
+            h('span', null, it.facility + ', ' + it.period),
+            h('span', { class: 'rsp-time' }, h('b', null, OF.ago(r.submitted_at)), h('small', null, OF.fmtStamp(r.submitted_at)))),
+          h('h4', null, it.issue),
+          h('p', { class: 'rsp-own' }, 'Owner: ' + it.owner),
+          h('div', { class: 'rsp-latest' }, h('span', null, 'Latest reply:'),
+            h('span', { class: 'pill pg-' + r.progress }, OF.PROGRESS[r.progress] || r.progress),
+            h('span', { class: 'pill rv-' + g.state }, g.state === 'pending' ? 'Waiting for review' + (g.pend > 1 ? ' (' + g.pend + ')' : '') : OF.REVIEW[g.state]),
+            g.files ? h('span', { class: 'pill fl' }, OF.plural(g.files, 'file')) : null,
+            h('span', { class: 'by' }, 'from ' + (r.submitted_by || 'owner'))),
+          h('p', { class: 'rsp-msg' }, r.message),
+          h('div', { class: 'rsp-acts' }, toggle,
+            h('button', { class: 'btn small', type: 'button', onclick: function () { OF.openItem(it.id); } }, 'Open item')));
+        return h('article', { class: 'rsp-card p-' + String(it.priority).toLowerCase() + (g.pend ? ' is-pending' : ''), id: 'rsp-' + it.id }, body, thread);
+      }
+
+      function drawList() {
+        var list = visible(all);
+        listBox.innerHTML = '';
+        if (!list.length) {
+          listBox.appendChild(h('div', { class: 'card-panel' }, h('div', { class: 'empty' }, 'No responses match. Change the tab or clear the search.')));
+          return;
+        }
+        var shown = list.slice(0, LIMIT), day = '';
+        shown.forEach(function (g) {
+          var d = OF.dayOf(g.latest.submitted_at);
+          if (d !== day) { day = d; listBox.appendChild(h('div', { class: 'rsp-day' }, OF.dayLabel(d))); }
+          listBox.appendChild(card(g));
+        });
+        if (list.length > shown.length) {
+          listBox.appendChild(h('div', { class: 'rsp-more' }, h('button', { class: 'btn', type: 'button',
+            onclick: function () { LIMIT += PAGE; drawList(); } }, 'Show more (' + (list.length - shown.length) + ' more)')));
+        }
+      }
+      drawList();
+      return root;
+    }
+  });
+})();
+</script>
+</body>
+</html>
