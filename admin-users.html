@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>User Management</title>
+<script src="auth-contracts.js"></script>
+<script src="sidebar-contracts.js"></script>
+<link rel="stylesheet" href="contracts.css">
+<style>
+.tab-bar{display:flex;gap:0;border-bottom:2px solid var(--border);margin-bottom:22px}
+.tab-btn{padding:10px 22px;border:none;background:none;cursor:pointer;font-size:14px;
+  font-weight:600;color:var(--muted);border-bottom:2px solid transparent;
+  margin-bottom:-2px;transition:all .15s}
+.tab-btn.active{color:var(--primary);border-bottom-color:var(--primary)}
+.user-picker{position:relative}
+.search-results{position:absolute;top:100%;left:0;right:0;background:var(--card);
+  border:1.5px solid var(--accent);border-top:none;border-radius:0 0 8px 8px;
+  box-shadow:var(--sh-md);z-index:50;max-height:240px;overflow-y:auto;display:none}
+.search-results.show{display:block}
+.result-item{padding:10px 14px;cursor:pointer;display:flex;align-items:center;
+  gap:10px;border-top:1px solid var(--border);transition:background .1s}
+.result-item:first-child{border-top:none}
+.result-item:hover{background:#f4f7ff}
+.r-name{font-weight:600;font-size:13.5px}
+.r-meta{font-size:12px;color:var(--muted)}
+.selected-user{display:flex;align-items:center;gap:10px;padding:10px 12px;
+  background:#EFF6FF;border:1.5px solid var(--accent);border-radius:8px;margin-top:6px}
+.su-name{font-weight:600;font-size:13.5px;color:var(--primary)}
+.su-meta{font-size:12px;color:var(--muted)}
+.no-results{padding:12px 14px;color:var(--muted);font-size:13px;text-align:center}
+.pass-display{display:flex;align-items:center;gap:8px;background:#f8fafc;
+  border:1.5px solid var(--border);border-radius:8px;padding:10px 14px}
+.pass-txt{flex:1;font-family:monospace;font-size:16px;font-weight:700;letter-spacing:1px;color:var(--primary)}
+.cred-card{background:#f0fdf4;border:2px solid #22c55e;border-radius:10px;padding:22px}
+.cred-card h4{color:#166534;font-size:15px;font-weight:700;margin-bottom:14px}
+.cred-row{display:flex;align-items:center;gap:10px;margin-bottom:9px;font-size:13px}
+.cred-label{color:#64748b;font-weight:600;min-width:130px}
+.cred-value{font-family:monospace;font-weight:700;color:#1F3864;font-size:13.5px}
+</style>
+</head>
+<body>
+
+<div class="page-hdr">
+  <div class="ph-left">
+    <div class="ph-icon">👥</div>
+    <div>
+      <div class="ph-title">User Management</div>
+      <div class="ph-sub">Manage internal staff access and contractor portal accounts</div>
+    </div>
+  </div>
+  <div class="ph-right">
+    <button class="btn btn-hdr" onclick="location.href='contracts.html'">← Back to Dashboard</button>
+  </div>
+</div>
+
+<div class="content">
+  <div id="loading" class="loading-wrap">
+    <div class="spinner"></div>
+    <div class="loading-txt">Loading…</div>
+  </div>
+
+  <div id="app" style="display:none">
+
+    <div class="tab-bar">
+      <button class="tab-btn active" id="tb-staff" onclick="switchTab('staff')">Internal Staff</button>
+      <button class="tab-btn"        id="tb-portal" onclick="switchTab('portal')">Contractor Portal</button>
+    </div>
+
+    <!-- ══════════════════════════════════════
+         TAB 1 — INTERNAL STAFF
+    ══════════════════════════════════════════ -->
+    <div id="tab-staff">
+
+      <div class="alert alert-info" style="margin-bottom:18px">
+        <strong>Workflow:</strong> The person must already have a RumbuApp account.
+        Search for them below, assign a role, and save.<br>
+        <span style="font-size:12px;color:#475569">
+          <strong>Available roles:</strong> CEO, ContractAdmin, HeadOfContract, SiteSupervisor, Viewer.
+          SiteSupervisors only see contracts assigned to them.
+        </span>
+      </div>
+
+      <div class="sec-card" style="margin-bottom:22px">
+        <div class="sec-hdr">
+          <div>
+            <div class="sec-title">Grant Module Access</div>
+            <div class="sec-sub">Search for an existing RumbuApp user and assign a role</div>
+          </div>
+        </div>
+        <div class="sec-body">
+          <div class="g2" style="margin-bottom:14px">
+            <div class="field">
+              <label>Find User <span class="req">*</span></label>
+              <div class="user-picker">
+                <input id="user-search" class="srch" placeholder="Type a name or email…"
+                  autocomplete="off" oninput="onSearchInput()" onfocus="onSearchFocus()">
+                <div id="search-results" class="search-results"></div>
+              </div>
+              <div id="selected-user" style="display:none">
+                <div class="selected-user">
+                  <div>
+                    <div class="su-name" id="su-name"></div>
+                    <div class="su-meta" id="su-meta"></div>
+                  </div>
+                  <button class="btn-link" style="margin-left:auto;font-size:12px"
+                    onclick="clearSelectedUser()">✕ Clear</button>
+                </div>
+              </div>
+              <div id="search-status" style="font-size:12px;color:#6b7280;margin-top:4px;display:none"></div>
+            </div>
+            <div class="field">
+              <label>Role <span class="req">*</span></label>
+              <select id="f-role" class="srch">
+                <option value="">— Select Role —</option>
+              </select>
+            </div>
+          </div>
+          <div class="g2" style="margin-bottom:16px">
+            <div class="field">
+              <label>Staff ID</label>
+              <input id="f-staff-id" class="srch" placeholder="e.g. CM-003 (auto if blank)">
+            </div>
+            <div class="field">
+              <label>Phone</label>
+              <input id="f-phone" class="srch" type="tel" placeholder="+234…">
+            </div>
+          </div>
+          <button class="btn btn-primary" onclick="grantAccess()">＋ Grant Access</button>
+        </div>
+      </div>
+
+      <div class="sec-card">
+        <div class="sec-hdr">
+          <div class="sec-title">
+            Module Users
+            <span id="staff-count" style="font-weight:400;color:var(--muted);font-size:13px"></span>
+          </div>
+        </div>
+        <div id="staff-table" style="overflow-x:auto"></div>
+      </div>
+
+    </div><!-- /#tab-staff -->
+
+    <!-- ══════════════════════════════════════
+         TAB 2 — CONTRACTOR PORTAL
+    ══════════════════════════════════════════ -->
+    <div id="tab-portal" style="display:none">
+
+      <div class="alert alert-info" style="margin-bottom:18px">
+        <strong>How it works:</strong> Create a login for a contractor representative.
+        The system generates a temporary password — share it with them directly.
+        They log in at <strong>rumbu.vercel.app/portal.html</strong>.
+      </div>
+
+      <div class="sec-card" style="margin-bottom:22px">
+        <div class="sec-hdr">
+          <div>
+            <div class="sec-title">Add Contractor Portal User</div>
+            <div class="sec-sub">Creates a login and grants access to the contractor portal</div>
+          </div>
+        </div>
+        <div class="sec-body">
+          <div class="g2" style="margin-bottom:14px">
+            <div class="field">
+              <label>Full Name <span class="req">*</span></label>
+              <input id="p-name" class="srch" placeholder="e.g. Aliyu Musa Ibrahim">
+            </div>
+            <div class="field">
+              <label>Company <span class="req">*</span></label>
+              <select id="p-company" class="srch">
+                <option value="">— Select Company —</option>
+              </select>
+            </div>
+          </div>
+          <div class="g2" style="margin-bottom:14px">
+            <div class="field">
+              <label>Email Address <span class="req">*</span></label>
+              <input id="p-email" type="email" class="srch" placeholder="user@company.ng">
+            </div>
+            <div class="field">
+              <label>Phone (optional)</label>
+              <input id="p-phone" type="tel" class="srch" placeholder="+234…">
+            </div>
+          </div>
+          <div class="field" style="margin-bottom:18px">
+            <label>Temporary Password — copy before creating</label>
+            <div class="pass-display">
+              <span class="pass-txt" id="p-pass-txt"></span>
+              <button class="btn" style="padding:5px 11px;font-size:12px" onclick="copyPass()">Copy</button>
+              <button class="btn" style="padding:5px 11px;font-size:12px" onclick="regenPass()">↻ New</button>
+            </div>
+            <div style="font-size:11px;color:var(--muted);margin-top:4px">
+              Share this password with the user directly (phone, WhatsApp, or in-person).
+            </div>
+          </div>
+          <button class="btn btn-primary" onclick="createPortalUser()">Create Portal Account</button>
+        </div>
+      </div>
+
+      <div id="cred-card" class="cred-card" style="display:none;margin-bottom:22px">
+        <h4>✅ Portal Account Created</h4>
+        <div class="cred-row"><span class="cred-label">Name</span><span class="cred-value" id="cc-name"></span></div>
+        <div class="cred-row"><span class="cred-label">Company</span><span class="cred-value" id="cc-company"></span></div>
+        <div class="cred-row"><span class="cred-label">Email</span><span class="cred-value" id="cc-email"></span></div>
+        <div class="cred-row">
+          <span class="cred-label">Temp Password</span>
+          <span class="cred-value" id="cc-pass"></span>
+          <button class="btn" style="padding:3px 9px;font-size:11px;margin-left:8px" onclick="copyCredPass()">Copy</button>
+        </div>
+        <div style="font-size:12px;color:#166534;margin-top:12px;line-height:1.6">
+          Portal URL: <strong>rumbu.vercel.app/portal.html</strong><br>
+          Share the email and temporary password with the user now.
+        </div>
+      </div>
+
+      <div class="sec-card">
+        <div class="sec-hdr">
+          <div class="sec-title">
+            Portal Users
+            <span id="portal-count" style="font-weight:400;color:var(--muted);font-size:13px"></span>
+          </div>
+        </div>
+        <div id="portal-table" style="overflow-x:auto"></div>
+      </div>
+
+    </div><!-- /#tab-portal -->
+  </div><!-- /#app -->
+</div>
+
+<!-- Edit staff modal -->
+<div id="edit-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);
+  z-index:200;align-items:center;justify-content:center">
+  <div class="sec-card" style="width:420px;max-width:95vw;max-height:85vh;overflow-y:auto">
+    <div class="sec-hdr">
+      <div class="sec-title">Edit Access</div>
+      <button class="btn-link" onclick="closeModal()">✕</button>
+    </div>
+    <div class="sec-body">
+      <div class="field">
+        <label>Role</label>
+        <select id="m-role" class="srch"></select>
+      </div>
+      <div class="field">
+        <label>Staff ID</label>
+        <input id="m-staff-id" class="srch">
+      </div>
+      <div class="field">
+        <label>Phone</label>
+        <input id="m-phone" class="srch" type="tel">
+      </div>
+      <div class="field">
+        <label>Status</label>
+        <select id="m-status" class="srch">
+          <option value="active">Active</option>
+          <option value="suspended">Suspended</option>
+          <option value="inactive">Inactive</option>
+        </select>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:4px">
+        <button class="btn btn-primary" onclick="saveEdit()">Save Changes</button>
+        <button class="btn" onclick="closeModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+var sb, roles = [], companies = [], staffUsers = [], portalUsers = [], allProfiles = [];
+var selectedProfile = null;
+var editingId       = null;
+var currentTempPass = '';
+
+async function init() {
+  try {
+    var auth = await guardPage();
+    if (!auth) return;
+
+    if (!auth.permissions.has('users.manage')) {
+      document.body.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;'
+        + 'justify-content:center;height:100vh;text-align:center;font-family:system-ui;'
+        + 'background:#f8fafc;padding:20px">'
+        + '<div style="font-size:48px;margin-bottom:16px">🔒</div>'
+        + '<h2 style="color:#1F3864;font-size:18px;font-weight:700;margin-bottom:10px">Access Restricted</h2>'
+        + '<p style="color:#64748b;font-size:14px;max-width:320px;line-height:1.65">'
+        + 'Only the designated Contract Administrator can manage module users.</p></div>';
+      return;
+    }
+
+    sb = auth.sb;
+    regenPass();
+
+    // Load roles and companies
+    var results = await Promise.all([
+      sb.from('cnt_roles').select('id,name').order('name'),
+      sb.from('cnt_companies').select('id,name').order('name')
+    ]);
+
+    roles     = results[0].data || [];
+    companies = results[1].data || [];
+    // allProfiles is not pre-loaded; search uses the cnt_search_users RPC function
+
+    // Populate role dropdowns
+    ['f-role','m-role'].forEach(function(selId){
+      var sel = document.getElementById(selId);
+      roles.forEach(function(r){
+        if (selId === 'f-role' && r.name === 'Subcontractor') return;
+        sel.insertAdjacentHTML('beforeend','<option value="'+r.id+'">'+esc(r.name)+'</option>');
+      });
+    });
+
+    var cSel = document.getElementById('p-company');
+    companies.forEach(function(c){
+      cSel.insertAdjacentHTML('beforeend','<option value="'+c.id+'">'+esc(c.name)+'</option>');
+    });
+
+    await loadUsers();
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('app').style.display     = 'block';
+
+  } catch(e) {
+    document.getElementById('loading').innerHTML =
+      '<p style="color:var(--bad);text-align:center">'+esc(e.message)+'</p>';
+    console.error(e);
+  }
+}
+
+// ── Search users via RPC (bypasses RLS on auth.users) ────────────
+// Requires the cnt_search_users(search_term TEXT) function in Supabase.
+async function searchUsers(q) {
+  try {
+    var r = await sb.rpc('cnt_search_users', { search_term: q });
+    if (r.error) throw r.error;
+    return (r.data || []).map(function(u){
+      return { id: u.id, username: u.display_name || u.email || 'Unknown', email: u.email || '' };
+    });
+  } catch(e) {
+    console.error('cnt_search_users RPC error:', e.message);
+    return [];
+  }
+}
+
+async function loadUsers() {
+  var r = await sb.from('cnt_profiles')
+    .select('id,full_name,email,phone,status,staff_id,company_id')
+    .order('full_name');
+  var all  = r.data || [];
+  staffUsers  = all.filter(function(p){ return !p.company_id && !String(p.staff_id||'').startsWith('SA-'); });
+  portalUsers = all.filter(function(p){ return  p.company_id; });
+
+  var roleMap = {};
+  if (staffUsers.length) {
+    var ids = staffUsers.map(function(p){ return p.id; });
+    var rr  = await sb.from('cnt_profile_roles')
+      .select('profile_id,cnt_roles(id,name)').in('profile_id', ids);
+    (rr.data || []).forEach(function(r2){
+      if (!roleMap[r2.profile_id]) roleMap[r2.profile_id] = [];
+      if (r2.cnt_roles) roleMap[r2.profile_id].push(r2.cnt_roles);
+    });
+  }
+  renderStaffTable(staffUsers, roleMap);
+  renderPortalTable(portalUsers);
+}
+
+function renderStaffTable(users, roleMap) {
+  document.getElementById('staff-count').textContent = '('+users.length+')';
+  var el = document.getElementById('staff-table');
+  if (!users.length) {
+    el.innerHTML = '<div style="padding:28px;text-align:center;color:var(--muted)">No internal staff added yet.</div>';
+    return;
+  }
+  el.innerHTML = '<table class="tbl"><thead><tr>'
+    + '<th>Name</th><th>Staff ID</th><th>Role</th><th>Status</th><th>Actions</th>'
+    + '</tr></thead><tbody>'
+    + users.map(function(u){
+      var ur       = roleMap[u.id] || [];
+      var roleName = ur.map(function(r){ return r.name; }).join(', ') || '—';
+      var roleId   = ur[0] ? ur[0].id : '';
+      var sc = {active:'ok',suspended:'warn',inactive:'err'}[u.status] || '';
+      var sl = {active:'Active',suspended:'Suspended',inactive:'Inactive'}[u.status] || u.status;
+      return '<tr>'
+        + '<td><div style="font-weight:600">'+esc(u.full_name)+'</div>'
+        + '<div style="font-size:12px;color:var(--muted)">'+esc(u.email)+'</div></td>'
+        + '<td>'+esc(u.staff_id||'—')+'</td>'
+        + '<td>'+esc(roleName)+'</td>'
+        + '<td><span class="status '+sc+'">'+sl+'</span></td>'
+        + '<td style="white-space:nowrap">'
+        + '<button class="btn" style="padding:4px 10px;font-size:12px" '
+        + 'onclick="openEdit(\''+u.id+'\',\''+roleId+'\',\''+esc(u.staff_id||'')+'\',\''+esc(u.phone||'')+'\',\''+u.status+'\')">Edit</button> '
+        + '<button class="btn btn-warn" style="padding:4px 10px;font-size:12px" '
+        + 'onclick="resetStaffPw(\''+esc(u.email)+'\',\''+esc(u.full_name)+'\')">Reset PW</button> '
+        + '<button class="btn btn-danger" style="padding:4px 10px;font-size:12px" '
+        + 'onclick="removeStaff(\''+u.id+'\',\''+esc(u.full_name)+'\')">Remove</button>'
+        + '</td></tr>';
+    }).join('')
+    + '</tbody></table>';
+}
+
+function renderPortalTable(users) {
+  document.getElementById('portal-count').textContent = '('+users.length+')';
+  var el = document.getElementById('portal-table');
+  if (!users.length) {
+    el.innerHTML = '<div style="padding:28px;text-align:center;color:var(--muted)">No portal users added yet.</div>';
+    return;
+  }
+  var companyMap = {};
+  companies.forEach(function(c){ companyMap[c.id] = c.name; });
+  el.innerHTML = '<table class="tbl"><thead><tr>'
+    + '<th>Name</th><th>Company</th><th>Status</th><th>Actions</th>'
+    + '</tr></thead><tbody>'
+    + users.map(function(u){
+      var cn = companyMap[u.company_id] || '—';
+      var sc = {active:'ok',suspended:'warn',inactive:'err'}[u.status] || '';
+      var sl = {active:'Active',suspended:'Suspended',inactive:'Inactive'}[u.status] || u.status;
+      return '<tr>'
+        + '<td><div style="font-weight:600">'+esc(u.full_name)+'</div>'
+        + '<div style="font-size:12px;color:var(--muted)">'+esc(u.email)+'</div></td>'
+        + '<td>'+esc(cn)+'</td>'
+        + '<td><span class="status '+sc+'">'+sl+'</span></td>'
+        + '<td style="white-space:nowrap">'
+        + '<button class="btn btn-warn" style="padding:4px 10px;font-size:12px" '
+        + 'onclick="resetPortalPw(\''+esc(u.email)+'\',\''+esc(u.full_name)+'\')">Reset PW</button> '
+        + '<button class="btn btn-danger" style="padding:4px 10px;font-size:12px" '
+        + 'onclick="removePortalUser(\''+u.id+'\',\''+esc(u.full_name)+'\')">Remove</button>'
+        + '</td></tr>';
+    }).join('')
+    + '</tbody></table>';
+}
+
+// ── Tabs ──────────────────────────────────────────────────────────
+function switchTab(tab) {
+  document.getElementById('tab-staff').style.display  = tab==='staff'  ? 'block' : 'none';
+  document.getElementById('tab-portal').style.display = tab==='portal' ? 'block' : 'none';
+  document.getElementById('tb-staff').classList.toggle('active',  tab==='staff');
+  document.getElementById('tb-portal').classList.toggle('active', tab==='portal');
+}
+
+// ── User search ───────────────────────────────────────────────────
+var _searchTimer = null;
+function onSearchInput() {
+  var q   = document.getElementById('user-search').value.trim();
+  var res = document.getElementById('search-results');
+  if (!q || q.length < 2) { res.classList.remove('show'); return; }
+
+  res.innerHTML = '<div class="no-results">Searching…</div>';
+  res.classList.add('show');
+
+  clearTimeout(_searchTimer);
+  _searchTimer = setTimeout(async function(){
+    var hits = await searchUsers(q);
+    var taken = new Set(staffUsers.concat(portalUsers).map(function(u){ return u.id; }));
+    hits = hits.filter(function(p){ return !taken.has(p.id); });
+
+    res.innerHTML = hits.length
+      ? hits.map(function(p){
+          return '<div class="result-item" onclick="selectUser(\''+p.id+'\',\''+esc(p.username)+'\',\''+esc(p.email)+'\')">'
+            + '<div><div class="r-name">'+esc(p.username)+'</div>'
+            + '<div class="r-meta">'+esc(p.email)+'</div></div></div>';
+        }).join('')
+      : '<div class="no-results">No matching users found</div>';
+    res.classList.add('show');
+  }, 300);
+}
+function onSearchFocus() {
+  if (document.getElementById('user-search').value.trim().length >= 2) onSearchInput();
+}
+function selectUser(id, username, email) {
+  selectedProfile = { id: id, username: username, email: email };
+  document.getElementById('user-search').value = '';
+  document.getElementById('search-results').classList.remove('show');
+  document.getElementById('su-name').textContent = username;
+  document.getElementById('su-meta').textContent = email;
+  document.getElementById('selected-user').style.display = 'block';
+}
+function clearSelectedUser() {
+  selectedProfile = null;
+  document.getElementById('user-search').value = '';
+  document.getElementById('selected-user').style.display = 'none';
+}
+document.addEventListener('click', function(e){
+  if (!e.target.closest('.user-picker'))
+    document.getElementById('search-results').classList.remove('show');
+});
+
+// ── Grant access ──────────────────────────────────────────────────
+async function grantAccess() {
+  if (!selectedProfile) { toast('Select a user first', 'warn'); return; }
+  var roleId = document.getElementById('f-role').value;
+  if (!roleId) { toast('Select a role', 'warn'); return; }
+
+  var staffId = document.getElementById('f-staff-id').value.trim()
+    || ('CM-' + String(staffUsers.length + 1).padStart(3,'0'));
+  var phone   = document.getElementById('f-phone').value.trim() || null;
+
+  var existing = await sb.from('cnt_profiles').select('id').eq('id', selectedProfile.id).maybeSingle();
+  if (!existing.data) {
+    // Use SECURITY DEFINER RPC — direct INSERT is blocked by RLS when
+    // ContractAdmin creates a profile row on behalf of a different user.
+    var ie = await sb.rpc('cnt_upsert_profile', {
+      p_id:        selectedProfile.id,
+      p_org_id:    'c0000000-0000-0000-0000-000000000001',
+      p_staff_id:  staffId,
+      p_full_name: selectedProfile.username,
+      p_email:     selectedProfile.email,
+      p_phone:     phone || null
+    });
+    if (ie.error) { toast('Profile error: ' + ie.error.message, 'err'); return; }
+  }
+
+  var re = await sb.from('cnt_profile_roles').insert({ profile_id: selectedProfile.id, role_id: roleId });
+  if (re.error && re.error.code !== '23505') { toast(re.error.message, 'err'); return; }
+
+  toast('Access granted', 'ok');
+  clearSelectedUser();
+  document.getElementById('f-role').value    = '';
+  document.getElementById('f-staff-id').value= '';
+  document.getElementById('f-phone').value   = '';
+  await loadUsers();
+}
+
+// ── Edit / Remove staff ───────────────────────────────────────────
+function openEdit(id, roleId, staffId, phone, status) {
+  editingId = id;
+  document.getElementById('m-role').value    = roleId;
+  document.getElementById('m-staff-id').value= staffId;
+  document.getElementById('m-phone').value   = phone;
+  document.getElementById('m-status').value  = status;
+  document.getElementById('edit-modal').style.display = 'flex';
+}
+function closeModal() {
+  document.getElementById('edit-modal').style.display = 'none';
+  editingId = null;
+}
+async function saveEdit() {
+  if (!editingId) return;
+  var ue = await sb.from('cnt_profiles').update({
+    staff_id:   document.getElementById('m-staff-id').value.trim(),
+    phone:      document.getElementById('m-phone').value.trim() || null,
+    status:     document.getElementById('m-status').value,
+    updated_at: new Date().toISOString()
+  }).eq('id', editingId);
+  if (ue.error) { toast(ue.error.message, 'err'); return; }
+
+  var newRoleId = document.getElementById('m-role').value;
+  await sb.from('cnt_profile_roles').delete().eq('profile_id', editingId);
+  if (newRoleId)
+    await sb.from('cnt_profile_roles').insert({ profile_id: editingId, role_id: newRoleId });
+
+  toast('Saved', 'ok');
+  closeModal();
+  await loadUsers();
+}
+async function removeStaff(id, name) {
+  if (!confirm('Remove '+name+' from the module? They will lose all access.')) return;
+  await sb.from('cnt_profile_roles').delete().eq('profile_id', id);
+  var r = await sb.from('cnt_profiles').delete().eq('id', id);
+  if (r.error) { toast(r.error.message, 'err'); return; }
+  toast(name + ' removed', 'ok');
+  await loadUsers();
+}
+
+// ── Password generation ───────────────────────────────────────────
+function regenPass() {
+  var c = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  currentTempPass = 'Rumbu@' +
+    Array.from({length:5}, function(){ return c[Math.floor(Math.random()*c.length)]; }).join('');
+  document.getElementById('p-pass-txt').textContent = currentTempPass;
+}
+function copyPass() {
+  navigator.clipboard.writeText(currentTempPass).then(function(){ toast('Password copied', 'ok'); });
+}
+function copyCredPass() {
+  var pw = document.getElementById('cc-pass').textContent;
+  navigator.clipboard.writeText(pw).then(function(){ toast('Password copied', 'ok'); });
+}
+
+// ── Create portal account ─────────────────────────────────────────
+async function createPortalUser() {
+  var name      = document.getElementById('p-name').value.trim();
+  var email     = document.getElementById('p-email').value.trim();
+  var companyId = document.getElementById('p-company').value;
+  var phone     = document.getElementById('p-phone').value.trim() || null;
+
+  if (!name || !email || !companyId) {
+    toast('Name, email, and company are required', 'warn'); return;
+  }
+
+  var factory = (window.supabase && window.supabase.createClient)
+    || (window.parent && window.parent.supabase && window.parent.supabase.createClient);
+  if (!factory) { toast('Could not reach Supabase library', 'err'); return; }
+
+  var tmpSb = factory(_CNT_URL, _CNT_KEY, { auth: { persistSession:false, autoRefreshToken:false } });
+  var authR  = await tmpSb.auth.signUp({ email: email, password: currentTempPass, options:{data:{full_name:name}} });
+
+  if (authR.error) { toast('Auth error: '+authR.error.message, 'err'); return; }
+  var userId = authR.data && authR.data.user && authR.data.user.id;
+  if (!userId) { toast('Account not created — Supabase returned no user ID. Email may already exist.', 'err'); return; }
+
+  var staffId = 'PRT-' + Date.now().toString(36).toUpperCase().slice(-5);
+  var profErr = await sb.from('cnt_profiles').insert({
+    id: userId, org_id:'c0000000-0000-0000-0000-000000000001',
+    staff_id: staffId, full_name: name, email: email, phone: phone,
+    company_id: companyId, status: 'active'
+  });
+  if (profErr.error) { toast('Profile error: '+profErr.error.message, 'err'); return; }
+
+  var companyName = (companies.find(function(c){ return c.id===companyId; })||{}).name || '—';
+  document.getElementById('cc-name').textContent    = name;
+  document.getElementById('cc-company').textContent = companyName;
+  document.getElementById('cc-email').textContent   = email;
+  document.getElementById('cc-pass').textContent    = currentTempPass;
+  document.getElementById('cred-card').style.display = 'block';
+  document.getElementById('cred-card').scrollIntoView({ behavior:'smooth' });
+
+  document.getElementById('p-name').value    = '';
+  document.getElementById('p-email').value   = '';
+  document.getElementById('p-company').value = '';
+  document.getElementById('p-phone').value   = '';
+  regenPass();
+  toast('Portal account created', 'ok');
+  await loadUsers();
+}
+
+// ── Reset passwords ───────────────────────────────────────────────
+async function resetStaffPw(email, name) {
+  if (!confirm('Send a password-reset email to '+name+' ('+email+')?')) return;
+  var r = await sb.auth.resetPasswordForEmail(email, { redirectTo:'https://rumbu.vercel.app/login.html' });
+  if (r.error) { toast(r.error.message, 'err'); return; }
+  toast('Reset email sent to '+email, 'ok');
+}
+async function resetPortalPw(email, name) {
+  if (!confirm('Send a password-reset email to '+name+' ('+email+')?')) return;
+  var r = await sb.auth.resetPasswordForEmail(email, { redirectTo:'https://rumbu.vercel.app/portal.html' });
+  if (r.error) { toast(r.error.message, 'err'); return; }
+  toast('Reset email sent to '+email, 'ok');
+}
+async function removePortalUser(id, name) {
+  if (!confirm('Remove '+name+' from portal access? This cannot be undone.')) return;
+  var r = await sb.from('cnt_profiles').delete().eq('id', id);
+  if (r.error) { toast(r.error.message, 'err'); return; }
+  document.getElementById('cred-card').style.display = 'none';
+  toast(name+' removed', 'ok');
+  await loadUsers();
+}
+
+// ── Utility ───────────────────────────────────────────────────────
+function esc(s){
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+init();
+</script>
+</body>
+</html>
