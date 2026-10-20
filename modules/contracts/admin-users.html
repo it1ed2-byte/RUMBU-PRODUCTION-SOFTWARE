@@ -289,24 +289,15 @@ async function init() {
     sb = auth.sb;
     regenPass();
 
-    // Load roles, companies, and RumbuApp user profiles in parallel
+    // Load roles and companies
     var results = await Promise.all([
       sb.from('cnt_roles').select('id,name').order('name'),
-      sb.from('cnt_companies').select('id,name').order('name'),
-      loadAllProfiles(sb)
+      sb.from('cnt_companies').select('id,name').order('name')
     ]);
 
-    roles      = results[0].data || [];
-    companies  = results[1].data || [];
-    allProfiles= results[2];
-
-    // Show feedback if no profiles found
-    var ss = document.getElementById('search-status');
-    if (!allProfiles.length && ss) {
-      ss.style.display = 'block';
-      ss.innerHTML = '⚠️ No RumbuApp users found. Ensure the <code>profiles</code> table has users '
-        + 'or contact IT to check table permissions.';
-    }
+    roles     = results[0].data || [];
+    companies = results[1].data || [];
+    // allProfiles is not pre-loaded; search uses the cnt_search_users RPC function
 
     // Populate role dropdowns
     ['f-role','m-role'].forEach(function(selId){
@@ -333,30 +324,19 @@ async function init() {
   }
 }
 
-// ── Load profiles for user search ─────────────────────────────────
-// Tries profiles table first (standard RumbuApp), falls back gracefully.
-async function loadAllProfiles(sb2) {
-  // Attempt 1: profiles table with full_name or username
+// ── Search users via RPC (bypasses RLS on auth.users) ────────────
+// Requires the cnt_search_users(search_term TEXT) function in Supabase.
+async function searchUsers(q) {
   try {
-    var r = await sb2.from('profiles').select('id,username,full_name,email').order('username');
-    if (!r.error && r.data && r.data.length) {
-      return r.data.map(function(p){
-        return { id: p.id, username: p.full_name || p.username || p.email || 'Unknown', email: p.email || '' };
-      });
-    }
-  } catch(e) {}
-
-  // Attempt 2: employees table (used for supervisor assignment context)
-  try {
-    var r2 = await sb2.from('employees').select('id,full_name,email,employee_id').order('full_name');
-    if (!r2.error && r2.data && r2.data.length) {
-      return r2.data.map(function(e){
-        return { id: e.id, username: e.full_name || e.email || 'Unknown', email: e.email || '' };
-      });
-    }
-  } catch(e) {}
-
-  return [];
+    var r = await sb.rpc('cnt_search_users', { search_term: q });
+    if (r.error) throw r.error;
+    return (r.data || []).map(function(u){
+      return { id: u.id, username: u.display_name || u.email || 'Unknown', email: u.email || '' };
+    });
+  } catch(e) {
+    console.error('cnt_search_users RPC error:', e.message);
+    return [];
+  }
 }
 
 async function loadUsers() {
@@ -455,34 +435,33 @@ function switchTab(tab) {
 }
 
 // ── User search ───────────────────────────────────────────────────
+var _searchTimer = null;
 function onSearchInput() {
-  var q   = document.getElementById('user-search').value.toLowerCase().trim();
+  var q   = document.getElementById('user-search').value.trim();
   var res = document.getElementById('search-results');
-  if (!q) { res.classList.remove('show'); return; }
+  if (!q || q.length < 2) { res.classList.remove('show'); return; }
 
-  if (!allProfiles.length) {
-    res.innerHTML = '<div class="no-results">No user directory loaded. Check console for details.</div>';
-    res.classList.add('show');
-    return;
-  }
-
-  var taken = new Set(staffUsers.map(function(u){ return u.id; }));
-  var hits  = allProfiles.filter(function(p){
-    return !taken.has(p.id) &&
-      ((p.username||'').toLowerCase().includes(q) || (p.email||'').toLowerCase().includes(q));
-  }).slice(0, 10);
-
-  res.innerHTML = hits.length
-    ? hits.map(function(p){
-        return '<div class="result-item" onclick="selectUser(\''+p.id+'\',\''+esc(p.username)+'\',\''+esc(p.email)+'\')">'
-          + '<div><div class="r-name">'+esc(p.username)+'</div>'
-          + '<div class="r-meta">'+esc(p.email)+'</div></div></div>';
-      }).join('')
-    : '<div class="no-results">No matching users found</div>';
+  res.innerHTML = '<div class="no-results">Searching…</div>';
   res.classList.add('show');
+
+  clearTimeout(_searchTimer);
+  _searchTimer = setTimeout(async function(){
+    var hits = await searchUsers(q);
+    var taken = new Set(staffUsers.map(function(u){ return u.id; }));
+    hits = hits.filter(function(p){ return !taken.has(p.id); });
+
+    res.innerHTML = hits.length
+      ? hits.map(function(p){
+          return '<div class="result-item" onclick="selectUser(\''+p.id+'\',\''+esc(p.username)+'\',\''+esc(p.email)+'\')">'
+            + '<div><div class="r-name">'+esc(p.username)+'</div>'
+            + '<div class="r-meta">'+esc(p.email)+'</div></div></div>';
+        }).join('')
+      : '<div class="no-results">No matching users found</div>';
+    res.classList.add('show');
+  }, 300);
 }
 function onSearchFocus() {
-  if (document.getElementById('user-search').value.trim()) onSearchInput();
+  if (document.getElementById('user-search').value.trim().length >= 2) onSearchInput();
 }
 function selectUser(id, username, email) {
   selectedProfile = { id: id, username: username, email: email };
