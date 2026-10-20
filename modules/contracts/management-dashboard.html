@@ -216,6 +216,7 @@
 
 <script>
 let contracts = [], evalMap = {}, actionCountMap = {}, showEscOnly = false;
+var _myProfileId = null, _myRoles = new Set(), _canEdit = false;
 
 async function init() {
   try {
@@ -223,6 +224,10 @@ async function init() {
     if (!auth) return;
     const sb = auth.sb;
     window._sb = sb;
+    _myProfileId = auth.profile.id;
+    const rolesQry = await sb.from('cnt_profile_roles').select('cnt_roles(name)').eq('profile_id', _myProfileId);
+    _myRoles = new Set((rolesQry.data || []).map(r => r.cnt_roles && r.cnt_roles.name).filter(Boolean));
+    _canEdit = _myRoles.has('CEO') || _myRoles.has('ContractAdmin') || _myRoles.has('HeadOfContract');
     await loadData();
   } catch(e) {
     document.getElementById('loading').innerHTML =
@@ -237,10 +242,11 @@ async function loadData() {
 
   // 1. All contracts
   const { data: cData } = await sb.from('cnt_contracts').select(`
-    id, contract_id, title, status, risk_level, risk_notes,
-    original_value, start_date, original_completion_date,
+    id, contract_id, title, status, risk_level, risk_notes, notes,
+    original_value, start_date, original_completion_date, revised_completion_date,
     physical_progress_pct, financial_progress_pct,
-    cnt_agencies(name), cnt_companies(name)
+    state, lga, agency_id, assigned_company_id, site_supervisor_id,
+    cnt_agencies(id,name), cnt_companies(id,name)
   `).order('risk_level', { ascending: false })
     .order('contract_id');
   contracts = cData ?? [];
@@ -809,7 +815,7 @@ function openDetail(c) {
           + '<button onclick="closeDetail()" style="background:rgba(255,255,255,.15);'
           + 'border:none;color:#fff;cursor:pointer;border-radius:6px;padding:6px 14px;'
           + 'font-size:13px;font-weight:700">\u2190 Dashboard</button>'
-          + '<button onclick="editContract()" style="background:#2E75B6;border:1px solid rgba(255,255,255,.3);color:#fff;cursor:pointer;border-radius:6px;padding:6px 14px;font-size:13px;font-weight:700">\u270E Edit</button>'
+          + (_canEdit ? '<button onclick="editContract()" style="background:#2E75B6;border:1px solid rgba(255,255,255,.3);color:#fff;cursor:pointer;border-radius:6px;padding:6px 14px;font-size:13px;font-weight:700">\u270E Edit</button>' : '')
           + '<div style="flex:1;min-width:0">'
           + '<div style="font-size:11px;font-weight:700;opacity:.7;letter-spacing:.07em">'
           + (c.contract_id||'') + '</div>'
@@ -996,7 +1002,6 @@ async function dlLoad(name) {
             z-index:601;background:#fff;border-radius:12px;width:min(680px,95vw);
             max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.3)">
 
-  <!-- Modal header -->
   <div style="background:#1F3864;color:#fff;padding:14px 20px;border-radius:12px 12px 0 0;
               display:flex;align-items:center;justify-content:space-between">
     <div>
@@ -1008,89 +1013,73 @@ async function dlLoad(name) {
                    cursor:pointer;border-radius:6px;padding:5px 12px;font-size:18px">×</button>
   </div>
 
-  <!-- Form body -->
   <div style="padding:22px">
 
-    <!-- Reference & Status row -->
+    <!-- Reference & Status -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px">
       <div>
-        <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-                      color:#6b7280;display:block;margin-bottom:5px">Reference Number</label>
-        <input id="ec-contract-id" placeholder="NDDC/PU/…"
-               style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
-                      padding:9px 12px;font-size:13px;outline:none">
+        <label class="ec-lbl">Reference Number</label>
+        <input id="ec-contract-id" placeholder="NDDC/PU/…" class="ec-inp">
       </div>
       <div>
-        <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-                      color:#6b7280;display:block;margin-bottom:5px">Status</label>
-        <select id="ec-status"
-                style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
-                       padding:9px 12px;font-size:13px;outline:none;background:#fff">
-          <option>Pipeline</option>
-          <option>Active</option>
-          <option>On Hold</option>
-          <option>At Risk</option>
-          <option>Delayed</option>
-          <option>Practically Complete</option>
-          <option>Closed</option>
-          <option>Cancelled</option>
+        <label class="ec-lbl">Status</label>
+        <select id="ec-status" class="ec-sel">
+          <option value="Pipeline">Pending</option>
+          <option value="Active">Ongoing</option>
+          <option value="On Hold">On Hold</option>
+          <option value="At Risk">At Risk</option>
+          <option value="Delayed">Delayed</option>
+          <option value="Practically Complete">Practically Complete</option>
+          <option value="Closed">Completed</option>
+          <option value="Cancelled">Cancelled</option>
         </select>
       </div>
     </div>
 
     <!-- Title -->
     <div style="margin-bottom:16px">
-      <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-                    color:#6b7280;display:block;margin-bottom:5px">Contract Title</label>
-      <textarea id="ec-title" rows="2"
-                style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
-                       padding:9px 12px;font-size:13px;resize:vertical;outline:none"></textarea>
+      <label class="ec-lbl">Contract Title</label>
+      <textarea id="ec-title" rows="2" class="ec-ta"></textarea>
     </div>
 
-    <!-- Agency & Company -->
+    <!-- Agency (read-only) & Subcontractor -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px">
       <div>
-        <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-                      color:#6b7280;display:block;margin-bottom:5px">Agency</label>
-        <select id="ec-agency"
-                style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
-                       padding:9px 12px;font-size:13px;outline:none;background:#fff">
-          <option value="">— select —</option>
-        </select>
+        <label class="ec-lbl">Agency</label>
+        <div id="ec-agency-display"
+             style="padding:9px 12px;background:#f8fafc;border:1px solid #e2e8f0;
+                    border-radius:7px;font-size:13px;color:#6b7280;font-weight:600;min-height:38px">—</div>
+        <div style="font-size:11px;color:#9ca3af;margin-top:3px">Agency cannot be changed after creation.</div>
       </div>
       <div>
-        <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-                      color:#6b7280;display:block;margin-bottom:5px">Subcontractor</label>
-        <select id="ec-company"
-                style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
-                       padding:9px 12px;font-size:13px;outline:none;background:#fff">
+        <label class="ec-lbl">Subcontractor</label>
+        <select id="ec-company" class="ec-sel">
           <option value="">— select —</option>
         </select>
       </div>
+    </div>
+
+    <!-- Site Supervisor -->
+    <div style="margin-bottom:16px">
+      <label class="ec-lbl">Site Supervisor</label>
+      <select id="ec-supervisor" class="ec-sel">
+        <option value="">— None assigned —</option>
+      </select>
     </div>
 
     <!-- Value, State, Risk -->
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:16px">
       <div>
-        <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-                      color:#6b7280;display:block;margin-bottom:5px">Contract Value (NGN)</label>
-        <input id="ec-value" type="number" placeholder="0"
-               style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
-                      padding:9px 12px;font-size:13px;outline:none">
+        <label class="ec-lbl">Contract Value (NGN)</label>
+        <input id="ec-value" type="number" placeholder="0" class="ec-inp">
       </div>
       <div>
-        <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-                      color:#6b7280;display:block;margin-bottom:5px">State</label>
-        <input id="ec-state" placeholder="e.g. Lagos"
-               style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
-                      padding:9px 12px;font-size:13px;outline:none">
+        <label class="ec-lbl">State</label>
+        <input id="ec-state" placeholder="e.g. Rivers" class="ec-inp">
       </div>
       <div>
-        <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-                      color:#6b7280;display:block;margin-bottom:5px">Risk Level</label>
-        <select id="ec-risk"
-                style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
-                       padding:9px 12px;font-size:13px;outline:none;background:#fff">
+        <label class="ec-lbl">Risk Level</label>
+        <select id="ec-risk" class="ec-sel">
           <option value="low">Low</option>
           <option value="medium">Medium</option>
           <option value="high">High</option>
@@ -1101,125 +1090,93 @@ async function dlLoad(name) {
 
     <!-- Dates -->
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:16px">
-      <div>
-        <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-                      color:#6b7280;display:block;margin-bottom:5px">Start Date</label>
-        <input id="ec-start" type="date"
-               style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
-                      padding:9px 12px;font-size:13px;outline:none">
-      </div>
-      <div>
-        <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-                      color:#6b7280;display:block;margin-bottom:5px">End Date</label>
-        <input id="ec-end" type="date"
-               style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
-                      padding:9px 12px;font-size:13px;outline:none">
-      </div>
-      <div>
-        <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-                      color:#6b7280;display:block;margin-bottom:5px">Revised End Date</label>
-        <input id="ec-revised" type="date"
-               style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
-                      padding:9px 12px;font-size:13px;outline:none">
-      </div>
+      <div><label class="ec-lbl">Start Date</label><input id="ec-start" type="date" class="ec-inp"></div>
+      <div><label class="ec-lbl">End Date</label><input id="ec-end" type="date" class="ec-inp"></div>
+      <div><label class="ec-lbl">Revised End Date</label><input id="ec-revised" type="date" class="ec-inp"></div>
     </div>
 
     <!-- Progress -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px">
       <div>
-        <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-                      color:#6b7280;display:block;margin-bottom:5px">Physical Progress %</label>
-        <input id="ec-pp" type="number" min="0" max="100" placeholder="0"
-               style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
-                      padding:9px 12px;font-size:13px;outline:none">
+        <label class="ec-lbl">Physical Progress %</label>
+        <input id="ec-pp" type="number" min="0" max="100" placeholder="0" class="ec-inp">
       </div>
       <div>
-        <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-                      color:#6b7280;display:block;margin-bottom:5px">Financial Progress %</label>
-        <input id="ec-fp" type="number" min="0" max="100" placeholder="0"
-               style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
-                      padding:9px 12px;font-size:13px;outline:none">
+        <label class="ec-lbl">Financial Progress %</label>
+        <input id="ec-fp" type="number" min="0" max="100" placeholder="0" class="ec-inp">
       </div>
     </div>
 
     <!-- Risk Notes -->
     <div style="margin-bottom:16px">
-      <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-                    color:#6b7280;display:block;margin-bottom:5px">Risk Notes</label>
-      <textarea id="ec-risk-notes" rows="2"
-                style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
-                       padding:9px 12px;font-size:13px;resize:vertical;outline:none"></textarea>
+      <label class="ec-lbl">Risk Notes</label>
+      <textarea id="ec-risk-notes" rows="2" class="ec-ta"></textarea>
     </div>
 
-    <!-- General Notes -->
+    <!-- Notes -->
     <div style="margin-bottom:20px">
-      <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
-                    color:#6b7280;display:block;margin-bottom:5px">Notes</label>
-      <textarea id="ec-notes" rows="2"
-                style="width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
-                       padding:9px 12px;font-size:13px;resize:vertical;outline:none"></textarea>
+      <label class="ec-lbl">Notes</label>
+      <textarea id="ec-notes" rows="2" class="ec-ta"></textarea>
     </div>
 
-    <!-- Error message -->
     <div id="ec-err" style="display:none;background:#fef2f2;border:1px solid #fca5a5;
          color:#dc2626;border-radius:7px;padding:10px 14px;font-size:13px;margin-bottom:14px"></div>
 
-    <!-- Actions -->
     <div style="display:flex;gap:10px;justify-content:flex-end">
       <button onclick="closeEdit()"
               style="padding:10px 22px;border:1px solid #e2e8f0;border-radius:7px;
-                     background:#fff;cursor:pointer;font-size:13px;font-weight:600;color:#374151">
-        Cancel
-      </button>
-      <button onclick="saveContract()"
-              id="ec-save-btn"
+                     background:#fff;cursor:pointer;font-size:13px;font-weight:600;color:#374151">Cancel</button>
+      <button onclick="saveContract()" id="ec-save-btn"
               style="padding:10px 28px;border:none;border-radius:7px;
-                     background:#1F3864;color:#fff;cursor:pointer;
-                     font-size:13px;font-weight:700">
-        Save Changes
-      </button>
+                     background:#1F3864;color:#fff;cursor:pointer;font-size:13px;font-weight:700">Save Changes</button>
     </div>
   </div>
 </div>
 
+<style>
+.ec-lbl{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;
+  color:#6b7280;display:block;margin-bottom:5px}
+.ec-inp{width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
+  padding:9px 12px;font-size:13px;outline:none}
+.ec-sel{width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
+  padding:9px 12px;font-size:13px;outline:none;background:#fff}
+.ec-ta{width:100%;box-sizing:border-box;border:1px solid #e2e8f0;border-radius:7px;
+  padding:9px 12px;font-size:13px;resize:vertical;outline:none}
+</style>
+
 <script>
-/* ── Edit Contract ────────────────────────────────────────────────────────── */
-var _ecId = null;   // UUID of contract being edited
+var _ecId = null;
 
 async function editContract() {
   var c = _dlC;
   if (!c) return;
+  if (!_canEdit) { toast('You do not have permission to edit this contract.', 'warn'); return; }
+
   _ecId = c.id;
 
-  document.getElementById('ec-ref').textContent    = c.contract_id || 'New Contract';
-  document.getElementById('ec-contract-id').value  = c.contract_id || '';
-  document.getElementById('ec-title').value        = c.title       || '';
-  document.getElementById('ec-status').value       = c.status      || 'Pipeline';
-  document.getElementById('ec-value').value        = c.original_value || '';
-  document.getElementById('ec-state').value        = c.state       || '';
-  document.getElementById('ec-risk').value         = c.risk_level  || 'medium';
-  document.getElementById('ec-start').value        = c.start_date  ? c.start_date.slice(0,10) : '';
-  document.getElementById('ec-end').value          = c.original_completion_date  ? c.original_completion_date.slice(0,10)  : '';
-  document.getElementById('ec-revised').value      = c.revised_completion_date   ? c.revised_completion_date.slice(0,10)   : '';
-  document.getElementById('ec-pp').value           = c.physical_progress_pct  ?? 0;
-  document.getElementById('ec-fp').value           = c.financial_progress_pct ?? 0;
-  document.getElementById('ec-risk-notes').value   = c.risk_notes  || '';
-  document.getElementById('ec-notes').value        = c.notes       || '';
-  document.getElementById('ec-err').style.display  = 'none';
-  document.getElementById('ec-save-btn').textContent = 'Save Changes';
+  document.getElementById('ec-ref').textContent         = c.contract_id || 'Contract';
+  document.getElementById('ec-contract-id').value       = c.contract_id || '';
+  document.getElementById('ec-title').value             = c.title || '';
+  document.getElementById('ec-status').value            = c.status || 'Pipeline';
+  document.getElementById('ec-value').value             = c.original_value || '';
+  document.getElementById('ec-state').value             = c.state || '';
+  document.getElementById('ec-risk').value              = c.risk_level || 'medium';
+  document.getElementById('ec-start').value             = c.start_date               ? c.start_date.slice(0,10)               : '';
+  document.getElementById('ec-end').value               = c.original_completion_date ? c.original_completion_date.slice(0,10) : '';
+  document.getElementById('ec-revised').value           = c.revised_completion_date  ? c.revised_completion_date.slice(0,10)  : '';
+  document.getElementById('ec-pp').value                = c.physical_progress_pct  ?? 0;
+  document.getElementById('ec-fp').value                = c.financial_progress_pct ?? 0;
+  document.getElementById('ec-risk-notes').value        = c.risk_notes || '';
+  document.getElementById('ec-notes').value             = c.notes || '';
+  document.getElementById('ec-err').style.display       = 'none';
+  document.getElementById('ec-save-btn').textContent    = 'Save Changes';
+  document.getElementById('ec-save-btn').disabled       = false;
 
-  // Load agencies dropdown
-  var agSel = document.getElementById('ec-agency');
-  agSel.innerHTML = '<option value="">— select —</option>';
-  var agRes = await window._sb.from('cnt_agencies').select('id,name').order('name');
-  (agRes.data || []).forEach(function(a) {
-    var o = document.createElement('option');
-    o.value = a.id; o.textContent = a.name;
-    if (a.id === c.agency_id) o.selected = true;
-    agSel.appendChild(o);
-  });
+  // Agency — read-only display
+  document.getElementById('ec-agency-display').textContent =
+    (c.cnt_agencies && c.cnt_agencies.name) ? c.cnt_agencies.name : '—';
 
-  // Load companies dropdown
+  // Companies dropdown
   var coSel = document.getElementById('ec-company');
   coSel.innerHTML = '<option value="">— select —</option>';
   var coRes = await window._sb.from('cnt_companies').select('id,name').order('name');
@@ -1229,6 +1186,27 @@ async function editContract() {
     if (co.id === c.assigned_company_id) o.selected = true;
     coSel.appendChild(o);
   });
+
+  // Site Supervisor dropdown
+  var svSel = document.getElementById('ec-supervisor');
+  svSel.innerHTML = '<option value="">— None assigned —</option>';
+  try {
+    var svRoleR = await window._sb.from('cnt_roles').select('id').eq('name','SiteSupervisor').maybeSingle();
+    var svRoleId = svRoleR.data && svRoleR.data.id;
+    if (svRoleId) {
+      var svPrR = await window._sb.from('cnt_profile_roles')
+        .select('profile_id, cnt_profiles(id,full_name)').eq('role_id', svRoleId);
+      (svPrR.data || []).forEach(function(pr) {
+        if (pr.cnt_profiles) {
+          var o = document.createElement('option');
+          o.value = pr.cnt_profiles.id;
+          o.textContent = pr.cnt_profiles.full_name;
+          if (pr.cnt_profiles.id === c.site_supervisor_id) o.selected = true;
+          svSel.appendChild(o);
+        }
+      });
+    }
+  } catch(e) {}
 
   document.getElementById('ec-backdrop').style.display = 'block';
   document.getElementById('ec-modal').style.display    = 'block';
@@ -1243,8 +1221,8 @@ async function saveContract() {
   var btn = document.getElementById('ec-save-btn');
   var err = document.getElementById('ec-err');
   err.style.display = 'none';
-  btn.textContent = 'Saving…';
-  btn.disabled = true;
+  btn.textContent   = 'Saving…';
+  btn.disabled      = true;
 
   function v(id) { return document.getElementById(id).value.trim() || null; }
   function n(id) { var x = parseFloat(document.getElementById(id).value); return isNaN(x) ? null : x; }
@@ -1253,8 +1231,8 @@ async function saveContract() {
     contract_id:              v('ec-contract-id'),
     title:                    v('ec-title'),
     status:                   v('ec-status'),
-    agency_id:                v('ec-agency')  || null,
     assigned_company_id:      v('ec-company') || null,
+    site_supervisor_id:       v('ec-supervisor') || null,
     original_value:           n('ec-value'),
     state:                    v('ec-state'),
     risk_level:               v('ec-risk'),
@@ -1264,10 +1242,10 @@ async function saveContract() {
     physical_progress_pct:    n('ec-pp'),
     financial_progress_pct:   n('ec-fp'),
     risk_notes:               v('ec-risk-notes'),
-    notes:                    v('ec-notes'),
+    notes:                    v('ec-notes')
+    // agency_id intentionally omitted — read-only
   };
 
-  // Remove null dates (PostgREST needs omit, not null, for date fields)
   ['start_date','original_completion_date','revised_completion_date'].forEach(function(k) {
     if (!payload[k]) delete payload[k];
   });
@@ -1275,14 +1253,13 @@ async function saveContract() {
   var res = await window._sb.from('cnt_contracts').update(payload).eq('id', _ecId);
 
   if (res.error) {
-    err.textContent = 'Save failed: ' + res.error.message;
+    err.textContent   = 'Save failed: ' + res.error.message;
     err.style.display = 'block';
-    btn.textContent = 'Save Changes';
-    btn.disabled = false;
+    btn.textContent   = 'Save Changes';
+    btn.disabled      = false;
     return;
   }
 
-  // Update in-memory contract so overlay reflects changes immediately
   var idx = (window._contracts || []).findIndex(function(c) { return c.id === _ecId; });
   if (idx >= 0) {
     Object.assign(window._contracts[idx], payload);
@@ -1292,13 +1269,11 @@ async function saveContract() {
   btn.textContent = 'Saved ✓';
   setTimeout(function() {
     closeEdit();
-    // Re-open overlay with updated data
     openDetail(_dlC);
     btn.disabled = false;
   }, 700);
 }
 
-// Close modal on Escape
 document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape') closeEdit();
 });
