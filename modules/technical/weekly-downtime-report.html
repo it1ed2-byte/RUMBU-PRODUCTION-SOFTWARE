@@ -64,6 +64,11 @@
     <label>Start Date</label><input type="date" id="startDate">
     <label>End Date</label><input type="date" id="endDate">
   </div>
+  <label>Count records by</label>
+  <select id="dateBasis">
+    <option value="stop">Stoppage date (as the original report)</option>
+    <option value="op">Operator-recorded date</option>
+  </select>
   <label>Department</label><select id="department"></select>
   <label>Job Code <span id="jcBadge" class="jc-badge" style="display:none;"></span></label>
   <div class="jc-wrap">
@@ -89,6 +94,19 @@ function parseDT(v){ const d=new Date(v); return isNaN(d)?null:d; }
 function minutesBetween(a,b){ return (!a||!b)?0:Math.trunc((b-a)/60000); }
 function extractNumber(v){ if(v==null) return 0; const m=String(v).match(/\d+(\.\d+)?/); return m?Number(m[0]):0; }
 function fmtDate(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+function htmlEsc(v){ return String(v==null?"":v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+// Which date a record belongs to, for the chosen period:
+//   "stop" (the default, as in the original script): the date part of the stoppage time
+//   "op"   : the date the operator recorded on the work order
+// The Date column in the Asset Breakdown shows the same date the report counted by.
+let DATE_BASIS = "stop";
+function stopDay(r){ return r.stop_time ? String(r.stop_time).slice(0,10) : (r.date_col || null); }
+function recordDay(r){ return DATE_BASIS === "op" ? (r.date_col || null) : stopDay(r); }
+// Days between the operator-recorded date and the stoppage day. A gap of exactly 1 is the normal night shift
+// (entered under the shift's start day, stopped after midnight); anything larger is worth a look.
+function dayGap(r){ const a = r.date_col, b = stopDay(r); if(!a || !b || a === b) return 0; return Math.round((Date.parse(b) - Date.parse(a)) / 86400000); }
+function useOperatorDate(){ document.getElementById("dateBasis").value = "op"; generate(); }
 
 // ---- Exact department -> job-code map from the original script. ----
 // NOTE: this report filters by Job_Code membership in this map, NOT by a
@@ -281,7 +299,7 @@ function deptLabelMatches(department, label){
 function explainEmpty(range, department, shift, section, jobCode){
   const jobCodes = (jobCode && jobCode !== "All") ? [jobCode] : getJobCodesByDepartment(department);
   const jobSet = new Set(jobCodes.map(normalizeCode));
-  const dayOf = r => r.stop_time ? String(r.stop_time).slice(0,10) : r.date_col;
+  const dayOf = recordDay;
   const esc = v => String(v==null?"":v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
   const inRange   = CTRL_ROWS.filter(r => { const d = dayOf(r); return d && d >= range.startDate && d <= range.endDate; });
   const complete  = inRange.filter(r => r.stop_time && r.starting_time && r.finish_time);
@@ -321,9 +339,10 @@ function filterRows(range, department, shift, section, jobCode){
   const jobSet = new Set(jobCodes.map(normalizeCode));
   return CTRL_ROWS.filter(r=>{
     if(!r.stop_time || !r.starting_time || !r.finish_time) return false; // matches GAS WHERE ... IS NOT NULL
-    // Use the date from mc_stoppage_time (matches old script's DATE(MC_Stoppage_Time) BETWEEN)
-    const stopDate = r.stop_time ? r.stop_time.slice(0,10) : r.date_col;
-    if(stopDate < range.startDate || stopDate > range.endDate) return false;
+    // Which date counts is chosen with "Count records by": the stoppage date (matches the old script's
+    // DATE(MC_Stoppage_Time) BETWEEN, the default) or the operator-recorded date.
+    const day = recordDay(r);
+    if(!day || day < range.startDate || day > range.endDate) return false;
     // Job code: normalize both sides
     if(!jobSet.has(normalizeCode(r.job_code))) return false; // exclude codes not in any known department
     // Shift: case-insensitive
@@ -356,7 +375,7 @@ function get5PeriodSummary(periodType, year, week, month, startDate, endDate, de
       while(m<=0){ m+=12; y-=1; }
       const range = getMonthDateRange(y,m);
       const s = summariseRange(range, department, shift, section, jobCode);
-      summary.push({ label: y+"-"+String(m).padStart(2,"0"), ...s });
+      summary.push({ label: y+"-"+String(m).padStart(2,"0"), ...s, selected: i===0 });
     }
   } else if(periodType === "Custom"){
     const start = new Date(startDate), end = new Date(endDate);
@@ -366,7 +385,7 @@ function get5PeriodSummary(periodType, year, week, month, startDate, endDate, de
       const rangeStart = new Date(rangeEnd); rangeStart.setDate(rangeEnd.getDate()-intervalDays+1);
       const range = { startDate: fmtDate(rangeStart), endDate: fmtDate(rangeEnd) };
       const s = summariseRange(range, department, shift, section, jobCode);
-      summary.push({ label: range.startDate+" &rarr; "+range.endDate, ...s });
+      summary.push({ label: range.startDate+" &rarr; "+range.endDate, ...s, selected: i===0 });
     }
   } else {
     for(let i=4;i>=0;i--){
@@ -374,7 +393,7 @@ function get5PeriodSummary(periodType, year, week, month, startDate, endDate, de
       if(w<=0) continue;
       const range = getWeekDateRange(year, w);
       const s = summariseRange(range, department, shift, section, jobCode);
-      summary.push({ label: "Week "+w, ...s });
+      summary.push({ label: "Week "+w, ...s, selected: i===0 });
     }
   }
   return summary;
@@ -465,6 +484,7 @@ async function generate(){
   const shift = document.getElementById("shift").value;
   const section = document.getElementById("section").value;
   const jobCode = document.getElementById("jobCode").value; // "All" or specific code
+  DATE_BASIS = document.getElementById("dateBasis").value;
 
   let range;
   if(periodType === "Monthly") range = getMonthDateRange(year, month);
@@ -492,7 +512,9 @@ async function generate(){
   status.style.color=""; status.textContent = "Loading…";
   try{
     // Use mc_stoppage_time filter to match old script's DATE(MC_Stoppage_Time) BETWEEN
-  const ctrlQ = "&mc_stoppage_time=gte."+fetchFrom+"&mc_stoppage_time=lte."+fetchTo+"T23:59:59";
+  const ctrlQ = DATE_BASIS === "op"
+    ? "&date=gte."+fetchFrom+"&date=lte."+fetchTo
+    : "&mc_stoppage_time=gte."+fetchFrom+"&mc_stoppage_time=lte."+fetchTo+"T23:59:59";
   CTRL_ROWS = await fetchAllRows("control","*", ctrlQ);
     CTRL_ROWS.forEach(normalizeControlRow);
   }catch(e){
@@ -525,12 +547,31 @@ async function generate(){
   const worstSet = new Set([...jobData].sort((a,b)=>b.downtime-a.downtime).slice(0,5).map(x=>x.job));
 
   let reportTitle = periodType==="Monthly" ? "Monthly Downtime Report" : periodType==="Custom" ? "Custom Downtime Report" : "Weekly Downtime Report";
-  let periodLabel = periodType==="Monthly" ? "Month: "+month : periodType==="Custom" ? "Custom Report" : "Week: "+week;
+  let periodLabel = periodType==="Monthly" ? "Month: "+month : periodType==="Custom" ? "Report" : "Week: "+week;
   const isSpecificCode = jobCode && jobCode !== "All";
   const jobCodeLabel = isSpecificCode ? "Job Code: "+jobCode : "Department: "+department;
 
+  // Records counted in this period whose operator-recorded date is a different day from their stoppage date.
+  const mismatched = DATE_BASIS === "stop" ? rows.filter(r => Math.abs(dayGap(r)) > 1) : [];
+  const nightCount = DATE_BASIS === "stop" ? rows.filter(r => Math.abs(dayGap(r)) === 1).length : 0;
+  let noteHtml = "";
+  if(mismatched.length){
+    const sample = mismatched.slice().sort((a,b)=>String(a.date_col).localeCompare(String(b.date_col))).slice(0,8)
+      .map(r => `<li>Work order ${htmlEsc(r.work_order)}${r.assets ? " ("+htmlEsc(r.assets)+")" : ""}: operator-recorded date <b>${htmlEsc(r.date_col)}</b>, stopped <b>${htmlEsc(stopDay(r))}</b></li>`).join("");
+    noteHtml = `<div style="max-width:1100px;margin:12px auto;padding:10px 14px;border:1px solid #d9a441;background:rgba(217,164,65,.14);border-radius:8px;font-size:12.5px;text-align:left;">
+      &#9888; <b>${mismatched.length} record(s)</b> in this report were entered with a date more than one day away from the day they stopped.
+      As in the original report, they are counted by <b>stoppage date</b>, and the Date column below shows that date (marked &dagger;).
+      <ul style="margin:6px 0 6px 18px;padding:0;">${sample}</ul>${mismatched.length > 8 ? "&hellip;and " + (mismatched.length-8) + " more.<br>" : ""}
+      <button class="no-print" type="button" onclick="useOperatorDate()" style="width:auto;margin:6px 0 0;padding:6px 12px;font-size:12.5px;">Count by operator-recorded date instead</button>
+    </div>`;
+  }
+  if(nightCount){
+    noteHtml += `<p style="max-width:1100px;margin:6px auto;font-size:12px;opacity:.8;text-align:left;">${nightCount} record(s) were entered under the previous day's date (night shift, stopped after midnight). They are counted and shown by their stoppage date.</p>`;
+  }
+  const basisLabel = DATE_BASIS === "op" ? "operator-recorded date" : "stoppage date";
+
   let html = `<h2 style="text-align:center;">${reportTitle}</h2>
-    <p style="text-align:center;">Year: ${year} | ${periodType} ${periodLabel} | ${jobCodeLabel} (${range.startDate} &rarr; ${range.endDate})</p>
+    <p style="text-align:center;">Year: ${year} | ${periodType} ${periodLabel} | ${jobCodeLabel} (${range.startDate} &rarr; ${range.endDate}) | Counted by: ${basisLabel}</p>${noteHtml}
     <table><tr><th>Job</th><th>Count</th><th>Downtime</th><th>Repair</th><th>Waiting</th><th>Est</th><th>%</th></tr>`;
 
   let tC=0,tD=0,tR=0,tW=0,tE=0;
@@ -544,13 +585,16 @@ async function generate(){
 
   // ---- 5-period trailing summary ----
   if(summary5.length){
-    html += `<br><h3 style="text-align:center;">Last 5 ${periodType==="Monthly"?"Months":"Weeks"}</h3>
-      <table><tr><th>${periodType==="Monthly"?"Month":"Week"}</th><th>Count</th><th>Downtime</th><th>Repair</th><th>Waiting</th><th>%</th></tr>`;
+    const isCustom = periodType === "Custom";
+    const spanDays = isCustom ? Math.floor((new Date(range.endDate) - new Date(range.startDate))/86400000) + 1 : 0;
+    const summaryHeading = periodType==="Monthly" ? "Last 5 Months" : isCustom ? "Selected period and the 4 before it (" + spanDays + " days each)" : "Last 5 Weeks";
+    html += `<br><h3 style="text-align:center;">${summaryHeading}</h3>
+      <table><tr><th>${periodType==="Monthly"?"Month":isCustom?"Period":"Week"}</th><th>Count</th><th>Downtime</th><th>Repair</th><th>Waiting</th><th>%</th></tr>`;
     summary5.forEach(w=>{
-      html += `<tr><td>${w.label}</td><td>${w.count}</td><td>${Math.round(w.downtime)}</td><td>${Math.round(w.repair)}</td>` +
+      html += `<tr style="${w.selected ? "font-weight:700;background:rgba(46,117,182,.14)" : ""}"><td>${w.label}${w.selected ? " (selected)" : ""}</td><td>${w.count}</td><td>${Math.round(w.downtime)}</td><td>${Math.round(w.repair)}</td>` +
         `<td>${Math.round(w.waiting)}</td><td>${w.efficiency.toFixed(1)}%</td></tr>`;
     });
-    html += "</table>";
+    html += `</table><p style="text-align:center;font-size:12px;opacity:.8;">The last row is the selected period. The rows above it are earlier periods, shown for comparison only. They are not part of the figures above.</p>`;
   }
 
   // ---- Asset Breakdown: Job Code > Shed > Asset, with subtotals ----
@@ -603,7 +647,9 @@ async function generate(){
     gd+=down; gr+=rep; gw+=wait; ge+=estC;
 
     const label = [asset, r.discription, r.part_needed].filter(Boolean).join(" / ") + (job ? " / "+job : "");
-    html += `<tr><td>${label}</td><td>${r.work_order||""}</td><td>${r.names||""}</td><td>${r.date_col||""}</td>` +
+    const shownDay = DATE_BASIS === "op" ? (r.date_col || "") : (stopDay(r) || "");
+    const flag = (DATE_BASIS === "stop" && Math.abs(dayGap(r)) > 1) ? ` <span title="Operator-recorded date: ${htmlEsc(r.date_col)}" style="color:#b26a00;font-weight:700;">&dagger;</span>` : "";
+    html += `<tr><td>${label}</td><td>${r.work_order||""}</td><td>${r.names||""}</td><td>${shownDay}${flag}</td>` +
       `<td>${down}</td><td>${rep}</td><td>${wait}</td><td>${Math.ceil(est)}</td></tr>`;
   });
   if(currentAsset !== "") html += subtotalRow();
