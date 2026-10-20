@@ -493,16 +493,17 @@ async function grantAccess() {
 
   var existing = await sb.from('cnt_profiles').select('id').eq('id', selectedProfile.id).maybeSingle();
   if (!existing.data) {
-    var ie = await sb.from('cnt_profiles').insert({
-      id:       selectedProfile.id,
-      org_id:   'c0000000-0000-0000-0000-000000000001',
-      staff_id: staffId,
-      full_name:selectedProfile.username,
-      email:    selectedProfile.email,
-      phone:    phone,
-      status:   'active'
+    // Use SECURITY DEFINER RPC — direct INSERT is blocked by RLS when
+    // ContractAdmin creates a profile row on behalf of a different user.
+    var ie = await sb.rpc('cnt_upsert_profile', {
+      p_id:        selectedProfile.id,
+      p_org_id:    'c0000000-0000-0000-0000-000000000001',
+      p_staff_id:  staffId,
+      p_full_name: selectedProfile.username,
+      p_email:     selectedProfile.email,
+      p_phone:     phone || null
     });
-    if (ie.error) { toast(ie.error.message, 'err'); return; }
+    if (ie.error) { toast('Profile error: ' + ie.error.message, 'err'); return; }
   }
 
   var re = await sb.from('cnt_profile_roles').insert({ profile_id: selectedProfile.id, role_id: roleId });
