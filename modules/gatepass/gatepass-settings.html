@@ -75,13 +75,7 @@ body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;color:va
   border-radius:10px;padding:12px 16px;font-size:12.5px;
   color:var(--heading);margin-bottom:16px;line-height:1.55;
 }
-.sql-note{
-  background:var(--bg);border:1.5px solid var(--line);border-radius:12px;
-  padding:14px 18px;font-size:12px;color:var(--muted);margin-bottom:16px;
-}
-.sql-note summary{font-weight:700;cursor:pointer;color:var(--heading);}
-.sql-note pre{margin:12px 0 0;padding:12px;background:var(--card);border-radius:8px;
-  font-size:11px;overflow-x:auto;border:1px solid var(--line);white-space:pre;}
+
 .empty-note{color:var(--muted);font-size:13px;padding:20px 0;text-align:center;}
 </style>
 </head>
@@ -97,22 +91,7 @@ body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;color:va
   </div>
 </div>
 
-<div id="sqlNote" style="display:none;">
-  <details class="sql-note">
-    <summary>📋 First-time setup — run this SQL in Supabase if the table does not exist yet</summary>
-    <pre>CREATE TABLE IF NOT EXISTS gatepass_branch_settings (
-  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  branch_name text UNIQUE NOT NULL,
-  address text,
-  chief_security_phone text,
-  plant_manager_phone  text,
-  updated_at timestamptz DEFAULT now()
-);
-ALTER TABLE gatepass_branch_settings ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "read"  ON gatepass_branch_settings FOR SELECT TO authenticated USING (true);
-CREATE POLICY "write" ON gatepass_branch_settings FOR ALL    TO authenticated USING (true) WITH CHECK (true);</pre>
-  </details>
-</div>
+
 
 <div class="notice" id="scopeNote" style="display:none;"></div>
 
@@ -132,15 +111,21 @@ async function loadAll(){
   const grid = document.getElementById("cardsGrid");
   grid.innerHTML = '<p class="empty-note">Loading…</p>';
 
-  // 1. Fetch known branches
+  // 1. Always fetch ALL branches from app_sections (super_admin sees all;
+  //    others are filtered below)
+  const { data: secs } = await sb.from("app_sections").select("name").order("name");
+  const allBranches = (secs||[]).map(s=>s.name);
+
   let branchNames = [];
   if(ME.role === "super_admin"){
-    // Super admin: ALL branches from app_sections
-    const { data: secs } = await sb.from("app_sections").select("name").order("name");
-    branchNames = (secs||[]).map(s=>s.name);
+    branchNames = allBranches;                         // super_admin: everything
+  } else if((ME.sectionNames||[]).length){
+    // Filter to only this user's assigned branches
+    const mySet = new Set(ME.sectionNames);
+    branchNames = allBranches.filter(n=>mySet.has(n));
   } else {
-    // Other users: only their own assigned branches
-    branchNames = (ME.sectionNames||[]).slice().sort();
+    // Fallback: no sectionNames set but auth passed — show all
+    branchNames = allBranches;
   }
 
   // 2. Fetch existing settings (all, then filter client-side)
@@ -149,7 +134,7 @@ async function loadAll(){
 
   if(error){
     if(error.code==="42P01"){
-      grid.innerHTML="<p style='color:var(--bad);font-size:13px;font-weight:700;'>⚠️ The <b>gatepass_branch_settings</b> table does not exist yet. Expand the SQL note above and run it in Supabase first, then refresh.</p>";
+      grid.innerHTML="<p style='color:var(--bad);font-size:13px;font-weight:700;'>⚠️ The <b>gatepass_branch_settings</b> table does not exist yet. Ask a super admin to create it in Supabase, then refresh.</p>";
       return;
     }
     grid.innerHTML=`<p style="color:var(--bad);">Error: ${esc(error.message)}</p>`;
@@ -242,8 +227,7 @@ async function init(){
     if(!ME) return;
     cs.style.color="var(--ok)"; cs.textContent="Connected as "+ME.username;
 
-    // Show SQL note only to super_admin (they may need to create the table)
-    if(ME.role==="super_admin") document.getElementById("sqlNote").style.display="";
+
 
     // Scope note for non-super-admin
     const note = document.getElementById("scopeNote");
