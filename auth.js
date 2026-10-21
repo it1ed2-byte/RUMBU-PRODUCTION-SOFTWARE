@@ -47,7 +47,7 @@ async function requireAuth(loginPath) {
   }
 
   if (!session) {
-    window.location.href = loginPath;
+    (window.top||window).location.href = loginPath;
     return null;
   }
 
@@ -63,7 +63,7 @@ async function requireAuth(loginPath) {
 
   // --- KWP Phase 2: forced password change ---
   if (profile.must_change_password) {
-    window.location.href = _kwpForceChangePath(loginPath);
+    (window.top||window).location.href = _kwpForceChangePath(loginPath);
     return null;
   }
 
@@ -79,7 +79,7 @@ async function requireAuth(loginPath) {
       .maybeSingle();
     if (kwpLink && kwpLink.status !== "Active") {
       await sb.auth.signOut();
-      window.location.href = loginPath + "?blocked=inactive";
+      (window.top||window).location.href = loginPath + "?blocked=inactive";
       return null;
     }
   } catch (e) {
@@ -234,7 +234,7 @@ function _roBlock(el){
 
 async function logout(loginPath) {
   await sb.auth.signOut();
-  window.location.href = loginPath || "login.html";
+  (window.top||window).location.href = loginPath || "login.html";
 }
 
 // Blur any focused number input when the user scrolls — prevents the
