@@ -106,8 +106,8 @@
     <h3>Initiate Production</h3>
     <p class="sub">Only two initiations are allowed per day for each Work Type — one per shift. E.g. Normal can have a Morning and a Night initiation the same day; separately, B Grade can also have its own Morning and Night initiation that same day. Any initiation still Pending 24 hours after it was started is automatically Suspended — no entries are accepted until the original initiator revokes the suspension.</p>
     <div class="form-row-3">
-      <div class="field"><label>Production Date</label><input type="date" id="init_date"></div>
-      <div class="field"><label>Shift</label><select id="init_shift"><option>Morning</option><option>Night</option></select></div>
+      <div class="field"><label>Production Date</label><input type="date" id="init_date" onchange="updateGroupHint()"></div>
+      <div class="field"><label>Shift</label><select id="init_shift" onchange="updateGroupHint()"><option>Morning</option><option>Night</option></select></div>
       <div class="field">
         <label>Work Type</label>
         <select id="init_work_type">
@@ -115,6 +115,13 @@
           <option>Overtime</option><option>Extra Operators</option><option>Breakdown</option>
         </select>
       </div>
+    </div>
+    <div class="form-row-3">
+      <div class="field">
+        <label>Group (team) that worked this shift</label>
+        <select id="init_group" onchange="updateGroupHint()"><option value="">Select group…</option><option value="A">Group A</option><option value="B">Group B</option></select>
+      </div>
+      <div class="field" style="grid-column: span 2;"><label>&nbsp;</label><div id="init_group_hint" class="sub" style="margin:0;"></div></div>
     </div>
     <button id="btnInitiate" onclick="initiateProduction()">Initiate</button>
     <div class="status" id="initiateStatus" style="display:none;"></div>
@@ -128,7 +135,7 @@
   <div class="table-wrap">
     <div class="table-scroll">
       <table id="initTable">
-        <thead><tr><th>Date</th><th>Shift</th><th>Work Type</th><th>Status</th><th>Initiated By</th><th>Completed By</th><th></th></tr></thead>
+        <thead><tr><th>Date</th><th>Shift</th><th>Work Type</th><th>Group</th><th>Status</th><th>Initiated By</th><th>Completed By</th><th></th></tr></thead>
         <tbody id="initBody"><tr><td colspan="7">Loading...</td></tr></tbody>
       </table>
     </div>
@@ -342,6 +349,20 @@ function pickEmployee(emp){
   document.getElementById("empSearch").value = emp.full_name;
 }
 
+// A person must not be changed in a group while a shift of that group is still open: entries still to be made would be saved against
+// the NEW person while entries already made keep the OLD one, splitting one shift between two people.
+async function confirmChangeWithOpenShifts(group, what){
+  const { data, error } = await sb.from("weaving_production_initiations")
+    .select("production_date,shift,work_type").eq("status", "Pending").eq("group_name", group).order("production_date", {ascending:false});
+  if(error){ alert("Could not check for open production shifts (" + error.message + ").\n\nTo be safe, nothing was changed. Try again."); return { ok:false, open:0, failed:true }; }
+  const open = data || [];
+  if(!open.length) return { ok:true, open:0 };
+  const list = open.slice(0, 8).map(r => "   • " + niceDate(r.production_date) + " " + r.shift + " (" + r.work_type + ")").join("\n") + (open.length > 8 ? "\n   …and " + (open.length - 8) + " more" : "");
+  const ok = confirm("⚠⚠  WARNING: GROUP " + group + " HAS OPEN PRODUCTION SHIFTS  ⚠⚠\n\n" + open.length + " Group " + group + " shift(s) have not been completed:\n" + list +
+    "\n\nIf you change this operator now, entries still to be made for these shifts will be saved against the NEW person, while entries already made keep the OLD one. One shift will be split between two people.\n\nRECOMMENDED: press Cancel, complete the open shifts first (Initiate Production tab, Mark Completed), then change the operator.\n\nDo you still want to " + what + " anyway?");
+  return { ok, open: ok ? open.length : 0 };
+}
+
 async function saveOperatorChange(){
   if(!canWrite()) return;
   const statusEl = document.getElementById("changeStatus");
@@ -382,6 +403,9 @@ async function saveOperatorChange(){
 
   // ---- edit mode ----
   if(!EDIT_TARGET) return;
+  const guard = await confirmChangeWithOpenShifts(EDIT_TARGET.group_name, "change the Group " + EDIT_TARGET.group_name + " operator of unit " + EDIT_TARGET.unit_code);
+  if(!guard.ok){ statusEl.className = "status err"; statusEl.textContent = guard.failed ? "Could not check for open production shifts, so nothing was changed. Try again." : "Not changed."; return; }
+  const openNote = guard.open ? " [approved with " + guard.open + " open Group " + EDIT_TARGET.group_name + " shift(s)]" : "";
   try{
     const { error } = await sb.from("weaving_unit_operators").update({
       employee_id: PICKED_EMPLOYEE.employee_id,
@@ -392,7 +416,7 @@ async function saveOperatorChange(){
 
     await logActivity("weaving_operator_changed",
       ME.username + " changed operator for unit " + EDIT_TARGET.unit_code + " (Group " + EDIT_TARGET.group_name + ") from \"" +
-      EDIT_TARGET.before.operator_name + "\" to \"" + PICKED_EMPLOYEE.full_name + "\" (" + PICKED_EMPLOYEE.employee_id + ")");
+      EDIT_TARGET.before.operator_name + "\" to \"" + PICKED_EMPLOYEE.full_name + "\" (" + PICKED_EMPLOYEE.employee_id + ")" + openNote);
 
     statusEl.className = "status ok"; statusEl.textContent = "Operator changed.";
     await loadOperators();
@@ -437,6 +461,9 @@ async function markAsTrainee(){
 
   // ---- edit mode ----
   if(!EDIT_TARGET) return;
+  const guard = await confirmChangeWithOpenShifts(EDIT_TARGET.group_name, "mark the Group " + EDIT_TARGET.group_name + " slot of unit " + EDIT_TARGET.unit_code + " as Trainee/Vacant");
+  if(!guard.ok){ statusEl.className = "status err"; statusEl.textContent = guard.failed ? "Could not check for open production shifts, so nothing was changed. Try again." : "Not changed."; return; }
+  const openNote = guard.open ? " [approved with " + guard.open + " open Group " + EDIT_TARGET.group_name + " shift(s)]" : "";
   try{
     const { error } = await sb.from("weaving_unit_operators").update({
       employee_id: null, operator_name: "Trainee", is_trainee: true
@@ -444,7 +471,7 @@ async function markAsTrainee(){
     if(error) throw error;
 
     await logActivity("weaving_operator_marked_trainee",
-      ME.username + " marked unit " + EDIT_TARGET.unit_code + " (Group " + EDIT_TARGET.group_name + ") as Trainee/Vacant (was \"" + EDIT_TARGET.before.operator_name + "\")");
+      ME.username + " marked unit " + EDIT_TARGET.unit_code + " (Group " + EDIT_TARGET.group_name + ") as Trainee/Vacant (was \"" + EDIT_TARGET.before.operator_name + "\")" + openNote);
 
     statusEl.className = "status ok"; statusEl.textContent = "Marked as Trainee / Vacant.";
     await loadOperators();
@@ -455,6 +482,26 @@ async function markAsTrainee(){
 }
 
 // ---------- Initiate Production ----------
+// Shows which group worked this shift last time, and which group is already on the other shift that day.
+function niceDate(iso){ const m = String(iso||"").match(/^(\d{4})-(\d{2})-(\d{2})/); if(!m) return iso || ""; return m[3] + " " + ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][+m[2]-1] + " " + m[1]; }
+async function updateGroupHint(){
+  const el = document.getElementById("init_group_hint"); if(!el) return;
+  const date = document.getElementById("init_date").value, shift = document.getElementById("init_shift").value;
+  const other = shift === "Morning" ? "Night" : "Morning", parts = [];
+  try{
+    const { data: last } = await sb.from("weaving_production_initiations").select("production_date,group_name")
+      .eq("shift", shift).not("group_name","is",null).order("production_date",{ascending:false}).limit(1);
+    if(last && last.length) parts.push("Last " + shift + " shift: Group " + last[0].group_name + " (" + niceDate(last[0].production_date) + ").");
+    if(date){
+      const { data: same } = await sb.from("weaving_production_initiations").select("group_name")
+        .eq("production_date", date).eq("shift", other).not("group_name","is",null).limit(1);
+      if(same && same.length) parts.push(other + " on this date: Group " + same[0].group_name + ".");
+    }
+  }catch(e){ /* hint only; the Group column may not exist yet */ }
+  parts.push("The team that worked this shift. Enter Production fetches each asset's operator from this group.");
+  el.textContent = parts.join("  ");
+}
+
 async function initiateProduction(){
   if(!canWrite()) return;
   const statusEl = document.getElementById("initiateStatus");
@@ -463,7 +510,9 @@ async function initiateProduction(){
   const date = document.getElementById("init_date").value;
   const shift = document.getElementById("init_shift").value;
   const workType = document.getElementById("init_work_type").value;
+  const group = document.getElementById("init_group").value;
   if(!date){ statusEl.className="status err"; statusEl.textContent="Select a Production Date."; return; }
+  if(group !== "A" && group !== "B"){ statusEl.className="status err"; statusEl.textContent="Select the group that worked this shift."; return; }
 
   try{
     // Pre-check for a friendlier message than the raw unique-constraint error
@@ -476,21 +525,34 @@ async function initiateProduction(){
       return;
     }
 
+    // A group normally works one shift a day: ask before putting the same group on both shifts of one date.
+    const { data: clash, error: clErr } = await sb.from("weaving_production_initiations")
+      .select("shift,work_type").eq("production_date", date).eq("group_name", group).neq("shift", shift);
+    if(clErr) throw clErr;
+    if(clash && clash.length){
+      const o = clash[0];
+      if(!confirm("Group " + group + " is already set for the " + o.shift + " shift (" + o.work_type + ") on " + niceDate(date) + ".\n\nA group normally works one shift a day. Use Group " + group + " for the " + shift + " shift as well?")){
+        statusEl.className = "status"; statusEl.textContent = "Not initiated. Pick the other group, or change the date or shift."; return;
+      }
+    }
+
     statusEl.textContent = "Initiating...";
     const { error } = await sb.from("weaving_production_initiations").insert({
-      production_date: date, shift: shift, work_type: workType,
+      production_date: date, shift: shift, work_type: workType, group_name: group,
       status: "Pending", initiated_by: ME.username
     });
     if(error) throw error;
 
     await logActivity("weaving_production_initiated",
-      ME.username + " initiated production for " + date + " (" + shift + ", " + workType + ")");
+      ME.username + " initiated production for " + date + " (" + shift + ", " + workType + ", Group " + group + ")");
 
-    statusEl.className = "status ok"; statusEl.textContent = "Initiated. Operators can now use \"Enter Production\" for this shift.";
+    statusEl.className = "status ok"; statusEl.textContent = "Initiated for Group " + group + ". Operators can now use \"Enter Production\" for this shift.";
     await loadInitiations();
   }catch(e){
     statusEl.className = "status err";
-    statusEl.textContent = (e.message && e.message.indexOf("duplicate") !== -1)
+    statusEl.textContent = (e.message && e.message.indexOf("group_name") !== -1)
+      ? "The database needs the Group column first. Run weaving_initiation_group_sql.sql in Supabase, then try again."
+      : (e.message && e.message.indexOf("duplicate") !== -1)
       ? "An initiation already exists for that date, shift, and work type."
       : "Error: " + e.message;
   }
@@ -510,9 +572,9 @@ async function loadInitiations(){
 
   const { data, error } = await query;
   const body = document.getElementById("initBody");
-  if(error){ body.innerHTML = `<tr><td colspan="7">Error: ${error.message}</td></tr>`; return; }
+  if(error){ body.innerHTML = `<tr><td colspan="8">Error: ${error.message}</td></tr>`; return; }
   const rows = data || [];
-  if(!rows.length){ body.innerHTML = `<tr><td colspan="7">No initiations match these filters.</td></tr>`; return; }
+  if(!rows.length){ body.innerHTML = `<tr><td colspan="8">No initiations match these filters.</td></tr>`; return; }
 
   function statusTag(s){
     if(s === "Pending") return '<span class="tag" style="background:var(--warn);">Pending</span>';
@@ -527,17 +589,37 @@ async function loadInitiations(){
     } else if(r.status === "Suspended" && ME.username === r.initiated_by){
       action = `<button class="btn-sm btn-ghost" onclick="revokeSuspension(${r.id},'${r.production_date}','${r.shift}')">Revoke Suspension</button>`;
     }
+    // A shift started before groups were recorded cannot be used for entry until it has a group.
+    if(canWrite() && !r.group_name && (r.status === "Pending" || r.status === "Suspended")){
+      action += ` <button class="btn-sm btn-ghost" onclick="setInitiationGroup(${r.id},'A','${r.production_date}','${r.shift}')">Set Group A</button>` +
+                ` <button class="btn-sm btn-ghost" onclick="setInitiationGroup(${r.id},'B','${r.production_date}','${r.shift}')">Set Group B</button>`;
+    }
     return `
     <tr>
       <td>${r.production_date}</td>
       <td>${r.shift}</td>
       <td>${r.work_type}</td>
+      <td>${r.group_name ? "Group " + r.group_name : "—"}</td>
       <td>${statusTag(r.status)}</td>
       <td>${r.initiated_by || "—"}</td>
       <td>${r.completed_by || "—"}</td>
       <td>${action}</td>
     </tr>`;
   }).join("");
+}
+
+async function setInitiationGroup(id, group, date, shift){
+  if(!canWrite()) return;
+  if(!confirm("Set Group " + group + " for the " + shift + " shift of " + niceDate(date) + "?\n\nThis shift was started before groups were recorded. Entries still to be made will use Group " + group + "'s operators. Entries already saved for this shift keep the group they were saved with.")) return;
+  try{
+    const { data, error } = await sb.from("weaving_production_initiations").update({ group_name: group }).eq("id", id).is("group_name", null).select("id");
+    if(error) throw error;
+    if(!data || data.length !== 1) throw new Error("The group was not set: a group may already be recorded for this shift, or you do not have permission. Refresh and check.");
+    await logActivity("weaving_production_group_set", ME.username + " set Group " + group + " on the " + shift + " initiation for " + date);
+    await loadInitiations();
+  }catch(e){
+    alert("Error: " + (e.message || e));
+  }
 }
 
 async function revokeSuspension(id, date, shift){

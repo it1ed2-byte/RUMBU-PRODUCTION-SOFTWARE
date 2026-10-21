@@ -101,23 +101,6 @@
     <div class="status" id="editStatus" style="display:none;"></div>
   </div>
 
-  <!-- ── Operator Change Panel ─────────────────────────── -->
-  <div class="card-panel" id="opChangePanel" style="display:none;">
-    <h3 id="opChangePanelTitle">Change Operator</h3>
-    <p class="sub" id="opChangePanelSub"></p>
-    <div class="field">
-      <label>Search Employee (name or ID)</label>
-      <input type="text" id="opEmpSearch" placeholder="Start typing..." oninput="searchOpEmployees()">
-      <div id="opEmpResults"></div>
-    </div>
-    <div class="picked-box empty" id="opPickedBox">No employee selected yet.</div>
-    <div class="row-actions" style="margin-top:12px;">
-      <button onclick="saveOperatorFromTarget()">Confirm Change</button>
-      <button class="btn-ghost" onclick="closeOpChangePanel()">Cancel</button>
-    </div>
-    <div class="status" id="opChangeStatus" style="display:none;"></div>
-  </div>
-  <!-- ───────────────────────────────────────────────────── -->
 
   <div class="filters">
     <div class="f"><label>Section</label><select id="filt_section" onchange="populateShedFilter(); loadAssets();"><option value="">All</option><option>Rumbu Mainmat</option><option>MamaSannu</option></select></div>
@@ -125,14 +108,14 @@
     <div class="f"><label>Mat Type</label><select id="filt_mattype" onchange="loadAssets()"><option value="">All</option><option>No.1</option><option>No.2</option><option>No.3</option><option>No.4</option><option>Hajj Mat</option><option>Prayer Mat</option><option>Customize</option></select></div>
     <div class="f"><label>Search Asset / Unit</label><input type="text" id="filt_search" placeholder="e.g. WA-01" oninput="loadAssets()"></div>
     <div class="f f-min"><button id="btnAddAsset" onclick="openAddAsset()">+ Add New Asset</button></div>
-    <div class="f f-min"><button id="btnSwitchAll" class="btn-ghost" onclick="switchAllOperators()" title="Swap Group A and Group B operators for every unit listed below">⇄ Switch All A↔B</button></div>
   </div>
 
+  <p class="sub" style="margin:8px 0;">Operators are shown for reference. To change an operator, use Manage Operator.</p>
   <div class="table-wrap">
     <div class="table-scroll">
       <table id="assetsTable">
-        <thead><tr><th>Asset</th><th>Unit</th><th>Shed</th><th>Section</th><th>Mat Type</th><th>Normal</th><th>Hajj</th><th>Prayer</th><th>Operator A (Morning)</th><th>Operator B (Night)</th><th>Switch</th><th></th></tr></thead>
-        <tbody id="assetsBody"><tr><td colspan="12">Loading...</td></tr></tbody>
+        <thead><tr><th>Asset</th><th>Unit</th><th>Shed</th><th>Section</th><th>Mat Type</th><th>Normal</th><th>Hajj</th><th>Prayer</th><th>Group A Operator</th><th>Group B Operator</th><th></th></tr></thead>
+        <tbody id="assetsBody"><tr><td colspan="11">Loading...</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -194,7 +177,6 @@ async function init(){
     if(!canWrite()){
       document.getElementById("roBanner").style.display = "block";
       document.getElementById("btnAddAsset").style.display = "none";
-      document.getElementById("btnSwitchAll").style.display = "none";
     }
 
     const { data: unitRows, error: uErr } = await sb.from("weaving_units")
@@ -257,9 +239,9 @@ async function loadAssets(){
 
   const { data, error } = await query;
   const body = document.getElementById("assetsBody");
-  if(error){ body.innerHTML = `<tr><td colspan="9">Error: ${error.message}</td></tr>`; return; }
+  if(error){ body.innerHTML = `<tr><td colspan="11">Error: ${error.message}</td></tr>`; return; }
   ASSETS = data || [];
-  if(!ASSETS.length){ body.innerHTML = `<tr><td colspan="12">No assets match these filters.</td></tr>`; return; }
+  if(!ASSETS.length){ body.innerHTML = `<tr><td colspan="11">No assets match these filters.</td></tr>`; return; }
 
   body.innerHTML = ASSETS.map(a => {
     return `
@@ -272,9 +254,8 @@ async function loadAssets(){
       <td>${a.target_normal_mat}</td>
       <td>${a.target_hajj_mat}</td>
       <td>${a.target_prayer_mat}</td>
-      <td>${OPS_MAP[a.unit_code]?.A || "—"}${canWrite() ? ` <button class="btn-sm btn-ghost" onclick="openOpChange('${a.unit_code}','A')" style="margin-left:4px;">✎</button>` : ""}</td>
-      <td>${OPS_MAP[a.unit_code]?.B || "—"}${canWrite() ? ` <button class="btn-sm btn-ghost" onclick="openOpChange('${a.unit_code}','B')" style="margin-left:4px;">✎</button>` : ""}</td>
-      <td>${canWrite() ? `<button class="btn-sm btn-ghost" onclick="switchOperators('${a.unit_code}')">⇄ Switch</button>` : "—"}</td>
+      <td>${OPS_MAP[a.unit_code]?.A || "—"}</td>
+      <td>${OPS_MAP[a.unit_code]?.B || "—"}</td>
       <td>${canWrite() ? `<button class="btn-sm btn-ghost" onclick="openEditAsset('${a.asset_code}')">Edit</button>` : ""}</td>
     </tr>`;
   }).join("");
@@ -422,288 +403,6 @@ async function applyLogFilter(){
 
 document.getElementById("log_action_type").innerHTML = '<option value="">All</option>' +
   ACTION_TYPES.map(t=>`<option value="${t}">${t}</option>`).join("");
-
-// ── Operator change from manage-target ───────────────────
-let OP_CHANGE_TARGET = null; // { unit_code, group_name }
-let OP_PICKED_EMP    = null;
-let opSearchTimer    = null;
-
-async function openOpChange(unitCode, group){
-  OP_CHANGE_TARGET = { unit_code: unitCode, group_name: group };
-  OP_PICKED_EMP    = null;
-
-  document.getElementById("opChangePanelTitle").textContent =
-    "Change Operator — " + unitCode + " (Group " + group + " / " +
-    (group === "A" ? "Morning" : "Night") + ")";
-  document.getElementById("opChangePanelSub").textContent = "Loading current operator...";
-  document.getElementById("opEmpSearch").value     = "";
-  document.getElementById("opEmpResults").innerHTML = "";
-  document.getElementById("opPickedBox").className  = "picked-box empty";
-  document.getElementById("opPickedBox").textContent = "No employee selected yet.";
-  document.getElementById("opChangeStatus").style.display = "none";
-  document.getElementById("opChangePanel").style.display  = "block";
-  window.scrollTo({ top: 0, behavior: "smooth" });
-
-  // Fetch current operator for this unit+group only (single row)
-  const { data } = await sb.from("weaving_unit_operators")
-    .select("operator_name, employee_id")
-    .eq("unit_code", unitCode).eq("group_name", group).maybeSingle();
-  const current = (data && data.operator_name) ? data.operator_name : "None assigned";
-  if(data){ 
-    if(!OPS_MAP[unitCode]) OPS_MAP[unitCode] = {};
-    OPS_MAP[unitCode][group] = data.operator_name || "—";
-    OPS_MAP[unitCode]["_emp" + group] = data.employee_id;
-  }
-  document.getElementById("opChangePanelSub").textContent = "Current: " + current;
-}
-
-function closeOpChangePanel(){
-  document.getElementById("opChangePanel").style.display = "none";
-  OP_CHANGE_TARGET = null;
-  OP_PICKED_EMP    = null;
-}
-
-function searchOpEmployees(){
-  clearTimeout(opSearchTimer);
-  opSearchTimer = setTimeout(runOpEmpSearch, 250);
-}
-
-async function runOpEmpSearch(){
-  const q       = document.getElementById("opEmpSearch").value.trim();
-  const results = document.getElementById("opEmpResults");
-  if(q.length < 2){ results.innerHTML = ""; return; }
-  try{
-    const { data, error } = await sb.from("employees")
-      .select("employee_id, full_name, department, rank")
-      .or("department.ilike.%weaving%,unit.ilike.%weaving%")
-      .or(`full_name.ilike.%${q}%,employee_id.ilike.%${q}%`)
-      .order("full_name").limit(12);
-    if(error) throw error;
-    if(!data || !data.length){
-      results.innerHTML = `<p class="sub">No matching Weaving employee found.</p>`;
-      return;
-    }
-    results.innerHTML = data.map(e => `
-      <div class="emp-result" onclick='pickOpEmployee(${JSON.stringify(e).replace(/'/g,"&apos;")})'>
-        <div>
-          <div class="n">${e.full_name}</div>
-          <div class="m">${e.employee_id} · ${e.department || ""}</div>
-        </div>
-        <div class="m">${e.rank || "no rank"}</div>
-      </div>`).join("");
-  }catch(e){
-    results.innerHTML = `<p class="sub">Search error: ${e.message}</p>`;
-  }
-}
-
-function pickOpEmployee(emp){
-  OP_PICKED_EMP = emp;
-  const box = document.getElementById("opPickedBox");
-  box.className   = "picked-box";
-  box.innerHTML   = `Selected: <b>${emp.full_name}</b> (${emp.employee_id}) — ${emp.rank || "no rank"}`;
-  document.getElementById("opEmpResults").innerHTML = "";
-  document.getElementById("opEmpSearch").value      = emp.full_name;
-}
-
-async function saveOperatorFromTarget(){
-  if(!canWrite()) return;
-  const statusEl = document.getElementById("opChangeStatus");
-  statusEl.style.display = "block";
-  statusEl.className     = "status";
-  statusEl.textContent   = "Saving...";
-
-  if(!OP_PICKED_EMP){
-    statusEl.className   = "status err";
-    statusEl.textContent = "Search and select an employee first.";
-    return;
-  }
-  if(!OP_CHANGE_TARGET){
-    statusEl.className   = "status err";
-    statusEl.textContent = "No target selected.";
-    return;
-  }
-
-  try{
-    const { unit_code, group_name } = OP_CHANGE_TARGET;
-
-    // Check if a row already exists for this unit+group
-    const { data: existing } = await sb.from("weaving_unit_operators")
-      .select("unit_code").eq("unit_code", unit_code).eq("group_name", group_name).maybeSingle();
-
-    if(existing){
-      const { error } = await sb.from("weaving_unit_operators").update({
-        employee_id:   OP_PICKED_EMP.employee_id,
-        operator_name: OP_PICKED_EMP.full_name,
-        is_trainee:    false
-      }).eq("unit_code", unit_code).eq("group_name", group_name);
-      if(error) throw error;
-    } else {
-      const { error } = await sb.from("weaving_unit_operators").insert({
-        unit_code:     unit_code,
-        group_name:    group_name,
-        employee_id:   OP_PICKED_EMP.employee_id,
-        operator_name: OP_PICKED_EMP.full_name,
-        is_trainee:    false
-      });
-      if(error) throw error;
-    }
-
-    await logActivity("weaving_operator_changed",
-      ME.username + " changed Group " + group_name + " operator for unit " + unit_code +
-      " to " + OP_PICKED_EMP.full_name + " (" + OP_PICKED_EMP.employee_id + ") from manage-target");
-
-    // Update OPS_MAP locally — no extra DB round trip
-    if(!OPS_MAP[unit_code]) OPS_MAP[unit_code] = {};
-    OPS_MAP[unit_code][group_name] = OP_PICKED_EMP.full_name;
-    if(group_name === "A") OPS_MAP[unit_code]["_empA"] = OP_PICKED_EMP.employee_id;
-    if(group_name === "B") OPS_MAP[unit_code]["_empB"] = OP_PICKED_EMP.employee_id;
-
-    statusEl.className   = "status ok";
-    statusEl.textContent = "✅ Operator updated.";
-    await loadAssets();
-    setTimeout(closeOpChangePanel, 800);
-  }catch(e){
-    statusEl.className   = "status err";
-    statusEl.textContent = "Error: " + e.message;
-  }
-}
-
-// Switch Group A and Group B operators for a unit
-async function switchOperators(unitCode){
-  // Always fetch fresh from DB for this unit only
-  const { data: rows, error: fetchErr } = await sb.from("weaving_unit_operators")
-    .select("group_name, operator_name, employee_id")
-    .eq("unit_code", unitCode);
-  if(fetchErr){ alert("Could not load operators: " + fetchErr.message); return; }
-
-  const rowA = (rows || []).find(r => r.group_name === "A");
-  const rowB = (rows || []).find(r => r.group_name === "B");
-  const nameA = rowA?.operator_name || "—";
-  const nameB = rowB?.operator_name || "—";
-  const empA  = rowA?.employee_id || null;
-  const empB  = rowB?.employee_id || null;
-
-  if(nameA === "—" || nameB === "—"){
-    alert("Both operators must be assigned before switching."); return;
-  }
-  if(!confirm(`Switch operators for unit ${unitCode}?\n\nGroup A: ${nameA} → will become Group B\nGroup B: ${nameB} → will become Group A`)) return;
-
-  try{
-    // Swap by updating both rows simultaneously
-    const { error: e1 } = await sb.from("weaving_unit_operators")
-      .update({ operator_name: nameB, employee_id: empB || null })
-      .eq("unit_code", unitCode).eq("group_name", "A");
-    if(e1) throw e1;
-
-    const { error: e2 } = await sb.from("weaving_unit_operators")
-      .update({ operator_name: nameA, employee_id: empA || null })
-      .eq("unit_code", unitCode).eq("group_name", "B");
-    if(e2) throw e2;
-
-    await logActivity("weaving_operator_changed",
-      ME.username + " switched operators for unit " + unitCode +
-      " — A↔B: " + nameA + " ↔ " + nameB);
-
-    // Update OPS_MAP locally — no extra DB round trip
-    if(!OPS_MAP[unitCode]) OPS_MAP[unitCode] = {};
-    OPS_MAP[unitCode]["A"] = nameB;
-    OPS_MAP[unitCode]["B"] = nameA;
-    OPS_MAP[unitCode]["_empA"] = empB || null;
-    OPS_MAP[unitCode]["_empB"] = empA || null;
-    await loadAssets();
-  }catch(e){
-    alert("Switch failed: " + e.message);
-  }
-}
-
-// Switch Group A and Group B for EVERY unit currently listed (the Section / Shed / Mat Type / Search filters narrow
-// the list, so with no filter this is every unit). The inline "⇄ Switch" on each row is unchanged, for one unit.
-let SWITCH_ALL_BUSY = false;
-async function switchAllOperators(){
-  if(!canWrite() || SWITCH_ALL_BUSY) return;
-  // Several assets can share one unit. Each unit must be swapped exactly ONCE: swapping it twice would put everyone back.
-  const codes = [...new Set((ASSETS||[]).map(a=>a.unit_code).filter(Boolean))];
-  if(!codes.length){ alert("No units are listed. Adjust the filters first."); return; }
-
-  const filters = [];
-  const fs = document.getElementById("filt_section").value, fh = document.getElementById("filt_shed").value,
-        fm = document.getElementById("filt_mattype").value, fq = document.getElementById("filt_search").value.trim();
-  if(fs) filters.push("Section: " + fs); if(fh) filters.push("Shed: " + fh);
-  if(fm) filters.push("Mat Type: " + fm); if(fq) filters.push("Search: " + fq);
-  const filterText = filters.length ? filters.join(", ") : "none (every unit)";
-
-  SWITCH_ALL_BUSY = true;
-  const btn = document.getElementById("btnSwitchAll"); const btnText = btn.textContent; btn.disabled = true; btn.textContent = "Checking…";
-  try{
-    // Always read the current operators from the database, in small batches (never one huge request).
-    let rows = [];
-    for(let i=0; i<codes.length; i+=100){
-      const { data, error } = await sb.from("weaving_unit_operators")
-        .select("unit_code, group_name, operator_name, employee_id").in("unit_code", codes.slice(i, i+100));
-      if(error){ alert("Could not load operators: " + error.message); return; }
-      rows = rows.concat(data || []);
-    }
-    const ready = [], skipped = [];
-    codes.forEach(code=>{
-      const A = rows.filter(r=>r.unit_code===code && r.group_name==="A"), B = rows.filter(r=>r.unit_code===code && r.group_name==="B");
-      if(A.length>1 || B.length>1){ skipped.push(code + " (duplicate A/B rows)"); return; }
-      const nameA = A[0] && A[0].operator_name ? A[0].operator_name : "", nameB = B[0] && B[0].operator_name ? B[0].operator_name : "";
-      if(!nameA || !nameB){ skipped.push(code + " (" + (!nameA && !nameB ? "no operators" : (!nameA ? "no Group A operator" : "no Group B operator")) + ")"); return; }
-      ready.push({ code, nameA, nameB, empA: A[0].employee_id || null, empB: B[0].employee_id || null });
-    });
-    if(!ready.length){ alert("Nothing to switch. " + (skipped.length ? "These units are missing an operator or have duplicate rows:\n" + skipped.slice(0,15).join("\n") : "")); return; }
-
-    let msg = "Switch Group A and Group B for " + ready.length + " unit(s)?\n\nFilters applied: " + filterText +
-      "\n\nIn each unit, today's Group A operator becomes Group B and today's Group B operator becomes Group A.";
-    if(skipped.length) msg += "\n\n" + skipped.length + " unit(s) will be left unchanged:\n" + skipped.slice(0,10).join("\n") + (skipped.length>10 ? "\n…and " + (skipped.length-10) + " more" : "");
-    msg += "\n\nTo undo, press Switch All again with the same filters.";
-    if(!confirm(msg)) return;
-
-    const T = "weaving_unit_operators";
-    // One unit = two updates. Each must change exactly one row; if the second fails, the first is put back.
-    async function swapOne(u){
-      const upd = (group, name, emp) => sb.from(T).update({ operator_name: name, employee_id: emp }).eq("unit_code", u.code).eq("group_name", group).select("group_name");
-      const r1 = await upd("A", u.nameB, u.empB);
-      if(r1.error || !r1.data || r1.data.length !== 1){
-        if(!r1.error && r1.data && r1.data.length > 1) await upd("A", u.nameA, u.empA);
-        return { u, ok:false, why: r1.error ? r1.error.message : "Group A was not updated (no permission, or the row is missing)" };
-      }
-      const r2 = await upd("B", u.nameA, u.empA);
-      if(r2.error || !r2.data || r2.data.length !== 1){
-        if(!r2.error && r2.data && r2.data.length > 1) await upd("B", u.nameB, u.empB);
-        await upd("A", u.nameA, u.empA);   // put Group A back so nobody ends up listed twice
-        return { u, ok:false, why: r2.error ? r2.error.message : "Group B was not updated (no permission, or the row is missing)" };
-      }
-      return { u, ok:true };
-    }
-    const results = []; let next = 0, done = 0;
-    async function worker(){
-      while(next < ready.length){ const u = ready[next++]; results.push(await swapOne(u)); done++; btn.textContent = "Switching " + done + "/" + ready.length + "…"; }
-    }
-    await Promise.all([worker(), worker(), worker(), worker(), worker()]);
-
-    const okList = results.filter(r=>r.ok).map(r=>r.u), failed = results.filter(r=>!r.ok);
-    await loadAllOperators();   // show what the database really holds now
-    const verified = okList.filter(u=> OPS_MAP[u.code] && OPS_MAP[u.code].A === u.nameB && OPS_MAP[u.code].B === u.nameA).length;
-    await loadAssets();
-
-    if(okList.length){
-      const detail = okList.map(u=>u.code + ": " + u.nameA + " ↔ " + u.nameB).join("; ");
-      await logActivity("weaving_operator_changed",
-        ME.username + " switched Group A and Group B operators for " + okList.length + " unit(s) at once (filters: " + filterText + "). " +
-        detail.slice(0, 3000) + (detail.length > 3000 ? " …" : ""));
-    }
-    let out = "Switched " + okList.length + " unit(s)" + (okList.length ? " (" + verified + " checked in the database)" : "") + ".";
-    if(failed.length) out += "\n\nFAILED, left as they were (" + failed.length + "):\n" + failed.slice(0,10).map(r=>r.u.code + ": " + r.why).join("\n");
-    if(skipped.length) out += "\n\nSkipped (" + skipped.length + "):\n" + skipped.slice(0,10).join("\n");
-    alert(out);
-  }catch(e){
-    alert("Switch All failed: " + (e.message || e));
-  }finally{
-    SWITCH_ALL_BUSY = false; btn.disabled = false; btn.textContent = btnText;
-  }
-}
-window.switchAllOperators = switchAllOperators;
 
 init();
 </script>

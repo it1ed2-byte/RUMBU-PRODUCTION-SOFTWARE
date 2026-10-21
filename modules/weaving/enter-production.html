@@ -185,7 +185,7 @@ async function init(){
       sel.disabled = true;
     } else {
       sel.innerHTML = '<option value="">Select...</option>' + INITIATIONS.map((i,idx)=>
-        `<option value="${idx}">${i.production_date} — ${i.shift} — ${i.work_type} (by ${i.initiated_by})</option>`).join("");
+        `<option value="${idx}">${i.production_date} — ${i.shift} — ${i.work_type} — ${(i.group_name === "A" || i.group_name === "B") ? "Group " + i.group_name : "NO GROUP SET"} (by ${i.initiated_by})</option>`).join("");
     }
 
     status.style.color = "var(--ok)"; status.textContent = "Connected.";
@@ -309,11 +309,22 @@ function recomputeTotal(){
 async function lookupOperator(){
   if(!PICKED_ASSET || !CURRENT_INIT) return;
 
-  const shift = CURRENT_INIT.shift;
-  const group = (shift === "Night") ? "B" : "A"; // Morning → A, Night → B
+  // The group is the TEAM that worked this shift. The supervisor chooses it when the shift is initiated; it does not depend on
+  // Morning or Night. The asset's unit is then matched to that group's operator.
+  const group = (CURRENT_INIT.group_name === "A" || CURRENT_INIT.group_name === "B") ? CURRENT_INIT.group_name : null;
+  if(!group){
+    document.getElementById("f_group").value = "";
+    document.getElementById("lk_group").textContent = "No group set";
+    document.getElementById("lk_opname").textContent = "No operator assigned: this shift has no group yet. Ask the supervisor to set it in Manage Operator, Initiate Production.";
+    document.getElementById("f_opid").value = "";
+    document.getElementById("lk_rank").textContent = "—";
+    AUTO_OP = null;
+    refreshOpIdWarn();
+    return;
+  }
 
   document.getElementById("f_group").value = group;
-  document.getElementById("lk_group").textContent = "Group " + group + " (" + shift + ")";
+  document.getElementById("lk_group").textContent = "Group " + group;
   document.getElementById("lk_opname").textContent = "Loading...";
   document.getElementById("f_opid").value = "";
   document.getElementById("lk_rank").textContent = "—";
@@ -383,6 +394,7 @@ async function submitEntry(){
   if(!PICKED_ASSET){ statusEl.className="status err"; statusEl.textContent="Select an Asset."; return; }
   const matType = document.getElementById("f_mat_type").value;
   if(!matType){ statusEl.className="status err"; statusEl.textContent="Select a Mat Type."; return; }
+  if(CURRENT_INIT.group_name !== "A" && CURRENT_INIT.group_name !== "B"){ statusEl.className="status err"; statusEl.textContent="This shift has no group yet, so the entry was NOT submitted. Ask the supervisor to set the group in Manage Operator, Initiate Production."; return; }
   const group = document.getElementById("f_group").value;
   if(!group){ statusEl.className="status err"; statusEl.textContent="Select a Group."; return; }
 
