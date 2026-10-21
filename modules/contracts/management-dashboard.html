@@ -952,10 +952,65 @@ async function dlLoad(name) {
         r.data.map(function(x){ return [x.name||x.kpi_name, x.target_value, x.actual_value, x.status]; }));
     }
     else if (name === 'tm') {
-      var r = await sb.from('cnt_contract_staff').select('id,role_on_contract,start_date,cnt_profiles(full_name,email)').eq('contract_id',cid);
-      if (!r.data || !r.data.length) { noData('No team members recorded.'); return; }
-      el.innerHTML = tbl(['Name','Role','Email','Start Date'],
-        r.data.map(function(x){ return [x.cnt_profiles&&x.cnt_profiles.full_name, x.role_on_contract, x.cnt_profiles&&x.cnt_profiles.email, fmtD(x.start_date)]; }));
+      var r = await sb.from('cnt_contract_staff')
+        .select('id,role_on_contract,start_date,cnt_profiles(id,full_name,email)')
+        .eq('contract_id',cid).order('role_on_contract');
+      var members = r.data || [];
+      var hoc    = members.find(function(m){ return (m.role_on_contract||'').toLowerCase().includes('head'); });
+      var others = members.filter(function(m){ return !(m.role_on_contract||'').toLowerCase().includes('head'); });
+      var canMgr = _canEdit;
+
+      var h = '<div>';
+      h += '<div class="dlsec" style="margin-bottom:14px">'
+        + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">'
+        + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#6b7280">Head of Contract</div>'
+        + (canMgr ? '<button onclick="showHoCAssign()" style="padding:5px 12px;border:1px solid #2E75B6;'
+          + 'border-radius:6px;background:#fff;color:#2E75B6;cursor:pointer;font-size:12px;font-weight:600">'
+          + (hoc ? '✎ Change' : '＋ Assign') + '</button>' : '')
+        + '</div>';
+      if (hoc && hoc.cnt_profiles) {
+        var hp = hoc.cnt_profiles;
+        h += '<div style="display:flex;align-items:center;gap:12px;padding:12px;'
+          + 'background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px">'
+          + '<div style="width:38px;height:38px;border-radius:50%;background:#2E75B6;color:#fff;'
+          + 'display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;flex-shrink:0">'
+          + esc((hp.full_name||'?').charAt(0).toUpperCase()) + '</div>'
+          + '<div><div style="font-weight:700;font-size:13px;color:#1F3864">' + esc(hp.full_name||'—') + '</div>'
+          + '<div style="font-size:12px;color:#6b7280">' + esc(hp.email||'') + '</div></div>'
+          + (canMgr ? '<button onclick="hocTabClear(\'' + cid + '\')" style="margin-left:auto;padding:4px 10px;'
+            + 'border:1px solid #fca5a5;border-radius:6px;background:#fff;color:#dc2626;'
+            + 'cursor:pointer;font-size:11px;font-weight:600">Remove</button>' : '')
+          + '</div>';
+      } else {
+        h += '<div style="color:#6b7280;font-size:13px;padding:12px;background:#f8fafc;'
+          + 'border:1px solid #e2e8f0;border-radius:8px;text-align:center">No Head of Contract assigned yet.</div>';
+      }
+      if (canMgr) {
+        h += '<div id="hoc-assign-wrap" style="display:none;margin-top:12px;position:relative">'
+          + '<input id="hoc-assign-search" placeholder="Search by name or email…"'
+          + ' oninput="hocTabSearch(\'' + cid + '\')" autocomplete="off"'
+          + ' style="width:100%;box-sizing:border-box;border:1.5px solid #2E75B6;'
+          + 'border-radius:7px;padding:9px 12px;font-size:13px;outline:none">'
+          + '<div id="hoc-assign-results" style="display:none;position:absolute;top:100%;left:0;right:0;'
+          + 'background:#fff;border:1.5px solid #2E75B6;border-top:none;border-radius:0 0 8px 8px;'
+          + 'box-shadow:0 4px 12px rgba(0,0,0,.1);z-index:50;max-height:180px;overflow-y:auto"></div>'
+          + '</div>';
+      }
+      h += '</div>';
+      h += '<div class="dlsec"><div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:#6b7280;margin-bottom:12px">Team Members (' + others.length + ')</div>';
+      if (!others.length) {
+        h += '<div style="color:#6b7280;font-size:13px;text-align:center;padding:16px">No other team members recorded.</div>';
+      } else {
+        h += '<table class="dltbl"><thead><tr><th>Name</th><th>Role</th><th>Email</th><th>Start Date</th></tr></thead><tbody>'
+          + others.map(function(x){
+            return '<tr><td>' + esc((x.cnt_profiles&&x.cnt_profiles.full_name)||'—') + '</td>'
+              + '<td>' + esc(x.role_on_contract||'—') + '</td>'
+              + '<td>' + esc((x.cnt_profiles&&x.cnt_profiles.email)||'—') + '</td>'
+              + '<td>' + fmtD(x.start_date) + '</td></tr>';
+          }).join('') + '</tbody></table>';
+      }
+      h += '</div></div>';
+      el.innerHTML = h;
     }
     else if (name === 'ca') {
       var r = await sb.from('cnt_corrective_actions').select('*').eq('contract_id',cid).order('created_at',{ascending:false});
@@ -1067,6 +1122,31 @@ async function dlLoad(name) {
       </select>
     </div>
 
+    <!-- Head of Contract -->
+    <div style="margin-bottom:16px">
+      <label class="ec-lbl">Head of Contract</label>
+      <div id="ec-hoc-wrap" style="position:relative">
+        <div id="ec-hoc-selected"
+             style="display:none;align-items:center;gap:10px;padding:9px 12px;
+                    background:#eff6ff;border:1.5px solid #2E75B6;border-radius:7px">
+          <div style="flex:1">
+            <div id="ec-hoc-name" style="font-size:13px;font-weight:600;color:#1F3864"></div>
+            <div id="ec-hoc-email" style="font-size:11px;color:#6b7280"></div>
+          </div>
+          <button onclick="hocClear()" title="Remove"
+                  style="background:none;border:none;cursor:pointer;color:#6b7280;
+                         font-size:16px;line-height:1;padding:0 4px">✕</button>
+        </div>
+        <input id="ec-hoc-search" placeholder="Search by name or email…"
+               class="ec-inp" autocomplete="off" oninput="hocSearchInput()">
+        <div id="ec-hoc-results"
+             style="display:none;position:absolute;top:100%;left:0;right:0;background:#fff;
+                    border:1.5px solid #2E75B6;border-top:none;border-radius:0 0 8px 8px;
+                    box-shadow:0 4px 12px rgba(0,0,0,.1);z-index:50;
+                    max-height:200px;overflow-y:auto"></div>
+      </div>
+    </div>
+
     <!-- Value, State, Risk -->
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:16px">
       <div>
@@ -1146,6 +1226,9 @@ async function dlLoad(name) {
 
 <script>
 var _ecId = null;
+var _hocSelection  = null;
+var _hocSearchTimer= null;
+var _hocTabTimer   = null;
 
 async function editContract() {
   var c = _dlC;
@@ -1208,6 +1291,22 @@ async function editContract() {
     }
   } catch(e) {}
 
+  // Head of Contract
+  _hocSelection = null;
+  document.getElementById('ec-hoc-selected').style.display = 'none';
+  document.getElementById('ec-hoc-search').style.display   = 'block';
+  document.getElementById('ec-hoc-search').value           = '';
+  document.getElementById('ec-hoc-results').style.display  = 'none';
+  try {
+    var hocR = await window._sb.from('cnt_contract_staff')
+      .select('cnt_profiles(id,full_name,email)')
+      .eq('contract_id', c.id).ilike('role_on_contract','%head%').maybeSingle();
+    if (hocR.data && hocR.data.cnt_profiles) {
+      var hp = hocR.data.cnt_profiles;
+      hocSelectUser(hp.id, hp.full_name || hp.email, hp.email);
+    }
+  } catch(e) {}
+
   document.getElementById('ec-backdrop').style.display = 'block';
   document.getElementById('ec-modal').style.display    = 'block';
 }
@@ -1260,6 +1359,14 @@ async function saveContract() {
     return;
   }
 
+  // Save Head of Contract
+  await window._sb.rpc('cnt_set_head_of_contract', {
+    p_contract_id: _ecId,
+    p_profile_id:  _hocSelection ? _hocSelection.id    : null,
+    p_full_name:   _hocSelection ? _hocSelection.name  : '',
+    p_email:       _hocSelection ? _hocSelection.email : ''
+  });
+
   var idx = (window._contracts || []).findIndex(function(c) { return c.id === _ecId; });
   if (idx >= 0) {
     Object.assign(window._contracts[idx], payload);
@@ -1272,6 +1379,90 @@ async function saveContract() {
     openDetail(_dlC);
     btn.disabled = false;
   }, 700);
+}
+
+// ── Head of Contract search (edit modal) ─────────────────────────
+function hocSearchInput() {
+  var q   = (document.getElementById('ec-hoc-search').value || '').trim();
+  var res = document.getElementById('ec-hoc-results');
+  if (!q || q.length < 2) { res.style.display = 'none'; return; }
+  res.innerHTML = '<div style="padding:10px 14px;font-size:13px;color:#6b7280">Searching…</div>';
+  res.style.display = 'block';
+  clearTimeout(_hocSearchTimer);
+  _hocSearchTimer = setTimeout(async function() {
+    var r = await window._sb.rpc('cnt_search_users', { search_term: q });
+    var hits = r.data || [];
+    res.innerHTML = hits.length
+      ? hits.map(function(u) {
+          return '<div onclick="hocSelectUser(\'' + u.id + '\',\'' + esc(u.display_name||u.email) + '\',\'' + esc(u.email) + '\')"'
+            + ' style="padding:10px 14px;cursor:pointer;border-top:1px solid #f1f5f9;font-size:13px"'
+            + ' onmouseover="this.style.background=\'#f4f7ff\'" onmouseout="this.style.background=\'\'">'
+            + '<div style="font-weight:600">' + esc(u.display_name||u.email) + '</div>'
+            + '<div style="font-size:11px;color:#6b7280">' + esc(u.email) + '</div></div>';
+        }).join('')
+      : '<div style="padding:10px 14px;font-size:13px;color:#6b7280">No matching users found</div>';
+    res.style.display = 'block';
+  }, 300);
+}
+function hocSelectUser(id, name, email) {
+  _hocSelection = { id: id, name: name, email: email };
+  document.getElementById('ec-hoc-name').textContent       = name;
+  document.getElementById('ec-hoc-email').textContent      = email;
+  document.getElementById('ec-hoc-selected').style.display = 'flex';
+  document.getElementById('ec-hoc-search').style.display   = 'none';
+  document.getElementById('ec-hoc-results').style.display  = 'none';
+  document.getElementById('ec-hoc-search').value = '';
+}
+function hocClear() {
+  _hocSelection = null;
+  document.getElementById('ec-hoc-selected').style.display = 'none';
+  document.getElementById('ec-hoc-search').style.display   = 'block';
+  document.getElementById('ec-hoc-results').style.display  = 'none';
+}
+
+// ── Head of Contract — Team tab ───────────────────────────────────
+function showHoCAssign() {
+  var w = document.getElementById('hoc-assign-wrap');
+  if (w) w.style.display = w.style.display === 'none' ? 'block' : 'none';
+}
+function hocTabSearch(cid) {
+  var q   = (document.getElementById('hoc-assign-search').value || '').trim();
+  var res = document.getElementById('hoc-assign-results');
+  if (!q || q.length < 2) { res.style.display = 'none'; return; }
+  res.innerHTML = '<div style="padding:10px 14px;font-size:13px;color:#6b7280">Searching…</div>';
+  res.style.display = 'block';
+  clearTimeout(_hocTabTimer);
+  _hocTabTimer = setTimeout(async function() {
+    var r = await window._sb.rpc('cnt_search_users', { search_term: q });
+    var hits = r.data || [];
+    res.innerHTML = hits.length
+      ? hits.map(function(u) {
+          var n = esc(u.display_name||u.email), em = esc(u.email);
+          return '<div onclick="hocTabSelect(\'' + cid + '\',\'' + u.id + '\',\'' + n + '\',\'' + em + '\')"'
+            + ' style="padding:10px 14px;cursor:pointer;border-top:1px solid #f1f5f9;font-size:13px"'
+            + ' onmouseover="this.style.background=\'#f4f7ff\'" onmouseout="this.style.background=\'\'">'
+            + '<div style="font-weight:600">' + n + '</div>'
+            + '<div style="font-size:11px;color:#6b7280">' + em + '</div></div>';
+        }).join('')
+      : '<div style="padding:10px 14px;font-size:13px;color:#6b7280">No matching users found</div>';
+  }, 300);
+}
+async function hocTabSelect(cid, id, name, email) {
+  var r = await window._sb.rpc('cnt_set_head_of_contract',
+    { p_contract_id: cid, p_profile_id: id, p_full_name: name, p_email: email });
+  if (r.error) { toast('Failed: ' + r.error.message, 'err'); return; }
+  toast('Head of Contract assigned', 'ok');
+  _dlDone['tm'] = false;
+  dlLoad('tm');
+}
+async function hocTabClear(cid) {
+  if (!confirm('Remove the Head of Contract from this contract?')) return;
+  var r = await window._sb.rpc('cnt_set_head_of_contract',
+    { p_contract_id: cid, p_profile_id: null, p_full_name: '', p_email: '' });
+  if (r.error) { toast('Failed: ' + r.error.message, 'err'); return; }
+  toast('Head of Contract removed', 'ok');
+  _dlDone['tm'] = false;
+  dlLoad('tm');
 }
 
 document.addEventListener('keydown', function(e) {
