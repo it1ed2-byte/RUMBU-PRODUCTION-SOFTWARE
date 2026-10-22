@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Enter Visitor</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="visitor-common.js"></script>
+</head>
+<body>
+
+<div class="card" id="viewOnlyCard" style="display:none;">
+  <h2>🪪 Enter Visitor</h2>
+  <div class="notice">You have view-only access, so you cannot register visitors. You can open Visitor History to view and print records.</div>
+</div>
+
+<div class="card" id="noBranchCard" style="display:none;">
+  <h2>🪪 Enter Visitor</h2>
+  <div class="notice">Your account is not assigned to a branch, so you cannot register visitors. Please contact your administrator.</div>
+</div>
+
+<div class="card" id="formCard" style="display:none;">
+  <h2>🪪 Enter Visitor</h2>
+  <div class="status-line" id="connStatus">Connecting...</div>
+
+  <div class="grid">
+    <div class="sec-title">Visitor details</div>
+    <div>
+      <label>Branch <span class="req">*</span></label>
+      <select id="f_branch" onchange="onBranchChange()"></select>
+    </div>
+    <div>
+      <label>Time in</label>
+      <input type="text" id="f_timein" readonly value="Recorded automatically when you register">
+    </div>
+    <div>
+      <label>Phone number <span class="req">*</span></label>
+      <input type="text" id="f_phone" inputmode="tel" placeholder="e.g. 08031234567" onchange="lookupPhone()" onblur="lookupPhone()">
+      <div class="hint" id="phoneHint"></div>
+    </div>
+    <div>
+      <label>Full name <span class="req">*</span></label>
+      <input type="text" id="f_name" placeholder="Visitor's full name" autocomplete="off">
+    </div>
+    <div>
+      <label>Company / Organisation</label>
+      <input type="text" id="f_company" placeholder="Where the visitor is from (optional)">
+    </div>
+    <div>
+      <label>Number of people <span class="req">*</span></label>
+      <input type="number" id="f_group" min="1" max="500" value="1">
+      <div class="hint">Count everyone in this group, including the visitor.</div>
+    </div>
+    <div class="full">
+      <label>Address <span class="req">*</span></label>
+      <textarea id="f_address" style="min-height:56px;" placeholder="Visitor's home or office address"></textarea>
+    </div>
+    <div>
+      <label>ID type</label>
+      <select id="f_idtype"></select>
+    </div>
+    <div>
+      <label>ID number</label>
+      <input type="text" id="f_idnumber" placeholder="Required if an ID type is chosen" autocomplete="off">
+    </div>
+
+    <div class="sec-title">Visit details</div>
+    <div>
+      <label>Purpose of visit <span class="req">*</span></label>
+      <select id="f_purpose"></select>
+    </div>
+    <div>
+      <label>Person to visit <span class="req">*</span></label>
+      <input type="text" id="f_host" placeholder="Name of the staff member being visited" autocomplete="off">
+    </div>
+    <div>
+      <label>Department to visit</label>
+      <select id="f_dept"></select>
+    </div>
+    <div>
+      <label>Visitor badge number</label>
+      <input type="text" id="f_badge" placeholder="If a badge is issued (optional)" autocomplete="off">
+    </div>
+    <div>
+      <label>Vehicle plate number</label>
+      <input type="text" id="f_vehicle" placeholder="If the visitor comes with a vehicle (optional)" autocomplete="off">
+    </div>
+    <div>
+      <label>Items brought in</label>
+      <input type="text" id="f_items" placeholder="e.g. laptop, tools, samples (optional)" autocomplete="off">
+    </div>
+    <div class="full">
+      <label>Remarks</label>
+      <textarea id="f_remarks" style="min-height:56px;" placeholder="Anything else worth recording (optional)"></textarea>
+    </div>
+  </div>
+
+  <div class="btn-row">
+    <button id="btnRegister" class="btn-primary" onclick="registerVisitor()">Register Visitor</button>
+    <button id="btnClear" class="btn-ghost" onclick="clearForm()">Clear Form</button>
+  </div>
+  <div class="msg" id="msg"></div>
+</div>
+
+<div class="card" id="successCard" style="display:none;">
+  <h2>✅ Visitor Registered</h2>
+  <div class="kv" id="successInfo"></div>
+  <div class="btn-row" style="margin-top:6px;">
+    <button class="btn-accent" onclick="printSlip()">Print Visitor Slip</button>
+    <button class="btn-primary" onclick="registerAnother()">Register Another Visitor</button>
+  </div>
+</div>
+
+<script>
+var ME = null, BRANCHES = [], SAVING = false, PREV = null, LAST = null;
+function $(id){ return document.getElementById(id); }
+function normPhone(v){ return String(v || "").replace(/[\s\-().]/g, ""); }
+function validPhone(p){ return /^\+?\d{7,15}$/.test(p); }
+function one(v){ return String(v || "").replace(/\s+/g, " ").trim(); }   // single-line text
+function many(v){ return String(v || "").trim(); }                         // multi-line text
+
+function fillSelect(id, items, placeholder){
+  $(id).innerHTML = '<option value="">' + vsEsc(placeholder) + '</option>' +
+    items.map(function(x){ return '<option value="' + vsEsc(x) + '">' + vsEsc(x) + '</option>'; }).join("");
+}
+
+async function loadDepartments(){
+  var branch = $("f_branch").value, sel = $("f_dept");
+  sel.innerHTML = '<option value="">Not specific / general</option>';
+  if(!branch) return;
+  var r = await sb.from("departments").select("name").eq("section", branch).order("name");
+  if(r.error){ console.warn("Departments could not be loaded:", r.error.message); return; }
+  var seen = {};
+  (r.data || []).forEach(function(d){
+    if(seen[d.name]) return; seen[d.name] = 1;
+    var o = document.createElement("option"); o.value = d.name; o.textContent = d.name; sel.appendChild(o);
+  });
+}
+async function onBranchChange(){ await loadDepartments(); }
+
+// Returning visitors: look the phone number up and offer to reuse their earlier details.
+async function lookupPhone(){
+  var phone = normPhone($("f_phone").value), hint = $("phoneHint");
+  PREV = null; hint.innerHTML = "";
+  if(!validPhone(phone)) return;
+  var r = await sb.from("visitors")
+    .select("full_name,company,address,id_type,id_number,vehicle_plate")
+    .eq("phone", phone).order("time_in", { ascending: false }).limit(1);
+  if(r.error || !r.data || !r.data.length) return;
+  if(normPhone($("f_phone").value) !== phone) return;         // the user kept typing
+  PREV = r.data[0];
+  hint.innerHTML = 'Returning visitor: <b>' + vsEsc(PREV.full_name) + '</b>. ' +
+    '<a href="#" onclick="usePrevious();return false;" style="color:var(--accent);font-weight:700;">Use previous details</a>';
+}
+function usePrevious(){
+  if(!PREV) return;
+  $("f_name").value = PREV.full_name || "";
+  $("f_company").value = PREV.company || "";
+  $("f_address").value = PREV.address || "";
+  $("f_idtype").value = PREV.id_type || "";
+  $("f_idnumber").value = PREV.id_number || "";
+  $("f_vehicle").value = PREV.vehicle_plate || "";
+  $("phoneHint").textContent = "Previous details filled in. Please confirm they are still correct.";
+}
+
+function setMsg(text, cls){ var m = $("msg"); m.className = "msg" + (cls ? " " + cls : ""); m.textContent = text; }
+function problem(text, fieldId){
+  setMsg("❌ " + text, "err");
+  if(fieldId){ var f = $(fieldId); if(f){ f.focus(); } }
+  $("formCard").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+function lock(on){ SAVING = on; $("btnRegister").disabled = on; $("btnClear").disabled = on; }
+
+async function registerVisitor(){
+  if(SAVING) return;
+  var v = {
+    branch: $("f_branch").value,
+    full_name: one($("f_name").value),
+    phone: normPhone($("f_phone").value),
+    company: one($("f_company").value) || null,
+    address: many($("f_address").value),
+    id_type: $("f_idtype").value || null,
+    id_number: one($("f_idnumber").value) || null,
+    purpose: $("f_purpose").value,
+    person_to_visit: one($("f_host").value),
+    department_visited: $("f_dept").value || null,
+    group_size: parseInt($("f_group").value, 10),
+    vehicle_plate: one($("f_vehicle").value).toUpperCase() || null,
+    items_carried: one($("f_items").value) || null,
+    badge_number: one($("f_badge").value) || null,
+    remarks: many($("f_remarks").value) || null
+  };
+
+  if(!v.branch) return problem("Select the branch.", "f_branch");
+  if(!v.phone) return problem("Enter the visitor's phone number.", "f_phone");
+  if(!validPhone(v.phone)) return problem("The phone number looks wrong. Use digits only, 7 to 15 digits, with an optional + at the start.", "f_phone");
+  if(v.full_name.length < 2) return problem("Enter the visitor's full name.", "f_name");
+  if(!v.address) return problem("Enter the visitor's address.", "f_address");
+  if(v.id_type && !v.id_number) return problem("Enter the ID number, or clear the ID type.", "f_idnumber");
+  if(v.id_number && !v.id_type) return problem("Choose the ID type for the ID number entered.", "f_idtype");
+  if(!v.purpose) return problem("Choose the purpose of the visit.", "f_purpose");
+  if(!v.person_to_visit) return problem("Enter the person being visited.", "f_host");
+  if(!(v.group_size >= 1 && v.group_size <= 500)) return problem("Number of people must be between 1 and 500.", "f_group");
+
+  lock(true); setMsg("Registering...", "");
+  try{
+    // Guard against registering the same person twice by mistake
+    var dup = await sb.from("visitors").select("visitor_number,time_in,full_name")
+      .eq("branch", v.branch).eq("phone", v.phone).eq("status", "checked_in").limit(1);
+    if(!dup.error && dup.data && dup.data.length){
+      var d = dup.data[0];
+      if(!confirm(d.full_name + " (" + d.visitor_number + ") is already on site since " + vsFmtDateTime(d.time_in) +
+                  " with this phone number.\n\nRegister another visit anyway?")){
+        setMsg("", ""); lock(false); return;
+      }
+    }
+
+    var r = await sb.from("visitors").insert(v).select().single();
+    if(r.error){
+      var denied = r.error.code === "42501" || /row-level security/i.test(r.error.message || "");
+      throw new Error(denied ? "You do not have permission to register visitors for this branch." : r.error.message);
+    }
+    LAST = r.data;
+    showSuccess();
+  }catch(e){
+    setMsg("❌ " + (e.message || e), "err");
+  }finally{
+    lock(false);
+  }
+}
+
+function showSuccess(){
+  var r = LAST;
+  $("successInfo").innerHTML =
+    '<div><label>Visitor number</label><span style="font-size:18px;color:var(--heading);">' + vsEsc(r.visitor_number) + '</span></div>' +
+    '<div><label>Time in</label><span>' + vsEsc(vsFmtDateTime(r.time_in)) + ' WAT</span></div>' +
+    '<div><label>Visitor</label><span>' + vsEsc(r.full_name) + (r.group_size > 1 ? ' (+' + (r.group_size - 1) + ' more)' : '') + '</span></div>' +
+    '<div><label>Branch</label><span>' + vsEsc(r.branch) + '</span></div>' +
+    '<div><label>Visiting</label><span>' + vsEsc(r.person_to_visit) + (r.department_visited ? ' · ' + vsEsc(r.department_visited) : '') + '</span></div>' +
+    '<div><label>Purpose</label><span>' + vsEsc(r.purpose) + '</span></div>';
+  $("formCard").style.display = "none";
+  $("successCard").style.display = "block";
+  window.scrollTo(0, 0);
+}
+
+function clearForm(){
+  ["f_phone","f_name","f_company","f_address","f_idnumber","f_host","f_badge","f_vehicle","f_items","f_remarks"].forEach(function(id){ $(id).value = ""; });
+  $("f_group").value = "1"; $("f_idtype").value = ""; $("f_purpose").value = ""; $("f_dept").value = "";
+  $("phoneHint").textContent = ""; PREV = null; setMsg("", "");
+}
+function registerAnother(){
+  clearForm();
+  $("successCard").style.display = "none";
+  $("formCard").style.display = "block";
+  window.scrollTo(0, 0);
+}
+
+function printSlip(){
+  var r = LAST; if(!r) return;
+  function row(k, v){ return '<tr><td class="k">' + k + '</td><td>' + (v ? vsEsc(v) : "-") + '</td></tr>'; }
+  var html = vsPrintHead("Visitor Pass") +
+    '<div class="pr-title">VISITOR PASS</div>' +
+    '<div class="pr-sub">' + vsEsc(r.visitor_number) + '</div>' +
+    '<table class="pr-kv">' +
+      row("Visitor", r.full_name + (r.group_size > 1 ? " (group of " + r.group_size + ")" : "")) +
+      row("Company / Organisation", r.company) +
+      row("Branch", r.branch) +
+      row("Visiting", r.person_to_visit) +
+      row("Department", r.department_visited) +
+      row("Purpose", r.purpose) +
+      row("Badge number", r.badge_number) +
+      row("Vehicle", r.vehicle_plate) +
+      row("Time in", vsFmtDateTime(r.time_in) + " WAT") +
+    '</table>' +
+    '<div class="pr-note">Please keep this pass with you while on site and return it at the gate when leaving.</div>' +
+    '<div class="pr-sign"><div>Visitor signature</div><div>Issued by: ' + vsEsc(r.checked_in_by_username || "Security") + '</div></div>';
+  vsPrint(html, "A5 portrait", false);
+}
+
+async function init(){
+  var s = $("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    if(ME.readOnly){ $("viewOnlyCard").style.display = "block"; return; }
+    BRANCHES = await vsBranches(ME);
+    if(!BRANCHES.length){ $("noBranchCard").style.display = "block"; return; }
+
+    fillSelect("f_idtype", VS_ID_TYPES, "No ID shown");
+    fillSelect("f_purpose", VS_PURPOSES, "Select purpose");
+    var bsel = $("f_branch");
+    if(BRANCHES.length === 1){
+      bsel.innerHTML = '<option value="' + vsEsc(BRANCHES[0]) + '">' + vsEsc(BRANCHES[0]) + '</option>';
+      bsel.disabled = true;
+    } else {
+      fillSelect("f_branch", BRANCHES, "Select branch");
+    }
+    $("formCard").style.display = "block";
+    s.textContent = "Connected as " + ME.username;
+    await loadDepartments();
+  }catch(e){
+    $("formCard").style.display = "block";
+    s.style.color = "#dc2626"; s.textContent = "Error: " + (e.message || e);
+  }
+}
+init();
+</script>
+</body>
+</html>
