@@ -58,6 +58,11 @@
         <div><label>Chassis / VIN <span style="color:var(--muted);font-weight:400;">(optional)</span></label><input id="v_chassis"></div>
       </div>
       <div><label>Vehicle Category *</label><select id="v_category"><option value="">— Select Category —</option></select></div>
+      <div class="form-row" style="margin-top:10px;">
+        <div><label>Cost of Vehicle (NGN) <span style="color:var(--muted);font-weight:400;">(optional)</span></label>
+          <input type="number" step="0.01" id="v_cost" placeholder="e.g. 25000000"></div>
+        <div></div>
+      </div>
 
       <div class="sec-title">Assignment &amp; Status</div>
       <div class="form-row-3">
@@ -87,7 +92,7 @@
       <div><label>Licence Document</label><input type="file" id="v_lic_file"><div id="v_lic_url" class="hidden"></div></div>
 
       <div class="sec-title">Purchase / Ownership</div>
-      <div class="form-row"><div><label>Purchase Date</label><input type="date" id="v_purchase_date"></div><div><label>Purchase Value (NGN)</label><input type="number" step="0.01" id="v_purchase_value"></div></div>
+      <div class="form-row"><div><label>Purchase Date</label><input type="date" id="v_purchase_date"></div><div></div></div>
       <div><label>Purchase / Ownership Document</label><input type="file" id="v_purchase_file"><div id="v_purchase_url" class="hidden"></div></div>
 
       <button onclick="saveVehicle()" style="margin-top:14px;">Save Vehicle</button>
@@ -109,6 +114,20 @@
 
     <div id="wrap" style="margin-top:14px;overflow-x:auto;"></div>
   </div>
+
+  <!-- Manage Categories panel — visible to super_admin only -->
+  <div class="card-panel" id="catPanel" style="display:none;margin-top:16px;">
+    <h3 style="color:var(--heading);margin:0 0 4px;">Vehicle Categories</h3>
+    <p style="font-size:12px;color:var(--muted);margin:0 0 14px;">Add or remove vehicle categories used across the logistics module.</p>
+
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:14px;">
+      <input id="newCatName" placeholder="New category name (e.g. Trucks)" style="max-width:300px;">
+      <button onclick="addCategory()" style="width:auto;padding:9px 18px;white-space:nowrap;">+ Add Category</button>
+      <span id="catMsg" style="font-size:12px;font-weight:700;"></span>
+    </div>
+
+    <div id="catList"></div>
+  </div>
 </div>
 
 <script>
@@ -128,6 +147,8 @@ async function init(){
     document.getElementById("v_category").innerHTML = '<option value="">— Select Category —</option>' + catOptions;
     document.getElementById("categoryFilter").innerHTML = '<option value="">All</option>' + catOptions;
     await loadAll();
+    if(ME.role==="super_admin") document.getElementById("catPanel").style.display="";
+    renderCatList();
     status.style.color="var(--ok)"; status.textContent="Connected.";
   }catch(e){
     status.style.color="var(--bad)"; status.textContent="Error: "+e.message;
@@ -244,7 +265,7 @@ function editVehicle(id){
   document.getElementById("v_lic_no").value = v.vehicle_licence_no||"";
   document.getElementById("v_lic_expiry").value = v.vehicle_licence_expiry||"";
   document.getElementById("v_purchase_date").value = v.purchase_date||"";
-  document.getElementById("v_purchase_value").value = v.purchase_value??"";
+  document.getElementById("v_cost").value = v.purchase_value??"";
   setAttachmentDisplay("v_ins_url", v.insurance_attachment);
   setAttachmentDisplay("v_road_url", v.roadworthiness_attachment);
   setAttachmentDisplay("v_lic_url", v.vehicle_licence_attachment);
@@ -308,7 +329,7 @@ async function saveVehicle(){
       vehicle_licence_no: document.getElementById("v_lic_no").value.trim() || null,
       vehicle_licence_expiry: document.getElementById("v_lic_expiry").value || null,
       purchase_date: document.getElementById("v_purchase_date").value || null,
-      purchase_value: document.getElementById("v_purchase_value").value ? Number(document.getElementById("v_purchase_value").value) : null,
+      purchase_value: document.getElementById("v_cost").value ? Number(document.getElementById("v_cost").value) : null,
     };
 
     payload.insurance_attachment = null;
@@ -358,6 +379,58 @@ async function saveVehicle(){
       ? "❌ That Registration Number is already in use."
       : "❌ " + e.message;
   }
+}
+
+/* ── Category management ─────────────────────────────────────────── */
+async function refreshCategories(){
+  const { data } = await sb.from("logistics_vehicle_categories").select("*").order("name");
+  CATEGORIES = data || [];
+  const opts = CATEGORIES.map(c=>`<option value="${c.id}">${c.name}</option>`).join("");
+  document.getElementById("v_category").innerHTML = '<option value="">— Select Category —</option>' + opts;
+  document.getElementById("categoryFilter").innerHTML = '<option value="">All</option>' + opts;
+  renderCatList();
+}
+
+function renderCatList(){
+  const el = document.getElementById("catList");
+  if(!el) return;
+  if(!CATEGORIES.length){
+    el.innerHTML="<p style='color:var(--muted);font-size:13px;'>No categories yet — add one above.</p>";
+    return;
+  }
+  el.innerHTML = `<table style="font-size:13px;">
+    <thead><tr><th>Category Name</th><th style="width:120px;"></th></tr></thead>
+    <tbody>${CATEGORIES.map(c=>`<tr>
+      <td><b>${c.name}</b></td>
+      <td><button class="btn-ghost" style="padding:4px 12px;font-size:12px;" onclick="deleteCategory(${c.id},'${c.name.replace(/'/g,"\\'")}')">Delete</button></td>
+    </tr>`).join("")}</tbody>
+  </table>`;
+}
+
+async function addCategory(){
+  const inp = document.getElementById("newCatName");
+  const msg = document.getElementById("catMsg");
+  const name = inp.value.trim();
+  if(!name){ msg.style.color="var(--bad)"; msg.textContent="Enter a category name."; return; }
+  if(CATEGORIES.some(c=>c.name.toLowerCase()===name.toLowerCase())){
+    msg.style.color="var(--bad)"; msg.textContent="Category already exists."; return;
+  }
+  msg.style.color="var(--muted)"; msg.textContent="Saving…";
+  const { error } = await sb.from("logistics_vehicle_categories").insert({ name });
+  if(error){ msg.style.color="var(--bad)"; msg.textContent="❌ "+error.message; return; }
+  inp.value="";
+  msg.style.color="var(--ok)"; msg.textContent="✅ Added.";
+  await refreshCategories();
+  setTimeout(()=>{ msg.textContent=""; },3000);
+}
+
+async function deleteCategory(id, name){
+  const inUse = VEHICLES.some(v=>v.category_id===id);
+  if(inUse){ alert(`"${name}" is assigned to one or more vehicles and cannot be deleted.`); return; }
+  if(!confirm(`Delete category "${name}"?`)) return;
+  const { error } = await sb.from("logistics_vehicle_categories").delete().eq("id",id);
+  if(error){ alert("❌ "+error.message); return; }
+  await refreshCategories();
 }
 
 init();
