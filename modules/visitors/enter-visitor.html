@@ -15,6 +15,13 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="../../auth.js"></script>
 <script src="visitor-common.js"></script>
+<style>
+  .ok-banner{background:#dcfce7;border:1px solid #86efac;color:#15803d;border-radius:8px;padding:12px 14px;font-weight:700;font-size:14px;margin-bottom:14px}
+  .extra-list{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px}
+  .extra-row{display:flex;gap:6px;align-items:center}
+  .extra-row input{flex:1}
+  @media(max-width:700px){.extra-list{grid-template-columns:1fr}}
+</style>
 </head>
 <body>
 
@@ -31,6 +38,7 @@
 <div class="card" id="formCard" style="display:none;">
   <h2>🪪 Enter Visitor</h2>
   <div class="status-line" id="connStatus">Connecting...</div>
+  <div class="ok-banner" id="okBanner" style="display:none;"></div>
 
   <div class="grid">
     <div class="sec-title">Visitor details</div>
@@ -39,26 +47,30 @@
       <select id="f_branch" onchange="onBranchChange()"></select>
     </div>
     <div>
-      <label>Time in</label>
-      <input type="text" id="f_timein" readonly value="Recorded automatically when you register">
-    </div>
-    <div>
       <label>Phone number <span class="req">*</span></label>
       <input type="text" id="f_phone" inputmode="tel" placeholder="e.g. 08031234567" onchange="lookupPhone()" onblur="lookupPhone()">
       <div class="hint" id="phoneHint"></div>
     </div>
     <div>
       <label>Full name <span class="req">*</span></label>
-      <input type="text" id="f_name" placeholder="Visitor's full name" autocomplete="off">
+      <input type="text" id="f_name" placeholder="Visitor's full name" autocomplete="off" oninput="countPeople()">
     </div>
     <div>
       <label>Company / Organisation</label>
       <input type="text" id="f_company" placeholder="Where the visitor is from (optional)">
     </div>
     <div>
-      <label>Number of people <span class="req">*</span></label>
-      <input type="number" id="f_group" min="1" max="500" value="1">
-      <div class="hint">Count everyone in this group, including the visitor.</div>
+      <label>Number of people</label>
+      <input type="number" id="f_group" value="1" readonly>
+      <div class="hint">Counted automatically from the names entered.</div>
+    </div>
+    <div>
+      <label>Visiting with other people?</label>
+      <button type="button" class="btn-accent" id="btnAddPerson" onclick="addPerson()">+ Add Another Person</button>
+    </div>
+    <div class="full" id="extraWrap" style="display:none;">
+      <label>Other people with this visitor</label>
+      <div class="extra-list" id="extraNames"></div>
     </div>
     <div class="full">
       <label>Address <span class="req">*</span></label>
@@ -111,17 +123,8 @@
   <div class="msg" id="msg"></div>
 </div>
 
-<div class="card" id="successCard" style="display:none;">
-  <h2>✅ Visitor Registered</h2>
-  <div class="kv" id="successInfo"></div>
-  <div class="btn-row" style="margin-top:6px;">
-    <button class="btn-accent" onclick="printSlip()">Print Visitor Slip</button>
-    <button class="btn-primary" onclick="registerAnother()">Register Another Visitor</button>
-  </div>
-</div>
-
 <script>
-var ME = null, BRANCHES = [], SAVING = false, PREV = null, LAST = null;
+var ME = null, BRANCHES = [], SAVING = false, PREV = null, EXTRA_MAX = 49;
 function $(id){ return document.getElementById(id); }
 function normPhone(v){ return String(v || "").replace(/[\s\-().]/g, ""); }
 function validPhone(p){ return /^\+?\d{7,15}$/.test(p); }
@@ -180,6 +183,34 @@ function problem(text, fieldId){
 }
 function lock(on){ SAVING = on; $("btnRegister").disabled = on; $("btnClear").disabled = on; }
 
+/* ── Other people in the same group ── */
+function extraNames(){
+  return Array.prototype.map.call(document.querySelectorAll("#extraNames .extra-name"), function(i){ return one(i.value); }).filter(Boolean);
+}
+function countPeople(){
+  var n = (one($("f_name").value) ? 1 : 0) + extraNames().length;
+  $("f_group").value = String(Math.max(1, n));
+}
+function addPerson(){
+  var list = $("extraNames");
+  if(list.children.length >= EXTRA_MAX){ vsFlash("You can add up to " + EXTRA_MAX + " other people. For a bigger group, register it in more than one entry.", "err"); return; }
+  var row = document.createElement("div"); row.className = "extra-row";
+  row.innerHTML = '<input type="text" class="extra-name" placeholder="Full name of another person" autocomplete="off" oninput="countPeople()">' +
+                  '<button type="button" class="btn-sm btn-ghost" title="Remove this person" onclick="removePerson(this)">✕</button>';
+  list.appendChild(row);
+  $("extraWrap").style.display = "block";
+  row.firstChild.focus();
+  countPeople();
+}
+function removePerson(btn){
+  var row = btn.parentNode; row.parentNode.removeChild(row);
+  if(!$("extraNames").children.length) $("extraWrap").style.display = "none";
+  countPeople();
+}
+
+function showOk(text){ var b = $("okBanner"); b.textContent = text; b.style.display = "block"; window.scrollTo(0, 0); }
+function hideOk(){ $("okBanner").style.display = "none"; }
+
 async function registerVisitor(){
   if(SAVING) return;
   var v = {
@@ -193,7 +224,7 @@ async function registerVisitor(){
     purpose: $("f_purpose").value,
     person_to_visit: one($("f_host").value),
     department_visited: $("f_dept").value || null,
-    group_size: parseInt($("f_group").value, 10),
+    group_size: 1,
     vehicle_plate: one($("f_vehicle").value).toUpperCase() || null,
     items_carried: one($("f_items").value) || null,
     badge_number: one($("f_badge").value) || null,
@@ -209,7 +240,19 @@ async function registerVisitor(){
   if(v.id_number && !v.id_type) return problem("Choose the ID type for the ID number entered.", "f_idtype");
   if(!v.purpose) return problem("Choose the purpose of the visit.", "f_purpose");
   if(!v.person_to_visit) return problem("Enter the person being visited.", "f_host");
-  if(!(v.group_size >= 1 && v.group_size <= 500)) return problem("Number of people must be between 1 and 500.", "f_group");
+
+  var others = extraNames();
+  for(var k = 0; k < others.length; k++){
+    if(others[k].length < 2) return problem("Each extra name must be at least 2 letters. Remove or complete \"" + others[k] + "\".", "f_name");
+  }
+  var seen = {}; seen[v.full_name.toLowerCase()] = 1;
+  for(var m = 0; m < others.length; m++){
+    var key = others[m].toLowerCase();
+    if(seen[key]) return problem("The name \"" + others[m] + "\" is entered more than once in this group.", "f_name");
+    seen[key] = 1;
+  }
+  v.group_size = 1 + others.length;
+  if(others.length) v.companions = others;       // only sent when there are other people
 
   lock(true); setMsg("Registering...", "");
   try{
@@ -229,8 +272,11 @@ async function registerVisitor(){
       var denied = r.error.code === "42501" || /row-level security/i.test(r.error.message || "");
       throw new Error(denied ? "You do not have permission to register visitors for this branch." : r.error.message);
     }
-    LAST = r.data;
-    showSuccess();
+    var saved = r.data;
+    clearForm();
+    showOk("✅ Visitor added successfully: " + saved.full_name +
+           (saved.group_size > 1 ? " and " + (saved.group_size - 1) + (saved.group_size === 2 ? " other" : " others") : "") +
+           " (" + saved.visitor_number + "). The form is ready for the next visitor.");
   }catch(e){
     setMsg("❌ " + (e.message || e), "err");
   }finally{
@@ -238,54 +284,12 @@ async function registerVisitor(){
   }
 }
 
-function showSuccess(){
-  var r = LAST;
-  $("successInfo").innerHTML =
-    '<div><label>Visitor number</label><span style="font-size:18px;color:var(--heading);">' + vsEsc(r.visitor_number) + '</span></div>' +
-    '<div><label>Time in</label><span>' + vsEsc(vsFmtDateTime(r.time_in)) + ' WAT</span></div>' +
-    '<div><label>Visitor</label><span>' + vsEsc(r.full_name) + (r.group_size > 1 ? ' (+' + (r.group_size - 1) + ' more)' : '') + '</span></div>' +
-    '<div><label>Branch</label><span>' + vsEsc(r.branch) + '</span></div>' +
-    '<div><label>Visiting</label><span>' + vsEsc(r.person_to_visit) + (r.department_visited ? ' · ' + vsEsc(r.department_visited) : '') + '</span></div>' +
-    '<div><label>Purpose</label><span>' + vsEsc(r.purpose) + '</span></div>';
-  $("formCard").style.display = "none";
-  $("successCard").style.display = "block";
-  window.scrollTo(0, 0);
-}
-
 function clearForm(){
   ["f_phone","f_name","f_company","f_address","f_idnumber","f_host","f_badge","f_vehicle","f_items","f_remarks"].forEach(function(id){ $(id).value = ""; });
-  $("f_group").value = "1"; $("f_idtype").value = ""; $("f_purpose").value = ""; $("f_dept").value = "";
-  $("phoneHint").textContent = ""; PREV = null; setMsg("", "");
+  $("extraNames").innerHTML = ""; $("extraWrap").style.display = "none"; $("f_group").value = "1";
+  $("f_idtype").value = ""; $("f_purpose").value = ""; $("f_dept").value = "";
+  $("phoneHint").textContent = ""; PREV = null; setMsg("", ""); hideOk();
 }
-function registerAnother(){
-  clearForm();
-  $("successCard").style.display = "none";
-  $("formCard").style.display = "block";
-  window.scrollTo(0, 0);
-}
-
-function printSlip(){
-  var r = LAST; if(!r) return;
-  function row(k, v){ return '<tr><td class="k">' + k + '</td><td>' + (v ? vsEsc(v) : "-") + '</td></tr>'; }
-  var html = vsPrintHead("Visitor Pass") +
-    '<div class="pr-title">VISITOR PASS</div>' +
-    '<div class="pr-sub">' + vsEsc(r.visitor_number) + '</div>' +
-    '<table class="pr-kv">' +
-      row("Visitor", r.full_name + (r.group_size > 1 ? " (group of " + r.group_size + ")" : "")) +
-      row("Company / Organisation", r.company) +
-      row("Branch", r.branch) +
-      row("Visiting", r.person_to_visit) +
-      row("Department", r.department_visited) +
-      row("Purpose", r.purpose) +
-      row("Badge number", r.badge_number) +
-      row("Vehicle", r.vehicle_plate) +
-      row("Time in", vsFmtDateTime(r.time_in) + " WAT") +
-    '</table>' +
-    '<div class="pr-note">Please keep this pass with you while on site and return it at the gate when leaving.</div>' +
-    '<div class="pr-sign"><div>Visitor signature</div><div>Issued by: ' + vsEsc(r.checked_in_by_username || "Security") + '</div></div>';
-  vsPrint(html, "A5 portrait", false);
-}
-
 async function init(){
   var s = $("connStatus");
   try{
@@ -305,6 +309,7 @@ async function init(){
       fillSelect("f_branch", BRANCHES, "Select branch");
     }
     $("formCard").style.display = "block";
+    $("formCard").addEventListener("input", hideOk);
     s.textContent = "Connected as " + ME.username;
     await loadDepartments();
   }catch(e){
