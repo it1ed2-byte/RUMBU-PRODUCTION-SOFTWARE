@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Manage Visitors</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="visitor-common.js"></script>
+</head>
+<body>
+
+<div class="card">
+  <h2>🚪 Manage Visitors</h2>
+  <div class="status-line" id="connStatus">Connecting...</div>
+  <div class="notice" id="viewOnlyNote" style="display:none;">You have view-only access. You can see who is on site and print the list, but you cannot check visitors out.</div>
+
+  <div class="chips" id="chips"></div>
+
+  <div class="toolbar">
+    <div id="branchBox" style="display:none;">
+      <label>Branch</label>
+      <select id="filterBranch" onchange="loadData()"></select>
+    </div>
+    <div class="grow">
+      <label>Search</label>
+      <input type="text" id="filterSearch" placeholder="Search name, phone, company, host, badge or vehicle" oninput="onSearch()">
+    </div>
+    <div>
+      <label>Rows</label>
+      <select id="filterRows" onchange="onSearch()">
+        <option value="10">10 rows</option>
+        <option value="25" selected>25 rows</option>
+        <option value="50">50 rows</option>
+        <option value="100">100 rows</option>
+      </select>
+    </div>
+    <div style="min-width:0;"><button class="btn-ghost" onclick="loadData()">⟳ Refresh</button></div>
+    <div style="min-width:0;"><button class="btn-accent" onclick="printOnSite()">Print On-Site List</button></div>
+  </div>
+
+  <p class="count-label" id="countLabel"></p>
+  <div class="table-wrap"><div id="tableArea">Loading...</div></div>
+  <div class="pagination" id="paginationArea"></div>
+  <p class="hint" style="margin-top:12px;" id="updatedAt"></p>
+</div>
+
+<!-- Check-out confirmation -->
+<div class="modal-bg" id="coModal">
+  <div class="modal">
+    <h3>Check Out Visitor</h3>
+    <div class="kv" id="coInfo"></div>
+    <div class="warn" id="coWarn" style="display:none;"></div>
+    <p style="font-size:14px;margin:0 0 12px;">Are you sure <b id="coName"></b> is leaving the premises?</p>
+    <label>Comments <span id="coOpt" class="hint" style="display:inline;">(optional)</span></label>
+    <textarea id="coComment" maxlength="500" placeholder="e.g. Left after the meeting. Delivery note signed by stores."></textarea>
+    <div class="msg" id="coMsg"></div>
+    <div class="modal-btns">
+      <button class="btn-ghost" id="coCancel" onclick="closeCo()">Cancel</button>
+      <button class="btn-primary" id="coConfirm" onclick="confirmCo()">Confirm Check Out</button>
+    </div>
+  </div>
+</div>
+
+<script>
+var ME = null, BRANCHES = [], ROWS = [], FILTERED = [], page = 1, CAN_WRITE = false, CO = null, CO_STALE = false, BUSY = false, TRUNC = false;
+function $(id){ return document.getElementById(id); }
+function rpp(){ return Number($("filterRows").value) || 25; }
+function isStale(r){ return vsDay(r.time_in) < vsToday(); }                 // checked in on an earlier day
+function isLong(r){ return vsMinutes(r.time_in, new Date()) >= VS_OVERSTAY_HOURS * 60; }
+
+async function loadData(silent){
+  if(!silent) $("tableArea").innerHTML = "Loading...";
+  try{
+    var branch = $("filterBranch").value;
+    var res = await vsFetchAll(function(){
+      var q = sb.from("visitors").select("*").eq("status", "checked_in")
+        .order("time_in", { ascending: true }).order("id");
+      if(branch) q = q.eq("branch", branch);
+      else if(ME.role !== "super_admin") q = q.in("branch", BRANCHES);
+      return q;
+    });
+    ROWS = res.rows; TRUNC = res.truncated;
+    $("updatedAt").textContent = "Last updated " + vsFmtTime(new Date()) + " WAT. This list refreshes by itself every minute.";
+    applyFilter();
+  }catch(e){
+    if(!silent) $("tableArea").innerHTML = '<p class="empty" style="color:#dc2626;">❌ ' + vsEsc(e.message || e) + '</p>';
+  }
+}
+
+function onSearch(){ page = 1; applyFilter(); }
+
+function applyFilter(){
+  var q = $("filterSearch").value.trim().toLowerCase();
+  FILTERED = !q ? ROWS.slice() : ROWS.filter(function(r){
+    return [r.full_name, r.phone, r.company, r.person_to_visit, r.department_visited, r.badge_number, r.vehicle_plate, r.visitor_number, r.purpose]
+      .join(" ").toLowerCase().indexOf(q) !== -1;
+  });
+  renderChips(); renderTable();
+}
+
+function renderChips(){
+  var people = 0, today = 0, earlier = 0;
+  ROWS.forEach(function(r){ people += r.group_size || 1; if(isStale(r)) earlier++; else today++; });
+  $("chips").innerHTML =
+    '<span class="chip c-blue">On site now<b>' + ROWS.length + '</b></span>' +
+    '<span class="chip c-green">People on site<b>' + people + '</b></span>' +
+    '<span class="chip c-gray">Checked in today<b>' + today + '</b></span>' +
+    (earlier ? '<span class="chip c-red">From earlier days, not checked out<b>' + earlier + '</b></span>' : '');
+}
+
+function renderTable(){
+  var total = FILTERED.length, per = rpp(), totalPages = Math.max(1, Math.ceil(total / per));
+  if(page > totalPages) page = totalPages;
+  var start = (page - 1) * per, end = Math.min(start + per, total), rows = FILTERED.slice(start, end);
+  $("countLabel").textContent = total + " visitor" + (total === 1 ? "" : "s") + " on site" +
+    (FILTERED.length !== ROWS.length ? " (filtered from " + ROWS.length + ")" : "") +
+    (TRUNC ? ". Only the first " + VS_MAX_ROWS + " are shown." : "");
+  if(!rows.length){
+    $("tableArea").innerHTML = '<p class="empty">' + (ROWS.length ? "No visitors match your search." : "No visitors are on site right now.") + '</p>';
+    $("paginationArea").innerHTML = ""; return;
+  }
+  var multi = BRANCHES.length > 1;
+  var h = '<table><thead><tr><th>#</th><th>Visitor No</th><th>Name</th><th>Phone</th><th>Company</th>' + (multi ? '<th>Branch</th>' : '') +
+          '<th>Visiting</th><th>Purpose</th><th class="num">People</th><th>Badge</th><th>Time In</th><th>On Site</th>' + (CAN_WRITE ? '<th>Action</th>' : '') + '</tr></thead><tbody>';
+  rows.forEach(function(r, i){
+    var stale = isStale(r), cls = stale ? "row-stale" : (isLong(r) ? "row-long" : "");
+    h += '<tr class="' + cls + '"><td>' + (start + i + 1) + '</td><td><b>' + vsEsc(r.visitor_number) + '</b></td>' +
+      '<td>' + vsEsc(r.full_name) + '</td><td>' + vsEsc(r.phone) + '</td><td>' + vsEsc(r.company || "-") + '</td>' +
+      (multi ? '<td>' + vsEsc(r.branch) + '</td>' : '') +
+      '<td>' + vsEsc(r.person_to_visit) + (r.department_visited ? '<br><span class="hint">' + vsEsc(r.department_visited) + '</span>' : '') + '</td>' +
+      '<td>' + vsEsc(r.purpose) + '</td><td class="num">' + (r.group_size || 1) + '</td><td>' + vsEsc(r.badge_number || "-") + '</td>' +
+      '<td>' + vsFmtDate(r.time_in) + '<br>' + vsFmtTime(r.time_in) + '</td>' +
+      '<td>' + vsDuration(r.time_in, new Date()) + (stale ? '<br><span class="badge b-stale">Earlier day</span>' : (isLong(r) ? '<br><span class="badge b-on">Long stay</span>' : '')) + '</td>' +
+      (CAN_WRITE ? '<td><button class="btn-sm btn-accent" onclick="openCo(\'' + r.id + '\')">Check Out</button></td>' : '') + '</tr>';
+  });
+  $("tableArea").innerHTML = h + '</tbody></table>';
+  $("paginationArea").innerHTML = vsPager(page, totalPages, start, end, total, "goPage");
+}
+function goPage(p){ var tp = Math.max(1, Math.ceil(FILTERED.length / rpp())); if(p < 1 || p > tp) return; page = p; renderTable(); }
+
+/* ── Check out ── */
+function openCo(id){
+  var r = ROWS.find(function(x){ return x.id === id; }); if(!r || !CAN_WRITE) return;
+  CO = r; CO_STALE = isStale(r);
+  $("coName").textContent = r.full_name + (r.group_size > 1 ? " and " + (r.group_size - 1) + " other" + (r.group_size > 2 ? "s" : "") : "");
+  $("coInfo").innerHTML =
+    '<div><label>Visitor number</label><span>' + vsEsc(r.visitor_number) + '</span></div>' +
+    '<div><label>Time in</label><span>' + vsEsc(vsFmtDateTime(r.time_in)) + '</span></div>' +
+    '<div><label>Visiting</label><span>' + vsEsc(r.person_to_visit) + '</span></div>' +
+    '<div><label>Time on site</label><span>' + vsEsc(vsDuration(r.time_in, new Date())) + '</span></div>';
+  var warn = $("coWarn");
+  if(CO_STALE){
+    warn.style.display = "block";
+    warn.textContent = "This visitor checked in on " + vsFmtDate(r.time_in) + " and was never checked out. The time out will be recorded as right now, so please state in the comments when the visitor actually left.";
+    $("coOpt").textContent = "(required for this visitor)";
+  } else { warn.style.display = "none"; $("coOpt").textContent = "(optional)"; }
+  $("coComment").value = ""; $("coMsg").textContent = ""; $("coMsg").className = "msg";
+  $("coModal").classList.add("open");
+  setTimeout(function(){ $("coComment").focus(); }, 50);
+}
+function closeCo(){ if(BUSY) return; $("coModal").classList.remove("open"); CO = null; }
+
+async function confirmCo(){
+  if(BUSY || !CO || !CAN_WRITE) return;
+  var comment = $("coComment").value.trim(), m = $("coMsg");
+  if(CO_STALE && !comment){ m.className = "msg err"; m.textContent = "❌ Please state when this visitor actually left."; $("coComment").focus(); return; }
+  BUSY = true; $("coConfirm").disabled = true; $("coCancel").disabled = true; m.className = "msg"; m.textContent = "Checking out...";
+  var who = CO.full_name;
+  try{
+    // Only a visitor who is still checked in can be updated, so two guards cannot both check out the same person
+    var r = await sb.from("visitors").update({ status: "checked_out", checkout_comment: comment || null })
+      .eq("id", CO.id).eq("status", "checked_in").select("id,time_out");
+    if(r.error) throw r.error;
+    BUSY = false; $("coConfirm").disabled = false; $("coCancel").disabled = false;
+    if(!r.data || !r.data.length){
+      closeCo();
+      vsFlash(who + " was not updated. They may already have been checked out by someone else, or you do not have permission. The list has been refreshed.", "err");
+    } else {
+      closeCo();
+      vsFlash(who + " checked out at " + vsFmtTime(r.data[0].time_out) + " WAT.", "ok");
+    }
+    await loadData(true);
+  }catch(e){
+    BUSY = false; $("coConfirm").disabled = false; $("coCancel").disabled = false;
+    m.className = "msg err"; m.textContent = "❌ " + (e.message || e);
+  }
+}
+
+/* ── Print the on-site list (also useful as an emergency roll call) ── */
+function printOnSite(){
+  if(!FILTERED.length){ vsFlash("There is nobody on site to print.", "err"); return; }
+  var branch = $("filterBranch").value || (BRANCHES.length === 1 ? BRANCHES[0] : "All branches");
+  var people = 0; FILTERED.forEach(function(r){ people += r.group_size || 1; });
+  var multi = BRANCHES.length > 1 && !$("filterBranch").value;
+  var html = vsPrintHead("Visitors On Site") +
+    '<div class="pr-title">Visitors On Site</div>' +
+    '<div class="pr-meta"><b>Branch:</b> ' + vsEsc(branch) + '</div>' +
+    '<div class="pr-meta"><b>As at:</b> ' + vsEsc(vsNowLabel()) + '</div>' +
+    '<div class="pr-meta"><b>Visits on site:</b> ' + FILTERED.length + ' &nbsp; <b>People on site:</b> ' + people + '</div>' +
+    '<table class="pr-table"><thead><tr><th>No</th><th>Visitor No</th><th>Name</th><th>Phone</th><th>Company</th>' + (multi ? '<th>Branch</th>' : '') +
+    '<th>Visiting</th><th>People</th><th>Badge</th><th>Time In</th><th>On Site</th></tr></thead><tbody>' +
+    FILTERED.map(function(r, i){
+      return '<tr><td>' + (i + 1) + '</td><td>' + vsEsc(r.visitor_number) + '</td><td>' + vsEsc(r.full_name) + '</td><td>' + vsEsc(r.phone) + '</td><td>' + vsEsc(r.company || "-") + '</td>' +
+        (multi ? '<td>' + vsEsc(r.branch) + '</td>' : '') +
+        '<td>' + vsEsc(r.person_to_visit) + (r.department_visited ? ' (' + vsEsc(r.department_visited) + ')' : '') + '</td><td>' + (r.group_size || 1) + '</td><td>' + vsEsc(r.badge_number || "-") + '</td>' +
+        '<td>' + vsEsc(vsFmtDateTime(r.time_in)) + '</td><td>' + vsDuration(r.time_in, new Date()) + '</td></tr>';
+    }).join("") +
+    '</tbody></table><div class="pr-end">Printed by ' + vsEsc(ME.username) + '</div>';
+  vsPrint(html, "A4 landscape", true);
+}
+
+document.addEventListener("keydown", function(e){ if(e.key === "Escape") closeCo(); });
+
+async function init(){
+  var s = $("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    CAN_WRITE = !ME.readOnly;
+    if(!CAN_WRITE) $("viewOnlyNote").style.display = "block";
+    BRANCHES = await vsBranches(ME);
+    if(!BRANCHES.length){ s.textContent = "Your account is not assigned to a branch."; $("tableArea").innerHTML = ""; return; }
+    if(BRANCHES.length > 1){
+      $("branchBox").style.display = "block";
+      $("filterBranch").innerHTML = '<option value="">All branches</option>' +
+        BRANCHES.map(function(b){ return '<option value="' + vsEsc(b) + '">' + vsEsc(b) + '</option>'; }).join("");
+    } else {
+      $("filterBranch").innerHTML = '<option value="' + vsEsc(BRANCHES[0]) + '">' + vsEsc(BRANCHES[0]) + '</option>';
+    }
+    s.textContent = "Connected as " + ME.username + (BRANCHES.length === 1 ? " · " + BRANCHES[0] : "");
+    await loadData();
+    setInterval(function(){ if(!$("coModal").classList.contains("open")) loadData(true); }, 60000);
+  }catch(e){
+    s.style.color = "#dc2626"; s.textContent = "Error: " + (e.message || e);
+  }
+}
+init();
+</script>
+</body>
+</html>
