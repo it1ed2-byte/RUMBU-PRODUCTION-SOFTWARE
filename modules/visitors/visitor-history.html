@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Visitor History</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="visitor-common.js"></script>
+</head>
+<body>
+
+<div class="card">
+  <h2>📖 Visitor History</h2>
+  <div class="status-line" id="connStatus">Connecting...</div>
+
+  <div class="toolbar">
+    <div>
+      <label>From</label>
+      <input type="date" id="filterFrom" onchange="loadData()">
+    </div>
+    <div>
+      <label>To</label>
+      <input type="date" id="filterTo" onchange="loadData()">
+    </div>
+    <div id="branchBox" style="display:none;">
+      <label>Branch</label>
+      <select id="filterBranch" onchange="loadData()"></select>
+    </div>
+    <div>
+      <label>Status</label>
+      <select id="filterStatus" onchange="onFilter()">
+        <option value="">All visits</option>
+        <option value="checked_in">Still on site</option>
+        <option value="checked_out">Checked out</option>
+      </select>
+    </div>
+    <div>
+      <label>Department visited</label>
+      <select id="filterDept" onchange="onFilter()"><option value="">All departments</option></select>
+    </div>
+    <div>
+      <label>Purpose</label>
+      <select id="filterPurpose" onchange="onFilter()"><option value="">All purposes</option></select>
+    </div>
+  </div>
+  <div class="toolbar">
+    <div class="grow">
+      <label>Search</label>
+      <input type="text" id="filterSearch" placeholder="Search name, phone, company, host, visitor number, badge or vehicle" oninput="onFilter()">
+    </div>
+    <div>
+      <label>Rows</label>
+      <select id="filterRows" onchange="onFilter()">
+        <option value="10">10 rows</option>
+        <option value="25" selected>25 rows</option>
+        <option value="50">50 rows</option>
+        <option value="100">100 rows</option>
+      </select>
+    </div>
+    <div style="min-width:0;"><button class="btn-ghost" onclick="clearFilters()">Clear Filters</button></div>
+    <div style="min-width:0;"><button class="btn-accent" onclick="printReport()">Print Report</button></div>
+    <div style="min-width:0;"><button class="btn-ghost" onclick="exportCsv()">Export CSV</button></div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="chips" id="chips"></div>
+  <p class="count-label" id="countLabel"></p>
+  <div class="table-wrap"><div id="tableArea">Loading...</div></div>
+  <div class="pagination" id="paginationArea"></div>
+</div>
+
+<!-- Visit details -->
+<div class="modal-bg" id="detailModal">
+  <div class="modal">
+    <h3 id="dTitle"></h3>
+    <div class="kv" id="dBody"></div>
+    <div class="modal-btns">
+      <button class="btn-ghost" onclick="closeDetail()">Close</button>
+      <button class="btn-accent" onclick="printRecord()">Print Record</button>
+    </div>
+  </div>
+</div>
+
+<script>
+var ME = null, BRANCHES = [], ALL = [], VIEW = [], page = 1, TRUNC = false, CURRENT = null;
+function $(id){ return document.getElementById(id); }
+function rpp(){ return Number($("filterRows").value) || 25; }
+function stale(r){ return r.status === "checked_in" && vsDay(r.time_in) < vsToday(); }
+function statusBadge(r){
+  if(r.status === "checked_out") return '<span class="badge b-out">Checked out</span>';
+  return stale(r) ? '<span class="badge b-stale">No check-out</span>' : '<span class="badge b-on">On site</span>';
+}
+function statusText(r){ return r.status === "checked_out" ? "Checked out" : (stale(r) ? "On site (no check-out)" : "On site"); }
+function stay(r){ return r.status === "checked_out" ? vsDuration(r.time_in, r.time_out) : "-"; }
+function dash(v){ return v ? v : "-"; }
+
+async function loadData(){
+  var from = $("filterFrom").value, to = $("filterTo").value;
+  if(!from || !to || from > to){ $("tableArea").innerHTML = '<p class="empty" style="color:#dc2626;">Choose a valid date range (From must not be after To).</p>'; return; }
+  $("tableArea").innerHTML = "Loading...";
+  try{
+    var branch = $("filterBranch").value;
+    var res = await vsFetchAll(function(){
+      var q = sb.from("visitors").select("*")
+        .gte("time_in", vsDayStartISO(from)).lt("time_in", vsNextDayStartISO(to))
+        .order("time_in", { ascending: false }).order("id");
+      if(branch) q = q.eq("branch", branch);
+      else if(ME.role !== "super_admin") q = q.in("branch", BRANCHES);
+      return q;
+    });
+    ALL = res.rows; TRUNC = res.truncated;
+    fillDynamicFilters();
+    page = 1; applyFilters();
+  }catch(e){
+    $("tableArea").innerHTML = '<p class="empty" style="color:#dc2626;">❌ ' + vsEsc(e.message || e) + '</p>';
+  }
+}
+
+function fillDynamicFilters(){
+  var dsel = $("filterDept"), dkeep = dsel.value;
+  var depts = Array.from(new Set(ALL.map(function(r){ return r.department_visited; }).filter(Boolean))).sort();
+  dsel.innerHTML = '<option value="">All departments</option>' + depts.map(function(d){ return '<option value="' + vsEsc(d) + '">' + vsEsc(d) + '</option>'; }).join("");
+  if(depts.indexOf(dkeep) !== -1) dsel.value = dkeep;
+  var psel = $("filterPurpose"), pkeep = psel.value;
+  var purposes = Array.from(new Set(VS_PURPOSES.concat(ALL.map(function(r){ return r.purpose; }).filter(Boolean))));
+  psel.innerHTML = '<option value="">All purposes</option>' + purposes.map(function(p){ return '<option value="' + vsEsc(p) + '">' + vsEsc(p) + '</option>'; }).join("");
+  if(purposes.indexOf(pkeep) !== -1) psel.value = pkeep;
+}
+
+function onFilter(){ page = 1; applyFilters(); }
+
+function applyFilters(){
+  var st = $("filterStatus").value, dept = $("filterDept").value, pur = $("filterPurpose").value;
+  var q = $("filterSearch").value.trim().toLowerCase();
+  VIEW = ALL.filter(function(r){
+    if(st && r.status !== st) return false;
+    if(dept && r.department_visited !== dept) return false;
+    if(pur && r.purpose !== pur) return false;
+    if(q){
+      var hay = [r.full_name, r.phone, r.company, r.person_to_visit, r.department_visited, r.visitor_number, r.badge_number, r.vehicle_plate, r.purpose]
+        .join(" ").toLowerCase();
+      if(hay.indexOf(q) === -1) return false;
+    }
+    return true;
+  });
+  renderChips(); renderTable();
+}
+
+function summary(){
+  var people = 0, on = 0, out = 0, mins = 0;
+  VIEW.forEach(function(r){
+    people += r.group_size || 1;
+    if(r.status === "checked_in") on++; else { out++; mins += vsMinutes(r.time_in, r.time_out); }
+  });
+  return { visits: VIEW.length, people: people, on: on, out: out, avg: out ? vsFmtMinutes(mins / out) : "-" };
+}
+function renderChips(){
+  var s = summary();
+  $("chips").innerHTML =
+    '<span class="chip c-blue">Visits<b>' + s.visits + '</b></span>' +
+    '<span class="chip c-green">People<b>' + s.people + '</b></span>' +
+    '<span class="chip c-amber">Still on site<b>' + s.on + '</b></span>' +
+    '<span class="chip c-gray">Checked out<b>' + s.out + '</b></span>' +
+    '<span class="chip c-gray">Average stay<b>' + vsEsc(s.avg) + '</b></span>';
+}
+
+function renderTable(){
+  var total = VIEW.length, per = rpp(), totalPages = Math.max(1, Math.ceil(total / per));
+  if(page > totalPages) page = totalPages;
+  var start = (page - 1) * per, end = Math.min(start + per, total), rows = VIEW.slice(start, end);
+  $("countLabel").textContent = total + " visit" + (total === 1 ? "" : "s") +
+    (VIEW.length !== ALL.length ? " (filtered from " + ALL.length + ")" : "") +
+    (TRUNC ? ". The first " + VS_MAX_ROWS + " visits in this range are loaded. Narrow the dates to see the rest." : "");
+  if(!rows.length){
+    $("tableArea").innerHTML = '<p class="empty">No visits match these filters.</p>';
+    $("paginationArea").innerHTML = ""; return;
+  }
+  var multi = BRANCHES.length > 1;
+  var h = '<table><thead><tr><th>#</th><th>Visitor No</th><th>Name</th><th>Phone</th><th>Company</th>' + (multi ? '<th>Branch</th>' : '') +
+          '<th>Visiting</th><th>Purpose</th><th class="num">People</th><th>Time In</th><th>Time Out</th><th>Duration</th><th>Status</th><th></th></tr></thead><tbody>';
+  rows.forEach(function(r, i){
+    h += '<tr' + (stale(r) ? ' class="row-stale"' : '') + '><td>' + (start + i + 1) + '</td><td><b>' + vsEsc(r.visitor_number) + '</b></td>' +
+      '<td>' + vsEsc(r.full_name) + '</td><td>' + vsEsc(r.phone) + '</td><td>' + vsEsc(dash(r.company)) + '</td>' +
+      (multi ? '<td>' + vsEsc(r.branch) + '</td>' : '') +
+      '<td>' + vsEsc(r.person_to_visit) + (r.department_visited ? '<br><span class="hint">' + vsEsc(r.department_visited) + '</span>' : '') + '</td>' +
+      '<td>' + vsEsc(r.purpose) + '</td><td class="num">' + (r.group_size || 1) + '</td>' +
+      '<td>' + vsFmtDate(r.time_in) + '<br>' + vsFmtTime(r.time_in) + '</td>' +
+      '<td>' + (r.time_out ? vsFmtDate(r.time_out) + '<br>' + vsFmtTime(r.time_out) : '-') + '</td>' +
+      '<td>' + vsEsc(stay(r)) + '</td><td>' + statusBadge(r) + '</td>' +
+      '<td><button class="btn-sm btn-accent" onclick="openDetail(\'' + r.id + '\')">View</button></td></tr>';
+  });
+  $("tableArea").innerHTML = h + '</tbody></table>';
+  $("paginationArea").innerHTML = vsPager(page, totalPages, start, end, total, "goPage");
+}
+function goPage(p){ var tp = Math.max(1, Math.ceil(VIEW.length / rpp())); if(p < 1 || p > tp) return; page = p; renderTable(); }
+
+function clearFilters(){
+  var to = vsToday();
+  $("filterTo").value = to; $("filterFrom").value = vsShiftDay(to, -29);
+  $("filterStatus").value = ""; $("filterDept").value = ""; $("filterPurpose").value = ""; $("filterSearch").value = "";
+  if($("branchBox").style.display !== "none") $("filterBranch").value = "";
+  loadData();
+}
+
+/* ── One visit in detail ── */
+function detailPairs(r){
+  return [
+    ["Visitor number", r.visitor_number], ["Branch", r.branch], ["Visitor", r.full_name], ["Phone", r.phone],
+    ["Company / Organisation", r.company], ["Number of people", String(r.group_size || 1)], ["Address", r.address, true],
+    ["ID", r.id_type ? r.id_type + (r.id_number ? ": " + r.id_number : "") : null],
+    ["Purpose of visit", r.purpose], ["Person visited", r.person_to_visit], ["Department visited", r.department_visited],
+    ["Badge number", r.badge_number], ["Vehicle plate", r.vehicle_plate], ["Items brought in", r.items_carried],
+    ["Remarks", r.remarks, true],
+    ["Time in", vsFmtDateTime(r.time_in) + " WAT"], ["Time out", r.time_out ? vsFmtDateTime(r.time_out) + " WAT" : null],
+    ["Duration", r.status === "checked_out" ? stay(r) : null], ["Status", statusText(r)],
+    ["Checked in by", r.checked_in_by_username], ["Checked out by", r.checked_out_by_username],
+    ["Check-out comments", r.checkout_comment, true]
+  ];
+}
+function openDetail(id){
+  var r = VIEW.find(function(x){ return x.id === id; }) || ALL.find(function(x){ return x.id === id; });
+  if(!r) return;
+  CURRENT = r;
+  $("dTitle").textContent = r.visitor_number + " · " + r.full_name;
+  $("dBody").innerHTML = detailPairs(r).map(function(p){
+    return '<div' + (p[2] ? ' class="full"' : '') + '><label>' + vsEsc(p[0]) + '</label><span>' + vsEsc(dash(p[1])) + '</span></div>';
+  }).join("");
+  $("detailModal").classList.add("open");
+}
+function closeDetail(){ $("detailModal").classList.remove("open"); }
+
+function printRecord(){
+  var r = CURRENT; if(!r) return;
+  var html = vsPrintHead("Visitor Record") +
+    '<div class="pr-title">Visitor Record</div><div class="pr-sub">' + vsEsc(r.visitor_number) + '</div>' +
+    '<table class="pr-kv">' + detailPairs(r).map(function(p){
+      return '<tr><td class="k">' + vsEsc(p[0]) + '</td><td>' + vsEsc(dash(p[1])) + '</td></tr>';
+    }).join("") + '</table>' +
+    '<div class="pr-sign"><div>Visitor signature</div><div>Security officer</div><div>Host / Person visited</div></div>' +
+    '<div class="pr-end">Printed by ' + vsEsc(ME.username) + ' on ' + vsEsc(vsNowLabel()) + '</div>';
+  vsPrint(html, "A4 portrait", true);
+}
+
+/* ── Report for the filtered list ── */
+function scopeLabel(){
+  var b = $("filterBranch").value;
+  return b || (BRANCHES.length === 1 ? BRANCHES[0] : (ME.role === "super_admin" ? "All branches" : BRANCHES.join(", ")));
+}
+function filterSummaryLine(){
+  var parts = [], st = $("filterStatus"), d = $("filterDept").value, p = $("filterPurpose").value, q = $("filterSearch").value.trim();
+  if(st.value) parts.push("Status: " + st.options[st.selectedIndex].text);
+  if(d) parts.push("Department: " + d);
+  if(p) parts.push("Purpose: " + p);
+  if(q) parts.push('Search: "' + q + '"');
+  return parts.join(" · ");
+}
+function printReport(){
+  if(!VIEW.length){ vsFlash("There are no visits to print for these filters.", "err"); return; }
+  var from = $("filterFrom").value, to = $("filterTo").value, s = summary();
+  var multi = BRANCHES.length > 1 && !$("filterBranch").value;
+  var extra = filterSummaryLine();
+  var html = vsPrintHead("Visitor Attendance Report") +
+    '<div class="pr-title">Visitor Attendance Report</div>' +
+    '<div class="pr-meta"><b>Branch:</b> ' + vsEsc(scopeLabel()) + '</div>' +
+    '<div class="pr-meta"><b>Period:</b> ' + vsEsc(vsFmtDate(vsDayStartISO(from))) + ' to ' + vsEsc(vsFmtDate(vsDayStartISO(to))) + '</div>' +
+    (extra ? '<div class="pr-meta"><b>Filters:</b> ' + vsEsc(extra) + '</div>' : '') +
+    '<div class="pr-meta"><b>Visits:</b> ' + s.visits + ' &nbsp; <b>People:</b> ' + s.people + ' &nbsp; <b>Still on site:</b> ' + s.on +
+      ' &nbsp; <b>Checked out:</b> ' + s.out + ' &nbsp; <b>Average stay:</b> ' + vsEsc(s.avg) + '</div>' +
+    '<table class="pr-table"><thead><tr><th>No</th><th>Visitor No</th><th>Name</th><th>Phone</th><th>Company</th>' + (multi ? '<th>Branch</th>' : '') +
+    '<th>Visiting</th><th>Purpose</th><th>People</th><th>Time In</th><th>Time Out</th><th>Duration</th><th>Status</th></tr></thead><tbody>' +
+    VIEW.map(function(r, i){
+      return '<tr><td>' + (i + 1) + '</td><td>' + vsEsc(r.visitor_number) + '</td><td>' + vsEsc(r.full_name) + '</td><td>' + vsEsc(r.phone) + '</td><td>' + vsEsc(dash(r.company)) + '</td>' +
+        (multi ? '<td>' + vsEsc(r.branch) + '</td>' : '') +
+        '<td>' + vsEsc(r.person_to_visit) + (r.department_visited ? ' (' + vsEsc(r.department_visited) + ')' : '') + '</td><td>' + vsEsc(r.purpose) + '</td><td>' + (r.group_size || 1) + '</td>' +
+        '<td>' + vsEsc(vsFmtDateTime(r.time_in)) + '</td><td>' + vsEsc(r.time_out ? vsFmtDateTime(r.time_out) : "-") + '</td><td>' + vsEsc(stay(r)) + '</td><td>' + vsEsc(statusText(r)) + '</td></tr>';
+    }).join("") +
+    '</tbody></table><div class="pr-end">Generated by ' + vsEsc(ME.username) + ' on ' + vsEsc(vsNowLabel()) + '. ' + VIEW.length + ' record(s). ID numbers are not included in this report.</div>';
+  vsPrint(html, "A4 landscape", true);
+}
+
+/* ── CSV export (ID numbers are deliberately left out) ── */
+function exportCsv(){
+  if(!VIEW.length){ vsFlash("There are no visits to export for these filters.", "err"); return; }
+  var head = ["Visitor No", "Branch", "Name", "Phone", "Company", "Address", "Purpose", "Person Visited", "Department Visited", "People",
+              "Vehicle Plate", "Badge No", "Items Brought In", "Remarks", "Time In", "Time Out", "Duration", "Status",
+              "Checked In By", "Checked Out By", "Check-out Comments"];
+  var lines = [head.map(function(h){ return vsCsvCell(h); }).join(",")];
+  VIEW.forEach(function(r){
+    lines.push([
+      vsCsvCell(r.visitor_number), vsCsvCell(r.branch), vsCsvCell(r.full_name), vsCsvCell(r.phone, true), vsCsvCell(r.company),
+      vsCsvCell(r.address), vsCsvCell(r.purpose), vsCsvCell(r.person_to_visit), vsCsvCell(r.department_visited), vsCsvCell(r.group_size || 1),
+      vsCsvCell(r.vehicle_plate), vsCsvCell(r.badge_number, true), vsCsvCell(r.items_carried), vsCsvCell(r.remarks),
+      vsCsvCell(vsFmtDateTime(r.time_in)), vsCsvCell(r.time_out ? vsFmtDateTime(r.time_out) : ""), vsCsvCell(r.status === "checked_out" ? stay(r) : ""),
+      vsCsvCell(statusText(r)), vsCsvCell(r.checked_in_by_username), vsCsvCell(r.checked_out_by_username), vsCsvCell(r.checkout_comment)
+    ].join(","));
+  });
+  var from = $("filterFrom").value, to = $("filterTo").value;
+  var name = "Visitor_History_" + vsFileSafe(scopeLabel()) + "_" + vsFileSafe(vsFmtDate(vsDayStartISO(from))) + "_to_" + vsFileSafe(vsFmtDate(vsDayStartISO(to))) + ".csv";
+  vsDownload(name, "\ufeff" + lines.join("\r\n"));
+}
+
+document.addEventListener("keydown", function(e){ if(e.key === "Escape") closeDetail(); });
+
+async function init(){
+  var s = $("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    BRANCHES = await vsBranches(ME);
+    if(!BRANCHES.length){ s.textContent = "Your account is not assigned to a branch."; $("tableArea").innerHTML = ""; return; }
+    if(BRANCHES.length > 1){
+      $("branchBox").style.display = "block";
+      $("filterBranch").innerHTML = '<option value="">All branches</option>' +
+        BRANCHES.map(function(b){ return '<option value="' + vsEsc(b) + '">' + vsEsc(b) + '</option>'; }).join("");
+    } else {
+      $("filterBranch").innerHTML = '<option value="' + vsEsc(BRANCHES[0]) + '">' + vsEsc(BRANCHES[0]) + '</option>';
+    }
+    s.textContent = "Connected as " + ME.username + (BRANCHES.length === 1 ? " · " + BRANCHES[0] : "");
+    var to = vsToday();
+    $("filterTo").value = to; $("filterFrom").value = vsShiftDay(to, -29);
+    await loadData();
+  }catch(e){
+    s.style.color = "#dc2626"; s.textContent = "Error: " + (e.message || e);
+  }
+}
+init();
+</script>
+</body>
+</html>
