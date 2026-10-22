@@ -44,6 +44,9 @@ function vsFmtMinutes(m){
   return mm + "m";
 }
 function vsDuration(a, b){ return vsFmtMinutes(vsMinutes(a, b)); }
+// Other people who came in the same group as the main visitor (may be missing on older records)
+function vsCompanions(r){ return Array.isArray(r && r.companions) ? r.companions.filter(Boolean) : []; }
+function vsWithText(r){ var c = vsCompanions(r); return c.length ? "With: " + c.join(", ") : ""; }
 function vsFileSafe(s){ return String(s).replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, ""); }
 
 /* ───────────── branches and data ───────────── */
