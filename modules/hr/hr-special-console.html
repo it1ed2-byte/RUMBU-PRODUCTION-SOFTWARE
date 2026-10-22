@@ -129,6 +129,29 @@
   .type-kpi-wrap{margin-bottom:20px;}
   .type-kpi-wrap .lbl{font-size:12px;font-weight:700;color:var(--muted);margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px;}
   .type-kpis{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;}
+
+  /* ── Theme switcher ── */
+  .theme-wrap{position:relative;display:inline-block;}
+  .theme-btn{background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.3);
+    padding:7px 14px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.2px;transition:background .15s;}
+  .theme-btn:hover{background:rgba(255,255,255,.28);}
+  .theme-popover{
+    display:none;position:absolute;right:0;top:calc(100% + 8px);
+    background:var(--card);border:1.5px solid var(--line);border-radius:14px;
+    padding:14px 16px;box-shadow:0 8px 28px rgba(0,0,0,.22);z-index:500;width:230px;
+  }
+  .theme-popover.open{display:block;}
+  .theme-popover h5{margin:0 0 10px;font-size:12px;font-weight:800;color:var(--heading);
+    text-transform:uppercase;letter-spacing:.5px;}
+  .theme-swatches{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;}
+  .swatch{
+    width:36px;height:36px;border-radius:50%;border:3px solid transparent;cursor:pointer;
+    transition:transform .12s,border-color .12s;display:flex;align-items:center;justify-content:center;
+    font-size:14px;
+  }
+  .swatch:hover{transform:scale(1.15);}
+  .swatch.active{border-color:#fff;box-shadow:0 0 0 2px #1F3864;}
+  .theme-label{margin-top:10px;font-size:11.5px;font-weight:700;color:var(--muted);text-align:center;}
 </style>
 </head>
 <body>
@@ -151,6 +174,14 @@
       <div class="actions">
         <button onclick="goToOtherModules()">↗ Other Modules</button>
         <button onclick="location.reload()">⟳ Refresh</button>
+        <div class="theme-wrap">
+          <button class="theme-btn" onclick="toggleThemePopover(event)">🎨 Theme</button>
+          <div class="theme-popover" id="themePopover">
+            <h5>Console Theme</h5>
+            <div class="theme-swatches" id="themeSwatches"></div>
+            <div class="theme-label" id="themeLabel"></div>
+          </div>
+        </div>
         <button onclick="doLogout()">⏻ Log Out</button>
       </div>
     </div>
@@ -533,6 +564,7 @@ async function init(){
 
     status.style.display = "none";
     document.getElementById("app").style.display = "block";
+    initHrTheme();
 
     await loadReferenceData();
     await loadEmployees();
@@ -758,22 +790,29 @@ function renderDashboard(){
     <div class="kpi" style="--kc:var(--hr-blue);"><span class="icon">👷</span><div class="n">${UNITS.length}</div><div class="l">Units</div></div>
   `;
 
-  // Employee type breakdown
-  const typeMap = {};
+  // Employee type breakdown — normalise to lowercase key so "Confirmed Staff"
+  // and "confirmed staff" and "CONFIRMED STAFF" all land in the same bucket.
+  const typeMap = {}; // key (lowercase) → { label, count }
   active.forEach(e=>{
-    const t = (e.employee_type||"Unspecified").trim()||"Unspecified";
-    typeMap[t] = (typeMap[t]||0)+1;
+    const raw  = (e.employee_type||"").trim();
+    const key  = raw.toLowerCase() || "unspecified";
+    const label= raw || "Unspecified";
+    if(!typeMap[key]) typeMap[key] = { label, count: 0 };
+    typeMap[key].count++;
   });
-  const typeEntries = Object.entries(typeMap).sort((a,b)=>{
-    const ai = TYPE_ORDER.indexOf(a[0]), bi = TYPE_ORDER.indexOf(b[0]);
+  const typeEntries = Object.values(typeMap).sort((a,b)=>{
+    const ai = TYPE_ORDER.findIndex(t=>t.toLowerCase()===a.label.toLowerCase());
+    const bi = TYPE_ORDER.findIndex(t=>t.toLowerCase()===b.label.toLowerCase());
     return (ai<0?99:ai)-(bi<0?99:bi);
   });
   const typeWrap = document.getElementById("dashTypeWrap");
   if(typeEntries.length){
-    document.getElementById("dashTypeKpis").innerHTML = typeEntries.map(([type,count])=>`
-      <div class="kpi-sm" style="--kc:${TYPE_COLORS[type]||'#94a3b8'};">
-        <div class="n">${count}</div><div class="l">${type}</div>
-      </div>`).join("");
+    document.getElementById("dashTypeKpis").innerHTML = typeEntries.map(({label,count})=>{
+      const colorKey = TYPE_ORDER.find(t=>t.toLowerCase()===label.toLowerCase())||label;
+      return `<div class="kpi-sm" style="--kc:${TYPE_COLORS[colorKey]||'#94a3b8'};">
+        <div class="n">${count}</div><div class="l">${label}</div>
+      </div>`;
+    }).join("");
     typeWrap.style.display = "";
   } else {
     typeWrap.style.display = "none";
@@ -1838,6 +1877,104 @@ async function confirmMoveDept(){
 window.openMoveDepartment = openMoveDepartment; window.closeMoveDept = closeMoveDept;
 window.previewMoveDept = previewMoveDept; window.confirmMoveDept = confirmMoveDept;
 document.getElementById("moveDeptModal").addEventListener("click", function(e){ if(e.target === this) closeMoveDept(); });
+
+// ============================================================
+// HR CONSOLE THEME ENGINE
+// ============================================================
+const HR_THEMES = {
+  navy: {
+    label: 'Navy Classic', color: '#1F3864',
+    vars: { '--hr-navy':'#1F3864','--hr-blue':'#2E75B6','--hr-teal':'#0f766e','--hr-gold':'#c8a34e' },
+    grad: 'linear-gradient(120deg,#1F3864 0%,#2E75B6 55%,#0f766e 100%)',
+    tabActive: '#1F3864'
+  },
+  emerald: {
+    label: 'Emerald', color: '#065f46',
+    vars: { '--hr-navy':'#064e3b','--hr-blue':'#059669','--hr-teal':'#047857','--hr-gold':'#d97706' },
+    grad: 'linear-gradient(120deg,#022c22 0%,#065f46 50%,#059669 100%)',
+    tabActive: '#065f46'
+  },
+  crimson: {
+    label: 'Crimson', color: '#991b1b',
+    vars: { '--hr-navy':'#7f1d1d','--hr-blue':'#dc2626','--hr-teal':'#b45309','--hr-gold':'#f59e0b' },
+    grad: 'linear-gradient(120deg,#450a0a 0%,#991b1b 50%,#b45309 100%)',
+    tabActive: '#991b1b'
+  },
+  purple: {
+    label: 'Royal Purple', color: '#5b21b6',
+    vars: { '--hr-navy':'#3b0764','--hr-blue':'#7c3aed','--hr-teal':'#0891b2','--hr-gold':'#c8a34e' },
+    grad: 'linear-gradient(120deg,#1e0a3c 0%,#5b21b6 50%,#0891b2 100%)',
+    tabActive: '#5b21b6'
+  },
+  slate: {
+    label: 'Midnight Slate', color: '#334155',
+    vars: { '--hr-navy':'#1e293b','--hr-blue':'#475569','--hr-teal':'#0f766e','--hr-gold':'#c8a34e' },
+    grad: 'linear-gradient(120deg,#0f172a 0%,#1e293b 60%,#334155 100%)',
+    tabActive: '#334155'
+  }
+};
+
+let CURRENT_HR_THEME = 'navy';
+
+function applyHrTheme(key, save){
+  const t = HR_THEMES[key]; if(!t) return;
+  CURRENT_HR_THEME = key;
+  // Apply CSS variables
+  const root = document.documentElement;
+  Object.entries(t.vars).forEach(([k,v]) => root.style.setProperty(k, v));
+  // Update header gradient
+  const hdr = document.querySelector('.console-header');
+  if(hdr) hdr.style.background = t.grad;
+  // Update active tab underline colour
+  document.querySelectorAll('.tab-btn.active').forEach(b => b.style.color = t.tabActive);
+  document.documentElement.style.setProperty('--hr-tab-active', t.tabActive);
+  // Refresh swatch highlights
+  document.querySelectorAll('.swatch').forEach(s => {
+    s.classList.toggle('active', s.dataset.theme === key);
+    if(s.dataset.theme === key) s.style.border = `3px solid #fff`;
+    else s.style.border = '3px solid transparent';
+  });
+  const lbl = document.getElementById('themeLabel');
+  if(lbl) lbl.textContent = t.label;
+  if(save) try{ localStorage.setItem('hr_console_theme', key); }catch(e){}
+}
+
+function buildThemeSwatches(){
+  const wrap = document.getElementById('themeSwatches');
+  if(!wrap) return;
+  wrap.innerHTML = Object.entries(HR_THEMES).map(([key,t]) => `
+    <div class="swatch" data-theme="${key}" title="${t.label}"
+      style="background:${t.color};"
+      onclick="applyHrTheme('${key}',true);document.getElementById('themeLabel').textContent='${t.label}';">
+    </div>`).join('');
+}
+
+function toggleThemePopover(e){
+  e.stopPropagation();
+  document.getElementById('themePopover').classList.toggle('open');
+}
+document.addEventListener('click', () => {
+  const p = document.getElementById('themePopover');
+  if(p) p.classList.remove('open');
+});
+
+function initHrTheme(){
+  buildThemeSwatches();
+  let saved = 'navy';
+  try{ saved = localStorage.getItem('hr_console_theme') || 'navy'; }catch(e){}
+  applyHrTheme(saved, false);
+}
+
+// Make tab active color follow theme
+const _origSetTab = window.setTab;
+window.setTab = function(tab, btn){
+  _origSetTab(tab, btn);
+  document.querySelectorAll('.tab-btn').forEach(b => b.style.color = '');
+  btn.style.color = HR_THEMES[CURRENT_HR_THEME]?.tabActive || '';
+};
+
+window.applyHrTheme = applyHrTheme;
+window.toggleThemePopover = toggleThemePopover;
 
 init();
 </script>
