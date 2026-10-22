@@ -30,6 +30,8 @@
   .veh-card.occupied .veh-status{color:#991b1b;}
   .veh-card.unavailable .veh-status{color:#4b5563;}
   .veh-card .veh-info{font-size:10px;color:#6b7280;margin-top:4px;line-height:1.4;}
+  .veh-card .veh-reg{font-size:10px;color:#6b7280;margin-top:1px;}
+  .veh-cat{display:inline-block;margin-top:5px;padding:2px 9px;border-radius:20px;font-size:10px;font-weight:800;background:rgba(0,0,0,.10);color:#1f2430;letter-spacing:.2px;}
   .fuel-badge{display:inline-flex;align-items:center;gap:4px;margin-top:8px;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:700;}
   .fuel-badge.f-ok{background:#dbeafe;color:#1e40af;}
   .fuel-badge.f-low{background:#fef3c7;color:#92400e;}
@@ -73,6 +75,17 @@
         <div class="legend-item">⛽🔴 Empty</div>
       </div>
     </div>
+    <div style="margin-bottom:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+      <select id="catFilter" onchange="renderGrid()" style="width:auto;padding:7px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;background:var(--card);color:var(--text);">
+        <option value="">All Categories</option>
+      </select>
+      <select id="statusFilter" onchange="renderGrid()" style="width:auto;padding:7px 12px;border:1px solid var(--line);border-radius:8px;font-size:13px;background:var(--card);color:var(--text);">
+        <option value="">All Statuses</option>
+        <option value="free">Available</option>
+        <option value="occupied">Occupied</option>
+        <option value="unavailable">Unavailable</option>
+      </select>
+    </div>
     <div class="veh-grid" id="vehGrid"></div>
   </div>
 </div>
@@ -87,7 +100,7 @@
 </div>
 
 <script>
-let ME=null, VEHICLES=[], ACTIVE_TRIPS=[], FUEL_BY_VEHICLE={};
+let ME=null, VEHICLES=[], ACTIVE_TRIPS=[], FUEL_BY_VEHICLE={}, CAT_MAP={};
 
 // Simple, adjustable heuristic — there's no tank-capacity field on Vehicle
 // Profiles yet, so "Low" is an absolute litre threshold rather than a
@@ -106,17 +119,27 @@ async function init(){
 }
 
 async function loadVehicles(){
-  const [{ data: vData, error: vErr }, { data: tData }, { data: fuelData }, { data: allTripsData }] = await Promise.all([
-    sb.from("logistics_vehicles").select("*").order("registration_number"),
+  const [{ data: vData, error: vErr }, { data: tData }, { data: fuelData }, { data: allTripsData }, { data: catData }] = await Promise.all([
+    sb.from("logistics_vehicles").select("*").order("make"),
     sb.from("logistics_trips")
       .select("id,vehicle_id,destination,requesting_department,purpose,trip_date,expected_duration_hours,dispatched_at,logistics_drivers(employees(full_name))")
       .eq("status","dispatched"),
     sb.from("logistics_fuel_records").select("vehicle_id,quantity_purchased"),
-    sb.from("logistics_trips").select("vehicle_id,calculated_fuel_litres").in("status",["dispatched","completed"])
+    sb.from("logistics_trips").select("vehicle_id,calculated_fuel_litres").in("status",["dispatched","completed"]),
+    sb.from("logistics_vehicle_categories").select("id,name").order("name")
   ]);
   if(vErr){ document.getElementById("vehGrid").innerHTML=`<p style="color:var(--bad);">Error: ${vErr.message}</p>`; return; }
   VEHICLES = vData||[];
   ACTIVE_TRIPS = tData||[];
+
+  // Build category lookup and populate filter dropdown
+  CAT_MAP = {};
+  (catData||[]).forEach(c=>{ CAT_MAP[c.id]=c.name; });
+  const catSel = document.getElementById("catFilter");
+  const prevCat = catSel.value;
+  catSel.innerHTML = '<option value="">All Categories</option>' +
+    (catData||[]).map(c=>`<option value="${c.id}">${c.name}</option>`).join("");
+  if(prevCat) catSel.value = prevCat;
 
   // Remaining fuel per vehicle, tracked end to end: everything ever
   // purchased for it (Fuel Management) minus everything ever issued to it
@@ -141,20 +164,46 @@ async function loadVehicles(){
     <div class="stat unavail-s"><div class="n">${unavailable}</div><div class="l">Unavailable</div></div>
     <div class="stat fuel-s"><div class="n">${needsFuel}</div><div class="l">Need Fuel</div></div>`;
 
-  document.getElementById("vehGrid").innerHTML = VEHICLES.map(v=>{
+  renderGrid();
+}
+
+function renderGrid(){
+  const catF    = document.getElementById("catFilter").value;
+  const statusF = document.getElementById("statusFilter").value;
+  const occupiedIds = new Set(ACTIVE_TRIPS.map(t=>t.vehicle_id));
+
+  const filtered = VEHICLES.filter(v=>{
+    if(catF && String(v.category_id) !== catF) return false;
+    const state = occupiedIds.has(v.id) ? "occupied"
+                : v.operational_status !== "Active" ? "unavailable" : "free";
+    if(statusF && state !== statusF) return false;
+    return true;
+  });
+
+  if(!filtered.length){
+    document.getElementById("vehGrid").innerHTML="<p style='color:var(--muted);font-size:13px;padding:10px 0;'>No vehicles match the selected filters.</p>";
+    return;
+  }
+
+  document.getElementById("vehGrid").innerHTML = filtered.map(v=>{
     const trip = ACTIVE_TRIPS.find(t=>t.vehicle_id===v.id);
+    const catName = CAT_MAP[v.category_id] || "";
     let cls, label, info = "";
     if(trip){
-      cls = "occupied"; label = "Occupied";
+      cls = "occupied"; label = "On Trip";
       info = `${trip.destination}<br>${trip.requesting_department}`;
     } else if(v.operational_status !== "Active"){
       cls = "unavailable"; label = v.operational_status;
     } else {
       cls = "free"; label = "Available";
     }
+    const vehicleName = v.make || v.registration_number || "Vehicle #"+v.id;
+    const regLine = (v.make && v.registration_number) ? `<div class="veh-reg">${v.registration_number}</div>` : "";
     return `<div class="veh-card ${cls}" onclick="showDetail(${v.id})">
       <div class="veh-icon">🚐</div>
-      <div class="veh-name">${v.registration_number}</div>
+      <div class="veh-name">${vehicleName}</div>
+      ${regLine}
+      ${catName ? `<div class="veh-cat">${catName}</div>` : ""}
       <div class="veh-status">${label}</div>
       ${info ? `<div class="veh-info">${info}</div>` : ""}
       ${fuelBadge(v.id)}
@@ -180,10 +229,12 @@ function showDetail(id){
   const v = VEHICLES.find(x=>x.id===id);
   if(!v) return;
   const trip = ACTIVE_TRIPS.find(t=>t.vehicle_id===id);
-  const status = trip ? "Occupied" : (v.operational_status!=="Active" ? v.operational_status : "Available");
+  const status = trip ? "On Trip" : (v.operational_status!=="Active" ? v.operational_status : "Available");
   const f = FUEL_BY_VEHICLE[id] || { purchased:0, issued:0 };
   const remaining = f.purchased - f.issued;
-  document.getElementById("modalTitle").textContent = v.registration_number + " — " + status;
+  const catName = CAT_MAP[v.category_id] || "—";
+  const vehicleName = v.make || v.registration_number || "Vehicle #"+v.id;
+  document.getElementById("modalTitle").textContent = vehicleName + " — " + status;
 
   const fuelSection = `
     <div class="detail-row"><span>Total Fuel Purchased</span><b>${f.purchased.toFixed(2)} L</b></div>
@@ -193,6 +244,8 @@ function showDetail(id){
   if(trip){
     const drv = (trip.logistics_drivers && trip.logistics_drivers.employees) ? trip.logistics_drivers.employees.full_name : "—";
     document.getElementById("modalContent").innerHTML = `
+      <div class="detail-row"><span>Category</span><b>${catName}</b></div>
+      <div class="detail-row"><span>Registration</span><b>${v.registration_number||"—"}</b></div>
       <div class="detail-row"><span>Destination</span><b>${trip.destination}</b></div>
       <div class="detail-row"><span>Requesting Department</span><b>${trip.requesting_department}</b></div>
       <div class="detail-row"><span>Purpose</span><b>${trip.purpose}</b></div>
@@ -204,13 +257,17 @@ function showDetail(id){
       <p style="font-size:12px;color:var(--muted);margin-top:10px;">This vehicle will show as Available again once the trip is closed out.</p>`;
   } else if(v.operational_status !== "Active"){
     document.getElementById("modalContent").innerHTML = `
+      <div class="detail-row"><span>Category</span><b>${catName}</b></div>
+      <div class="detail-row"><span>Registration</span><b>${v.registration_number||"—"}</b></div>
       <div class="detail-row"><span>Operational Status</span><b>${v.operational_status}</b></div>
       <div class="detail-row"><span>Department / Location</span><b>${v.department_location||"—"}</b></div>
       ${fuelSection}
       <p style="color:#4b5563;font-weight:700;text-align:center;padding:12px 0;">Not currently available — update its status in Vehicle Profiles once it's ready again.</p>`;
   } else {
     document.getElementById("modalContent").innerHTML = `
-      <div class="detail-row"><span>Make / Model</span><b>${v.make} ${v.model} (${v.year})</b></div>
+      <div class="detail-row"><span>Category</span><b>${catName}</b></div>
+      <div class="detail-row"><span>Registration</span><b>${v.registration_number||"—"}</b></div>
+      <div class="detail-row"><span>Vehicle Name / Model</span><b>${v.make||""} ${v.model||""} (${v.year||"—"})</b></div>
       <div class="detail-row"><span>Current Mileage</span><b>${v.current_mileage!=null?v.current_mileage+" km":"—"}</b></div>
       ${fuelSection}
       ${remaining<=LOW_FUEL_THRESHOLD_LITRES ? `<p style="color:#92400e;font-weight:700;text-align:center;padding:8px 0;">⚠️ Consider fuelling this vehicle before its next trip.</p>` : `<p style="color:#065f46;font-weight:700;text-align:center;padding:16px 0;">Available for a new Trip Request.</p>`}`;
