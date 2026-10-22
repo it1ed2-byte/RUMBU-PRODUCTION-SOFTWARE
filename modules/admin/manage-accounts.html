@@ -342,7 +342,7 @@
 
 <div class="hidden" id="adminEmployeeDirectory">
   <h3>Employee Directory</h3>
-  <p class="sub">Employees in your Branch(es) only. Click a row to open a staff profile; Grant Access there creates their login (username = Employee ID, temporary password 12345678, changed on first login).</p>
+  <p class="sub">Employees in your Branch(es) only. Click a row to open a staff profile (view only). Access to the system is granted by a Super Admin.</p>
   <p class="sub hidden" id="hrGateNote" style="color:var(--warn);">Adding and editing staff records is limited to HR-designated staff for your Branch. Contact your HR office or a Super Admin if a change is needed.</p>
 
   <button class="ghost" onclick="toggleAddEmployeePanelAdmin()" id="addEmpToggleBtnAdmin" style="margin-bottom:12px;">+ Add New Employee</button>
@@ -661,8 +661,10 @@ async function init(){
       document.getElementById("listTitle").textContent = "Manage Role";
       document.getElementById("roleDropdownLabel").textContent = "Enter the Employee ID of a User you created to manage their access. Their name will appear so you can confirm it is the right person.";
       await Promise.all([ loadMyHrStatus(), loadManageStaffPageId(), loadRoleDropdown(), showEmployeeDirectoryPlaceholder() ]);
-      // admin: no Settings panel
+      // admin: no Settings panel, and no Manage Role. An Admin can look at staff but cannot grant access, reset
+      // passwords or change what pages a person may open: those are Super Admin actions.
       document.getElementById("sec-settings").classList.add("role-unavailable");
+      document.getElementById("sec-manage-user").classList.add("role-unavailable");
     } else {
       document.getElementById("noCreateNote").classList.remove("hidden");
       // user: no create, no manage-role, no settings
@@ -1716,6 +1718,7 @@ async function createSuperAdmin(){
 }
 
 async function createAdmin(){
+  if(adminBlocked("Creating an account")) return;
   const status = document.getElementById("a_status");
   const username = document.getElementById("a_username").value.trim();
   const password = document.getElementById("a_password").value;
@@ -1736,6 +1739,7 @@ async function createAdmin(){
 }
 
 async function createUser(){
+  if(adminBlocked("Creating an account")) return;
   const status = document.getElementById("u_status");
   const username = document.getElementById("u_username").value.trim();
   const password = document.getElementById("u_password").value;
@@ -2360,13 +2364,15 @@ function openEmployeeDetail(empId){
     // Reset password — for when a staff member forgets theirs. Resets to the
     // temporary password and forces a change on next login. Not offered for
     // Super Admin accounts (protected server-side too).
-    if(e.linked_profile_id && (e.linked_role !== "super_admin" || ME.username === "itops3")){
+    if(!isAdmin && e.linked_profile_id && (e.linked_role !== "super_admin" || ME.username === "itops3")){
       html += "<div style=\"margin-top:12px;padding-top:12px;border-top:1px solid var(--line);\">" +
         "<label>Forgot their password?</label>" +
         "<button style=\"margin:0;padding:8px 12px;\" onclick=\"resetAccessPassword(" + e.id + ")\">Reset Password</button>" +
         "<div class=\"sub\" style=\"margin-top:6px;\">Sets it to the temporary password <b>" + TEMP_ACCESS_PASSWORD + "</b>; they must change it on next login.</div>" +
       "</div>";
     }
+  } else if(isAdmin){
+    html += "<p class=\"sub\" style=\"margin:0;\">This staff has no login yet. Access is granted by a Super Admin.</p>";
   } else {
     // Granting creates the login account directly: username = Employee ID,
     // temporary password, forced change on first login. Everyone starts as a
@@ -3434,7 +3440,12 @@ const TEMP_ACCESS_PASSWORD = "12345678";
 // login), and links it back to the employee row. Everyone starts as a User;
 // elevate later with Change Role. Works for both Super Admin and Admin - the
 // edge function enforces who may do it server-side.
+// Granting access, resetting passwords and managing roles or page access are Super Admin actions. The buttons are not shown to an
+// Admin; this is a second guard in case one of these functions is reached some other way. The server must enforce the rule as well.
+function adminBlocked(what){ if(ME && ME.role === "admin"){ alert(what + " is a Super Admin action."); return true; } return false; }
+
 async function grantAccessToEmployee(empId){
+  if(adminBlocked("Granting access")) return;
   const emp = EMPLOYEES.find(e=>e.id === empId);
   if(!emp) return;
   const status = document.getElementById("emp_detail_status")
@@ -3485,6 +3496,7 @@ window.grantAccessToEmployee = grantAccessToEmployee;
 // the same edge action + RPC as the Manage Role password reset. Super Admin
 // accounts are never targeted here (and the edge function blocks it too).
 async function resetAccessPassword(empId){
+  if(adminBlocked("Resetting a password")) return;
   const emp = EMPLOYEES.find(e=>e.id === empId);
   if(!emp || !emp.linked_profile_id) return;
   const status = document.getElementById("emp_detail_status")
@@ -3552,6 +3564,7 @@ async function linkPendingEmployeeIfAny(newProfileId){
 // accounts can never be the target — same protection the system already
 // applies to delete_account and admin_reset_password.
 async function changeEmployeeRole(empId, profileId, currentRole){
+  if(adminBlocked("Changing a role")) return;
   const sel = document.getElementById("chg_role_" + empId);
   const newRole = sel ? sel.value : null;
   if(!newRole || newRole === currentRole) return;
@@ -3894,6 +3907,7 @@ window.goGrantAccessFromRole = goGrantAccessFromRole;
 window.openRolePanelForProfile = openRolePanelForProfile;
 
 async function saveRoleDetails(id, role){
+  if(adminBlocked("Changing a person's access")) return;
   const status = document.getElementById("role_status");
   const username = document.getElementById("role_username").value.trim();
   if(!username){ status.className="status err"; status.textContent="Username cannot be empty."; return; }
