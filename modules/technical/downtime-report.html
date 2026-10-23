@@ -79,6 +79,27 @@ function getJobCodesByDepartment(department){
   return DEPARTMENTS[department] || [];
 }
 
+// ── Production-only job codes ─────────────────────────────────────────────────
+// EX-prefixed codes (EX01–EX08) describe extruder PRODUCTION PROCESS reasons
+// (Pre-heating, Heating, Power Interruption, Filter Replacement, Shortage of
+// Water, Shortage of Staff, Materials Problem). They must NEVER appear in a
+// Technical department report — they belong to production/extruder downtime.
+// When these codes appear on a Technical record it is a data-entry error at
+// source; the report silently drops them and reports how many were excluded.
+const PRODUCTION_JOB_CODES = new Set([
+  "EX01","EX02","EX03","EX04","EX05","EX06","EX07","EX08"
+]);
+// Departments considered "production" — production codes ARE shown for these.
+const PRODUCTION_DEPARTMENTS = new Set([
+  "EXTRUDER","ELEC EXTRUDER","EXT-MECH CUTTER","EXT-MECH DIE HEAD",
+  "FEEDING","DELIVERY","RECYCLING","ELECRICAL RECYCLING","ELEC MAT WEAVING",
+  "ELEC TWINE/ WORK SHOP","BEAMING","TWINE","DESIGN CARD",
+  "TRANSMISSION","QUALITY CONTROL"
+]);
+function isProductionCode(jobCode){
+  return PRODUCTION_JOB_CODES.has(String(jobCode||"").trim().toUpperCase());
+}
+
 
 
 // Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
@@ -221,6 +242,25 @@ async function generate(){
       ["4. In the chosen section (" + section + ")", bySec.length]
     ], inDates, department);
     return;
+  }
+
+  // Strip production-only job codes from non-production department views.
+  // If the selected department is NOT a known production department (e.g. it is
+  // "Technical" or "All"), remove any rows whose job_code is an EX-series code.
+  // When "All" is selected we also strip them so they don't skew the summary.
+  let excludedProductionRows = [];
+  const isProductionDept = PRODUCTION_DEPARTMENTS.has(normLabel(department));
+  if(!isProductionDept){
+    const before = rows.length;
+    excludedProductionRows = rows.filter(r => isProductionCode(r.job_code));
+    rows = rows.filter(r => !isProductionCode(r.job_code));
+    if(excludedProductionRows.length){
+      const codes = [...new Set(excludedProductionRows.map(r=>String(r.job_code||"").trim()))].join(", ");
+      const note = document.createElement("p");
+      note.style.cssText = "text-align:center;font-size:12px;color:#b45309;background:#fef3c7;padding:6px 12px;border-radius:6px;margin:8px auto;max-width:760px;";
+      note.innerHTML = `ℹ️ <b>${excludedProductionRows.length} record(s)</b> with production-only job codes were excluded from this Technical report (${codes}). These codes belong to the production/extruder department.`;
+      document.getElementById("reportArea").prepend(note);
+    }
   }
 
   const byJob = {};
