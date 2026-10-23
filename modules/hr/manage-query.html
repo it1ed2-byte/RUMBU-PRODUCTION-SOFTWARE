@@ -14,6 +14,7 @@
 </script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="../../auth.js"></script>
+<script src="memo-print.js"></script>
 <style>
   :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;}
   *{box-sizing:border-box;}
@@ -94,7 +95,6 @@
 <script>
 let ME = null;
 let ALL = [];   // all rows fetched (already branch-scoped)
-const COMPANY = "Rumbu Industries Limited";
 
 async function logActivity(actionType, description){
   try{
@@ -207,73 +207,18 @@ function render(rows){
   wrap.innerHTML = html;
 }
 
-// ---- Reprint: rebuild the exact memo from the stored row ----
-const CC_BLOCK = `
-<div style="margin-top:60px;">
-Kingsley Onulaka<br>
-Head, H.R.<br>
-Cc: Chairman &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Sign: &hellip;.&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;..<br>
-Vice Chairman<br>
-Admin Directors &nbsp;&nbsp;&nbsp; Name: &hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;...<br>
-Executive Directors<br>
-Heads of Corporate<br>
-Heads of Admin/Departments<br>
-C.S.O.
-</div>`;
-
-function buildBody(r){
-  if(r.letter_type === "QUERY"){
-    return `
-<p style="text-align:center; font-weight:bold; font-size:16pt; margin:20px 0;">Subject: QUERY</p>
-<p style="line-height:1.6;">Could you explain within <b>${r.hours} hours</b> why disciplinary action should not be taken against you for <b>${r.title} (${r.details})</b>?</p>
-<p style="line-height:1.6;">This is viewed as misconduct. Reference to Section <b>${r.service_section}</b> of the Condition of Service, which attracts disciplinary action as this attitude will not be condoned by management.</p>`;
-  } else if(r.letter_type === "LAST WARNING"){
-    return `
-<p style="text-align:center; font-weight:bold; font-size:16pt; margin:20px 0;">Subject: LAST WARNING</p>
-<p style="line-height:1.6;">It has come to the attention of Management with dismay for ${r.details}.</p>
-<p style="line-height:1.6;">This letter is hereby issued to you as a <b>LAST WARNING</b>. Further occurrence will lead to stricter disciplinary action. It is hoped you will adjust your attitude to work going forward.</p>`;
-  } else if(r.letter_type === "SURCHARGE"){
-    return `
-<p style="text-align:center; font-weight:bold; font-size:16pt; margin:20px 0;">Subject: SURCHARGE</p>
-<p style="line-height:1.6;">Having gone through your reply to the query issued on <b>${r.query_date}</b> for ${r.details}. You are hereby surcharged <b>₦${r.amount}</b> to be deducted from your salary.</p>
-<p style="line-height:1.6;">It is hoped this will serve as a deterrent in the future.</p>`;
-  } else if(r.letter_type === "CUSTOM QUERY"){
-    const paras = [r.para1, r.para2, r.para3, r.para4, r.para5].filter(p=>p);
-    return `
-<p style="text-align:center; font-weight:bold; font-size:16pt; margin:20px 0;">Subject: ${r.custom_subject}</p>
-${paras.map(p=>`<p style="line-height:1.6;">${p}</p>`).join("")}`;
-  }
-  return "";
-}
-
+// ---- Reprint: rebuild the memo from the stored row, using the same design as Create Query / Memo ----
 function reprint(id){
   const r = ALL.find(x => x.id === id);
   if(!r) return;
-  const html = `
-<html><head><style>
-@page { size:A4; margin:40pt 50pt 40pt 50pt; }
-body { font-family:"Times New Roman", serif; font-size:12pt; line-height:1.6; margin:0; padding:40px; }
-h2 { text-align:center; font-size:18pt; margin-bottom:5px; }
-h3 { text-align:center; font-size:14pt; margin-top:0; margin-bottom:20px; }
-p { margin:10px 0; }
-.right { text-align:right; }
-</style></head><body>
-<h2>${COMPANY}</h2>
-<h3>MEMO</h3>
-<div class="right">
-<p><b>Tracking No:</b> ${r.tracking_number}</p>
-<p>${r.memo_from || ""}</p>
-<p><b>Date:</b> ${r.memo_date}</p>
-</div>
-<p><b>To:</b> ${r.employee_name} (${r.employee_id || ""})</p>
-<p><b>Department:</b> ${r.department || ""}</p>
-${buildBody(r)}
-${CC_BLOCK}
-</body></html>`;
   const w = window.open("", "_blank");
-  w.document.write(html);
-  w.document.close();
-  w.onload = function(){ w.focus(); w.print(); };
+  if(!w){
+    const status = document.getElementById("status");
+    status.className = "status err";
+    status.textContent = "Your browser blocked the PDF window. Allow pop-ups for this site and try again.";
+    return;
+  }
+  MemoPrint.write(w, MemoPrint.fromRow(r), r.tracking_number);
 }
 
 async function removeRow(id){

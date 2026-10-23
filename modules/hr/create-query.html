@@ -14,6 +14,7 @@
 </script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="../../auth.js"></script>
+<script src="memo-print.js"></script>
 <style>
   :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;}
   *{box-sizing:border-box;}
@@ -36,7 +37,24 @@
   .status.ok{color:var(--green);} .status.err{color:var(--red);}
   #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;}
   .hidden{display:none;}
-  .preview{border:1px solid var(--line);border-radius:8px;padding:14px;margin-top:12px;background:#fafcff;font-size:13px;line-height:1.5;}
+  .preview{margin-top:12px;}
+  .preview iframe{width:100%;height:1000px;border:1px solid var(--line);border-radius:8px;background:#fff;}
+
+  /* employee and sender pickers */
+  .ac{position:relative;}
+  .ac-list{position:absolute;left:0;right:0;top:100%;z-index:20;background:var(--card);border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.18);max-height:260px;overflow:auto;margin-top:2px;}
+  .ac-item{padding:8px 10px;cursor:pointer;border-bottom:1px solid var(--line);}
+  .ac-item:last-child{border-bottom:none;}
+  .ac-item b{display:block;font-size:13px;}
+  .ac-item span{font-size:11px;color:var(--muted);}
+  .ac-item.on,.ac-item:hover{background:rgba(46,117,182,.14);}
+  .ac-empty{padding:10px;font-size:12px;color:var(--muted);}
+  .chip{margin-top:8px;padding:8px 10px;border:1px solid var(--line);border-left:4px solid var(--green);border-radius:8px;font-size:12px;line-height:1.5;background:rgba(29,138,78,.06);}
+  .chip .warn{color:#b45309;font-weight:bold;display:block;}
+  .chip .bad{color:var(--red);font-weight:bold;}
+  .hint{font-size:11px;color:var(--muted);margin-top:4px;min-height:14px;}
+  .chk{display:flex;align-items:center;gap:6px;font-weight:normal;margin:8px 0 0;}
+  .chk input{width:auto;}
 </style>
 </head>
 <body>
@@ -67,29 +85,45 @@
   <div class="row">
     <div>
       <label>Branch (this memo is for)</label>
-      <select id="branch"></select>
+      <select id="branch" onchange="onBranchChange()"></select>
     </div>
   </div>
 
   <div class="row">
     <div>
       <label>Employee Name</label>
-      <input type="text" id="name" placeholder="Full name">
+      <div class="ac">
+        <input type="text" id="name" placeholder="Type a name or ID, then pick from the list" autocomplete="off">
+        <div class="ac-list hidden" id="nameList"></div>
+      </div>
     </div>
     <div>
       <label>Employee ID</label>
-      <input type="text" id="empId" placeholder="e.g. EMP123">
+      <div class="ac">
+        <input type="text" id="empId" placeholder="Type an ID, e.g. RD402" autocomplete="off">
+        <div class="ac-list hidden" id="idList"></div>
+      </div>
+    </div>
+  </div>
+  <div class="hint" id="empMsg">Names and IDs come from the employee records. Pick the person from the list.</div>
+  <label class="chk hidden" id="allBranchesRow"><input type="checkbox" id="allBranches"> Search employees in all branches</label>
+  <div class="chip hidden" id="empChip"></div>
+
+  <div class="row">
+    <div>
+      <label>Department (of employee)</label>
+      <select id="department"></select>
     </div>
   </div>
 
   <div class="row">
     <div>
-      <label>Department (of employee)</label>
-      <input type="text" id="department" placeholder="e.g. Weaving">
-    </div>
-    <div>
       <label>From (memo sender line)</label>
-      <input type="text" id="memoFrom" placeholder="e.g. Head, H.R.">
+      <div class="ac">
+        <input type="text" id="memoFrom" placeholder="Type the sender's name or ID, then pick from the list" autocomplete="off">
+        <div class="ac-list hidden" id="fromList"></div>
+      </div>
+      <div class="chip hidden" id="fromChip"></div>
     </div>
   </div>
 
@@ -125,7 +159,7 @@
         <input type="date" id="queryDate">
       </div>
       <div>
-        <label>Surcharge Amount (₦)</label>
+        <label>Surcharge Amount (NGN)</label>
         <input type="number" step="0.01" id="amount" placeholder="e.g. 5000">
       </div>
     </div>
@@ -161,9 +195,18 @@
 
 <script>
 let ME = null;
-const COMPANY = "Rumbu Industries Limited";
+let SEL_EMP = null;    // the employee row picked from the employees table
+let SEL_FROM = null;   // the sender row picked from the employees table
 
+const $ = id => document.getElementById(id);
 function todayISO(){ return new Date().toISOString().slice(0,10); }
+function esc(s){
+  return String(s == null ? "" : s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+}
+function same(a, b){ return String(a||"").trim().toLowerCase() === String(b||"").trim().toLowerCase(); }
+function isInactive(e){
+  return !!e.deactivated_at || /inactive|deactivated|terminated|resigned|dismissed/i.test(e.status || "");
+}
 
 async function logActivity(actionType, description){
   try{
@@ -175,18 +218,26 @@ async function logActivity(actionType, description){
 }
 
 async function init(){
-  const status = document.getElementById("connStatus");
+  const status = $("connStatus");
   try{
     ME = await requireAuth("../../login.html");
     if(!ME) return;
 
-    document.getElementById("memoDate").value = todayISO();
-    populateBranches();
-    document.getElementById("branchNote").textContent = "Signed in as " + ME.username;
+    $("memoDate").value = todayISO();
+    await populateBranches();
+    $("branchNote").textContent = "Signed in as " + ME.username;
+
+    // Only Admins and Super Admins may look beyond the selected branch for the employee.
+    $("allBranchesRow").classList.toggle("hidden", !(ME.role === "super_admin" || ME.role === "admin"));
+
+    wireSearch($("name"),    $("nameList"), { all: () => allBranchesOn(), onPick: pickEmployee, onEdit: () => onEmployeeEdit("name") });
+    wireSearch($("empId"),   $("idList"),   { all: () => allBranchesOn(), onPick: pickEmployee, onEdit: () => onEmployeeEdit("id"), onBlur: lookupExactId });
+    wireSearch($("memoFrom"),$("fromList"), { all: () => true,            onPick: pickFrom,     onEdit: onFromEdit });
 
     status.style.color = "#1d8a4e";
     status.textContent = "Connected.";
     onTypeChange();
+    await onBranchChange();
   }catch(e){
     status.style.color = "#c0392b";
     status.textContent = "❌ " + e.message;
@@ -195,28 +246,26 @@ async function init(){
 }
 
 function onTypeChange(){
-  const t = document.getElementById("type").value;
-  document.getElementById("fld-query").classList.toggle("hidden", t !== "QUERY");
-  document.getElementById("fld-warning").classList.toggle("hidden", t !== "LAST WARNING");
-  document.getElementById("fld-surcharge").classList.toggle("hidden", t !== "SURCHARGE");
-  document.getElementById("fld-custom").classList.toggle("hidden", t !== "CUSTOM QUERY");
+  const t = $("type").value;
+  $("fld-query").classList.toggle("hidden", t !== "QUERY");
+  $("fld-warning").classList.toggle("hidden", t !== "LAST WARNING");
+  $("fld-surcharge").classList.toggle("hidden", t !== "SURCHARGE");
+  $("fld-custom").classList.toggle("hidden", t !== "CUSTOM QUERY");
 }
 
 // Populate the Branch dropdown with ONLY the branches this person is
 // assigned to, so a memo can never be created for an unassigned branch.
 // Super Admin (no/all branches) can pick from every branch instead.
-function populateBranches(){
-  const sel = document.getElementById("branch");
+async function populateBranches(){
+  const sel = $("branch");
   sel.innerHTML = "";
 
   if(ME.role === "super_admin"){
-    // Super Admin isn't tied to a branch — let them pick any, loaded live.
-    sb.from("app_sections").select("name").order("name").then(({data})=>{
-      (data || []).forEach(s=>{
-        const o = document.createElement("option");
-        o.value = s.name; o.textContent = s.name;
-        sel.appendChild(o);
-      });
+    const { data } = await sb.from("app_sections").select("name").order("name");
+    (data || []).forEach(s=>{
+      const o = document.createElement("option");
+      o.value = s.name; o.textContent = s.name;
+      sel.appendChild(o);
     });
     sel.disabled = false;
     return;
@@ -240,17 +289,212 @@ function populateBranches(){
   sel.disabled = (mine.length === 1);
 }
 
-// Collect the form into a clean object
+function allBranchesOn(){ return !$("allBranchesRow").classList.contains("hidden") && $("allBranches").checked; }
+
+// ---- Branch and department -------------------------------------------------
+async function onBranchChange(){
+  clearEmployee();
+  await loadDepartments($("branch").value);
+}
+
+async function loadDepartments(branch){
+  const sel = $("department");
+  sel.innerHTML = "";
+  const first = document.createElement("option");
+  first.value = ""; first.textContent = "Select department";
+  sel.appendChild(first);
+  if(!branch) return;
+  const { data, error } = await sb.from("departments").select("id,name").eq("section", branch).order("name");
+  if(error){ $("status").className = "status err"; $("status").textContent = "❌ Could not load departments: " + error.message; return; }
+  (data || []).forEach(d=>{
+    const o = document.createElement("option");
+    o.value = d.name; o.textContent = d.name;
+    sel.appendChild(o);
+  });
+}
+
+// Select the employee's own department; if it is not in the branch list, add it so it is never lost.
+function setDepartment(name){
+  const sel = $("department");
+  const wanted = String(name || "").trim();
+  if(!wanted){ sel.value = ""; return; }
+  let found = null;
+  Array.prototype.forEach.call(sel.options, o => { if(same(o.value, wanted)) found = o; });
+  if(!found){
+    found = document.createElement("option");
+    found.value = wanted; found.textContent = wanted + " (as registered)";
+    sel.appendChild(found);
+  }
+  sel.value = found.value;
+}
+
+// ---- Employee search -------------------------------------------------------
+function cleanTerm(s){ return String(s || "").replace(/[%,()*"'\\]/g, " ").replace(/\s+/g, " ").trim(); }
+
+async function searchEmployees(term, allBranches){
+  const t = cleanTerm(term);
+  if(t.length < 2) return [];
+  const p = t.replace(/ /g, "%");   // "noah chukwu" also matches names stored with double spaces
+  let q = sb.from("employees")
+    .select("id,employee_id,full_name,department,unit,branch,rank,status,deactivated_at")
+    .or("full_name.ilike.%" + p + "%,employee_id.ilike.%" + p + "%")
+    .order("full_name").limit(15);
+  if(!allBranches) q = q.eq("branch", $("branch").value || "___none___");
+  const { data, error } = await q;
+  if(error) throw error;
+  return data || [];
+}
+
+function wireSearch(input, list, cfg){
+  let timer = null, items = [], active = -1, seq = 0;
+
+  function close(){ list.classList.add("hidden"); list.innerHTML = ""; items = []; active = -1; }
+  function render(){
+    if(!items.length){
+      list.innerHTML = '<div class="ac-empty">No matching employee found</div>';
+      list.classList.remove("hidden");
+      return;
+    }
+    list.innerHTML = items.map((e, i) =>
+      '<div class="ac-item' + (i === active ? " on" : "") + '" data-i="' + i + '"><b>' + esc(e.full_name) + '</b><span>' +
+      esc(e.employee_id) + " · " + esc(e.branch || "no branch") + " · " + esc(e.department || "no department") +
+      (e.rank ? " · " + esc(e.rank) : "") + (isInactive(e) ? " · INACTIVE" : "") + "</span></div>"
+    ).join("");
+    list.classList.remove("hidden");
+  }
+  function pick(i){ const e = items[i]; if(!e) return; close(); cfg.onPick(e); }
+
+  input.addEventListener("input", function(){
+    if(cfg.onEdit) cfg.onEdit();
+    clearTimeout(timer);
+    if(cleanTerm(input.value).length < 2){ seq++; close(); return; }
+    timer = setTimeout(async function(){
+      const mine = ++seq;
+      let res;
+      try{ res = await searchEmployees(input.value, cfg.all()); }
+      catch(e){ $("status").className = "status err"; $("status").textContent = "❌ Search failed: " + e.message; return; }
+      if(mine !== seq) return;   // a newer search is already running
+      items = res; active = res.length ? 0 : -1; render();
+    }, 250);
+  });
+  input.addEventListener("keydown", function(ev){
+    if(list.classList.contains("hidden") || !items.length) return;
+    if(ev.key === "ArrowDown"){ ev.preventDefault(); active = (active + 1) % items.length; render(); }
+    else if(ev.key === "ArrowUp"){ ev.preventDefault(); active = (active - 1 + items.length) % items.length; render(); }
+    else if(ev.key === "Enter"){ ev.preventDefault(); pick(active); }
+    else if(ev.key === "Escape"){ close(); }
+  });
+  list.addEventListener("mousedown", function(ev){
+    const it = ev.target.closest(".ac-item");
+    if(!it) return;
+    ev.preventDefault();
+    pick(parseInt(it.getAttribute("data-i"), 10));
+  });
+  input.addEventListener("blur", function(){
+    setTimeout(close, 150);
+    if(cfg.onBlur) cfg.onBlur();
+  });
+}
+
+// ---- Picked employee ---------------------------------------------------------
+function pickEmployee(e){
+  SEL_EMP = e;
+  $("name").value = e.full_name || "";
+  $("empId").value = e.employee_id || "";
+  setDepartment(e.department);
+  $("empMsg").textContent = "";
+  renderEmpChip();
+}
+
+function renderEmpChip(){
+  const chip = $("empChip");
+  if(!SEL_EMP){ chip.classList.add("hidden"); chip.innerHTML = ""; return; }
+  const e = SEL_EMP;
+  const bits = [e.branch || "no branch", e.department || "no department", e.unit, e.rank].filter(Boolean);
+  let h = "<b>" + esc(e.full_name) + "</b> · " + esc(e.employee_id) + "<br>Registered: " + esc(bits.join(" · "));
+  if(isInactive(e)) h += '<span class="bad">INACTIVE: this employee is marked as deactivated.</span>';
+  const memoBranch = $("branch").value;
+  if(e.branch && memoBranch && !same(e.branch, memoBranch)) h += '<span class="warn">This employee is registered under a different branch from the one selected above.</span>';
+  chip.innerHTML = h;
+  chip.classList.remove("hidden");
+}
+
+function clearEmployee(){
+  SEL_EMP = null;
+  $("name").value = ""; $("empId").value = "";
+  $("empMsg").textContent = "Names and IDs come from the employee records. Pick the person from the list.";
+  if($("department").options.length) $("department").value = "";
+  renderEmpChip();
+}
+
+// Typing over a picked employee drops the pick, so a name and ID can never get out of step.
+function onEmployeeEdit(which){
+  if(!SEL_EMP) return;
+  const typed = which === "name" ? $("name").value : $("empId").value;
+  const ref   = which === "name" ? SEL_EMP.full_name : SEL_EMP.employee_id;
+  if(same(typed, ref)) return;
+  SEL_EMP = null;
+  if(which === "name") $("empId").value = ""; else $("name").value = "";
+  $("department").value = "";
+  renderEmpChip();
+}
+
+// Tabbing out of the ID box with a full ID typed fills everything in.
+async function lookupExactId(){
+  if(SEL_EMP) return;
+  const id = String($("empId").value || "").replace(/[%]/g, "").trim();
+  if(!id) return;
+  try{
+    let q = sb.from("employees")
+      .select("id,employee_id,full_name,department,unit,branch,rank,status,deactivated_at")
+      .ilike("employee_id", id).limit(2);
+    if(!allBranchesOn()) q = q.eq("branch", $("branch").value || "___none___");
+    const { data, error } = await q;
+    if(error) throw error;
+    if(data && data.length === 1){ pickEmployee(data[0]); }
+    else if(!data || !data.length){ $("empMsg").textContent = "No employee with ID " + id + (allBranchesOn() ? "." : " in this branch."); }
+  }catch(e){ $("empMsg").textContent = "Lookup failed: " + e.message; }
+}
+
+// ---- Sender -------------------------------------------------------------------
+function pickFrom(e){
+  SEL_FROM = e;
+  $("memoFrom").value = e.full_name || "";
+  renderFromChip();
+}
+function renderFromChip(){
+  const chip = $("fromChip");
+  if(!SEL_FROM){ chip.classList.add("hidden"); chip.innerHTML = ""; return; }
+  const e = SEL_FROM;
+  let h = "<b>" + esc(e.full_name) + "</b> · " + esc(e.employee_id) + "<br>" +
+          (e.rank ? "Designation: " + esc(e.rank) : '<span class="warn">No designation is recorded for this person. The memo will show the name only.</span>');
+  if(isInactive(e)) h += '<span class="bad">INACTIVE: this person is marked as deactivated.</span>';
+  chip.innerHTML = h;
+  chip.classList.remove("hidden");
+}
+function onFromEdit(){
+  if(!SEL_FROM) return;
+  if(same($("memoFrom").value, SEL_FROM.full_name)) return;
+  SEL_FROM = null;
+  renderFromChip();
+}
+
+// ---- Form data ------------------------------------------------------------------
 function collect(){
-  const t = document.getElementById("type").value;
-  const g = id => document.getElementById(id).value.trim();
+  const t = $("type").value;
+  const g = id => $(id).value.trim();
+  const fromName = SEL_FROM ? SEL_FROM.full_name : "";
+  const fromRank = SEL_FROM ? (SEL_FROM.rank || "") : "";
   return {
     type: t,
     branch: g("branch"),
-    name: g("name"),
-    empId: g("empId"),
+    name: SEL_EMP ? SEL_EMP.full_name : g("name"),
+    empId: SEL_EMP ? SEL_EMP.employee_id : g("empId"),
     department: g("department"),
-    memoFrom: g("memoFrom"),
+    fromId: SEL_FROM ? SEL_FROM.employee_id : "",
+    fromName: fromName,
+    fromRank: fromRank,
+    memoFrom: fromName ? fromName + (fromRank ? ", " + fromRank : "") : "",
     memoDate: g("memoDate"),
     title: g("title"),
     details: t === "QUERY" ? g("details") : (t === "LAST WARNING" ? g("warnDetails") : g("surDetails")),
@@ -263,8 +507,9 @@ function collect(){
   };
 }
 
-// Year-wise sequential tracking number, read from Supabase
-async function nextTracking(){
+// Year-wise sequential tracking number, read from Supabase.
+// "skip" moves the number on when a save collides with a number someone else just took.
+async function nextTracking(skip){
   const year = new Date().getFullYear().toString();
   const { data, error } = await sb
     .from("hr_queries")
@@ -278,107 +523,32 @@ async function nextTracking(){
     const last = data[0].tracking_number;
     seq = parseInt(last.slice(4), 10) + 1;
   }
-  return year + String(seq).padStart(4, "0");
-}
-
-// Build the memo body based on type (mirrors the original letter formats)
-function buildBody(d){
-  if(d.type === "QUERY"){
-    return `
-<p style="text-align:center; font-weight:bold; font-size:16pt; margin:20px 0;">Subject: QUERY</p>
-<p style="line-height:1.6;">Could you explain within <b>${d.hours} hours</b> why disciplinary action should not be taken against you for <b>${d.title} (${d.details})</b>?</p>
-<p style="line-height:1.6;">This is viewed as misconduct. Reference to Section <b>${d.serviceSection}</b> of the Condition of Service, which attracts disciplinary action as this attitude will not be condoned by management.</p>`;
-  } else if(d.type === "LAST WARNING"){
-    return `
-<p style="text-align:center; font-weight:bold; font-size:16pt; margin:20px 0;">Subject: LAST WARNING</p>
-<p style="line-height:1.6;">It has come to the attention of Management with dismay for ${d.details}.</p>
-<p style="line-height:1.6;">This letter is hereby issued to you as a <b>LAST WARNING</b>. Further occurrence will lead to stricter disciplinary action. It is hoped you will adjust your attitude to work going forward.</p>`;
-  } else if(d.type === "SURCHARGE"){
-    return `
-<p style="text-align:center; font-weight:bold; font-size:16pt; margin:20px 0;">Subject: SURCHARGE</p>
-<p style="line-height:1.6;">Having gone through your reply to the query issued on <b>${d.queryDate}</b> for ${d.details}. You are hereby surcharged <b>₦${d.amount}</b> to be deducted from your salary.</p>
-<p style="line-height:1.6;">It is hoped this will serve as a deterrent in the future.</p>`;
-  } else if(d.type === "CUSTOM QUERY"){
-    return `
-<p style="text-align:center; font-weight:bold; font-size:16pt; margin:20px 0;">Subject: ${d.customSubject}</p>
-${d.paras.filter(p=>p).map(p=>`<p style="line-height:1.6;">${p}</p>`).join("")}`;
-  }
-  return "";
-}
-
-const CC_BLOCK = `
-<div style="margin-top:60px;">
-Kingsley Onulaka<br>
-Head, H.R.<br>
-Cc: Chairman &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Sign: &hellip;.&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;..<br>
-Vice Chairman<br>
-Admin Directors &nbsp;&nbsp;&nbsp; Name: &hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;&hellip;...<br>
-Executive Directors<br>
-Heads of Corporate<br>
-Heads of Admin/Departments<br>
-C.S.O.
-</div>`;
-
-function buildMemoHTML(d, tracking){
-  return `
-<html>
-<head>
-<style>
-@page { size:A4; margin:40pt 50pt 40pt 50pt; }
-body { font-family:"Times New Roman", serif; font-size:12pt; line-height:1.6; margin:0; padding:40px; }
-h2 { text-align:center; font-size:18pt; margin-bottom:5px; }
-h3 { text-align:center; font-size:14pt; margin-top:0; margin-bottom:20px; }
-p { margin:10px 0; }
-.right { text-align:right; }
-</style>
-</head>
-<body>
-<h2>${COMPANY}</h2>
-<h3>MEMO</h3>
-<div class="right">
-<p><b>Tracking No:</b> ${tracking}</p>
-<p>${d.memoFrom || ""}</p>
-<p><b>Date:</b> ${d.memoDate}</p>
-</div>
-<p><b>To:</b> ${d.name} (${d.empId})</p>
-<p><b>Department:</b> ${d.department}</p>
-${buildBody(d)}
-${CC_BLOCK}
-</body>
-</html>`;
+  return year + String(seq + (skip || 0)).padStart(4, "0");
 }
 
 function doPreview(){
   const d = collect();
-  const box = document.getElementById("previewBox");
-  let body = "";
-  if(d.type === "CUSTOM QUERY"){
-    body = `<b>Subject:</b> ${d.customSubject}<br>` + d.paras.filter(p=>p).map(p=>`<p>${p}</p>`).join("");
-  } else {
-    body = `<b>${d.type}:</b> ${d.details || ""}`;
-  }
+  const box = $("previewBox");
   box.classList.remove("hidden");
-  box.innerHTML = `
-    <h4 style="text-align:center;margin:0 0 8px;">${d.type} Memo Preview</h4>
-    <p><b>Tracking No:</b> (auto-generated on save)</p>
-    <p><b>Employee:</b> ${d.name} (${d.empId})</p>
-    <p><b>Date:</b> ${d.memoDate}</p>
-    <p><b>Department:</b> ${d.department}</p>
-    <hr>${body}`;
+  box.innerHTML = '<iframe id="pv" title="Memo preview"></iframe>';
+  $("pv").srcdoc = MemoPrint.html(d, "(assigned on save)", { preview: true });
 }
 
 function validate(d){
-  if(!d.name){ return "Employee name is required."; }
+  if(!SEL_EMP){ return "Pick the employee from the list, so the name and ID come from the employee records."; }
+  if(!SEL_FROM){ return "Pick the sender (From) from the list."; }
   if(!d.memoDate){ return "Memo date is required."; }
   if(d.type === "QUERY" && (!d.title || !d.details)){ return "Query needs a title and details."; }
+  if(d.type === "QUERY" && !d.hours){ return "Enter the hours the employee has to respond."; }
   if(d.type === "LAST WARNING" && !d.details){ return "Last warning needs details."; }
   if(d.type === "SURCHARGE" && (!d.amount || !d.details)){ return "Surcharge needs an amount and details."; }
+  if(d.type === "SURCHARGE" && !d.queryDate){ return "Enter the date of the original query."; }
   if(d.type === "CUSTOM QUERY" && (!d.customSubject || !d.paras[0])){ return "Custom query needs a subject and at least one paragraph."; }
   return null;
 }
 
 async function saveAndPrint(){
-  const status = document.getElementById("status");
+  const status = $("status");
   const d = collect();
 
   const err = validate(d);
@@ -394,54 +564,67 @@ async function saveAndPrint(){
     status.textContent = "You are not assigned to that Branch.";
     return;
   }
+  if(isInactive(SEL_EMP) && !confirm(SEL_EMP.full_name + " is marked as deactivated. Issue the memo anyway?")) return;
+
+  // Open the PDF window now, while the click is still fresh, so the browser does not block it.
+  const w = window.open("", "_blank");
+  if(w){ try{ w.document.write("<p style='font-family:Arial,sans-serif;padding:24px'>Saving memo, please wait...</p>"); }catch(e){} }
 
   status.className = "status"; status.textContent = "Saving...";
   try{
-    const tracking = await nextTracking();
-
-    const row = {
-      tracking_number: tracking,
-      branch: d.branch,
-      employee_name: d.name,
-      employee_id: d.empId || null,
-      letter_type: d.type,
-      department: d.department || null,
-      memo_from: d.memoFrom || null,
-      memo_date: d.memoDate || null,
-      title: d.title || null,
-      details: d.details || null,
-      service_section: d.serviceSection || null,
-      hours: d.hours ? parseInt(d.hours, 10) : null,
-      query_date: d.queryDate || null,
-      amount: d.amount ? parseFloat(d.amount) : null,
-      custom_subject: d.customSubject || null,
-      para1: d.paras[0] || null,
-      para2: d.paras[1] || null,
-      para3: d.paras[2] || null,
-      para4: d.paras[3] || null,
-      para5: d.paras[4] || null,
-      created_by_username: ME.username
-    };
-
-    const { error } = await sb.from("hr_queries").insert(row);
-    if(error) throw error;
+    let tracking = null, lastErr = null;
+    for(let attempt = 0; attempt < 3 && !tracking; attempt++){
+      const candidate = await nextTracking(attempt);
+      const row = {
+        tracking_number: candidate,
+        branch: d.branch,
+        employee_name: d.name,
+        employee_id: d.empId || null,
+        letter_type: d.type,
+        department: d.department || null,
+        memo_from: d.memoFrom || null,
+        from_employee_id: d.fromId || null,
+        from_name: d.fromName || null,
+        from_rank: d.fromRank || null,
+        memo_date: d.memoDate || null,
+        title: d.title || null,
+        details: d.details || null,
+        service_section: d.serviceSection || null,
+        hours: d.hours ? parseInt(d.hours, 10) : null,
+        query_date: d.queryDate || null,
+        amount: d.amount ? parseFloat(d.amount) : null,
+        custom_subject: d.customSubject || null,
+        para1: d.paras[0] || null,
+        para2: d.paras[1] || null,
+        para3: d.paras[2] || null,
+        para4: d.paras[3] || null,
+        para5: d.paras[4] || null,
+        created_by_username: ME.username
+      };
+      const { error } = await sb.from("hr_queries").insert(row);
+      if(!error){ tracking = candidate; break; }
+      if(error.code === "23505"){ lastErr = error; continue; }   // number already taken: try the next one
+      throw error;
+    }
+    if(!tracking) throw lastErr || new Error("Could not get a free tracking number.");
 
     await logActivity("hr_query_created", ME.username + " created a " + d.type + " memo for " + d.name + " (" + tracking + ")");
 
     status.className = "status ok";
-    status.textContent = "✅ Saved as " + tracking + ". Opening PDF...";
+    if(w){
+      status.textContent = "✅ Saved as " + tracking + ". Opening PDF...";
+      MemoPrint.write(w, d, tracking);
+    }else{
+      status.textContent = "✅ Saved as " + tracking + ", but your browser blocked the PDF window. Allow pop-ups for this site, then use Reprint in Manage Query/Memo.";
+    }
 
-    // Open the memo in a new window and trigger the browser's print-to-PDF
-    const w = window.open("", "_blank");
-    w.document.write(buildMemoHTML(d, tracking));
-    w.document.close();
-    w.onload = function(){ w.focus(); w.print(); };
-
-    // Reset the light fields, keep type/date for convenience
-    ["name","empId","department","title","details","serviceSection","hours","queryDate","amount","customSubject","para1","para2","para3","para4","para5","warnDetails","surDetails"]
-      .forEach(id => { const el = document.getElementById(id); if(el) el.value = ""; });
-    document.getElementById("previewBox").classList.add("hidden");
+    // Clear the employee and the details; keep type, date, branch and sender for the next memo.
+    clearEmployee();
+    ["title","details","serviceSection","hours","queryDate","amount","customSubject","para1","para2","para3","para4","para5","warnDetails","surDetails"]
+      .forEach(id => { const el = $(id); if(el) el.value = ""; });
+    $("previewBox").classList.add("hidden");
   }catch(e){
+    if(w){ try{ w.close(); }catch(x){} }
     status.className = "status err";
     status.textContent = "❌ " + e.message;
   }
