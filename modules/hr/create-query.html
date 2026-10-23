@@ -55,6 +55,7 @@
   .hint{font-size:11px;color:var(--muted);margin-top:4px;min-height:14px;}
   .chk{display:flex;align-items:center;gap:6px;font-weight:normal;margin:8px 0 0;}
   .chk input{width:auto;}
+  .ac input.unpicked{border-color:var(--red);background:rgba(192,57,43,.05);}
 </style>
 </head>
 <body>
@@ -93,19 +94,19 @@
     <div>
       <label>Employee Name</label>
       <div class="ac">
-        <input type="text" id="name" placeholder="Type a name or ID, then pick from the list" autocomplete="off">
+        <input type="text" id="name" placeholder="Start typing a name or ID" autocomplete="off">
         <div class="ac-list hidden" id="nameList"></div>
       </div>
     </div>
     <div>
       <label>Employee ID</label>
       <div class="ac">
-        <input type="text" id="empId" placeholder="Type an ID, e.g. RD402" autocomplete="off">
+        <input type="text" id="empId" placeholder="Start typing an ID, e.g. RD402" autocomplete="off">
         <div class="ac-list hidden" id="idList"></div>
       </div>
     </div>
   </div>
-  <div class="hint" id="empMsg">Names and IDs come from the employee records. Pick the person from the list.</div>
+  <div class="hint" id="empMsg">Start typing (at least 2 letters). The list comes from the employee records. Pick the person and the ID and department fill in.</div>
   <label class="chk hidden" id="allBranchesRow"><input type="checkbox" id="allBranches"> Search employees in all branches</label>
   <div class="chip hidden" id="empChip"></div>
 
@@ -120,9 +121,10 @@
     <div>
       <label>From (memo sender line)</label>
       <div class="ac">
-        <input type="text" id="memoFrom" placeholder="Type the sender's name or ID, then pick from the list" autocomplete="off">
+        <input type="text" id="memoFrom" placeholder="Start typing the sender's name or ID" autocomplete="off">
         <div class="ac-list hidden" id="fromList"></div>
       </div>
+      <div class="hint" id="fromMsg"></div>
       <div class="chip hidden" id="fromChip"></div>
     </div>
   </div>
@@ -230,9 +232,9 @@ async function init(){
     // Only Admins and Super Admins may look beyond the selected branch for the employee.
     $("allBranchesRow").classList.toggle("hidden", !(ME.role === "super_admin" || ME.role === "admin"));
 
-    wireSearch($("name"),    $("nameList"), { all: () => allBranchesOn(), onPick: pickEmployee, onEdit: () => onEmployeeEdit("name") });
-    wireSearch($("empId"),   $("idList"),   { all: () => allBranchesOn(), onPick: pickEmployee, onEdit: () => onEmployeeEdit("id"), onBlur: lookupExactId });
-    wireSearch($("memoFrom"),$("fromList"), { all: () => true,            onPick: pickFrom,     onEdit: onFromEdit });
+    wireSearch($("name"),    $("nameList"), { all: () => allBranchesOn(), onPick: pickEmployee, onEdit: () => onEmployeeEdit("name"), onBlur: () => resolveTyped($("name"), "emp") });
+    wireSearch($("empId"),   $("idList"),   { all: () => allBranchesOn(), onPick: pickEmployee, onEdit: () => onEmployeeEdit("id"),   onBlur: () => resolveTyped($("empId"), "emp") });
+    wireSearch($("memoFrom"),$("fromList"), { all: () => true,            onPick: pickFrom,     onEdit: onFromEdit,                   onBlur: () => resolveTyped($("memoFrom"), "from") });
 
     status.style.color = "#1d8a4e";
     status.textContent = "Connected.";
@@ -366,10 +368,13 @@ function wireSearch(input, list, cfg){
 
   input.addEventListener("input", function(){
     if(cfg.onEdit) cfg.onEdit();
+    refreshPickState();
     clearTimeout(timer);
     if(cleanTerm(input.value).length < 2){ seq++; close(); return; }
     timer = setTimeout(async function(){
       const mine = ++seq;
+      list.innerHTML = '<div class="ac-empty">Searching the employee records...</div>';
+      list.classList.remove("hidden");
       let res;
       try{ res = await searchEmployees(input.value, cfg.all()); }
       catch(e){ $("status").className = "status err"; $("status").textContent = "❌ Search failed: " + e.message; return; }
@@ -404,6 +409,14 @@ function pickEmployee(e){
   setDepartment(e.department);
   $("empMsg").textContent = "";
   renderEmpChip();
+  refreshPickState();
+}
+
+// Red outline on any box that holds typed text which is not (yet) a real employee from the list.
+function refreshPickState(){
+  $("name").classList.toggle("unpicked",     !!$("name").value.trim()     && !SEL_EMP);
+  $("empId").classList.toggle("unpicked",    !!$("empId").value.trim()    && !SEL_EMP);
+  $("memoFrom").classList.toggle("unpicked", !!$("memoFrom").value.trim() && !SEL_FROM);
 }
 
 function renderEmpChip(){
@@ -422,9 +435,10 @@ function renderEmpChip(){
 function clearEmployee(){
   SEL_EMP = null;
   $("name").value = ""; $("empId").value = "";
-  $("empMsg").textContent = "Names and IDs come from the employee records. Pick the person from the list.";
+  $("empMsg").textContent = "Start typing (at least 2 letters). The list comes from the employee records. Pick the person and the ID and department fill in.";
   if($("department").options.length) $("department").value = "";
   renderEmpChip();
+  refreshPickState();
 }
 
 // Typing over a picked employee drops the pick, so a name and ID can never get out of step.
@@ -437,30 +451,41 @@ function onEmployeeEdit(which){
   if(which === "name") $("empId").value = ""; else $("name").value = "";
   $("department").value = "";
   renderEmpChip();
+  refreshPickState();
 }
 
-// Tabbing out of the ID box with a full ID typed fills everything in.
-async function lookupExactId(){
-  if(SEL_EMP) return;
-  const id = String($("empId").value || "").replace(/[%]/g, "").trim();
-  if(!id) return;
-  try{
-    let q = sb.from("employees")
-      .select("id,employee_id,full_name,department,unit,branch,rank,status,deactivated_at")
-      .ilike("employee_id", id).limit(2);
-    if(!allBranchesOn()) q = q.eq("branch", $("branch").value || "___none___");
-    const { data, error } = await q;
-    if(error) throw error;
-    if(data && data.length === 1){ pickEmployee(data[0]); }
-    else if(!data || !data.length){ $("empMsg").textContent = "No employee with ID " + id + (allBranchesOn() ? "." : " in this branch."); }
-  }catch(e){ $("empMsg").textContent = "Lookup failed: " + e.message; }
+// When you leave a box that holds typed text that was not picked from the list:
+//   * exactly one employee matches (or the ID / full name matches exactly) -> that person is picked for you;
+//   * otherwise the box is cleared, so it can never keep an incomplete name.
+async function resolveTyped(input, kind){
+  const picked = kind === "emp" ? SEL_EMP : SEL_FROM;
+  const text = input.value.trim();
+  if(!text || picked) return;
+  const msg = kind === "emp" ? $("empMsg") : $("fromMsg");
+  const all = kind === "emp" ? allBranchesOn() : true;
+  let res;
+  try{ res = await searchEmployees(text, all); }
+  catch(e){ msg.textContent = "Lookup failed: " + e.message; return; }
+  // the person may have picked someone, or typed something else, while the lookup ran
+  if((kind === "emp" ? SEL_EMP : SEL_FROM) || input.value.trim() !== text) return;
+
+  const exact = res.filter(e => same(e.employee_id, text) || same(e.full_name, text));
+  const choice = exact.length === 1 ? exact[0] : (res.length === 1 ? res[0] : null);
+  if(choice){ if(kind === "emp") pickEmployee(choice); else pickFrom(choice); return; }
+
+  if(kind === "emp") clearEmployee(); else { input.value = ""; refreshPickState(); }
+  msg.textContent = res.length
+    ? res.length + " people match \"" + text + "\". Type more of the name, or pick one from the list."
+    : "No employee matches \"" + text + "\"" + (all ? "." : " in this branch.");
 }
 
 // ---- Sender -------------------------------------------------------------------
 function pickFrom(e){
   SEL_FROM = e;
   $("memoFrom").value = e.full_name || "";
+  $("fromMsg").textContent = "";
   renderFromChip();
+  refreshPickState();
 }
 function renderFromChip(){
   const chip = $("fromChip");
@@ -477,6 +502,7 @@ function onFromEdit(){
   if(same($("memoFrom").value, SEL_FROM.full_name)) return;
   SEL_FROM = null;
   renderFromChip();
+  refreshPickState();
 }
 
 // ---- Form data ------------------------------------------------------------------
