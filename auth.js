@@ -46,6 +46,18 @@ async function requireAuth(loginPath) {
     throw new Error("Could not reach Supabase Auth: " + e.message);
   }
 
+  // getSession() returns null on mobile when the browser suspended the tab
+  // and Supabase's background refresh timer never ran (screen lock, app switch).
+  // Before redirecting to login, attempt one explicit token refresh — if the
+  // refresh token is still valid (Supabase default: 7 days) the session is
+  // silently restored and the user never sees an unexpected logout.
+  if (!session) {
+    try {
+      const { data: rd } = await sb.auth.refreshSession();
+      session = rd?.session || null;
+    } catch (_) { /* refresh genuinely failed — fall through to redirect */ }
+  }
+
   if (!session) {
     (window.top||window).location.href = loginPath;
     return null;
