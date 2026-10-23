@@ -79,28 +79,14 @@ function getJobCodesByDepartment(department){
   return DEPARTMENTS[department] || [];
 }
 
-// ── Production-only job codes ─────────────────────────────────────────────────
-// EX-prefixed codes (EX01–EX08) describe extruder PRODUCTION PROCESS reasons
-// (Pre-heating, Heating, Power Interruption, Filter Replacement, Shortage of
-// Water, Shortage of Staff, Materials Problem). They must NEVER appear in a
-// Technical department report — they belong to production/extruder downtime.
-// When these codes appear on a Technical record it is a data-entry error at
-// source; the report silently drops them and reports how many were excluded.
-const PRODUCTION_JOB_CODES = new Set([
-  "EX01","EX02","EX03","EX04","EX05","EX06","EX07","EX08"
-]);
-// Departments considered "production" — production codes ARE shown for these.
-const PRODUCTION_DEPARTMENTS = new Set([
-  "EXTRUDER","ELEC EXTRUDER","EXT-MECH CUTTER","EXT-MECH DIE HEAD",
-  "FEEDING","DELIVERY","RECYCLING","ELECRICAL RECYCLING","ELEC MAT WEAVING",
-  "ELEC TWINE/ WORK SHOP","BEAMING","TWINE","DESIGN CARD",
-  "TRANSMISSION","QUALITY CONTROL"
-]);
-function isProductionCode(jobCode){
-  return PRODUCTION_JOB_CODES.has(String(jobCode||"").trim().toUpperCase());
-}
-
-
+// ── Production job codes ─────────────────────────────────────────────────────
+// These codes describe PRODUCTION process reasons, not technical faults:
+//   EX01 Pre-heating, EX02 Heating, EX03 Power Interruption, EX04 Filter Replacement,
+//   EX05 Shortage of Water, EX07 Shortage of Staff, EX08 Materials Problem.
+// Their downtime belongs to production. They must never be counted in this Technical report,
+// whichever department is selected (Extruder included). Only these codes are excluded here.
+const PRODUCTION_JOB_CODES = new Set(["EX01","EX02","EX03","EX04","EX05","EX07","EX08"]);
+function isProductionCode(jobCode){ return PRODUCTION_JOB_CODES.has(String(jobCode||"").trim().toUpperCase()); }
 
 // Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
 async function fetchAllRows(table, select, query){
@@ -244,23 +230,20 @@ async function generate(){
     return;
   }
 
-  // Strip production-only job codes from non-production department views.
-  // If the selected department is NOT a known production department (e.g. it is
-  // "Technical" or "All"), remove any rows whose job_code is an EX-series code.
-  // When "All" is selected we also strip them so they don't skew the summary.
-  let excludedProductionRows = [];
-  const isProductionDept = PRODUCTION_DEPARTMENTS.has(normLabel(department));
-  if(!isProductionDept){
-    const before = rows.length;
-    excludedProductionRows = rows.filter(r => isProductionCode(r.job_code));
-    rows = rows.filter(r => !isProductionCode(r.job_code));
-    if(excludedProductionRows.length){
-      const codes = [...new Set(excludedProductionRows.map(r=>String(r.job_code||"").trim()))].join(", ");
-      const note = document.createElement("p");
-      note.style.cssText = "text-align:center;font-size:12px;color:#b45309;background:#fef3c7;padding:6px 12px;border-radius:6px;margin:8px auto;max-width:760px;";
-      note.innerHTML = `ℹ️ <b>${excludedProductionRows.length} record(s)</b> with production-only job codes were excluded from this Technical report (${codes}). These codes belong to the production/extruder department.`;
-      document.getElementById("reportArea").prepend(note);
-    }
+  // Production job codes never count in this Technical report, in any department (Extruder included).
+  const excludedProductionRows = rows.filter(r => isProductionCode(r.job_code));
+  rows = rows.filter(r => !isProductionCode(r.job_code));
+  let noteHtml = "";
+  if(excludedProductionRows.length){
+    const per = {};
+    excludedProductionRows.forEach(r => { const c = String(r.job_code||"").trim(); per[c] = (per[c]||0)+1; });
+    const list = Object.entries(per).sort((x,y)=>x[0].localeCompare(y[0])).map(([c,n]) => c + " (" + n + ")").join(", ");
+    noteHtml = `<p style="text-align:center;font-size:12px;color:#b45309;background:#fef3c7;padding:6px 12px;border-radius:6px;margin:8px auto;max-width:760px;">ℹ️ <b>${excludedProductionRows.length} record(s)</b> with production job codes were left out of this Technical report: ${list}. Their downtime belongs to production.</p>`;
+  }
+  if(!rows.length){
+    document.getElementById("reportArea").innerHTML = noteHtml +
+      `<p style="text-align:center;font-size:15px;">⚠️ <b>Every record in this selection has a production job code,</b> so there is no technical downtime to show.</p>`;
+    return;
   }
 
   const byJob = {};
@@ -277,6 +260,7 @@ async function generate(){
 
   let html = `<h2 style="text-align:center;color:var(--heading);">📊 Downtime Report</h2>
     <p style="text-align:center;">${startDate} &rarr; ${endDate} | Department: ${department} | Shift: ${shift} | Section: ${section}</p>
+    ${noteHtml}
     <table><thead><tr><th>Job Code</th><th>Occurrences</th><th>Downtime (min)</th><th>Repair Time (min)</th>
     <th>Waiting Time (min)</th><th>Estimated Duration (min)</th><th>% Efficiency</th><th>Difference (min)</th></tr></thead><tbody>`;
 

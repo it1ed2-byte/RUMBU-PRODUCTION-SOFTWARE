@@ -54,7 +54,11 @@ function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "
 function parseDT(v){ const d=new Date(v); return isNaN(d)?null:d; }
 function minutesBetween(a,b){ return (!a||!b)?0:Math.trunc((b-a)/60000); }
 
-let CTRL_ROWS = [], EXCLUDED_JOB_CODES = new Set(); CTRL_ROWS.forEach(normalizeControlRow);
+// Production job codes (EX01 Pre-heating, EX02 Heating, EX03 Power Interruption, EX04 Filter Replacement, EX05 Shortage of Water,
+// EX07 Shortage of Staff, EX08 Materials Problem). Their downtime belongs to production, never to a Technical report.
+// They are always excluded here, in addition to whatever job_table returns.
+const PRODUCTION_JOB_CODES = ["EX01","EX02","EX03","EX04","EX05","EX07","EX08"];
+let CTRL_ROWS = [], EXCLUDED_JOB_CODES = new Set(PRODUCTION_JOB_CODES); CTRL_ROWS.forEach(normalizeControlRow);
 
 const DEPARTMENTS = {
   "FEEDING": ["200","201A","201B","202A","202B","203A","203B","204A","204B","205A","205B","206A","206B","207","208","209","210A","210B","211","212A","212B","214A","214B","215A","215B","216A","216B","218A","218B","220A","220B","222A","222B","223A","223B","224A","224B","225A","225B","226A","226B","227A","227B","228","230A","230B","231","232","233","234","235","236","237A","237B","237C","237D","238","239A","239B","239C","240A","240B","241A","241B","242A","242B","243","244A","245","248","249","251","252","253A","253B","254A","254B","255","256A","256B","257A","257B","258A","258B","260A","260B","261A","261B","262","263A","263B","264A","264B","265","266","267A","267B","268","270","271A","271B","272A","272B","273A","273B","274A","274B","275","277","278","279","280","281A","281B","282A","282B","283A","283B","284","285A","285B","286","287","288","289A","289B","290A","290B","291A","291B","292A","292B","293","294","295","296A","296B","297","298"],
@@ -151,7 +155,7 @@ async function init(){
     const jobRes = await fetch(SUPABASE_URL + "/rest/v1/job_table?select=job_code", { headers: authHeaders() });
     if(jobRes.ok){
       const jobRows = await jobRes.json();
-      EXCLUDED_JOB_CODES = new Set(jobRows.map(r=>r.job_code));
+      EXCLUDED_JOB_CODES = new Set([...PRODUCTION_JOB_CODES, ...jobRows.map(r=>r.job_code)]);
     }
     // Department dropdown — uses known department column values matching BigQuery's
     // SELECT DISTINCT Department FROM maintenance_log. Hardcoded to avoid paginating

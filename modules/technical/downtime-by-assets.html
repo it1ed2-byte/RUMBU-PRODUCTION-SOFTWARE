@@ -94,7 +94,11 @@ function parseEstimatedMinutes(v){
 // from Supabase and excluding any control row whose job_code is in that table.
 // The planned codes (BREAK, PRAYER, TOILET, LEAVE, EX, OPR, etc.) are stored
 // in the `job_code` column of the control table — NOT in the description field.
-let EXCLUDED_JOB_CODES = new Set();
+// Production job codes (EX01 Pre-heating, EX02 Heating, EX03 Power Interruption, EX04 Filter Replacement, EX05 Shortage of Water,
+// EX07 Shortage of Staff, EX08 Materials Problem). Their downtime belongs to production, never to a Technical report.
+// They are always excluded here, in addition to whatever job_table returns.
+const PRODUCTION_JOB_CODES = ["EX01","EX02","EX03","EX04","EX05","EX07","EX08"];
+let EXCLUDED_JOB_CODES = new Set(PRODUCTION_JOB_CODES);
 
 let CTRL_ROWS = [];
 
@@ -209,10 +213,10 @@ async function fetchRangeControl(fromDate, toDate){
 
   if(jobRes.ok){
     const jobRows = await jobRes.json();
-    EXCLUDED_JOB_CODES = new Set(jobRows.map(r => r.job_code));
+    EXCLUDED_JOB_CODES = new Set([...PRODUCTION_JOB_CODES, ...jobRows.map(r => r.job_code)]);
   } else {
     // Non-fatal: if job_table fetch fails, fall back to hardcoded known codes
-    EXCLUDED_JOB_CODES = new Set(["BREAK","PRAYER","TOILET","LEAVE","EX","OPR"]);
+    EXCLUDED_JOB_CODES = new Set([...PRODUCTION_JOB_CODES, "BREAK","PRAYER","TOILET","LEAVE","EX","OPR"]);
     console.warn("job_table fetch failed, using fallback exclusion list");
   }
 
