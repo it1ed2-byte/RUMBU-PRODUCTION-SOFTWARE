@@ -44,7 +44,7 @@
   function bodyHTML(d) {
     var paras = [];
     if (d.type === "QUERY") {
-      var within = d.hours ? "<b>" + esc(d.hours) + " hours</b>" : "the stipulated time";
+      var within = d.hours ? "<b>" + esc(d.hours) + (Number(d.hours) === 1 ? " hour" : " hours") + "</b>" : "the stipulated time";
       var offence = "<b>" + esc(d.title) + (d.details ? " (" + txt(d.details) + ")" : "") + "</b>";
       paras.push("Could you explain within " + within + " why disciplinary action should not be taken against you for " + offence + "?");
       if (d.serviceSection) {
