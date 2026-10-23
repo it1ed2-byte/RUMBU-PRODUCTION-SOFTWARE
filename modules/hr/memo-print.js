@@ -1,5 +1,5 @@
 /* memo-print.js
-   Shared memo design (header with logo, 20% logo watermark, gate pass style table and signature lines).
+   Shared memo design (header with logo, 12% logo watermark, gate pass style table and signature lines).
    Used by create-query.html (preview and print after saving) and manage-query.html (reprint),
    so a reprint always looks exactly like the original.
    Keep this file in the same folder as those two pages. */
@@ -80,7 +80,7 @@
       "  @bottom-right { content:'Page ' counter(page) ' of ' counter(pages); font:8pt Arial,sans-serif; color:#555; } }",
       "* { box-sizing:border-box; -webkit-print-color-adjust:exact; print-color-adjust:exact; }",
       "body { font-family:'Times New Roman',Times,serif; font-size:12pt; line-height:1.55; margin:0; padding:" + (opts.preview ? "34px 46px" : "0") + "; color:#000; background:#fff; }",
-      ".wm { position:fixed; top:50%; left:50%; width:430px; height:430px; margin:-215px 0 0 -215px; opacity:0.2; z-index:0; }",
+      ".wm { position:fixed; top:50%; left:50%; width:430px; height:430px; margin:-215px 0 0 -215px; opacity:0.12; z-index:0; }",
       ".page { position:relative; z-index:1; }",
       "table.hdr { width:100%; border-collapse:collapse; border-bottom:3px solid #1F3864; }",
       "table.hdr td { border:0; padding:0 0 8px 0; vertical-align:middle; }",
