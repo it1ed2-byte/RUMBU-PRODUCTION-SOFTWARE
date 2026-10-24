@@ -148,11 +148,14 @@ function api(path,opt){ return fetch(SUPABASE_URL+"/rest/v1/"+path, Object.assig
 
 function getRequestId(){ return new URLSearchParams(window.location.search).get("id") || sessionStorage.getItem("process_request_id"); }
 
+// Returns the staff name, "" when there is no such staff, or null when the lookup itself could not be done.
+// It asks a database function that returns only the name, so it works for every approver and admin
+// whatever branch the staff member belongs to.
 async function findEmployeeName(staffId){
   if(!staffId) return "";
-  const r=await api("employees?employee_id=eq."+encodeURIComponent(staffId)+"&select=full_name&limit=1");
-  if(!r.ok) return "";
-  const rows=await r.json(); return rows[0]?.full_name || "";
+  const { data, error } = await sb.rpc("request_staff_name", { p_staff_id: staffId });
+  if(error){ console.warn("Staff lookup failed:", error.message); return null; }
+  return data || "";
 }
 
 let lookupTimer=null;
@@ -165,6 +168,7 @@ function lookupCollector(){
     const name=await findEmployeeName(id);
     if(document.getElementById("colId").value.trim()!==id) return;
     if(name){ document.getElementById("colName").value=name; hint.style.color="#15803d"; hint.textContent="✓ Staff found"; }
+    else if(name===null){ hint.style.color="#d97706"; hint.textContent="Staff lookup is not available right now. Type the name manually."; }
     else { hint.style.color="#d97706"; hint.textContent="ID not found in staff records. Type the name manually."; }
   },400);
 }
