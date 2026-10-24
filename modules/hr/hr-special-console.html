@@ -354,6 +354,10 @@
 
     <!-- REFERENCE DATA -->
     <div class="panel" id="panel-refdata">
+      <div id="rdViewOnlyNote" style="display:none;margin:0 0 16px;padding:10px 14px;border:1px solid #f59e0b;border-left:4px solid #f59e0b;background:rgba(245,158,11,.10);border-radius:8px;font-size:12.5px;line-height:1.5;">
+        <b>View only.</b> Only the Super Admin can add, rename, move or delete Branches, Departments and Units.
+        You can still add and edit employees and their data. To request a change, contact the Super Admin.
+      </div>
       <p style="font-size:12.5px;color:var(--muted);margin:0 0 18px;">These are the Branches, Departments, and Units used across the whole app — anything added here is immediately available everywhere else.</p>
 
       <!-- BRANCH -->
@@ -363,7 +367,7 @@
           <span class="c-toggle" id="rdBranchToggle">▲ Collapse</span>
         </div>
         <div class="rd-section-body" id="rdBranchBody">
-          <div class="form-row" style="margin-bottom:12px;">
+          <div class="form-row" id="rdBranchAddRow" style="margin-bottom:12px;">
             <div>
               <label>New Branch Name *</label>
               <input id="rd_branch_name" placeholder="e.g. Agbara Plant">
@@ -384,7 +388,7 @@
           <span class="c-toggle" id="rdDeptToggle">▲ Collapse</span>
         </div>
         <div class="rd-section-body" id="rdDeptBody">
-          <div class="form-row-3" style="margin-bottom:12px;">
+          <div class="form-row-3" id="rdDeptAddRow" style="margin-bottom:12px;">
             <div>
               <label>Branch *</label>
               <select id="rd_dept_branch"><option value="">— select —</option></select>
@@ -410,7 +414,7 @@
           <span class="c-toggle" id="rdUnitToggle">▲ Collapse</span>
         </div>
         <div class="rd-section-body" id="rdUnitBody">
-          <div class="form-row-3" style="margin-bottom:12px;">
+          <div class="form-row-3" id="rdUnitAddRow1" style="margin-bottom:12px;">
             <div>
               <label>Branch *</label>
               <select id="rd_unit_branch" onchange="onRdUnitBranchChange()"><option value="">— select —</option></select>
@@ -421,7 +425,7 @@
             </div>
             <div></div>
           </div>
-          <div class="form-row" style="margin-bottom:12px;">
+          <div class="form-row" id="rdUnitAddRow2" style="margin-bottom:12px;">
             <div>
               <label>Unit Name *</label>
               <input id="rd_unit_name" placeholder="e.g. Night Shift">
@@ -516,6 +520,12 @@
 
 <script>
 let ME = null;
+// Only the Super Admin may add, rename, move or delete Branches, Departments and Units.
+// Everyone else who can open this console can still add and edit employees and their data,
+// but sees the Branches / Departments / Units tab as view-only.
+// (The database enforces the same rule; this keeps the screen honest and clear.)
+let CAN_EDIT_STRUCTURE = false;
+const STRUCTURE_ADMIN_USERNAMES = ["itops3"];
 let BRANCHES = [];
 let DEPARTMENTS = [];
 let UNITS = [];
@@ -560,7 +570,9 @@ async function init(){
     // Defensive: this console is only for the hr_console role. Anyone
     // else who somehow lands here (a stale link, a bookmark) is sent
     // back to the normal app shell rather than seeing HR data.
-    if(ME.role !== "hr_console"){
+    CAN_EDIT_STRUCTURE = (ME.role === "super_admin") ||
+      STRUCTURE_ADMIN_USERNAMES.indexOf(String(ME.username || "").toLowerCase()) !== -1;
+    if(ME.role !== "hr_console" && !CAN_EDIT_STRUCTURE){
       window.location.href = "../../index.html";
       return;
     }
@@ -570,6 +582,7 @@ async function init(){
     status.style.display = "none";
     document.getElementById("app").style.display = "block";
     initHrTheme();
+    applyStructureViewOnly();
 
     await loadReferenceData();
     await loadEmployees();
@@ -1390,7 +1403,7 @@ function empBadge(n){
     : `<span class="rd-emp-badge">${n}</span>`;
 }
 
-function renderRefDataLists(){
+function renderRefDataListsRaw(){
   // ── Build count maps ──────────────────────────────────────────────
   const branchEmpMap={}, deptEmpMap={}, deptUnitMap={}, unitEmpMap={};
   BRANCHES.forEach(b=>{ branchEmpMap[b.name]=0; });
@@ -1492,7 +1505,42 @@ function renderRefDataLists(){
     : `<span style='color:var(--hr-muted);'>${RD_UNIT_BRANCH_FILTER?"No units in this branch yet.":"No units yet."}</span>`;
 }
 
+function renderRefDataLists(){
+  renderRefDataListsRaw();
+  applyStructureViewOnly();
+}
+
+// Every action that changes Branches, Departments or Units starts with this check.
+function requireStructureAccess(){
+  if(CAN_EDIT_STRUCTURE) return true;
+  alert("Only the Super Admin can change Branches, Departments and Units. You can view them here.");
+  return false;
+}
+
+// For everyone except the Super Admin: show the banner, hide the add forms, and turn the lists into plain text
+// with no Save / Move / Delete buttons. Runs after every redraw of the lists.
+function applyStructureViewOnly(){
+  const note = document.getElementById("rdViewOnlyNote");
+  if(note) note.style.display = CAN_EDIT_STRUCTURE ? "none" : "block";
+  ["rdBranchAddRow","rdDeptAddRow","rdUnitAddRow1","rdUnitAddRow2"].forEach(id=>{
+    const el = document.getElementById(id);
+    if(el) el.style.display = CAN_EDIT_STRUCTURE ? "" : "none";
+  });
+  if(CAN_EDIT_STRUCTURE) return;
+  ["rdBranchList","rdDeptList","rdUnitList"].forEach(id=>{
+    const box = document.getElementById(id);
+    if(!box) return;
+    box.querySelectorAll(".act-btn").forEach(b=>b.remove());
+    box.querySelectorAll("input").forEach(inp=>{
+      const span = document.createElement("span");
+      span.textContent = inp.value;
+      inp.replaceWith(span);
+    });
+  });
+}
+
 async function addBranch(){
+  if(!requireStructureAccess()) return;
   const status = document.getElementById("rdBranchStatus");
   const name = document.getElementById("rd_branch_name").value.trim();
   if(!name){ status.className="status err"; status.textContent="Branch name is required."; return; }
@@ -1510,6 +1558,7 @@ async function addBranch(){
 window.addBranch = addBranch;
 
 async function addDepartment(){
+  if(!requireStructureAccess()) return;
   const status = document.getElementById("rdDeptStatus");
   const branch = document.getElementById("rd_dept_branch").value;
   const name = document.getElementById("rd_dept_name").value.trim();
@@ -1541,6 +1590,7 @@ function onRdUnitBranchChange(){
 window.onRdUnitBranchChange = onRdUnitBranchChange;
 
 async function addUnit(){
+  if(!requireStructureAccess()) return;
   const status = document.getElementById("rdUnitStatus");
   const branch = document.getElementById("rd_unit_branch").value;
   const deptId = document.getElementById("rd_unit_dept").value;
@@ -1571,6 +1621,7 @@ window.addUnit = addUnit;
 
 // ---- Branch: rename / delete ----
 async function renameBranchRd(id){
+  if(!requireStructureAccess()) return;
   const status = document.getElementById("rdBranchStatus");
   const newName = document.getElementById("rd_branch_head_" + id).value.trim();
   if(!newName){ status.className="status err"; status.textContent="Branch name cannot be empty."; return; }
@@ -1590,6 +1641,7 @@ async function renameBranchRd(id){
 window.renameBranchRd = renameBranchRd;
 
 async function deleteBranchRd(id, name){
+  if(!requireStructureAccess()) return;
   if(!confirm("Delete Branch \"" + name + "\"?\n\nThis will fail if any account or employee is still assigned to it.")) return;
   const status = document.getElementById("rdBranchStatus");
   try{
@@ -1606,6 +1658,7 @@ window.deleteBranchRd = deleteBranchRd;
 
 // ---- Department: rename / delete ----
 async function renameDepartmentRd(id){
+  if(!requireStructureAccess()) return;
   const status = document.getElementById("rdDeptStatus");
   const newName = document.getElementById("rd_dept_head_" + id).value.trim();
   if(!newName){ status.className="status err"; status.textContent="Department name cannot be empty."; return; }
@@ -1621,6 +1674,7 @@ async function renameDepartmentRd(id){
 window.renameDepartmentRd = renameDepartmentRd;
 
 async function deleteDepartmentRd(id, name){
+  if(!requireStructureAccess()) return;
   if(!confirm("Delete Department \"" + name + "\"?\n\nThis also removes every Unit under it. This cannot be undone.")) return;
   const status = document.getElementById("rdDeptStatus");
   try{
@@ -1637,6 +1691,7 @@ window.deleteDepartmentRd = deleteDepartmentRd;
 
 // ---- Unit: rename + delete ----
 async function renameUnitRd(id){
+  if(!requireStructureAccess()) return;
   const status = document.getElementById("rdUnitStatus");
   const newName = (document.getElementById("rd_unit_head_"+id)||{}).value?.trim();
   if(!newName){ status.className="status err"; status.textContent="Unit name cannot be empty."; return; }
@@ -1651,6 +1706,7 @@ async function renameUnitRd(id){
 window.renameUnitRd = renameUnitRd;
 
 async function deleteUnitRd(id, name){
+  if(!requireStructureAccess()) return;
   if(!confirm("Delete Unit \"" + (name||"") + "\"?\n\nThis cannot be undone.")) return;
   const status = document.getElementById("rdUnitStatus");
   try{
@@ -1683,6 +1739,7 @@ function mvError(error){
 }
 
 function openMoveUnit(unitId){
+  if(!requireStructureAccess()) return;
   const u = UNITS.find(x => x.id === unitId); if(!u) return;
   const dept = DEPARTMENTS.find(d => d.id === u.department_id);
   if(!dept){ alert("This unit's department could not be found."); return; }
@@ -1745,6 +1802,7 @@ async function previewMoveUnit(){
 }
 
 async function confirmMoveUnit(){
+  if(!requireStructureAccess()) return;
   if(!MOVE_UNIT) return;
   const toId = Number(document.getElementById("mvTarget").value); if(!toId) return;
   const to = DEPARTMENTS.find(d => d.id === toId);
@@ -1782,6 +1840,7 @@ document.getElementById("moveUnitModal").addEventListener("click", function(e){ 
 
 // ---------------- MOVE DEPARTMENT (across branches) ----------------
 function openMoveDepartment(deptId){
+  if(!requireStructureAccess()) return;
   const dept = DEPARTMENTS.find(d => d.id === deptId);
   if(!dept) return;
   const unitCount = UNITS.filter(u => u.department_id === deptId).length;
@@ -1840,6 +1899,7 @@ function previewMoveDept(){
 }
 
 async function confirmMoveDept(){
+  if(!requireStructureAccess()) return;
   if(!MOVE_DEPT) return;
   const toBranch = document.getElementById("mvDeptTarget").value;
   if(!toBranch) return;
