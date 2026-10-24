@@ -42,6 +42,15 @@
   .items-table input,
   .items-table select{ padding:7px 8px; font-size:12px; }
   .rm-btn{ padding:5px 10px; background:#dc2626; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:12px; font-weight:700; width:auto; margin:0; }
+  .cat-note{ font-size:12px; color:#777; margin:-4px 0 12px; }
+  .cat-box{ position:absolute; z-index:60; left:0; top:100%; min-width:300px; max-width:min(520px,88vw); max-height:270px; overflow-y:auto;
+            background:var(--card); border:1px solid var(--line); border-radius:8px; box-shadow:0 6px 18px rgba(0,0,0,.2); }
+  .cat-opt{ padding:8px 10px; cursor:pointer; font-size:13px; border-bottom:1px solid var(--line); }
+  .cat-opt:last-child{ border-bottom:none; }
+  .cat-opt.active, .cat-opt:hover{ background:var(--bg); }
+  .cat-opt small{ display:block; color:#888; font-size:11px; margin-top:1px; }
+  .cat-empty{ padding:9px 10px; font-size:12px; color:#888; }
+  .cat-tag{ font-size:11px; color:#15803d; font-weight:700; margin-top:3px; }
   .add-item-btn{ padding:8px 16px; background:var(--accent); color:#fff; border:none; border-radius:8px; cursor:pointer; font-size:13px; font-weight:600; width:auto; margin:0; }
 
   /* Action buttons */
@@ -112,6 +121,8 @@
 
 <div class="card">
   <h3>📦 Items Requested</h3>
+  <p class="cat-note">Start typing the item name. Matching items from the catalogue are suggested as you type. If the item is not listed, just type it in full.</p>
+  <p class="cat-note" id="catHint" style="display:none;color:#b45309;font-weight:600;">Catalogue suggestions are not available right now. You can still type each item manually.</p>
   <table class="items-table">
     <thead>
       <tr><th>#</th><th>Item Name</th><th>Quantity</th><th>Unit</th><th>Remarks</th><th></th></tr>
@@ -139,7 +150,7 @@ let ITEM_COUNT = 0;
 const UNITS = ['pcs','kg','litres','rolls','metres','bags','boxes','sets','pairs','sheets','bottles','cartons'];
 
 function authHeaders(){ return { "apikey":SUPABASE_ANON_KEY,"Authorization":"Bearer "+(ACCESS_TOKEN||SUPABASE_ANON_KEY),"Content-Type":"application/json" }; }
-function esc(s){ return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+function esc(s){ return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 
 function setPriority(p){
   PRIORITY = p;
@@ -152,13 +163,20 @@ function setPriority(p){
 function addItemRow(name='',qty=1,unit='pcs',remarks=''){
   ITEM_COUNT++;
   const id = ITEM_COUNT;
+  if(CAT_STATE[id]) clearTimeout(CAT_STATE[id].timer);
+  CAT_STATE[id] = { timer:null, seq:0, results:[], active:-1, picked:null };   // fresh suggestion state for this row
   const body = document.getElementById("itemsBody");
   const tr = document.createElement("tr");
   tr.id = "irow_"+id;
   const unitOpts = UNITS.map(u=>`<option value="${u}" ${u===unit?"selected":""}>${u}</option>`).join("");
   tr.innerHTML = `
     <td style="color:#888;font-size:12px;">${id}</td>
-    <td><input type="text" id="iname_${id}" value="${esc(name)}" placeholder="Item name"></td>
+    <td style="position:relative;">
+      <input type="text" id="iname_${id}" value="${esc(name)}" placeholder="Type item name" autocomplete="off"
+             oninput="catTyping(${id})" onkeydown="catKey(event,${id})" onblur="setTimeout(function(){catHide(${id})},200)">
+      <div class="cat-box" id="icat_${id}" style="display:none;"></div>
+      <div class="cat-tag" id="itag_${id}"></div>
+    </td>
     <td><input type="number" id="iqty_${id}" value="${qty}" min="0.01" step="0.01" style="width:80px;"></td>
     <td><select id="iunit_${id}">${unitOpts}</select></td>
     <td><input type="text" id="iremark_${id}" value="${esc(remarks)}" placeholder="Optional"></td>
@@ -169,6 +187,110 @@ function addItemRow(name='',qty=1,unit='pcs',remarks=''){
 function removeItemRow(id){
   const row = document.getElementById("irow_"+id);
   if(row) row.remove();
+  if(CAT_STATE[id]){ clearTimeout(CAT_STATE[id].timer); delete CAT_STATE[id]; }
+}
+
+/* ── Catalogue suggestions for the item name ──
+   Typing 2 or more characters looks the text up in the catalogue and lists matching items.
+   Picking one fills in the item name. Anything typed that is not in the catalogue is kept as typed. */
+const CAT_MIN_CHARS = 2, CAT_SHOW = 8;
+let CAT_STATE = {}, CAT_WARNED = false;
+
+function catClean(q){ return String(q||"").replace(/[,()"\\%*]/g," ").replace(/\s+/g," ").trim(); }   // characters that would confuse the search are dropped
+
+async function catSearch(q){
+  const clean = catClean(q);
+  if(clean.length < CAT_MIN_CHARS) return [];
+  const f = clean.toLowerCase(), words = f.split(" ");
+  const longest = words.slice().sort(function(a,b){ return b.length - a.length; })[0];
+  const { data, error } = await sb.from("catalogue").select("part_number,part_name")
+    .or("part_name.ilike.%"+longest+"%,part_number.ilike.%"+longest+"%")
+    .order("part_name").limit(100);
+  if(error) throw error;
+  const seen = {}, out = [];
+  (data||[]).forEach(function(r){
+    const n = String(r.part_name||"").trim(), p = String(r.part_number||"").trim();
+    if(!n) return;
+    const hay = (n+" "+p).toLowerCase();
+    if(!words.every(function(w){ return hay.indexOf(w) !== -1; })) return;      // every word typed must match
+    const key = p.toLowerCase()+"|"+n.toLowerCase();
+    if(seen[key]) return; seen[key] = 1;                                         // the same item stocked in several stores is listed once
+    const nl = n.toLowerCase(), pl = p.toLowerCase();
+    const rank = (nl===f || pl===f) ? 0 : nl.indexOf(f)===0 ? 1 : pl.indexOf(f)===0 ? 2 : (" "+nl).indexOf(" "+f)!==-1 ? 3 : 4;
+    out.push({ part_name:n, part_number:p, rank:rank });
+  });
+  out.sort(function(a,b){ return a.rank - b.rank || a.part_name.localeCompare(b.part_name); });
+  return out.slice(0, CAT_SHOW);
+}
+
+function catHide(id){
+  const b = document.getElementById("icat_"+id);
+  if(b){ b.style.display = "none"; b.innerHTML = ""; }
+  const st = CAT_STATE[id]; if(st){ st.results = []; st.active = -1; }
+}
+function catTag(id){
+  const t = document.getElementById("itag_"+id), st = CAT_STATE[id];
+  if(t) t.textContent = (st && st.picked) ? "✓ From catalogue · " + st.picked.part_number : "";
+}
+function catRender(id){
+  const st = CAT_STATE[id], box = document.getElementById("icat_"+id);
+  if(!st || !box) return;
+  box.innerHTML = st.results.length
+    ? st.results.map(function(r, i){
+        return '<div class="cat-opt' + (i===st.active ? ' active' : '') + '" onmousedown="catPick('+id+','+i+');event.preventDefault();">' +
+               esc(r.part_name) + '<small>' + esc(r.part_number) + '</small></div>';
+      }).join("")
+    : '<div class="cat-empty">No catalogue match. Keep typing to request it as a new item.</div>';
+  box.style.display = "block";
+  const act = box.querySelector(".cat-opt.active"); if(act && act.scrollIntoView) act.scrollIntoView({ block:"nearest" });
+}
+function catPick(id, idx){
+  const st = CAT_STATE[id], r = st && st.results[idx];
+  const input = document.getElementById("iname_"+id);
+  if(!r || !input) return;
+  input.value = r.part_name;
+  st.picked = { name:r.part_name, part_number:r.part_number };
+  catHide(id); catTag(id);
+  const q = document.getElementById("iqty_"+id);
+  if(q){ q.focus(); if(q.select) q.select(); }                                   // carry on to the quantity
+}
+function catTyping(id){
+  const input = document.getElementById("iname_"+id), st = CAT_STATE[id];
+  if(!input || !st) return;
+  const v = input.value.trim();
+  if(st.picked && v !== st.picked.name){ st.picked = null; catTag(id); }         // edited after picking: it is now a typed item
+  clearTimeout(st.timer);
+  if(catClean(v).length < CAT_MIN_CHARS){ st.seq++; catHide(id); return; }
+  st.timer = setTimeout(async function(){
+    const my = ++st.seq;
+    try{
+      const res = await catSearch(v);
+      if(my !== st.seq) return;                                                  // a newer search has replaced this one
+      if(document.activeElement !== input) return;                               // the user has already moved on
+      st.results = res; st.active = -1; catRender(id);
+    }catch(e){
+      if(my !== st.seq) return;
+      console.warn("Catalogue search failed:", e && e.message ? e.message : e);
+      if(!CAT_WARNED){ CAT_WARNED = true; document.getElementById("catHint").style.display = "block"; }
+      catHide(id);
+    }
+  }, 250);
+}
+function catKey(ev, id){
+  const st = CAT_STATE[id], box = document.getElementById("icat_"+id);
+  if(!st || !box) return;
+  const open = box.style.display !== "none" && st.results.length > 0;
+  if(ev.key === "ArrowDown" || ev.key === "ArrowUp"){
+    if(!open) return;
+    ev.preventDefault();
+    const n = st.results.length;
+    st.active = ev.key === "ArrowDown" ? (st.active + 1) % n : (st.active - 1 + n) % n;
+    catRender(id);
+  } else if(ev.key === "Enter"){
+    if(open && st.active >= 0){ ev.preventDefault(); catPick(id, st.active); }
+  } else if(ev.key === "Escape" || ev.key === "Tab"){
+    catHide(id);
+  }
 }
 
 function getItems(){
@@ -274,7 +396,7 @@ function resetForm(){
   document.getElementById("f_title").value="";
   document.getElementById("f_desc").value="";
   document.getElementById("f_reqno").value="";
-  document.getElementById("itemsBody").innerHTML="";
+  document.getElementById("itemsBody").innerHTML=""; CAT_STATE={};
   ITEM_COUNT=0; PRIORITY='Normal'; setPriority('Normal');
   if(EDIT_ID){
     EDIT_ID=null;
@@ -326,7 +448,7 @@ async function loadDraft(id){
     onStoreChange();
   }
   const items = await fetch(SUPABASE_URL+"/rest/v1/request_items?request_id=eq."+id+"&order=created_at", { headers:authHeaders() }).then(x=>x.json());
-  document.getElementById("itemsBody").innerHTML=""; ITEM_COUNT=0;
+  document.getElementById("itemsBody").innerHTML=""; ITEM_COUNT=0; CAT_STATE={};
   (items||[]).forEach(i=>addItemRow(i.item_name, i.quantity, i.unit, i.remarks||""));
   if(!items || !items.length) addItemRow();
   document.getElementById("draftNo").textContent = r.request_number;
