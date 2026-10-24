@@ -198,29 +198,15 @@ let CAT_STATE = {}, CAT_WARNED = false;
 
 function catClean(q){ return String(q||"").replace(/[,()"\\%*]/g," ").replace(/\s+/g," ").trim(); }   // characters that would confuse the search are dropped
 
+// The database does the matching and ranking (every word typed must appear in the part name or part number,
+// closest matches first, each item listed once), so it works however large the catalogue is.
 async function catSearch(q){
   const clean = catClean(q);
   if(clean.length < CAT_MIN_CHARS) return [];
-  const f = clean.toLowerCase(), words = f.split(" ");
-  const longest = words.slice().sort(function(a,b){ return b.length - a.length; })[0];
-  const { data, error } = await sb.from("catalogue").select("part_number,part_name")
-    .or("part_name.ilike.%"+longest+"%,part_number.ilike.%"+longest+"%")
-    .order("part_name").limit(100);
+  const { data, error } = await sb.rpc("catalogue_search", { p_query: clean, p_limit: CAT_SHOW });
   if(error) throw error;
-  const seen = {}, out = [];
-  (data||[]).forEach(function(r){
-    const n = String(r.part_name||"").trim(), p = String(r.part_number||"").trim();
-    if(!n) return;
-    const hay = (n+" "+p).toLowerCase();
-    if(!words.every(function(w){ return hay.indexOf(w) !== -1; })) return;      // every word typed must match
-    const key = p.toLowerCase()+"|"+n.toLowerCase();
-    if(seen[key]) return; seen[key] = 1;                                         // the same item stocked in several stores is listed once
-    const nl = n.toLowerCase(), pl = p.toLowerCase();
-    const rank = (nl===f || pl===f) ? 0 : nl.indexOf(f)===0 ? 1 : pl.indexOf(f)===0 ? 2 : (" "+nl).indexOf(" "+f)!==-1 ? 3 : 4;
-    out.push({ part_name:n, part_number:p, rank:rank });
-  });
-  out.sort(function(a,b){ return a.rank - b.rank || a.part_name.localeCompare(b.part_name); });
-  return out.slice(0, CAT_SHOW);
+  return (data||[]).map(function(r){ return { part_name:String(r.part_name||"").trim(), part_number:String(r.part_number||"").trim() }; })
+                   .filter(function(r){ return r.part_name; });
 }
 
 function catHide(id){
