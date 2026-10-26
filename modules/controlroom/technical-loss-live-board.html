@@ -239,24 +239,51 @@ setInterval(()=>{
 }, 1000);
 
 // ── WAT / shift helpers ───────────────────────────────────────────────────────
-// All times fixed to WAT (UTC+1) regardless of viewer's device timezone.
-// Date.now() is always UTC ms — simply add 1 hour to get WAT.
-// The old formula wrongly added getTimezoneOffset() on top of UTC ms, which
-// double-counted the offset and returned the wrong hour on any device NOT
-// set to UTC (including devices already set to WAT, which returned UTC+0).
 function watNow(){
-  return new Date(Date.now() + 3600000);
+  return new Date(Date.now() + 3600000); // UTC → WAT (UTC+1)
 }
 
-// Matches AppScript: Morning = 07:00-18:59, Night = 19:00-06:59 (WAT).
-// Night before 07:00 belongs to the previous calendar day.
-function currentShiftAndDate(){
-  const wat = watNow();
-  const h = wat.getHours();
-  const shift = (h >= 7 && h < 19) ? "Morning" : "Night";
-  const d = new Date(wat);
-  if(shift === "Night" && h < 7) d.setDate(d.getDate()-1);
-  return { shift, dateStr: ymd(d) };
+// Returns the current shift's UTC time window boundaries.
+// Morning shift: 07:00–18:59 WAT  →  06:00–17:59 UTC
+// Night shift:   19:00–06:59 WAT  →  18:00–05:59 UTC (spans midnight)
+//
+// Using UTC windows instead of the `shift` column avoids two problems:
+//  1. Records at the boundary (e.g. stopped at 18:45, still untreated at 19:05)
+//     were disappearing because the shift column flipped while mc_stoppage_time
+//     was still in the Morning window.
+//  2. Inconsistent or missing `shift` values in old rows no longer matter.
+function currentShiftWindow(){
+  const watMs  = Date.now() + 3600000;        // current WAT time in ms
+  const wat    = new Date(watMs);
+  const h      = wat.getHours();
+
+  let shift, windowStartUtc, windowEndUtc, shiftDateStr;
+
+  if(h >= 7 && h < 19){
+    // ── Morning shift ──
+    shift = "Morning";
+    const base = new Date(wat); base.setHours(0,0,0,0);   // WAT midnight
+    const startWat = new Date(base); startWat.setHours(7,0,0,0);
+    const endWat   = new Date(base); endWat.setHours(18,59,59,999);
+    windowStartUtc = new Date(startWat.getTime() - 3600000); // WAT→UTC
+    windowEndUtc   = new Date(endWat.getTime()   - 3600000);
+    shiftDateStr   = ymd(wat);
+  } else {
+    // ── Night shift ──
+    shift = "Night";
+    // Night that started yesterday evening (if before 07:00 WAT)
+    const base = new Date(wat); base.setHours(0,0,0,0);
+    if(h < 7) base.setDate(base.getDate()-1); // rollback to previous WAT day
+    const startWat = new Date(base); startWat.setHours(19,0,0,0);
+    const endWat   = new Date(base); endWat.setDate(endWat.getDate()+1);
+    endWat.setHours(6,59,59,999);
+    windowStartUtc = new Date(startWat.getTime() - 3600000);
+    windowEndUtc   = new Date(endWat.getTime()   - 3600000);
+    // Shift date = the WAT day the Night shift STARTED
+    shiftDateStr = ymd(h < 7 ? new Date(wat.getTime() - 86400000) : wat);
+  }
+
+  return { shift, shiftDateStr, windowStartUtc, windowEndUtc };
 }
 
 function ymd(d){
@@ -304,45 +331,37 @@ let CDOWN_INT    = null;
 let CDOWN_SEC    = 0;
 
 // ── fetchLive ─────────────────────────────────────────────────────────────────
-// Mirrors AppScript getLiveData():
-//   SELECT ... FROM tracking_table t
-//   LEFT JOIN treated_table tr ON t.ID = tr.ID
-//   WHERE DATE(t.Date) = workingDate AND t.Shift = shift
-//         AND t.Job_Code = 'Technical Loss' AND tr.ID IS NULL
-//
-// Since date_col is corrupt in Supabase, we filter by WAT date derived from
-// mc_stoppage_time client-side. The LEFT JOIN / IS NULL exclusion is done by
-// building TREATED_IDS and filtering out matching rows.
 async function fetchLive(){
   setDot("liveDot","loading");
-  setStatus("liveStatus","Fetching...");
+  setStatus("liveStatus","Fetching…");
   clearCountdown();
 
   try{
-    const { shift, dateStr } = currentShiftAndDate();
+    const { shift, shiftDateStr, windowStartUtc, windowEndUtc } = currentShiftWindow();
 
-    // Step 1: fetch recent Technical Loss rows server-side (job_code filter, latest first)
+    // Step 1: pull recent Technical Loss rows (server-side job_code filter only)
     const tRes = await api(
       "tracking_table?select=id,assets,shed,description,shift,mc_stoppage_time" +
       "&job_code=ilike.Technical Loss&order=id.desc&limit=2000"
     );
-    if(!tRes.ok) throw new Error("tracking_table HTTP "+tRes.status);
+    if(!tRes.ok) throw new Error("tracking_table fetch failed (HTTP "+tRes.status+")");
     const track = await tRes.json();
 
-    // Step 2: client-side — keep only today's date + current shift
-    // mc_stoppage_time is the reliable date source (date_col can be corrupt)
-    const candidates = (track||[]).filter(r =>
-      watDateFromTs(r.mc_stoppage_time) === dateStr &&
-      (r.shift||"").trim().toLowerCase() === shift.toLowerCase()
-    );
+    // Step 2: filter by the current shift's UTC time WINDOW.
+    // We use mc_stoppage_time (reliable) rather than the shift column (can be
+    // wrong or missing), so records entered just before or after 19:00 always
+    // land in the correct bucket regardless of what the shift column says.
+    const candidates = (track||[]).filter(r => {
+      const ts = parseTs(r.mc_stoppage_time);
+      return ts && ts >= windowStartUtc && ts <= windowEndUtc;
+    });
 
-    // Step 3: fetch treated status for ONLY these candidate IDs (targeted query —
-    // avoids the 1000-row Supabase default limit that caused treated rows to reappear).
+    // Step 3: fetch treated IDs for these candidates only
     TREATED_IDS = new Set();
     if(candidates.length > 0){
       const ids = candidates.map(r => r.id).join(",");
       const trRes = await api(
-        "treated_table?select=id_number&id_number=in.(" + ids + ")"
+        "treated_table?select=id_number&id_number=in.("+ids+")"
       );
       if(trRes.ok){
         const treated = await trRes.json();
@@ -350,19 +369,36 @@ async function fetchLive(){
       }
     }
 
-    // Step 4: exclude treated rows (LEFT JOIN IS NULL equivalent)
+    // Step 4: exclude treated rows
     LIVE_ROWS = candidates.filter(r => !TREATED_IDS.has(String(r.id)));
+
+    // ── Shift-change grace message ─────────────────────────────────────────
+    // When a shift has just started (< 10 min ago) and the board is empty,
+    // show a clear message so workers don't think the board is broken.
+    const shiftAgeMin = (Date.now() + 3600000 - windowStartUtc.getTime() - 3600000) / 60000;
+    const isNewShift  = shiftAgeMin < 10;
 
     setDot("liveDot","ok");
     setStatus("liveStatus",
-      shift+" shift  ·  "+dateStr+"  ·  "+LIVE_ROWS.length+" machine(s) on Technical Loss");
+      shift+" shift  ·  "+shiftDateStr+"  ·  "+
+      (LIVE_ROWS.length
+        ? LIVE_ROWS.length+" machine(s) on Technical Loss"
+        : isNewShift
+          ? "Shift just started — no Technical Loss recorded yet"
+          : "✅ No open Technical Loss this shift")
+    );
     renderLive();
-    startCountdown(60);
+    startCountdown(60);     // ← always restart, even after a clean fetch
+
   }catch(e){
+    // ── Error recovery ─────────────────────────────────────────────────────
+    // CRITICAL: always restart the countdown so the board self-heals after a
+    // transient network error. Without this the board goes permanently dark.
     setDot("liveDot","err");
-    setStatus("liveStatus","Error: "+(e.message||e));
+    setStatus("liveStatus","⚠️ Fetch error — retrying in 30s  ("+e.message+")");
     document.getElementById("liveBody").innerHTML =
-      '<tr><td colspan="7" class="no-data">❌ '+(e.message||e)+'</td></tr>';
+      '<tr><td colspan="7" class="no-data">⚠️ Temporary fetch error. Board will retry automatically in 30 seconds.</td></tr>';
+    startCountdown(30);     // ← retry sooner after an error
   }
 }
 
