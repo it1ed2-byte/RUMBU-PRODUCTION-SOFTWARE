@@ -37,6 +37,7 @@
   .badge-released{ background:#dcfce7; color:#15803d; }
   .badge-rejected{ background:#fee2e2; color:#dc2626; }
   .badge-closed{ background:#f3f4f6; color:#374151; }
+  .badge-awaiting{ background:#fef3c7; color:#b45309; }
   .pri-Normal{ color:#2563eb; font-weight:700; }
   .pri-Urgent{ color:#d97706; font-weight:700; }
   .pri-Critical{ color:#dc2626; font-weight:700; }
@@ -118,7 +119,17 @@ function authHeaders(){ return {"apikey":SUPABASE_ANON_KEY,"Authorization":"Bear
 function fmtDate(d){ return d ? d.slice(0,10) : "—"; }
 function getRowsPerPage(){ const v=document.getElementById("rowsPerPage").value; return v==="all"?Infinity:Number(v); }
 
-function statusBadge(s){ return `<span class="badge badge-${s}">${esc(s.replace(/_/g," "))}</span>`; }
+function statusBadge(s, approval){
+  if(s==="submitted" && approval==="pending") return `<span class="badge badge-awaiting">awaiting approval</span>`;
+  return `<span class="badge badge-${s}">${esc(s.replace(/_/g," "))}</span>`;
+}
+function approvalInfo(r){
+  const row=(v,color)=>`<div class="info-item" style="grid-column:1/-1"><label>Department Head</label><span${color?` style="color:${color};"`:""}>${v}</span></div>`;
+  if(r.approval_status==="pending") return row("Waiting for approval from the head of "+esc(r.approval_department||r.department||"your department")+". It goes to the store once approved.","#b45309");
+  if(r.approval_status==="approved") return row("Approved by "+esc(r.approved_by_name||"the department head")+" on "+fmtDate(r.approved_at)+(r.approval_remark?". Remark: "+esc(r.approval_remark):""),"#15803d");
+  if(r.approval_status==="rejected") return row("Rejected by "+esc(r.approved_by_name||"the department head")+" on "+fmtDate(r.approved_at),"#dc2626");
+  return "";
+}
 function priBadge(p){ return `<span class="pri-${p}">${p==="Normal"?"🔵":p==="Urgent"?"🟡":"🔴"} ${p}</span>`; }
 
 async function fetchAll(table,query){
@@ -175,7 +186,7 @@ function renderTable(){
       <td>${esc(r.title)}</td>
       <td>${esc(r.store_name||"—")}</td>
       <td>${priBadge(r.priority)}</td>
-      <td>${statusBadge(r.status)}</td>
+      <td>${statusBadge(r.status, r.approval_status)}</td>
       <td>${fmtDate(r.created_at)}</td>
       <td><button class="view-btn" onclick="openDetail('${r.id}')">View</button></td>
     </tr>`;
@@ -210,6 +221,7 @@ async function openDetail(id){
   document.getElementById("dTitle").textContent=req.request_number+" — "+req.title;
   document.getElementById("dInfo").innerHTML=`
     <div class="info-item"><label>Status</label><span>${req.status.replace(/_/g," ")}</span></div>
+    ${approvalInfo(req)}
     <div class="info-item"><label>Priority</label><span>${req.priority}</span></div>
     <div class="info-item"><label>Store</label><span>${esc(req.store_name||"—")}</span></div>
     <div class="info-item"><label>Department</label><span>${esc(req.department)}</span></div>

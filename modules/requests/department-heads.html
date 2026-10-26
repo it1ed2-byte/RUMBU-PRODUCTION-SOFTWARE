@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Department Heads Setup</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme",t); }
+    window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+  *{ box-sizing:border-box; }
+  body{ font-family:var(--sans); background:var(--bg); margin:0; padding:16px; }
+  .card{ background:var(--card); width:100%; max-width:1000px; margin:0 auto 16px; padding:22px; border-radius:12px; box-shadow:0 4px 12px rgba(0,0,0,.11); }
+  h2{ text-align:center; color:var(--heading); border-bottom:2px solid var(--heading); padding-bottom:10px; margin:0 0 16px; font-size:18px; }
+  h3{ color:var(--heading); font-size:15px; margin:0; }
+  .sub{ font-size:12.5px; color:#666; margin:0 0 14px; line-height:1.5; }
+  #connStatus{ font-size:12px; text-align:center; color:#666; margin-bottom:10px; }
+  label{ font-size:12px; font-weight:600; color:#555; margin-bottom:4px; display:block; }
+  input,select{ width:100%; padding:9px 12px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:13px; outline:none; }
+  input:focus,select:focus{ border-color:var(--accent); }
+  button{ padding:9px 16px; border:none; border-radius:8px; font-weight:700; font-size:13px; cursor:pointer; background:var(--primary); color:#fff; white-space:nowrap; }
+  button:disabled{ opacity:.5; cursor:not-allowed; }
+  .inline{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .inline input{ flex:1; min-width:200px; }
+  .dept-head{ display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:10px; flex-wrap:wrap; }
+  .tag{ display:inline-block; padding:3px 10px; border-radius:20px; font-size:11px; font-weight:700; }
+  .t-ok{ background:#dcfce7; color:#15803d; } .t-warn{ background:#fff7ed; color:#c2410c; } .t-info{ background:#e8f0fb; color:#1F3864; }
+  .chips{ display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; min-height:8px; }
+  .chip{ display:inline-flex; align-items:center; gap:6px; background:var(--bg); border:1px solid var(--line); border-radius:20px; padding:4px 6px 4px 12px; font-size:12px; font-weight:600; }
+  .chip button{ background:#dc2626; color:#fff; border-radius:50%; width:26px; height:26px; min-height:26px !important; flex:0 0 26px; padding:0; font-size:12px; line-height:1; display:inline-flex; align-items:center; justify-content:center; }
+  .alert{ background:#fef2f2; border:1px solid #fca5a5; color:#b91c1c; border-radius:8px; padding:9px 12px; font-size:12.5px; font-weight:600; margin-bottom:10px; }
+  .hint{ font-size:11.5px; color:#888; margin:8px 0 0; }
+  .msg{ margin-top:10px; font-size:13px; font-weight:600; min-height:18px; }
+  .msg.ok{ color:#15803d; } .msg.err{ color:#dc2626; }
+  .readonly-note{ background:#fffbeb; border:1px solid #fcd34d; color:#92400e; border-radius:8px; padding:10px 14px; font-size:13px; font-weight:600; margin-bottom:12px; }
+  .summary{ font-size:12.5px; color:#555; margin:12px 0 0; }
+  .ro .edit-only{ display:none !important; }
+  @media(max-width:600px){ .inline input{ flex:1 1 100%; } .inline button{ width:100%; } }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+</head>
+<body>
+<datalist id="userList"></datalist>
+
+<div class="card">
+  <h2>🏢 Department Heads Setup</h2>
+  <div id="connStatus">Connecting...</div>
+  <div class="readonly-note" id="roNote" style="display:none;">You can see who heads each department, but only an Admin can change it.</div>
+  <p class="sub">When someone in a department makes a request, it goes to that department's head for approval first. Only after the head approves does it appear for the store staff. A department with <b>no head</b> sends its requests straight to the store, as before.</p>
+  <label>Branch</label>
+  <select id="branchSel" onchange="loadBranch()"></select>
+  <div class="summary" id="summary"></div>
+  <div class="msg" id="msg"></div>
+</div>
+
+<div id="deptArea"></div>
+
+<script>
+var ME = null, CAN_EDIT = false, BRANCHES = [], BRANCH = "", USERS = [], USER_BY_LABEL = {}, USER_BY_ID = {};
+var DEPT_NAMES = [], HEADS = [], WAITING = {}, BUSY = false;
+
+function $(id){ return document.getElementById(id); }
+function esc(s){ return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+function key(s){ return String(s == null ? "" : s).trim().toUpperCase(); }
+function setMsg(t, cls){ var m = $("msg"); m.className = "msg" + (cls ? " " + cls : ""); m.textContent = t; if(t && cls) window.scrollTo(0, 0); }
+function userLabel(id){ var u = USER_BY_ID[id]; return u ? u.label : "(account not visible to you)"; }
+function friendly(e){
+  var t = (e && (e.message || e.details)) || String(e);
+  if(e && e.code === "23505") return "That person is already a head of this department.";
+  if((e && e.code === "42501") || /row-level security/i.test(t)) return "You are not allowed to set department heads for this branch.";
+  if((e && (e.code === "42P01" || e.code === "PGRST205")) || /request_department_heads/i.test(t) && /(does not exist|schema cache)/i.test(t))
+    return "The approval step is not set up in the database yet. Run Request Department Approval Setup in Supabase first.";
+  return t;
+}
+
+async function loadBranches(){
+  if(ME.role === "super_admin"){
+    var r = await sb.from("app_sections").select("name").order("name");
+    if(r.error) throw r.error;
+    BRANCHES = (r.data || []).map(function(x){ return x.name; });
+  } else {
+    BRANCHES = (ME.sectionNames || []).slice().sort();
+  }
+}
+
+async function loadUsers(){
+  var res = await Promise.all([
+    sb.from("profiles").select("id,username").order("username"),
+    sb.from("employees").select("linked_profile_id,full_name").not("linked_profile_id", "is", null)
+  ]);
+  if(res[0].error) throw res[0].error;
+  var nameOf = {}; ((res[1].data) || []).forEach(function(e){ nameOf[e.linked_profile_id] = e.full_name; });
+  USERS = (res[0].data || []).map(function(p){ return { id: p.id, label: nameOf[p.id] ? nameOf[p.id] + " (" + p.username + ")" : p.username }; });
+  USER_BY_LABEL = {}; USER_BY_ID = {};
+  USERS.forEach(function(u){ USER_BY_LABEL[u.label.toLowerCase()] = u; USER_BY_ID[u.id] = u; });
+  $("userList").innerHTML = USERS.map(function(u){ return '<option value="' + esc(u.label) + '">'; }).join("");
+}
+function pickUser(inputId){
+  var v = $(inputId).value.trim().toLowerCase();
+  return USER_BY_LABEL[v] || USERS.find(function(u){ return u.label.toLowerCase().slice(-(v.length + 2)) === "(" + v + ")"; }) || null;
+}
+
+async function loadBranch(){
+  BRANCH = $("branchSel").value;
+  if(!BRANCH){ $("deptArea").innerHTML = ""; $("summary").textContent = ""; return; }
+  $("deptArea").innerHTML = '<div class="card">Loading...</div>';
+  try{
+    var res = await Promise.all([
+      sb.from("departments").select("name").eq("section", BRANCH).order("name"),
+      sb.from("request_department_heads").select("id,branch,department,profile_id"),
+      sb.from("requests").select("approval_branch,approval_department").eq("approval_status", "pending")
+    ]);
+    for(var i = 0; i < res.length; i++) if(res[i].error) throw res[i].error;
+    var seen = {}; DEPT_NAMES = [];
+    (res[0].data || []).forEach(function(d){ var k = key(d.name); if(k && !seen[k]){ seen[k] = 1; DEPT_NAMES.push(d.name); } });
+    HEADS = (res[1].data || []).filter(function(h){ return key(h.branch) === key(BRANCH); });
+    WAITING = {};
+    (res[2].data || []).forEach(function(r){ if(key(r.approval_branch) === key(BRANCH)){ var k = key(r.approval_department); WAITING[k] = (WAITING[k] || 0) + 1; } });
+    render();
+  }catch(e){
+    $("deptArea").innerHTML = '<div class="card"><div class="alert">' + esc(friendly(e)) + '</div></div>';
+  }
+}
+
+function chip(h){
+  return '<span class="chip">' + esc(userLabel(h.profile_id)) +
+         '<button class="edit-only" title="Remove" onclick="removeHead(' + h.id + ')">✕</button></span>';
+}
+
+function render(){
+  var withHead = 0, html = "";
+  DEPT_NAMES.forEach(function(name, i){
+    var heads = HEADS.filter(function(h){ return key(h.department) === key(name); });
+    var waiting = WAITING[key(name)] || 0;
+    if(heads.length) withHead++;
+    html += '<div class="card"><div class="dept-head"><h3>' + esc(name) + '</h3>' +
+      (heads.length
+        ? '<span class="tag t-ok">' + heads.length + (heads.length === 1 ? " head" : " heads") + '</span>'
+        : '<span class="tag t-warn">No head: requests go straight to the store</span>') + '</div>' +
+      (waiting && !heads.length ? '<div class="alert">⚠️ ' + waiting + ' request' + (waiting === 1 ? " is" : "s are") + ' waiting for approval but nobody can approve ' + (waiting === 1 ? "it" : "them") + '. Add a head below.</div>' : '') +
+      (waiting && heads.length ? '<p class="hint" style="margin:0 0 8px;">' + waiting + ' request' + (waiting === 1 ? "" : "s") + ' waiting for approval.</p>' : '') +
+      '<div class="chips">' + heads.map(chip).join("") + '</div>' +
+      '<div class="inline edit-only"><input type="text" id="hin_' + i + '" list="userList" placeholder="Search a person by name or username" onkeydown="if(event.key===\'Enter\') addHead(' + i + ')">' +
+      '<button onclick="addHead(' + i + ')">+ Add Head</button></div>' +
+      '<p class="hint edit-only">After adding, tick Pending Request Approval for this person in Manage Role, so the page appears for them.</p></div>';
+  });
+  // assignments whose department no longer exists in the Departments list (for example after a rename)
+  var known = {}; DEPT_NAMES.forEach(function(n){ known[key(n)] = 1; });
+  var orphans = HEADS.filter(function(h){ return !known[key(h.department)]; });
+  if(orphans.length){
+    html += '<div class="card"><div class="dept-head"><h3>Not matching any department</h3><span class="tag t-warn">Check these</span></div>' +
+      '<p class="sub">These assignments name a department that is not in the Departments list for this branch (it may have been renamed). They have no effect until the names match. Remove them and add the head again under the correct department.</p>' +
+      '<div class="chips">' + orphans.map(function(h){ return '<span class="chip">' + esc(h.department) + ': ' + esc(userLabel(h.profile_id)) +
+        '<button class="edit-only" title="Remove" onclick="removeHead(' + h.id + ')">✕</button></span>'; }).join("") + '</div></div>';
+  }
+  if(!DEPT_NAMES.length) html = '<div class="card"><p class="sub">No departments are set up for this branch yet.</p></div>';
+  $("deptArea").innerHTML = html;
+  $("summary").textContent = DEPT_NAMES.length ? withHead + " of " + DEPT_NAMES.length + " departments in " + BRANCH + " have a head." : "";
+}
+
+async function addHead(i){
+  if(BUSY || !CAN_EDIT) return;
+  var dept = DEPT_NAMES[i], u = pickUser("hin_" + i);
+  if(!u){ setMsg("❌ Pick a person from the list.", "err"); return; }
+  if(HEADS.some(function(h){ return key(h.department) === key(dept) && h.profile_id === u.id; })){ setMsg("❌ " + u.label + " is already a head of " + dept + ".", "err"); return; }
+  BUSY = true; setMsg("Saving...", "");
+  try{
+    var r = await sb.from("request_department_heads").insert({ branch: BRANCH, department: dept, profile_id: u.id }).select();
+    if(r.error) throw r.error;
+    if(!r.data || !r.data.length) throw new Error("Nothing was saved. You may not have permission to set heads for this branch.");
+    setMsg("✅ " + u.label + " is now head of " + dept + ". Remember to tick Pending Request Approval for them in Manage Role.", "ok");
+    BUSY = false; await loadBranch();
+  }catch(e){ setMsg("❌ " + friendly(e), "err"); }
+  finally{ BUSY = false; }
+}
+
+async function removeHead(id){
+  if(BUSY || !CAN_EDIT) return;
+  var h = HEADS.find(function(x){ return x.id === id; }); if(!h) return;
+  if(!confirm("Remove " + userLabel(h.profile_id) + " as head of " + h.department + "?\n\nRequests already waiting will wait for the other heads, or for a new head.")) return;
+  BUSY = true;
+  try{
+    var r = await sb.from("request_department_heads").delete().eq("id", id).select();
+    if(r.error) throw r.error;
+    if(!r.data || !r.data.length) throw new Error("Nothing was removed. You may not have permission.");
+    setMsg("✅ Head removed.", "ok");
+    BUSY = false; await loadBranch();
+  }catch(e){ setMsg("❌ " + friendly(e), "err"); }
+  finally{ BUSY = false; }
+}
+
+async function init(){
+  var s = $("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    CAN_EDIT = !ME.readOnly && (ME.role === "admin" || ME.role === "super_admin");
+    if(!CAN_EDIT){ document.body.classList.add("ro"); $("roNote").style.display = "block"; }
+    await loadBranches();
+    if(!BRANCHES.length){ s.textContent = "Your account is not assigned to a branch."; return; }
+    await loadUsers();
+    var sel = $("branchSel");
+    sel.innerHTML = (BRANCHES.length > 1 ? '<option value="">Select branch</option>' : '') +
+      BRANCHES.map(function(b){ return '<option value="' + esc(b) + '">' + esc(b) + '</option>'; }).join("");
+    s.style.color = "#15803d"; s.textContent = "Connected as " + ME.username;
+    if(BRANCHES.length === 1){ sel.value = BRANCHES[0]; await loadBranch(); }
+  }catch(e){ s.style.color = "#dc2626"; s.textContent = "Error: " + (e.message || e); }
+}
+init();
+</script>
+</body>
+</html>
