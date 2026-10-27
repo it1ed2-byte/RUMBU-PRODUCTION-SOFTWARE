@@ -388,8 +388,9 @@ async function renderApprovalProgress(entry){
   const iHaveVoted = (votes||[]).some(v=>v.approver_profile_id===ME.id);
 
   document.getElementById("progressInfo").textContent =
-    approvedIds.size + " of " + requiredCount + " required approver(s) have signed off so far." +
-    (IS_SUPER_ADMIN_BLANKET ? " (As Super Admin, your approval completes this step immediately.)" : "");
+    approvedIds.size + " of " + requiredCount + " configured approver(s) have signed off." +
+    " Any one approval is sufficient to advance to Step 4." +
+    (IS_SUPER_ADMIN_BLANKET ? " (Super Admin approval also completes this step immediately.)" : "");
 
   const actionWrap = document.getElementById("actionArea");
   const amRequired = IS_SUPER_ADMIN_BLANKET || requiredProfileIds.indexOf(ME.id) !== -1;
@@ -451,7 +452,10 @@ async function voteEntry(decision){
         .select("approver_profile_id, decision")
         .eq("department_entry_id", CURRENT_ENTRY.id).eq("step", 3).eq("cycle", CURRENT_ENTRY.cycle);
       const approvedIds = new Set((votes||[]).filter(v=>v.decision==="approved").map(v=>v.approver_profile_id));
-      allApproved = requiredProfileIds.length > 0 && requiredProfileIds.every(id => approvedIds.has(id));
+      // ANY one required approver is sufficient to advance Step 3.
+      // Using some() instead of every() so branches with multiple configured
+      // approvers (e.g. ED1 Office) don't get stuck waiting for all of them.
+      allApproved = requiredProfileIds.length > 0 && requiredProfileIds.some(id => approvedIds.has(id));
     }
 
     await logActivity("overtime_step3_approved", ME.username + " approved overtime entry #" + CURRENT_ENTRY.id + " (" + CURRENT_ENTRY.section + " / " + CURRENT_ENTRY.department + ")");
@@ -463,7 +467,7 @@ async function voteEntry(decision){
       if(updErr) throw updErr;
       status.className = "status ok"; status.textContent = "✅ All approvers signed off — sent to Step 4.";
     } else {
-      status.className = "status ok"; status.textContent = "✅ Your approval was recorded. Awaiting other approver(s).";
+      status.className = "status ok"; status.textContent = "✅ Approval recorded — advancing to Step 4.";
     }
     setTimeout(backToQueue, 800);
   }catch(e){
