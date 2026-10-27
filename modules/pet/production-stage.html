@@ -64,21 +64,18 @@
   .ov th{background:var(--heading);color:#fff;text-align:left;padding:5px 8px;font-size:11.5px;}
   .ov td{padding:5px 8px;border-bottom:1px solid var(--line);}
 
-  /* Bag labels */
-  .qr-grid{margin-top:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px;}
-  .bag-label{border:1px solid #cbd5e1;border-radius:8px;overflow:hidden;text-align:center;background:#fff;}
-  .bag-label .bl-header{background:#1F3864;color:#fff;padding:6px 6px 7px;}
-  .bag-label .bl-company{font-size:10px;font-weight:800;letter-spacing:.3px;}
-  .bag-label .bl-addr{font-size:7.5px;opacity:.9;margin-top:2px;}
-  .bag-label .bl-body{padding:10px 8px 8px;color:#000;}
-  .bag-label .bl-qrbox{display:flex;justify-content:center;}
-  .bag-label .bl-foot{margin-top:6px;font-size:10.5px;color:#334155;border-top:1px solid #e2e8f0;padding-top:5px;}
+  /* Bag labels (wide label, about A5 landscape, 2 per A4 sheet) */
+  .qr-grid{margin-top:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(min(420px,100%),1fr));gap:14px;}
+  .bag-label{border:1px solid #cbd5e1;border-radius:8px;overflow:hidden;background:#fff;line-height:0;}
+  .bag-label canvas{width:100%;height:auto;display:block;}
+  #printSheet{display:none;}
   @media print{
-    body *{visibility:hidden;}
-    .print-target, .print-target *{visibility:visible;}
-    .print-target{position:absolute;top:0;left:0;width:100%;grid-template-columns:repeat(3,1fr)!important;gap:10px!important;}
-    .bag-label{break-inside:avoid;border:1px dashed #999;}
-    .bag-label .bl-header{background:#1F3864!important;color:#fff!important;-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact;}
+    @page{size:A4 portrait;margin:7mm 5mm;}
+    body.printing-labels > *:not(#printSheet){display:none!important;}
+    body.printing-labels #printSheet{display:block;}
+    #printSheet .print-label{display:block;width:200mm;height:137mm;margin:0 0 7mm 0;break-inside:avoid;page-break-inside:avoid;}
+    #printSheet .print-label:nth-child(2n){margin-bottom:0;break-after:page;page-break-after:always;}
+    #printSheet .print-label:last-child{break-after:auto;page-break-after:auto;}
   }
 </style>
 <script>
@@ -1114,72 +1111,232 @@ async function rebuildPdf(id){
 }
 
 // ---------------------------- labels ----------------------------
+/*LABEL-KIT-START*/
+// ---------------------------- wide bag label ----------------------------
+// One label is about A5 landscape. It is a little under 210 x 148 mm so that two fit on one A4 sheet inside normal printer margins.
+// The label is drawn once (drawBagLabel). The same drawing feeds the screen preview, the print sheet and the archived PDF.
+var LABEL_MM = { w:200, h:137 };
+var LABEL_QR_MM = 34;               // size of the QR symbol itself (about the same as before); its white margin comes on top of this
+var LABEL_LANGS = ["en"];           // languages printed in the handling guide
+var LABEL_GUIDE = [
+  { icon:"dry",   en:["KEEP DRY","Store under cover"] },
+  { icon:"sun",   en:["PROTECT FROM SUN","Cover when outdoors"] },
+  { icon:"loops", en:["LIFT BY ALL LOOPS","Keep loops vertical"] },
+  { icon:"under", en:["NEVER STAND UNDER","A lifted bag"] },
+  { icon:"drag",  en:["DO NOT DRAG","Lift it, never pull"] }
+];
+// To print a second language, add its two lines to each entry above (for example  ha:["...","..."]) and add its code to LABEL_LANGS.
+// Do that only after a native speaker has checked the wording.
+var LB_NAVY = "#1F3864", LB_BLUE = "#2E75B6", LB_RED = "#C00000";
+
+function lbFont(size, weight){ return (weight || "normal") + " " + size + "px Arial, Helvetica, sans-serif"; }
+function lbText(ctx, s, x, y, o){
+  o = o || {}; var size = o.size || 4;
+  ctx.font = lbFont(size, o.weight);
+  if(o.maxW){ while(size > 1 && ctx.measureText(s).width > o.maxW){ size -= 0.1; ctx.font = lbFont(size, o.weight); } }
+  ctx.fillStyle = o.color || "#000"; ctx.textAlign = o.align || "left"; ctx.textBaseline = "alphabetic";
+  ctx.fillText(s, x, y);
+}
+function lbRR(ctx, x, y, w, h, r){
+  ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+function lbDate(iso){
+  var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ""));
+  if(!m) return "";
+  var mon = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][parseInt(m[2], 10) - 1];
+  return parseInt(m[3], 10) + " " + mon + " " + m[1];
+}
+
+// Handling pictograms, drawn in a box about 12 x 12 mm centred on (cx, cy). They follow the meaning of the ISO 780 symbols.
+function lbIcon(ctx, kind, cx, cy){
+  ctx.save(); ctx.translate(cx, cy); ctx.lineWidth = 0.85; ctx.lineCap = "round"; ctx.lineJoin = "round";
+  ctx.strokeStyle = LB_NAVY; ctx.fillStyle = LB_NAVY; ctx.setLineDash([]);
+  function line(x1, y1, x2, y2){ ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); }
+  function prohibit(){ ctx.strokeStyle = LB_RED; ctx.lineWidth = 0.9; ctx.beginPath(); ctx.arc(0, 0, 6.3, 0, Math.PI * 2); ctx.stroke(); line(-4.45, -4.45, 4.45, 4.45); }
+  if(kind === "dry"){
+    ctx.beginPath(); ctx.arc(0, -0.6, 5.4, Math.PI, 0); ctx.closePath(); ctx.stroke();
+    line(0, -0.6, 0, 4.2); ctx.beginPath(); ctx.arc(-1.0, 4.2, 1.0, 0, Math.PI); ctx.stroke();
+    ctx.lineWidth = 0.7; line(-4.6, 2.2, -4.0, 3.6); line(4.6, 2.2, 5.2, 3.6); line(-2.4, 5.4, -1.8, 6.4); line(3.0, 4.0, 3.6, 5.0);
+  } else if(kind === "sun"){
+    ctx.beginPath(); ctx.arc(0, -1.2, 2.4, 0, Math.PI * 2); ctx.stroke();
+    for(var i = 0; i < 8; i++){ var a = i * Math.PI / 4; line(Math.cos(a) * 3.7, -1.2 + Math.sin(a) * 3.7, Math.cos(a) * 5.4, -1.2 + Math.sin(a) * 5.4); }
+    ctx.lineWidth = 1.1; line(-5.4, 5.6, 5.4, 5.6);
+  } else if(kind === "loops"){
+    ctx.beginPath(); ctx.arc(0, -5.2, 1.0, 0, Math.PI * 2); ctx.stroke();
+    line(-4.2, -3.6, 4.2, -3.6); line(0, -4.2, 0, -3.6);
+    line(-4.2, -3.6, -3.4, 0.4); line(-1.4, -3.6, -1.2, 0.4); line(1.4, -3.6, 1.2, 0.4); line(4.2, -3.6, 3.4, 0.4);
+    ctx.beginPath(); ctx.rect(-4.2, 0.4, 8.4, 5.6); ctx.stroke();
+  } else if(kind === "under"){
+    ctx.save(); ctx.translate(0, 0.2); ctx.scale(0.72, 0.72); ctx.lineWidth = 1.15;
+    ctx.beginPath(); ctx.rect(-4, -6.6, 8, 3.2); ctx.stroke(); line(0, -6.6, 0, -7.6);
+    ctx.beginPath(); ctx.arc(0, 0.2, 1.3, 0, Math.PI * 2); ctx.fill();
+    line(0, 1.6, 0, 5); line(-2.4, 2.8, 2.4, 2.8); line(0, 5, -2, 7.4); line(0, 5, 2, 7.4);
+    ctx.restore(); prohibit();
+  } else if(kind === "drag"){
+    ctx.save(); ctx.translate(0, 0.2); ctx.scale(0.72, 0.72); ctx.lineWidth = 1.15;
+    ctx.beginPath(); ctx.rect(-5.6, -5, 7, 6); ctx.stroke();
+    line(-6.8, 3.6, 6, 3.6); line(6, 3.6, 4.4, 2.2); line(6, 3.6, 4.4, 5);
+    ctx.restore(); prohibit();
+  }
+  ctx.restore();
+}
+
+// Builds the QR matrix with the library the page already loads. Level Q: denser than M but far less dense than H, so each module prints larger.
+function lbQrModel(text){
+  if(typeof QRCode === "undefined") return null;
+  var tmp = document.createElement("div");
+  var q = new QRCode(tmp, { text: text, width: 64, height: 64, correctLevel: QRCode.CorrectLevel.Q });
+  return q._oQRCode || null;
+}
+// Draws the QR with a whole number of pixels per module, so every module is crisp (the library's own drawing uses fractional pixels and blurs the edges)
+function lbDrawQr(ctx, model, cxPx, topPx, targetPx){
+  var n = model.getModuleCount(), cell = Math.max(1, Math.floor(targetPx / n)), size = cell * n;
+  var x0 = Math.round(cxPx - size / 2), y0 = Math.round(topPx);
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = "#000";
+  for(var r = 0; r < n; r++){ for(var c = 0; c < n; c++){ if(model.isDark(r, c)) ctx.fillRect(x0 + c * cell, y0 + r * cell, cell, cell); } }
+  ctx.restore();
+  return { cell: cell, size: size, modules: n };
+}
+
+// d = { ref, kg, grade, date, batchNo, index, count, url }   k = pixels per millimetre
+function drawBagLabel(canvas, d, k){
+  var W = LABEL_MM.w, H = LABEL_MM.h;
+  canvas.width = Math.round(W * k); canvas.height = Math.round(H * k);
+  var ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.save(); ctx.scale(k, k);
+
+  ctx.strokeStyle = "#94a3b8"; ctx.lineWidth = 0.3; ctx.setLineDash([2, 1.5]); ctx.strokeRect(0.5, 0.5, W - 1, H - 1); ctx.setLineDash([]);
+
+  // header
+  lbRR(ctx, 3, 3, 194, 21, 2.2); ctx.fillStyle = LB_NAVY; ctx.fill();
+  lbText(ctx, "RUMBU INDUSTRIES GROUP", 8, 12.4, { size: 6.4, weight: "bold", color: "#fff" });
+  lbText(ctx, "KM4, Hadejia Road, Kano State, Nigeria", 8, 19.4, { size: 3.5, color: "#dbe4f3" });
+  lbText(ctx, "PET FLAKES", 192, 13.4, { size: 8.6, weight: "bold", color: "#fff", align: "right" });
+  lbText(ctx, "Recycled bottle flakes", 192, 19.4, { size: 3.5, color: "#dbe4f3", align: "right" });
+
+  // grade and weight (largest text on the label, readable from a distance)
+  lbRR(ctx, 3, 27, 61, 64, 2.2); ctx.fillStyle = "#EAF0F9"; ctx.fill();
+  lbText(ctx, "GRADE", 8, 34.6, { size: 3, weight: "bold", color: LB_BLUE });
+  lbText(ctx, d.grade || "-", 33.5, 60, { size: 30, weight: "bold", color: LB_NAVY, align: "center", maxW: 52 });
+  lbText(ctx, "NET WEIGHT", 8, 69.4, { size: 3, weight: "bold", color: LB_BLUE });
+  lbText(ctx, (d.kg != null ? Number(d.kg).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "--") + " KG", 8, 81.6, { size: 9.6, weight: "bold", color: LB_NAVY, maxW: 52 });
+
+  // QR block
+  lbRR(ctx, 68, 27, 60, 64, 2.2); ctx.fillStyle = "#fff"; ctx.fill(); ctx.strokeStyle = "#cbd5e1"; ctx.lineWidth = 0.3; ctx.stroke();
+  lbText(ctx, "SCAN TO VERIFY", 98, 33.4, { size: 3.3, weight: "bold", color: LB_NAVY, align: "center" });
+  lbText(ctx, "Scan for the bag record", 98, 82.6, { size: 2.9, color: "#334155", align: "center" });
+  lbText(ctx, "Password needed for details", 98, 87.2, { size: 2.9, color: "#64748b", align: "center" });
+
+  // product details
+  lbRR(ctx, 132, 27, 65, 64, 2.2); ctx.fillStyle = "#fff"; ctx.fill(); ctx.strokeStyle = "#cbd5e1"; ctx.lineWidth = 0.3; ctx.stroke();
+  var rows = [["PACK REFERENCE", d.ref || ""], ["PRODUCTION DATE", lbDate(d.date)], ["BATCH NUMBER", d.batchNo != null ? String(d.batchNo) : ""], ["BAG", d.index + " of " + d.count], ["ORIGIN", "Made in Nigeria"]];
+  rows.forEach(function(rw, i){
+    var y = 33.6 + i * 12.3;
+    if(i > 0){ ctx.strokeStyle = "#e2e8f0"; ctx.lineWidth = 0.25; ctx.beginPath(); ctx.moveTo(136, y - 4.6); ctx.lineTo(193, y - 4.6); ctx.stroke(); }
+    lbText(ctx, rw[0], 136, y, { size: 2.7, weight: "bold", color: "#64748b" });
+    lbText(ctx, rw[1], 136, y + 5.7, { size: 5.2, weight: "bold", color: LB_NAVY, maxW: 57 });
+  });
+
+  // handling and storage guide
+  lbRR(ctx, 3, 94, 194, 31, 2.2); ctx.fillStyle = "#F3F6FA"; ctx.fill();
+  lbText(ctx, "HANDLING AND STORAGE", 8, 99.2, { size: 3.1, weight: "bold", color: LB_BLUE });
+  LABEL_GUIDE.forEach(function(g, i){
+    var cx = 26.4 + i * 36.8;
+    lbIcon(ctx, g.icon, cx, 108.4);
+    if(LABEL_LANGS.length === 1){
+      var t = g[LABEL_LANGS[0]] || g.en;
+      lbText(ctx, t[0], cx, 118.6, { size: 2.9, weight: "bold", color: LB_NAVY, align: "center", maxW: 35 });
+      lbText(ctx, t[1] || "", cx, 122.4, { size: 2.7, color: "#475569", align: "center", maxW: 35 });
+    } else {
+      LABEL_LANGS.forEach(function(lg, j){
+        var t2 = g[lg] || g.en;
+        lbText(ctx, t2[0], cx, 118.2 + j * 3.4, { size: 2.7, weight: "bold", color: LB_NAVY, align: "center", maxW: 35 });
+      });
+    }
+  });
+
+  // footer
+  lbText(ctx, "Follow the bag maker's label for the safe working load.", 8, 131.2, { size: 2.7, color: "#64748b" });
+  lbText(ctx, "Scan the QR code to verify authenticity.", 192, 131.2, { size: 2.7, color: "#64748b", align: "right" });
+  ctx.restore();
+
+  // QR last, in whole device pixels. Margin: 4 modules of white on every side (the white block behind it is larger than that)
+  var model = lbQrModel(d.url || "");
+  if(model){ lbDrawQr(ctx, model, 98 * k, 40.2 * k, LABEL_QR_MM * k); }
+  else { ctx.save(); ctx.scale(k, k); lbText(ctx, "QR library not loaded", 98, 58, { size: 3, color: LB_RED, align: "center" }); ctx.restore(); }
+}
+/*LABEL-KIT-END*/
+
 function labelData(b){
   const bags=RUN_BAGS[b.id]||[];
-  return bags.map((bag,i)=>({ ref:bag.reference_number, kg:bagWeightFor(b,i,bag), grade:bag.grade||b.grade||"" }));
+  return bags.map((bag,i)=>({
+    ref:bag.reference_number, kg:bagWeightFor(b,i,bag), grade:bag.grade||b.grade||"",
+    date:b.batch_date||"", batchNo:b.batch_no, index:i+1, count:bags.length,
+    url:QR_LOOKUP_BASE+"?ref="+encodeURIComponent(bag.reference_number)
+  }));
 }
+// Screen preview: 4 pixels per millimetre keeps 30 labels light on memory; print and PDF use 10 pixels per millimetre (254 dpi)
 function buildGrid(b){
   const grid=document.getElementById("qr_"+b.id); if(!grid) return;
   grid.innerHTML="";
   labelData(b).forEach(l=>{
     const cell=document.createElement("div"); cell.className="bag-label";
-    cell.innerHTML='<div class="bl-header"><div class="bl-company">RUMBU INDUSTRIES GROUP</div><div class="bl-addr">KM4, Hadejia Road, Kano State, Nigeria</div></div>'+
-      '<div class="bl-body"><div class="bl-qrbox"></div><div style="margin-top:6px;font-size:11px;font-weight:700;">'+esc(l.ref)+'</div>'+
-      '<div class="bl-foot">PET Flakes'+(l.grade?" · Grade "+esc(l.grade):"")+(l.kg!=null?" · "+fmt(l.kg)+" KG":"")+'</div></div>';
-    grid.appendChild(cell);
-    if(typeof QRCode!=="undefined") new QRCode(cell.querySelector(".bl-qrbox"), { text: QR_LOOKUP_BASE+"?ref="+encodeURIComponent(l.ref), width:120, height:120 });
+    const cv=document.createElement("canvas"); cell.appendChild(cv); grid.appendChild(cell);
+    drawBagLabel(cv,l,4);
   });
 }
 function toggleLabels(id){
   if(OPEN_LABELS.has(id)) OPEN_LABELS.delete(id); else OPEN_LABELS.add(id);
   renderBatchList();
 }
-function printLabels(id){
+// Prints the labels two per A4 sheet. The sheet is built from sharp images, then the page is hidden so only the sheet prints.
+async function printLabels(id){
   if(!needDuty("labels")) return;
-  const grid=document.getElementById("qr_"+id); if(!grid) return;
-  grid.classList.add("print-target");
-  const done=()=>{ grid.classList.remove("print-target"); window.removeEventListener("afterprint",done); };
-  window.addEventListener("afterprint",done);
-  window.print();
+  const b=RUN_BATCHES.find(x=>x.id===id); if(!b) return;
+  try{
+    flash(id,"Preparing the print sheet...");
+    const sheet=document.createElement("div"); sheet.id="printSheet";
+    const cv=document.createElement("canvas"); const imgs=[];
+    for(const l of labelData(b)){
+      drawBagLabel(cv,l,10);
+      const img=new Image(); img.className="print-label"; img.src=cv.toDataURL("image/png");
+      sheet.appendChild(img); imgs.push(img);
+      await new Promise(r=>setTimeout(r,0));
+    }
+    cv.width=cv.height=0;
+    document.body.appendChild(sheet);
+    await Promise.all(imgs.map(i=>(i.decode?i.decode().catch(()=>{}):Promise.resolve())));
+    document.body.classList.add("printing-labels");
+    const done=()=>{ document.body.classList.remove("printing-labels"); sheet.remove(); window.removeEventListener("afterprint",done); };
+    window.addEventListener("afterprint",done);
+    flash(id,"");
+    window.print();
+  }catch(e){ document.body.classList.remove("printing-labels"); const s=document.getElementById("printSheet"); if(s) s.remove(); flash(id,"? "+esc(e.message),"var(--bad)"); }
 }
 
+// Archived PDF: A4 portrait, two labels per sheet, each label placed as a 254 dpi image
 async function archiveLabelsPdf(b){
   if(!window.jspdf) throw new Error("PDF library not loaded");
   if(!OPEN_LABELS.has(b.id)){ OPEN_LABELS.add(b.id); }
-  renderBatchList();                                  // makes sure the QR canvases exist
   const labels=labelData(b);
   const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({ unit:"pt", format:"a4" });
-  const cols=3, cellW=165, cellH=240, margin=30, gap=12;
-  let x=margin, y=margin, col=0;
-  const boxes = document.querySelectorAll("#qr_"+b.id+" .bl-qrbox");
-  doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.setTextColor(0,0,0);
-  doc.text("PET Production — Bag Labels — "+(CURRENT_PROD.form_number||"")+" — Batch "+b.batch_no+" — Grade "+(b.grade||""), margin, y);
-  y += 20;
-  labels.forEach((l,i)=>{
-    const canvas = boxes[i] ? boxes[i].querySelector("canvas") : null;
-    const cx=x, cy=y;
-    doc.setDrawColor(203,213,225); doc.setLineWidth(0.75); doc.rect(cx, cy, cellW, cellH);
-    doc.setFillColor(31,56,100); doc.rect(cx, cy, cellW, 30, "F");
-    doc.setTextColor(255,255,255); doc.setFont("helvetica","bold"); doc.setFontSize(8.5);
-    doc.text("RUMBU INDUSTRIES GROUP", cx+cellW/2, cy+12, { align:"center" });
-    doc.setFont("helvetica","normal"); doc.setFontSize(6.5);
-    doc.text("KM4, Hadejia Road, Kano State, Nigeria", cx+cellW/2, cy+22, { align:"center" });
-    doc.setTextColor(46,117,182); doc.setFont("helvetica","bold"); doc.setFontSize(7.5);
-    doc.text("PACK REFERENCE", cx+cellW/2, cy+44, { align:"center" });
-    doc.setTextColor(31,56,100); doc.setFontSize(13);
-    doc.text(String(l.ref), cx+cellW/2, cy+60, { align:"center" });
-    let footerY = cy+68;
-    if(canvas){ const qrSize=95; doc.addImage(canvas.toDataURL("image/png"), "PNG", cx+(cellW-qrSize)/2, footerY, qrSize, qrSize); footerY += qrSize+8; }
-    doc.setDrawColor(226,232,240); doc.setLineWidth(0.5); doc.line(cx+10, footerY, cx+cellW-10, footerY);
-    doc.setTextColor(71,85,105); doc.setFont("helvetica","normal"); doc.setFontSize(7.5);
-    doc.text("Item: PET Flakes"+(l.grade?" — Grade "+l.grade:""), cx+cellW/2, footerY+12, { align:"center" });
-    doc.text("Net: "+(l.kg!=null?Number(l.kg).toFixed(2):"—")+" KG", cx+cellW/2, footerY+22, { align:"center" });
-    doc.setTextColor(0,0,0);
-    col++; x += cellW+gap;
-    if(col>=cols){ col=0; x=margin; y+=cellH+gap; }
-    if(y+cellH > 800){ doc.addPage(); y=margin; x=margin; col=0; }
-  });
+  const doc = new jsPDF({ unit:"mm", format:"a4", orientation:"portrait" });
+  const X=5, Y=[7, 7+LABEL_MM.h+7];
+  const cv=document.createElement("canvas");
+  for(let i=0;i<labels.length;i++){
+    const slot=i%2;
+    if(i>0 && slot===0) doc.addPage();
+    drawBagLabel(cv,labels[i],10);
+    doc.addImage(cv.toDataURL("image/png"),"PNG",X,Y[slot],LABEL_MM.w,LABEL_MM.h,undefined,"FAST");
+    if(slot===0){
+      doc.setFont("helvetica","normal"); doc.setFontSize(6.5); doc.setTextColor(100,116,139);
+      doc.text("PET Production - Bag Labels - "+(CURRENT_PROD.form_number||"")+" - Batch "+b.batch_no+" - Grade "+(b.grade||""), X, 4.6);
+    }
+    await new Promise(r=>setTimeout(r,0));
+  }
+  cv.width=cv.height=0;
   const blob = doc.output("blob");
   const path = `labels/${CURRENT_PROD.id}-b${b.batch_no}-${Date.now()}.pdf`;
   const { error: upErr } = await sb.storage.from("pet-attachments").upload(path, blob, { contentType:"application/pdf" });
