@@ -142,36 +142,64 @@ async function init(){
   try{
     ME=await requireAuth("../../login.html");
     if(!ME)return;
+
+    cs.textContent="Resolving table...";
     MW_TABLE=await resolveWeavingTable();
-    // Find the logged-in user's employee record in weaving
-    const {data:emp}=await sb.from("employees").select("employee_id,full_name,unit,department,rank")
+
+    cs.textContent="Loading your profile...";
+    // Step 1: find employee by linked_profile_id ONLY (no extra filter chained —
+    // chaining .or() after .eq() in Supabase JS can cause maybeSingle() to fail
+    // silently when the OR widens the result set)
+    const {data:emp, error:empErr}=await sb.from("employees")
+      .select("employee_id,full_name,unit,department,rank")
       .eq("linked_profile_id",ME.id)
-      .or("department.ilike.%weaving%,unit.ilike.%weaving%")
       .maybeSingle();
+
+    if(empErr) throw new Error("Employee lookup: "+empErr.message);
+
     if(!emp||!emp.employee_id){
+      // Account not linked to any employee row — show helper
+      document.getElementById("notLinked").innerHTML=
+        `<p style="color:var(--red);font-weight:700;">⚠ Your account (${escHtml(ME.username)}) is not linked to an employee record.</p>`+
+        `<p style="font-size:13px;color:var(--muted);">Contact your HR administrator to link your account. Once linked, this page will load your personal production data automatically.</p>`;
       document.getElementById("notLinked").style.display="block";
-      cs.style.color="var(--red)"; cs.textContent="No weaving employee record found.";
+      cs.style.color="var(--red)"; cs.textContent="Account not linked.";
       return;
     }
+
     MY_EMP_ID=emp.employee_id;
     MY_NAME=emp.full_name||ME.username;
     MY_RANK=emp.rank||"";
+
     document.getElementById("opCard").innerHTML=
       `<div><div class="name">👤 ${escHtml(MY_NAME)}</div>`+
       `<div class="meta">ID: ${escHtml(MY_EMP_ID)} &nbsp;·&nbsp; ${escHtml(emp.department||"")} / ${escHtml(emp.unit||"")}${MY_RANK?" · "+escHtml(MY_RANK):""}</div></div>`;
-    // Load sheds
+
+    // Step 2: load sheds (non-fatal)
     try{
       const {data}=await sb.from("weaving_units").select("shed");
       UNIT_SHEDS=(data||[]).filter(u=>u.shed!=null&&String(u.shed).trim()!=="");
-    }catch(e){UNIT_SHEDS=[];}
+    }catch(e){ UNIT_SHEDS=[]; }
     refreshShedOptions();
-    // Load excluded job codes
-    const jobRes=await fetch(SUPABASE_URL+"/rest/v1/job_table?select=job_code",{headers:authHeaders()});
-    if(jobRes.ok){const j=await jobRes.json();EXCLUDED_JOB_CODES=new Set(j.map(r=>r.job_code));}
+
+    // Step 3: load excluded job codes (non-fatal)
+    try{
+      const jobRes=await fetch(SUPABASE_URL+"/rest/v1/job_table?select=job_code",{headers:authHeaders()});
+      if(jobRes.ok){const j=await jobRes.json();EXCLUDED_JOB_CODES=new Set(j.map(r=>r.job_code));}
+    }catch(e){ /* non-fatal */ }
+
     document.getElementById("appArea").style.display="block";
-    cs.style.color="var(--green)"; cs.textContent="Connected.";
-    status.className="ok"; status.textContent="Ready. Select a date range and click Generate.";
-  }catch(e){cs.style.color="var(--red)";cs.textContent="❌ "+e.message;}
+    cs.style.color="var(--green)"; cs.textContent="Connected — "+escHtml(MY_NAME);
+
+    // Auto-generate for the default date range so the operator sees data immediately
+    status.className=""; status.textContent="Loading your report...";
+    await generate();
+
+  }catch(e){
+    cs.style.color="var(--red)";
+    cs.textContent="❌ "+e.message;
+    console.error("my-asset-report init error:", e);
+  }
 }
 
 async function generate(){
