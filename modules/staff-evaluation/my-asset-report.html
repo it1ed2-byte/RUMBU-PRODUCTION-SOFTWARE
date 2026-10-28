@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>My Asset Report</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>(function(){function apply(t){if(t)document.documentElement.setAttribute("data-theme",t);}window.addEventListener("message",function(e){if(e.data&&e.data.rumbuTheme)apply(e.data.rumbuTheme);});try{apply(localStorage.getItem("rumbu_theme"));}catch(e){}})();</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="../../table-resolver.js"></script>
+<style>
+  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;--amber:#d97706;}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;color:var(--text);}
+  .wrap{max-width:1100px;margin:0 auto;}
+  .page-head{background:linear-gradient(130deg,#064e3b 0%,#059669 100%);border-radius:14px;padding:18px 22px;margin-bottom:16px;color:#fff;}
+  .page-head h2{margin:0 0 3px;font-size:18px;font-weight:800;color:#fff;}
+  .page-head p{margin:0;font-size:12px;opacity:.88;color:#fff;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px;margin-bottom:16px;}
+  .card h3{color:var(--navy);margin:0 0 12px;font-size:14px;font-weight:800;}
+  label{display:block;font-size:12px;font-weight:700;margin-bottom:4px;}
+  input,select{width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px;}
+  .btn-row{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;}
+  button{padding:10px 18px;border:none;border-radius:8px;background:var(--blue);color:#fff;font-weight:700;cursor:pointer;font-size:13px;}
+  button:hover{background:var(--blue-dark);}
+  button.alt{background:var(--green);}
+  #status{margin-top:10px;font-size:13px;font-weight:700;}
+  #status.ok{color:var(--green);} #status.err{color:var(--red);}
+  #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;}
+  .table-scroll{overflow-x:auto;}
+  table{width:100%;border-collapse:collapse;font-size:12px;margin-top:6px;}
+  th,td{border:1px solid var(--line);padding:6px 8px;text-align:center;white-space:nowrap;}
+  th{background:var(--navy);color:#fff;font-size:11px;}
+  .colorHigh{background:#d9ead3;color:#1a4731;} .colorMedium{background:#fce5cd;} .colorLow{background:#f4cccc;}
+  .grandtotal{font-weight:700;background:#065f46;color:#fff;}
+  .note{font-size:12px;color:var(--muted);margin-top:10px;}
+  .shed-box{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:6px;border:1px solid var(--line);border-radius:8px;padding:10px;background:var(--bg);}
+  .shed-box label{display:flex;align-items:center;gap:5px;font-weight:500;font-size:13px;margin:0;cursor:pointer;}
+  .shed-box input[type="checkbox"]{width:auto;padding:0;}
+  .op-card{background:var(--bg);border:1.5px solid var(--blue);border-radius:10px;padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;}
+  .op-card .name{font-size:16px;font-weight:800;color:var(--navy);}
+  .op-card .meta{font-size:12px;color:var(--muted);}
+  @media print{.no-print{display:none !important;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div id="connStatus">Loading...</div>
+
+<div class="page-head">
+  <h2>📋 My Asset Report</h2>
+  <p>Your personal production record — output, efficiency, downtime and rewards.</p>
+</div>
+
+<div id="notLinked" style="display:none;" class="card">
+  <p style="color:var(--red);font-weight:700;">⚠ Your account is not linked to an employee record in the Weaving unit. Contact HR to update your employee profile.</p>
+</div>
+
+<div id="appArea" style="display:none;">
+  <div class="op-card" id="opCard"></div>
+
+  <div class="card no-print">
+    <h3>Filters</h3>
+    <div class="grid">
+      <div><label>From Date</label><input type="date" id="fromDate"></div>
+      <div><label>To Date</label><input type="date" id="toDate"></div>
+      <div><label>Shift</label><select id="shift"><option value="All">All Shifts</option><option>Morning</option><option>Night</option></select></div>
+      <div><label>Work Duration (min)</label><select id="workMinutes"><option value="660">11 hours</option><option value="600">10 hours</option><option value="540">9 hours</option></select></div>
+      <div><label>Min %A for Reward</label><input type="number" id="minPercent" value="93"></div>
+      <div><label>Min Work Days</label><input type="number" id="minDays" value="5"></div>
+      <div><label>Reward Low (₦)</label><input type="number" id="rewardLow" value="2500"></div>
+      <div><label>Reward High (₦)</label><input type="number" id="rewardHigh" value="5000"></div>
+    </div>
+    <div style="margin-top:12px;">
+      <label>Shed <span style="font-weight:400;color:var(--muted);">(leave all unticked = every shed)</span>
+        <a href="#" onclick="clearSheds();return false;" style="margin-left:8px;font-weight:400;">Clear</a></label>
+      <div id="shedContainer" class="shed-box"><span class="note">Loading sheds…</span></div>
+    </div>
+    <div class="btn-row">
+      <button onclick="generate()">▶ Generate Report</button>
+      <button class="alt" onclick="window.print()">🖨 Print / PDF</button>
+    </div>
+    <div id="status">Loading your operator profile...</div>
+  </div>
+
+  <div id="reportArea"></div>
+</div>
+</div>
+
+<script>
+let ME=null, MY_EMP_ID=null, MY_NAME="", MY_RANK="";
+let MW_TABLE="mat_weaving", MW_ROWS=[], CTRL_ROWS=[], EXCLUDED_JOB_CODES=new Set();
+let UNIT_SHEDS=[];
+const escHtml=v=>String(v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+function shedLabel(v){return /^\d+$/.test(v)?"Shed "+v:v;}
+function shedSort(a,b){const na=Number(a),nb=Number(b),ia=!isNaN(na),ib=!isNaN(nb);return ia&&ib?na-nb:(ia?-1:(ib?1:a.localeCompare(b)));}
+function checkedSheds(){return Array.from(document.querySelectorAll("#shedContainer input:checked")).map(cb=>cb.value);}
+function clearSheds(){document.querySelectorAll("#shedContainer input").forEach(cb=>{cb.checked=false;});}
+function authHeaders(){return{"apikey":SUPABASE_ANON_KEY,"Authorization":"Bearer "+SUPABASE_ANON_KEY};}
+function parseDT(v){const d=new Date(v);return isNaN(d)?null:d;}
+function minutesBetween(a,b){return(!a||!b)?0:Math.round((b-a)/60000);}
+
+function refreshShedOptions(){
+  const keep=new Set(checkedSheds());
+  const list=(UNIT_SHEDS.length?[...new Set(UNIT_SHEDS.map(u=>String(u.shed)))]:["1","2","3","4","5","6"]).sort(shedSort);
+  document.getElementById("shedContainer").innerHTML=list.length
+    ?list.map(v=>`<label><input type="checkbox" value="${escHtml(v)}"${keep.has(v)?" checked":""}> ${escHtml(shedLabel(v))}</label>`).join("")
+    :'<span class="note">No sheds found.</span>';
+}
+
+async function fetchAllRows(table,select,query){
+  let all=[],offset=0;const pageSize=1000;
+  for(let g=0;g<500;g++){
+    const res=await fetch(SUPABASE_URL+"/rest/v1/"+table+"?select="+(select||"*")+(query||""),
+      {headers:Object.assign({},authHeaders(),{"Range-Unit":"items","Range":offset+"-"+(offset+pageSize-1)})});
+    if(!res.ok)throw new Error(table+": HTTP "+res.status);
+    const batch=await res.json();
+    all=all.concat(batch);
+    if(batch.length<pageSize)break;
+    offset+=pageSize;
+  }
+  return all;
+}
+
+function normalizeCtrl(r){
+  if(r.date_col===undefined)r.date_col=r.date;
+  if(r.stop_time===undefined)r.stop_time=r.mc_stoppage_time;
+  if(r.finish_time===undefined)r.finish_time=r.extimated_time||r.estimated_duration;
+  return r;
+}
+
+// Default date range: current month
+const _t=new Date();
+document.getElementById("fromDate").value=new Date(_t.getFullYear(),_t.getMonth(),1).toISOString().slice(0,10);
+document.getElementById("toDate").value=_t.toISOString().slice(0,10);
+
+async function init(){
+  const cs=document.getElementById("connStatus");
+  const status=document.getElementById("status");
+  try{
+    ME=await requireAuth("../../login.html");
+    if(!ME)return;
+    MW_TABLE=await resolveWeavingTable();
+    // Find the logged-in user's employee record in weaving
+    const {data:emp}=await sb.from("employees").select("employee_id,full_name,unit,department,rank")
+      .eq("linked_profile_id",ME.id)
+      .or("department.ilike.%weaving%,unit.ilike.%weaving%")
+      .maybeSingle();
+    if(!emp||!emp.employee_id){
+      document.getElementById("notLinked").style.display="block";
+      cs.style.color="var(--red)"; cs.textContent="No weaving employee record found.";
+      return;
+    }
+    MY_EMP_ID=emp.employee_id;
+    MY_NAME=emp.full_name||ME.username;
+    MY_RANK=emp.rank||"";
+    document.getElementById("opCard").innerHTML=
+      `<div><div class="name">👤 ${escHtml(MY_NAME)}</div>`+
+      `<div class="meta">ID: ${escHtml(MY_EMP_ID)} &nbsp;·&nbsp; ${escHtml(emp.department||"")} / ${escHtml(emp.unit||"")}${MY_RANK?" · "+escHtml(MY_RANK):""}</div></div>`;
+    // Load sheds
+    try{
+      const {data}=await sb.from("weaving_units").select("shed");
+      UNIT_SHEDS=(data||[]).filter(u=>u.shed!=null&&String(u.shed).trim()!=="");
+    }catch(e){UNIT_SHEDS=[];}
+    refreshShedOptions();
+    // Load excluded job codes
+    const jobRes=await fetch(SUPABASE_URL+"/rest/v1/job_table?select=job_code",{headers:authHeaders()});
+    if(jobRes.ok){const j=await jobRes.json();EXCLUDED_JOB_CODES=new Set(j.map(r=>r.job_code));}
+    document.getElementById("appArea").style.display="block";
+    cs.style.color="var(--green)"; cs.textContent="Connected.";
+    status.className="ok"; status.textContent="Ready. Select a date range and click Generate.";
+  }catch(e){cs.style.color="var(--red)";cs.textContent="❌ "+e.message;}
+}
+
+async function generate(){
+  const from=document.getElementById("fromDate").value;
+  const to=document.getElementById("toDate").value;
+  const shift=document.getElementById("shift").value;
+  const workMinutes=Number(document.getElementById("workMinutes").value)||660;
+  const minPct=Number(document.getElementById("minPercent").value)||93;
+  const minDay=Number(document.getElementById("minDays").value)||5;
+  const rewardLow=Number(document.getElementById("rewardLow").value)||2500;
+  const rewardHigh=Number(document.getElementById("rewardHigh").value)||5000;
+  if(!from||!to){alert("Select both dates.");return;}
+  const status=document.getElementById("status");
+  status.className="";status.textContent="Loading...";
+  try{
+    const [mw,ctrl]=await Promise.all([
+      fetchAllRows(MW_TABLE,"*","&operator_id=eq."+encodeURIComponent(MY_EMP_ID)+"&date_col=gte."+from+"&date_col=lte."+to),
+      fetchAllRows("control","*","&date=gte."+from+"&date=lte."+to)
+    ]);
+    MW_ROWS=mw; CTRL_ROWS=ctrl; CTRL_ROWS.forEach(normalizeCtrl);
+    status.className="ok";status.textContent="";
+  }catch(e){status.className="err";status.textContent="Error: "+e.message;return;}
+
+  const shedsPicked=checkedSheds();
+  const shedText=shedsPicked.length?shedsPicked.map(shedLabel).join(", "):"All";
+  let prod=MW_ROWS.filter(r=>{
+    if(shift!=="All"&&r.shift!==shift)return false;
+    return true;
+  });
+  if(shedsPicked.length)prod=prod.filter(r=>shedsPicked.includes(String(r.shed)));
+
+  if(!prod.length){
+    document.getElementById("reportArea").innerHTML="<div class='card'><p style='color:var(--red);'>No records found for the selected filters.</p></div>";
+    return;
+  }
+
+  // Downtime map
+  const downtimeMap={};
+  CTRL_ROWS.forEach(r=>{
+    if(r.date_col<from||r.date_col>to)return;
+    if(EXCLUDED_JOB_CODES.has(r.job_code))return;
+    const stop=parseDT(r.stop_time),finish=parseDT(r.finish_time);
+    if(!stop||!finish)return;
+    const key=[r.assets,r.date_col,r.shift].join("||");
+    downtimeMap[key]=(downtimeMap[key]||0)+minutesBetween(stop,finish);
+  });
+
+  // Aggregate (single operator)
+  const o={dates:new Set(),mats:new Set(),mcWork:new Set(),mcCover:new Set(),A:0,B:0,C:0,total:0,target:0,downtime:0};
+  prod.forEach(r=>{
+    o.dates.add(r.date_col);
+    if(r.mat_type)o.mats.add(r.mat_type);
+    const workKey=r.assets+"||"+r.date_col;
+    if((r.work_type||"")!=="Cover duty")o.mcWork.add(workKey); else o.mcCover.add(workKey);
+    o.A+=Number(r.a_double||0)+Number(r.a_single||0);
+    o.B+=Number(r.b||0); o.C+=Number(r.c||0); o.total+=Number(r.total||0); o.target+=Number(r.target||0);
+    if((r.work_type||"")!=="Cover duty"){
+      const dkey=[r.assets,r.date_col,r.shift].join("||");
+      o.downtime+=downtimeMap[dkey]||0;
+    }
+  });
+
+  const workDays=o.dates.size, mcWork=o.mcWork.size;
+  const MLD=o.target?Math.round((o.target*o.downtime)/(workMinutes*(mcWork||1))):0;
+  const ATG=Math.round(o.target-MLD);
+  const MLU=Math.round(o.A-ATG);
+  const pA=ATG?Math.round((o.A/ATG)*100):0;
+  const pB=ATG?Math.round((o.B/ATG)*100):0;
+  const pC=ATG?Math.round((o.C/ATG)*100):0;
+  const pP=ATG?Math.round((o.total/ATG)*100):0;
+  const highSet=["No.2","No.3","No.4"];
+  const onlyHigh=[...o.mats].every(m=>highSet.includes(m));
+  let reward=0;
+  if(workDays>=minDay&&pA>=minPct)reward=onlyHigh?rewardHigh:rewardLow;
+
+  function clr(v){return v>=minPct?"colorHigh":v>=85?"colorMedium":"colorLow";}
+
+  let html=`<div class="card"><h3>My Production Report</h3>
+  <p class="note">${from} to ${to} &middot; Shift: ${shift} &middot; Shed: ${escHtml(shedText)}</p>
+  <div class="table-scroll"><table>
+  <tr><th>Days</th><th>Work</th><th>Cover</th><th>A</th><th>B</th><th>C</th><th>Total</th><th>Target</th><th>Down (min)</th><th>MLD</th><th>ATG</th><th>MLU</th><th>%A</th><th>%B</th><th>%C</th><th>%P</th><th>Reward (₦)</th></tr>
+  <tr>
+    <td>${workDays}</td><td>${mcWork}</td><td>${o.mcCover.size}</td>
+    <td>${Math.round(o.A)}</td><td>${Math.round(o.B)}</td><td>${Math.round(o.C)}</td>
+    <td>${Math.round(o.total)}</td><td>${Math.round(o.target)}</td><td>${Math.round(o.downtime)}</td>
+    <td>${MLD}</td><td>${ATG}</td><td>${MLU}</td>
+    <td class="${clr(pA)}">${pA}%</td><td class="${clr(pB)}">${pB}%</td>
+    <td class="${clr(pC)}">${pC}%</td><td class="${clr(pP)}">${pP}%</td>
+    <td style="font-weight:700;color:var(--green);">₦${reward.toLocaleString()}</td>
+  </tr>
+  </table></div>`;
+
+  // Day-by-day breakdown
+  const byDay={};
+  prod.forEach(r=>{
+    const d=r.date_col;
+    if(!byDay[d])byDay[d]={A:0,B:0,C:0,total:0,target:0};
+    byDay[d].A+=Number(r.a_double||0)+Number(r.a_single||0);
+    byDay[d].B+=Number(r.b||0);byDay[d].C+=Number(r.c||0);
+    byDay[d].total+=Number(r.total||0);byDay[d].target+=Number(r.target||0);
+  });
+  html+=`<h4 style="color:var(--navy);margin:18px 0 8px;">Daily Breakdown</h4>
+  <div class="table-scroll"><table>
+  <tr><th>Date</th><th>A</th><th>B</th><th>C</th><th>Total</th><th>Target</th><th>Efficiency %</th></tr>`;
+  Object.entries(byDay).sort((a,b)=>a[0]<b[0]?-1:1).forEach(([d,v])=>{
+    const e=v.target?Math.round(v.total/v.target*100):0;
+    html+=`<tr><td>${d}</td><td>${Math.round(v.A)}</td><td>${Math.round(v.B)}</td><td>${Math.round(v.C)}</td>`+
+      `<td>${Math.round(v.total)}</td><td>${Math.round(v.target)}</td><td class="${clr(e)}">${e}%</td></tr>`;
+  });
+  html+=`</table></div></div>`;
+  document.getElementById("reportArea").innerHTML=html;
+  const status=document.getElementById("status");
+  status.className="ok";status.textContent=`Report generated for ${workDays} work day(s).`;
+}
+
+init();
+</script>
+</body>
+</html>

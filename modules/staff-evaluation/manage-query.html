@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Weaving Staff — Queries</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>(function(){function apply(t){if(t)document.documentElement.setAttribute("data-theme",t);}window.addEventListener("message",function(e){if(e.data&&e.data.rumbuTheme)apply(e.data.rumbuTheme);});try{apply(localStorage.getItem("rumbu_theme"));}catch(e){}})();</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;--amber:#d97706;}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;color:var(--text);}
+  .wrap{max-width:1200px;margin:0 auto;}
+  .page-head{background:linear-gradient(130deg,#7c2d12 0%,#c2410c 100%);border-radius:14px;padding:18px 22px;margin-bottom:16px;color:#fff;}
+  .page-head h2{margin:0 0 3px;font-size:18px;font-weight:800;color:#fff;}
+  .page-head p{margin:0;font-size:12px;opacity:.88;color:#fff;}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;}
+  label{display:block;font-size:12px;font-weight:700;color:var(--text);margin:0 0 4px;}
+  input,select{width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;}
+  .row>div{flex:1;min-width:150px;}
+  button{padding:9px 14px;border:none;border-radius:8px;font-weight:700;font-size:13px;cursor:pointer;background:var(--blue);color:#fff;}
+  button:hover{background:var(--blue-dark);}
+  button.mini{padding:5px 10px;font-size:11px;}
+  button.view-btn{background:var(--blue);}
+  .status{margin-top:8px;font-weight:700;font-size:13px;min-height:14px;}
+  .status.ok{color:var(--green);}.status.err{color:var(--red);}
+  #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;}
+  .table-scroll{overflow-x:auto;}
+  table{width:100%;border-collapse:collapse;font-size:12px;}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top;}
+  thead th{background:var(--navy);color:#fff;font-size:11px;position:sticky;top:0;}
+  tbody tr:nth-child(even){background:#f6f8fb;}
+  .tag{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;color:#fff;}
+  .tag.QUERY{background:#2E75B6;}.tag.LASTWARNING{background:var(--amber);}.tag.SURCHARGE{background:var(--red);}.tag.CUSTOMQUERY{background:#6b7280;}
+  .no-query{color:var(--muted);font-style:italic;font-size:12px;}
+  .summary-bar{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px;}
+  .sbar-item{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;color:var(--navy);flex:1;min-width:120px;text-align:center;}
+  .sbar-item span{display:block;font-size:20px;font-weight:800;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div id="connStatus">Loading...</div>
+
+<div class="page-head">
+  <h2>⚠ Weaving Staff — Disciplinary Record</h2>
+  <p>Maps all Weaving production operators to their HR query/memo records. Management view.</p>
+</div>
+
+<div id="appArea" style="display:none;">
+  <div class="card">
+    <div class="row">
+      <div><label>From Date</label><input type="date" id="fromDate"></div>
+      <div><label>To Date</label><input type="date" id="toDate"></div>
+      <div>
+        <label>Memo Type</label>
+        <select id="typeFilter">
+          <option value="">All Types</option>
+          <option value="QUERY">QUERY</option>
+          <option value="LAST WARNING">LAST WARNING</option>
+          <option value="SURCHARGE">SURCHARGE</option>
+          <option value="CUSTOM QUERY">CUSTOM QUERY</option>
+        </select>
+      </div>
+      <div>
+        <label>Show Operators</label>
+        <select id="showFilter">
+          <option value="all">All Operators</option>
+          <option value="with">With Queries Only</option>
+          <option value="without">Clean Record Only</option>
+        </select>
+      </div>
+      <div><label>Search (name / ID / tracking)</label><input type="text" id="search" placeholder="Type to filter…" oninput="applyFilters()"></div>
+      <div style="flex:0 0 auto;"><label>&nbsp;</label><button onclick="loadData()">🔄 Refresh</button></div>
+    </div>
+    <div class="status" id="status"></div>
+  </div>
+
+  <div class="card">
+    <div class="summary-bar" id="summaryBar"></div>
+    <div class="table-scroll" id="tableWrap"></div>
+  </div>
+</div>
+
+<!-- View memo modal -->
+<div id="memoModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1000;overflow-y:auto;padding:30px 16px;">
+  <div style="max-width:700px;margin:0 auto;background:#fff;border-radius:12px;padding:24px;position:relative;">
+    <button onclick="closeMemo()" style="position:absolute;top:12px;right:12px;background:var(--red);padding:6px 12px;font-size:12px;">✕ Close</button>
+    <div id="memoBody"></div>
+  </div>
+</div>
+
+</div>
+
+<script>
+let ME=null, ALL_EMPS=[], ALL_QUERIES=[], COMBINED=[];
+const COMPANY="Rumbu Industries Limited";
+const escHtml=v=>String(v||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+
+async function init(){
+  const cs=document.getElementById("connStatus");
+  try{
+    ME=await requireAuth("../../login.html");
+    if(!ME)return;
+    const t=new Date();
+    document.getElementById("fromDate").value=new Date(t.getFullYear(),t.getMonth(),1).toISOString().slice(0,10);
+    document.getElementById("toDate").value=t.toISOString().slice(0,10);
+    cs.style.color="var(--green)";cs.textContent="Connected.";
+    document.getElementById("appArea").style.display="block";
+    await loadData();
+  }catch(e){cs.style.color="var(--red)";cs.textContent="❌ "+e.message;}
+}
+
+async function loadData(){
+  const status=document.getElementById("status");
+  status.className="status";status.textContent="Loading weaving staff and query records…";
+  try{
+    // 1. Fetch all employees in weaving dept/unit
+    let empQ=sb.from("employees").select("employee_id,full_name,department,unit,branch").or("department.ilike.%weaving%,unit.ilike.%weaving%");
+    if(ME.role!=="super_admin"&&ME.sectionNames&&ME.sectionNames.length) empQ=empQ.in("branch",ME.sectionNames);
+    const{data:emps,error:empErr}=await empQ;
+    if(empErr)throw empErr;
+    ALL_EMPS=emps||[];
+
+    // 2. Fetch all hr_queries for those employee IDs
+    const empIds=ALL_EMPS.map(e=>e.employee_id).filter(Boolean);
+    let queries=[];
+    if(empIds.length){
+      let qQ=sb.from("hr_queries").select("*").in("employee_id",empIds).order("created_at",{ascending:false});
+      const{data:qData,error:qErr}=await qQ;
+      if(qErr)throw qErr;
+      queries=qData||[];
+    }
+    ALL_QUERIES=queries;
+
+    // 3. Combine: each employee row + their queries
+    COMBINED=ALL_EMPS.map(emp=>{
+      const empQueries=ALL_QUERIES.filter(q=>q.employee_id===emp.employee_id);
+      return{...emp,queries:empQueries};
+    });
+
+    status.className="status ok";
+    status.textContent=`${ALL_EMPS.length} weaving operators · ${ALL_QUERIES.length} memo record(s) found.`;
+    applyFilters();
+  }catch(e){status.className="status err";status.textContent="❌ "+e.message;}
+}
+
+function applyFilters(){
+  const from=document.getElementById("fromDate").value;
+  const to=document.getElementById("toDate").value;
+  const type=document.getElementById("typeFilter").value;
+  const show=document.getElementById("showFilter").value;
+  const search=document.getElementById("search").value.trim().toLowerCase();
+
+  let data=COMBINED.map(emp=>{
+    let queries=emp.queries.slice();
+    if(from)queries=queries.filter(q=>(q.memo_date||"")>=from);
+    if(to)queries=queries.filter(q=>(q.memo_date||"")<=to);
+    if(type)queries=queries.filter(q=>q.letter_type===type);
+    return{...emp,queries};
+  });
+  if(show==="with")data=data.filter(d=>d.queries.length>0);
+  if(show==="without")data=data.filter(d=>d.queries.length===0);
+  if(search){
+    data=data.filter(d=>
+      (d.full_name||"").toLowerCase().includes(search)||
+      (d.employee_id||"").toLowerCase().includes(search)||
+      d.queries.some(q=>(q.tracking_number||"").toLowerCase().includes(search)));
+  }
+  render(data);
+}
+
+function render(data){
+  const wrap=document.getElementById("tableWrap");
+  // Summary bar
+  const withQuery=data.filter(d=>d.queries.length>0).length;
+  const clean=data.filter(d=>d.queries.length===0).length;
+  const totalQ=data.reduce((s,d)=>s+d.queries.length,0);
+  document.getElementById("summaryBar").innerHTML=
+    `<div class="sbar-item"><span>${data.length}</span>Operators Shown</div>`+
+    `<div class="sbar-item" style="border-color:var(--red);"><span style="color:var(--red);">${withQuery}</span>Have Queries</div>`+
+    `<div class="sbar-item" style="border-color:var(--green);"><span style="color:var(--green);">${clean}</span>Clean Record</div>`+
+    `<div class="sbar-item"><span>${totalQ}</span>Total Memos</div>`;
+
+  if(!data.length){wrap.innerHTML="<p style='color:var(--muted);'>No records match.</p>";return;}
+
+  let html=`<table><thead><tr>
+    <th>S/N</th><th>Employee ID</th><th>Name</th><th>Department</th><th>Unit</th><th>Branch</th>
+    <th>Queries</th><th>Tracking No.</th><th>Date</th><th>Type</th><th>Details</th><th>Action</th>
+  </tr></thead><tbody>`;
+
+  let sn=0;
+  data.forEach(emp=>{
+    sn++;
+    if(!emp.queries.length){
+      html+=`<tr>
+        <td>${sn}</td>
+        <td>${escHtml(emp.employee_id)}</td>
+        <td>${escHtml(emp.full_name)}</td>
+        <td>${escHtml(emp.department)}</td>
+        <td>${escHtml(emp.unit)}</td>
+        <td>${escHtml(emp.branch)}</td>
+        <td><span class="no-query">None</span></td>
+        <td colspan="4" style="color:var(--muted);font-style:italic;font-size:11px;">No disciplinary records in this period</td>
+        <td>—</td>
+      </tr>`;
+    } else {
+      emp.queries.forEach((q,qi)=>{
+        const tagCls=(q.letter_type||"").replace(/\s+/g,"");
+        let summary=q.details||q.custom_subject||"";
+        if(q.letter_type==="SURCHARGE"&&q.amount) summary+=` (₦${q.amount})`;
+        html+=`<tr>
+          ${qi===0?`<td rowspan="${emp.queries.length}">${sn}</td>
+          <td rowspan="${emp.queries.length}">${escHtml(emp.employee_id)}</td>
+          <td rowspan="${emp.queries.length}" style="font-weight:700;">${escHtml(emp.full_name)}</td>
+          <td rowspan="${emp.queries.length}">${escHtml(emp.department)}</td>
+          <td rowspan="${emp.queries.length}">${escHtml(emp.unit)}</td>
+          <td rowspan="${emp.queries.length}">${escHtml(emp.branch)}</td>
+          <td rowspan="${emp.queries.length}" style="text-align:center;font-weight:800;color:var(--red);">${emp.queries.length}</td>`:""}
+          <td>${escHtml(q.tracking_number)}</td>
+          <td>${escHtml(q.memo_date)}</td>
+          <td><span class="tag ${tagCls}">${escHtml(q.letter_type)}</span></td>
+          <td>${escHtml(summary)}</td>
+          <td><button class="mini view-btn" onclick="viewMemo(${q.id})">👁 View</button></td>
+        </tr>`;
+      });
+    }
+  });
+  html+="</tbody></table>";
+  wrap.innerHTML=html;
+}
+
+const CC_BLOCK=`<div style="margin-top:60px;">Kingsley Onulaka<br>Head, H.R.<br>Cc: Chairman &nbsp;&nbsp;&nbsp; Sign: …………………………<br>Vice Chairman<br>Admin Directors &nbsp;&nbsp;&nbsp; Name: ………………………<br>Executive Directors<br>Heads of Corporate<br>Heads of Admin/Departments<br>C.S.O.</div>`;
+
+function buildBody(r){
+  if(r.letter_type==="QUERY"){
+    return`<p style="text-align:center;font-weight:bold;font-size:16pt;">Subject: QUERY</p>
+<p>Could you explain within <b>${r.hours} hours</b> why disciplinary action should not be taken against you for <b>${r.title} (${r.details})</b>?</p>
+<p>This is viewed as misconduct. Reference to Section <b>${r.service_section}</b> of the Condition of Service, which attracts disciplinary action as this attitude will not be condoned by management.</p>`;
+  }else if(r.letter_type==="LAST WARNING"){
+    return`<p style="text-align:center;font-weight:bold;font-size:16pt;">Subject: LAST WARNING</p>
+<p>It has come to the attention of Management with dismay for ${r.details}.</p>
+<p>This letter is hereby issued to you as a <b>LAST WARNING</b>. Further occurrence will lead to stricter disciplinary action.</p>`;
+  }else if(r.letter_type==="SURCHARGE"){
+    return`<p style="text-align:center;font-weight:bold;font-size:16pt;">Subject: SURCHARGE</p>
+<p>Having gone through your reply to the query issued on <b>${r.query_date}</b> for ${r.details}. You are hereby surcharged <b>₦${r.amount}</b> to be deducted from your salary.</p>`;
+  }else if(r.letter_type==="CUSTOM QUERY"){
+    const paras=[r.para1,r.para2,r.para3,r.para4,r.para5].filter(p=>p);
+    return`<p style="text-align:center;font-weight:bold;font-size:16pt;">Subject: ${r.custom_subject}</p>${paras.map(p=>`<p>${p}</p>`).join("")}`;
+  }
+  return"";
+}
+
+function viewMemo(id){
+  const r=ALL_QUERIES.find(x=>x.id===id);
+  if(!r)return;
+  const emp=ALL_EMPS.find(e=>e.employee_id===r.employee_id)||{};
+  document.getElementById("memoBody").innerHTML=`
+    <div style="font-family:'Times New Roman',serif;font-size:13pt;line-height:1.7;padding:10px;">
+      <h2 style="text-align:center;font-size:18pt;margin-bottom:4px;">${COMPANY}</h2>
+      <h3 style="text-align:center;font-size:14pt;margin-top:0;margin-bottom:20px;">MEMO</h3>
+      <div style="text-align:right;margin-bottom:16px;">
+        <p><b>Tracking No:</b> ${escHtml(r.tracking_number)}</p>
+        <p>${escHtml(r.memo_from||"")}</p>
+        <p><b>Date:</b> ${escHtml(r.memo_date)}</p>
+      </div>
+      <p><b>To:</b> ${escHtml(r.employee_name)} (${escHtml(r.employee_id||"")})</p>
+      <p><b>Department:</b> ${escHtml(r.department||emp.department||"")}</p>
+      ${buildBody(r)}
+      ${CC_BLOCK}
+    </div>`;
+  document.getElementById("memoModal").style.display="block";
+  document.body.style.overflow="hidden";
+}
+function closeMemo(){
+  document.getElementById("memoModal").style.display="none";
+  document.body.style.overflow="";
+}
+
+// Filters re-apply on date/type/show change
+["fromDate","toDate","typeFilter","showFilter"].forEach(id=>{
+  const el=document.getElementById(id);
+  if(el)el.addEventListener("change",applyFilters);
+});
+
+init();
+</script>
+</body>
+</html>
