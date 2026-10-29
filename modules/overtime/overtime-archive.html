@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Overtime Archive</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;--amber:#d97706;}
+  *{box-sizing:border-box;}
+  body{font-family:var(--sans);background:var(--bg);margin:0;padding:22px 18px;color:var(--text);}
+  .wrap{max-width:1040px;margin:0 auto;}
+  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:14px;color:var(--muted);}
+
+  .form-head{text-align:center;margin-bottom:16px;}
+  .form-head .co{font-size:15px;font-weight:800;letter-spacing:.4px;color:var(--navy);}
+  .form-head .ti{font-size:12px;font-weight:700;letter-spacing:2px;color:var(--blue);margin-top:2px;text-transform:uppercase;}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 22px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.04);}
+  .card > h3{color:var(--navy);margin:0 0 2px;font-size:14px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;}
+  .card > .sub{color:var(--muted);font-size:12px;margin:0 0 16px;}
+  h4{color:var(--navy);margin:16px 0 6px;font-size:13px;}
+
+  label{display:block;font-size:11.5px;font-weight:700;color:var(--text);margin:0 0 5px;}
+  input,select{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;background:var(--card);color:var(--text);}
+  input:focus,select:focus{outline:2px solid var(--blue);border-color:var(--blue);}
+
+  button{padding:10px 15px;border:none;border-radius:8px;font-weight:700;font-size:13px;cursor:pointer;background:var(--blue);color:#fff;}
+  button:hover{background:var(--blue-dark);}
+  button.mini{padding:6px 11px;font-size:12px;}
+  button.grey{background:#6b7280;} button.grey:hover{background:#565d68;}
+  .backbar{margin-bottom:10px;}
+
+  .filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;align-items:end;}
+  .filters .act{display:flex;gap:8px;}
+
+  .loading,.empty{font-size:12.5px;color:var(--muted);padding:6px 0;}
+  table{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px;}
+  th,td{border-bottom:1px solid var(--line);padding:9px 10px;text-align:left;vertical-align:top;}
+  thead th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.3px;border-bottom:2px solid var(--line);}
+  tbody tr:hover td{background:var(--bg);}
+  .clickrow{cursor:pointer;}
+  .num{text-align:right;white-space:nowrap;}
+
+  .tag{display:inline-block;padding:2px 9px;border-radius:10px;font-size:11px;font-weight:700;color:#fff;white-space:nowrap;}
+  .tag.blue{background:var(--blue);}
+  .tag.amber{background:var(--amber);}
+  .tag.green{background:var(--green);}
+  .tag.red{background:var(--red);}
+  .tag.grey{background:#6b7280;}
+  .muted{color:var(--muted);font-size:12px;}
+  .infobox{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:13px;line-height:1.7;}
+  .roview{background:#fff8e1;border:1px solid #f0d38a;color:#8a6d1a;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:700;margin-bottom:12px;}
+  :root:not([data-theme="light"]) .roview{background:rgba(240,211,138,.12);}
+  .noaccess{color:var(--red);font-weight:bold;text-align:center;padding:30px;}
+  button.danger{background:var(--red);} button.danger:hover{background:#a52f23;}
+  .tag.arch{background:#6b7280;}
+  .arcnote{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:12.5px;margin-bottom:14px;line-height:1.6;}
+  .warnbox{background:#fff8e1;border:1px solid #f0d38a;color:#8a6d1a;border-radius:8px;padding:10px 12px;font-size:12.5px;line-height:1.55;margin:12px 0;}
+  :root:not([data-theme="light"]) .warnbox{background:rgba(240,211,138,.12);color:#f0d38a;}
+  textarea{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;background:var(--card);color:var(--text);min-height:84px;resize:vertical;}
+  textarea:focus{outline:2px solid var(--blue);border-color:var(--blue);}
+  .modal-bg{display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.5);align-items:center;justify-content:center;padding:14px;}
+  .modal-bg.open{display:flex;}
+  .modal{background:var(--card);border-radius:14px;padding:22px;max-width:520px;width:100%;max-height:92vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,.25);}
+  .modal h3{margin:0 0 8px;color:var(--navy);font-size:16px;}
+  .modal .btns{display:flex;gap:10px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap;}
+  .errline{color:var(--red);font-size:12.5px;font-weight:700;margin-top:8px;min-height:16px;}
+  .flash{display:none;position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:10000;padding:10px 18px;border-radius:10px;font-size:13px;font-weight:700;box-shadow:0 4px 16px rgba(0,0,0,.2);max-width:92vw;background:#dcfce7;color:#15803d;}
+  .flash.err{background:#fee2e2;color:#dc2626;}
+
+  button.danger{background:var(--red);} button.danger:hover{background:#a52f23;}
+  button.restore{background:var(--green);} button.restore:hover{background:#17703f;}
+  button:disabled{opacity:.55;cursor:not-allowed;}
+  .tag.arch{background:#6b7280;}
+  .arcnote{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:12.5px;margin-bottom:14px;line-height:1.6;}
+  .warnbox{background:#fff8e1;border:1px solid #f0d38a;color:#8a6d1a;border-radius:8px;padding:10px 12px;font-size:12.5px;line-height:1.55;margin:12px 0;}
+  :root:not([data-theme="light"]) .warnbox{background:rgba(240,211,138,.12);color:#f0d38a;}
+  .okbox{background:#ecfdf3;border:1px solid #b7e4c7;color:#1d6b3f;border-radius:8px;padding:10px 12px;font-size:12.5px;line-height:1.55;margin:12px 0;}
+  :root:not([data-theme="light"]) .okbox{background:rgba(29,138,78,.14);color:#7fd6a3;}
+  textarea{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;background:var(--card);color:var(--text);min-height:84px;resize:vertical;}
+  textarea:focus{outline:2px solid var(--blue);border-color:var(--blue);}
+  .modal-bg{display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.5);align-items:center;justify-content:center;padding:14px;}
+  .modal-bg.open{display:flex;}
+  .modal{background:var(--card);border-radius:14px;padding:22px;max-width:560px;width:100%;max-height:92vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,.25);}
+  .modal h3{margin:0 0 8px;color:var(--navy);font-size:16px;}
+  .modal .btns{display:flex;gap:10px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap;}
+  .errline{color:var(--red);font-size:12.5px;font-weight:700;margin-top:8px;min-height:16px;}
+  .tick{display:flex;gap:8px;align-items:flex-start;font-size:12.5px;font-weight:600;margin-top:10px;}
+  .tick input{width:auto;margin-top:2px;}
+  .flash{display:none;position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:10000;padding:10px 18px;border-radius:10px;font-size:13px;font-weight:700;box-shadow:0 4px 16px rgba(0,0,0,.2);max-width:92vw;background:#dcfce7;color:#166534;}
+  .flash.err{background:#fee2e2;color:#dc2626;}
+  .reasoncell{min-width:170px;max-width:300px;white-space:normal;word-break:break-word;}
+  .btnrow{white-space:nowrap;}
+  .btnrow button + button{margin-left:6px;}
+</style>
+</head>
+<body>
+
+<div class="wrap">
+<div id="connStatus">Loading...</div>
+
+<div class="form-head">
+  <div class="co">RUMBU INDUSTRIES GROUP</div>
+  <div class="ti">Overtime Archive</div>
+</div>
+
+<div id="noAccess" class="noaccess" style="display:none;">You do not have access to the Overtime Archive.</div>
+
+<div id="appArea" style="display:none;">
+
+  <!-- ============ LIST ============ -->
+  <div id="listView">
+    <div class="card">
+      <h3>Archived Overtime</h3>
+      <p class="sub">Overtime that was archived because it was started by mistake. Nothing here counts in any step. Open one to see what it held<span id="restoreSub"></span>.</p>
+      <div class="filters">
+        <div><label>Show</label><select id="fMode" onchange="modeChanged()"><option value="now">Archived now</option><option value="hist">Restore history</option></select></div>
+        <div><label>Branch</label><select id="fBranch" onchange="loadList()"><option value="all">All allowed</option></select></div>
+        <div><label>Overtime date from</label><input type="date" id="fFrom" onchange="loadList()"></div>
+        <div><label>Overtime date to</label><input type="date" id="fTo" onchange="loadList()"></div>
+        <div><label id="lblAFrom">Archived from</label><input type="date" id="fAFrom" onchange="loadList()"></div>
+        <div><label id="lblATo">Archived to</label><input type="date" id="fATo" onchange="loadList()"></div>
+        <div><label>Search</label><input type="text" id="fSearch" placeholder="Form no., name, reason" oninput="renderList()"></div>
+        <div class="act"><button class="mini grey" onclick="loadList()">Refresh</button></div>
+      </div>
+      <div id="scopeNote" class="muted" style="margin-top:8px;"></div>
+      <div id="restoreNote" class="muted" style="margin-top:4px;"></div>
+      <div id="listCount" class="muted" style="margin-top:8px;font-weight:700;"></div>
+      <div id="listWrap"></div>
+    </div>
+  </div>
+
+  <!-- ============ DEPARTMENTS OF ONE FORM ============ -->
+  <div id="deptView" style="display:none;">
+    <div class="backbar"><button class="mini grey" onclick="backToList()">&larr; Back to archive</button></div>
+    <div class="card">
+      <div class="roview">View only. This overtime is archived and is not part of any step.</div>
+      <h3 id="deptTitle">Form</h3>
+      <div id="archBanner"></div>
+      <div id="deptInfo"></div>
+      <div id="restoreBtnWrap" style="margin-bottom:12px;"></div>
+      <h4>Departments &amp; units on this form</h4>
+      <p class="sub">Click a department to see its units and staff.</p>
+      <div id="deptWrap"></div>
+      <h4>History</h4>
+      <div id="histWrap"></div>
+    </div>
+  </div>
+
+  <!-- ============ UNITS + STAFF OF ONE DEPARTMENT ============ -->
+  <div id="unitView" style="display:none;">
+    <div class="backbar"><button class="mini grey" onclick="backToDept()">&larr; Back to departments</button></div>
+    <div class="card">
+      <div class="roview">View only.</div>
+      <h3 id="unitTitle">Department</h3>
+      <div id="unitInfo"></div>
+      <div id="unitWrap"></div>
+    </div>
+  </div>
+
+</div>
+</div>
+
+<div class="flash" id="flash"></div>
+<div class="modal-bg" id="restModal"><div class="modal">
+  <h3>Restore overtime</h3>
+  <div class="infobox" id="restInfo"></div>
+  <div id="restCheck"></div>
+  <div class="infobox" id="restPlan"></div>
+  <div class="warnbox">This puts the overtime back into the steps. It keeps its form number and its staff. The restore is recorded, with your name and the reason, in the history of the form.</div>
+  <label for="restReason">Reason for restoring (required)</label>
+  <textarea id="restReason" maxlength="500" placeholder="For example: archived by mistake, the date was correct"></textarea>
+  <div class="errline" id="restErr"></div>
+  <div class="btns"><button class="grey" id="restCancel" onclick="closeRestore()">Cancel</button><button class="restore" id="restConfirm" onclick="confirmRestore()">Restore this overtime</button></div>
+</div></div>
+
+<script>
+let ME = null;
+let IS_SUPER = false;
+let ALLOWED_BRANCHES = null;   // null = all (super admin); else array of branch names
+let SCOPE_ROWS = null;         // null = branch-only scope; else [{section, department, unit}]
+let LIST_ROWS = [];
+let CUR = null;                // { initiation, entries, fullyVisible }
+let CAN_ARCHIVE = false;       // staff chosen in Overtime Approver Setup > Overtime Archive may open this page
+let CAN_RESTORE = false;       // only those the database allows (IT)
+let RESTORE_READY = true;      // false until the restore step is installed in the database
+let REST_CUR = null, REST_BUSY = false, REST_CONFLICTS = [];
+const ARCH_COLS = "archived_at, archived_by_name, archive_reason";
+const LIST_LIMIT = 300;
+
+// ---------- helpers ----------
+function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
+function fmtDate(iso){
+  if(!iso) return "";
+  const p = String(iso).split("T")[0].split("-"); if(p.length !== 3) return iso;
+  const m=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return p[2] + " " + (m[parseInt(p[1],10)-1] || p[1]) + " " + p[0];
+}
+// archived_at is a timestamp: show it in West Africa Time (WAT), the group standard
+function fmtWat(ts){
+  if(!ts) return "";
+  const d = new Date(ts); if(isNaN(d)) return String(ts);
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone:"Africa/Lagos", day:"2-digit", month:"short", year:"numeric", hour:"2-digit", minute:"2-digit", hour12:false }).formatToParts(d);
+  const g = t => (parts.find(x => x.type === t) || {}).value || "";
+  return g("day") + " " + g("month") + " " + g("year") + ", " + g("hour") + ":" + g("minute") + " WAT";
+}
+function normDept(d){ return String(d == null ? "" : d).trim().toUpperCase(); }
+const STEP_LABEL = {
+  awaiting_step2:"Step 2 - Filling", awaiting_step3:"Step 3 - Staff Approval", awaiting_step4:"Step 4 - HR Review",
+  awaiting_step5:"Step 5 - HR Payment", awaiting_step6:"Step 6 - Accounting", completed:"Completed",
+  rejected_to_step2:"Returned to Step 2", rejected_to_step3:"Returned to Step 3",
+  rejected_to_step4:"Returned to Step 4", rejected_to_step5:"Returned to Step 5", archived:"Archived"
+};
+function stepTag(status){
+  if(status === "archived") return "<span class='tag arch'>Archived</span>";
+  if(status === "completed") return "<span class='tag green'>Completed</span>";
+  if(String(status).indexOf("rejected") === 0) return "<span class='tag red'>" + esc(STEP_LABEL[status]||status) + "</span>";
+  return "<span class='tag amber'>" + esc(STEP_LABEL[status]||status) + "</span>";
+}
+function flash(text, isErr){
+  const el = document.getElementById("flash"); el.textContent = text; el.className = "flash" + (isErr ? " err" : ""); el.style.display = "block";
+  clearTimeout(el._t); el._t = setTimeout(function(){ el.style.display = "none"; }, 6000);
+}
+async function logActivity(actionType, description){
+  try{
+    await sb.from("activity_log").insert({ actor_id: ME.id, actor_username: ME.username, actor_role: ME.role, section_id: ME.sectionId, action_type: actionType, description: description });
+  }catch(e){ console.warn("Activity log write failed (non-fatal):", e); }
+}
+// Reads every row for a list of ids. Supabase returns at most 1000 rows per request, so ask in small chunks and page through each.
+async function fetchAllIn(table, cols, col, ids){
+  const out = [];
+  for(let i = 0; i < ids.length; i += 100){
+    const chunk = ids.slice(i, i + 100);
+    for(let from = 0; ; from += 1000){
+      let res = await sb.from(table).select(cols).in(col, chunk).order("id", { ascending:true }).range(from, from + 999);
+      if(res.error && /column .*id|"id"/i.test(res.error.message || "")){
+        res = await sb.from(table).select(cols).in(col, chunk).range(from, from + 999);
+      }
+      if(res.error) throw res.error;
+      const rows = res.data || []; out.push.apply(out, rows);
+      if(rows.length < 1000) break;
+    }
+  }
+  return out;
+}
+
+// Departments of some forms, including the step each was at before it was archived (that column may not exist yet)
+async function fetchEntries(ids){
+  try{ return await fetchAllIn("overtime_department_entries", "id, initiation_id, section, department, units, status, status_before_archive", "initiation_id", ids); }
+  catch(e){
+    if(/status_before_archive|column/i.test((e && e.message) || ""))
+      return await fetchAllIn("overtime_department_entries", "id, initiation_id, section, department, units, status", "initiation_id", ids);
+    throw e;
+  }
+}
+
+// ---------- scope (same rules as Manage Overtime) ----------
+function branchAllowed(section){
+  if(IS_SUPER) return true;
+  if(SCOPE_ROWS && SCOPE_ROWS.length) return SCOPE_ROWS.some(r => r.section === section);
+  return (ALLOWED_BRANCHES || []).indexOf(section) !== -1;
+}
+function deptAllowed(section, dept){
+  if(IS_SUPER) return true;
+  if(SCOPE_ROWS && SCOPE_ROWS.length)
+    return SCOPE_ROWS.some(r => r.section === section && (!r.department || r.department === dept));
+  return branchAllowed(section);
+}
+function unitAllowed(section, dept, unit){
+  if(IS_SUPER) return true;
+  if(SCOPE_ROWS && SCOPE_ROWS.length)
+    return SCOPE_ROWS.some(r => r.section === section && (!r.department || r.department === dept) && (!r.unit || r.unit === unit));
+  return branchAllowed(section);
+}
+async function computeScope(){
+  if(IS_SUPER){
+    const { data } = await sb.from("app_sections").select("name").order("name");
+    ALLOWED_BRANCHES = (data||[]).map(s=>s.name);
+    SCOPE_ROWS = null;
+    return;
+  }
+  ALLOWED_BRANCHES = (ME.sectionNames || []).slice();
+  try{
+    const { data, error } = await sb.from("overtime_view_scope").select("section, department, unit").eq("profile_id", ME.id);
+    if(!error && data && data.length){
+      SCOPE_ROWS = data.map(r => ({ section: r.section, department: r.department || "", unit: r.unit || "" }));
+      ALLOWED_BRANCHES = [...new Set(SCOPE_ROWS.map(r => r.section))];
+    } else { SCOPE_ROWS = null; }
+  }catch(e){ SCOPE_ROWS = null; }
+}
+
+// ---------- privileges ----------
+async function checkPrivileges(){
+  CAN_ARCHIVE = false; CAN_RESTORE = false; RESTORE_READY = true;
+  try{
+    const { data, error } = await sb.rpc("overtime_can_archive");
+    if(!error && data === true) CAN_ARCHIVE = true;
+  }catch(e){}
+  try{
+    const { data, error } = await sb.rpc("overtime_can_restore");
+    if(error){ RESTORE_READY = false; }
+    else if(data === true && !ME.readOnly) CAN_RESTORE = true;
+  }catch(e){ RESTORE_READY = false; }
+}
+function restoreBlockReason(fullyVisible){
+  if(!RESTORE_READY) return "Restore is not set up in the database yet.";
+  if(!CAN_RESTORE) return "You have not been given the privilege to restore overtime. Ask IT.";
+  if(!fullyVisible) return "Part of this form is outside your department scope, so you cannot restore it.";
+  return "";
+}
+
+// ---------- init ----------
+async function init(){
+  const status = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    IS_SUPER = (ME.role === "super_admin");
+    await checkPrivileges();
+    if(ME.role !== "super_admin" && ME.role !== "admin" && ME.role !== "hr_console" && !CAN_ARCHIVE){
+      status.style.color = "var(--green)"; status.textContent = "Connected.";
+      document.getElementById("noAccess").style.display = "block";
+      return;
+    }
+    await computeScope();
+    document.getElementById("appArea").style.display = "block";
+    const sel = document.getElementById("fBranch");
+    (ALLOWED_BRANCHES||[]).slice().sort().forEach(b => { const o = document.createElement("option"); o.value = b; o.textContent = b; sel.appendChild(o); });
+    document.getElementById("scopeNote").textContent = IS_SUPER
+      ? "You can see every branch."
+      : "You can see: " + ((ALLOWED_BRANCHES||[]).join(", ") || "no branch assigned") + (SCOPE_ROWS ? " (department/unit limited)" : "");
+    document.getElementById("restoreNote").textContent = !RESTORE_READY ? "Restore is not available yet. Ask IT to set it up."
+      : (!CAN_RESTORE ? "You have not been given the privilege to restore overtime. It is assigned in Overtime Approver Setup." : "");
+    document.getElementById("restoreSub").textContent = CAN_RESTORE && RESTORE_READY ? ", or restore it" : "";
+    document.getElementById("listWrap").addEventListener("click", onListClick);
+    await loadList();
+    status.style.color = "var(--green)"; status.textContent = "Connected.";
+  }catch(e){
+    status.style.color = "var(--red)"; status.textContent = "Error: " + e.message;
+  }
+}
+
+// ---------- list ----------
+async function loadList(){
+  const wrap = document.getElementById("listWrap");
+  wrap.innerHTML = "<p class='loading'>Loading...</p>";
+  if(document.getElementById("fMode").value === "hist"){
+    try{ await loadHistoryList(); }catch(e){ wrap.innerHTML = "<p class='empty' style='color:var(--red)'>" + esc(e.message || e) + "</p>"; }
+    return;
+  }
+  try{
+    const branch = document.getElementById("fBranch").value;
+    const from = document.getElementById("fFrom").value, to = document.getElementById("fTo").value;
+    const aFrom = document.getElementById("fAFrom").value, aTo = document.getElementById("fATo").value;
+    let q = sb.from("overtime_initiations")
+      .select("id, form_number, form_date, overtime_date, section, initiator_username, " + ARCH_COLS)
+      .not("archived_at", "is", null).order("archived_at", { ascending:false }).limit(LIST_LIMIT);
+    if(branch !== "all") q = q.eq("section", branch);
+    else if(!IS_SUPER) q = q.in("section", (ALLOWED_BRANCHES||[""]));
+    if(from) q = q.gte("overtime_date", from);
+    if(to) q = q.lte("overtime_date", to);
+    if(aFrom) q = q.gte("archived_at", aFrom + "T00:00:00+01:00");     // archived dates are West Africa Time
+    if(aTo) q = q.lte("archived_at", aTo + "T23:59:59.999+01:00");
+    const { data: inits, error } = await q;
+    if(error){
+      if(/archived|column/i.test(error.message || "")){ wrap.innerHTML = "<p class='empty'>The archive feature is not set up in the database yet. Ask IT to run Overtime_Archive_Setup.sql.</p>"; document.getElementById("listCount").textContent = ""; LIST_ROWS = []; return; }
+      throw error;
+    }
+    const initList = (inits||[]).filter(i => branchAllowed(i.section));
+    const ids = initList.map(i => i.id);
+
+    let entries = [];
+    const allCount = {};
+    if(ids.length){
+      const de = await fetchEntries(ids);
+      de.forEach(e => { allCount[e.initiation_id] = (allCount[e.initiation_id] || 0) + 1; });
+      entries = de.filter(e => deptAllowed(e.section, e.department));
+    }
+    const byInit = {};
+    entries.forEach(e => { (byInit[e.initiation_id] = byInit[e.initiation_id] || []).push(e); });
+    const counts = {};
+    if(entries.length){
+      const oe = await fetchAllIn("overtime_employees", "department_entry_id", "department_entry_id", entries.map(e => e.id));
+      oe.forEach(r => { counts[r.department_entry_id] = (counts[r.department_entry_id] || 0) + 1; });
+    }
+    LIST_ROWS = initList.map(i => {
+      const es = byInit[i.id] || [];
+      return {
+        id:i.id, form_number:i.form_number||"", overtime_date:i.overtime_date, section:i.section, initiator:i.initiator_username||"",
+        archived_at:i.archived_at, archived_by:i.archived_by_name||"", archive_reason:i.archive_reason||"",
+        fullyVisible: es.length === (allCount[i.id] || 0),
+        entries: es.map(e => ({ id:e.id, department:e.department, units:e.units, status:e.status, before:e.status_before_archive || null })),
+        staff: es.reduce((a, e) => a + (counts[e.id] || 0), 0)
+      };
+    }).filter(r => r.entries.length > 0 || IS_SUPER);
+    renderList();
+    if((inits||[]).length >= LIST_LIMIT) document.getElementById("listCount").textContent += " (showing the latest " + LIST_LIMIT + "; narrow the dates to see older ones)";
+  }catch(e){
+    wrap.innerHTML = "<p class='empty' style='color:var(--red)'>" + esc(e.message || e) + "</p>";
+  }
+}
+function renderList(){
+  if(document.getElementById("fMode").value === "hist"){ renderHistList(); return; }
+  const wrap = document.getElementById("listWrap");
+  const term = document.getElementById("fSearch").value.trim().toLowerCase();
+  let rows = LIST_ROWS.filter(r => !term ||
+    (r.form_number + " " + r.initiator + " " + r.archived_by + " " + r.archive_reason + " " + r.entries.map(e => e.department).join(" ")).toLowerCase().indexOf(term) !== -1);
+  document.getElementById("listCount").textContent = rows.length + " archived overtime" + (rows.length === 1 ? "" : "s");
+  if(!rows.length){ wrap.innerHTML = "<p class='empty'>No archived overtime found.</p>"; return; }
+  let html = "<table><thead><tr><th>Form No.</th><th>Branch</th><th>Overtime Date</th><th>Initiator</th><th class='num'>Depts</th><th class='num'>Staff</th><th>Archived</th><th>Reason</th><th></th></tr></thead><tbody>";
+  rows.forEach(r => {
+    const why = restoreBlockReason(r.fullyVisible);
+    const restoreBtn = (CAN_RESTORE && RESTORE_READY)
+      ? (why ? "<button class='mini restore' disabled title='" + esc(why) + "'>Restore</button>" : "<button class='mini restore' data-act='restore' data-id='" + esc(r.id) + "'>Restore</button>")
+      : "";
+    html += "<tr class='clickrow' data-act='view' data-id='" + esc(r.id) + "'>" +
+      "<td><b>" + esc(r.form_number) + "</b></td>" +
+      "<td>" + esc(r.section) + "</td>" +
+      "<td>" + esc(fmtDate(r.overtime_date)) + "</td>" +
+      "<td>" + esc(r.initiator) + "</td>" +
+      "<td class='num'>" + r.entries.length + "</td>" +
+      "<td class='num'>" + r.staff + "</td>" +
+      "<td>" + esc(fmtWat(r.archived_at)) + "<br><span class='muted'>by " + esc(r.archived_by || "?") + "</span></td>" +
+      "<td class='reasoncell'>" + esc(r.archive_reason) + "</td>" +
+      "<td class='btnrow'><button class='mini' data-act='view' data-id='" + esc(r.id) + "'>View</button>" + restoreBtn + "</td></tr>";
+  });
+  html += "</tbody></table>";
+  wrap.innerHTML = html;
+}
+function onListClick(ev){
+  const el = ev.target.closest("[data-act]"); if(!el || el.disabled) return;
+  const id = el.getAttribute("data-id");
+  if(el.getAttribute("data-act") === "restore"){ ev.stopPropagation(); openRestore(id); }
+  else openInitiation(id);
+}
+
+// ---------- one form ----------
+function showView(id){
+  ["listView","deptView","unitView"].forEach(v => { const el = document.getElementById(v); if(el) el.style.display = (v === id) ? "block" : "none"; });
+  try{ window.scrollTo(0, 0); }catch(e){}
+}
+function backToList(){ showView("listView"); }
+async function openInitiation(id){
+  showView("deptView");
+  const wrap = document.getElementById("deptWrap");
+  wrap.innerHTML = "<p class='loading'>Loading...</p>";
+  document.getElementById("restoreBtnWrap").innerHTML = "";
+  try{
+    const { data: init, error: ie } = await sb.from("overtime_initiations").select("id, form_number, form_date, overtime_date, section, initiator_username, propose_hours, " + ARCH_COLS).eq("id", id).single();
+    if(ie) throw ie;
+    let deRes = await sb.from("overtime_department_entries").select("id, section, department, units, status, cycle, status_before_archive").eq("initiation_id", id);
+    if(deRes.error) deRes = await sb.from("overtime_department_entries").select("id, section, department, units, status, cycle").eq("initiation_id", id);
+    const de = deRes.data;
+    const entries = (de||[]).filter(e => deptAllowed(e.section, e.department));
+    CUR = { initiation: init, entries, fullyVisible: entries.length === (de||[]).length };
+
+    document.getElementById("archBanner").innerHTML = init.archived_at
+      ? "<div class='arcnote'><b>Archived</b> by " + esc(init.archived_by_name || "?") + " on " + esc(fmtWat(init.archived_at)) + ".<br><b>Reason:</b> " + esc(init.archive_reason || "") + "</div>"
+      : "<div class='okbox'>This overtime is not archived. It is back in the steps.</div>";
+    document.getElementById("deptTitle").textContent = "Form " + (init.form_number || "");
+    document.getElementById("deptInfo").innerHTML = "<div class='infobox'>" +
+      "<b>Form No.:</b> " + esc(init.form_number||"") + " &nbsp;|&nbsp; <b>Branch:</b> " + esc(init.section||"") + " &nbsp;|&nbsp; " +
+      "<b>Overtime Date:</b> " + esc(fmtDate(init.overtime_date)) + " &nbsp;|&nbsp; <b>Initiated by:</b> " + esc(init.initiator_username||"") + "</div>";
+
+    if(init.archived_at && CAN_RESTORE && RESTORE_READY){
+      const why = restoreBlockReason(CUR.fullyVisible);
+      document.getElementById("restoreBtnWrap").innerHTML = why
+        ? "<button class='restore' disabled>Restore this overtime</button><div class='muted' style='margin-top:6px;'>" + esc(why) + "</div>"
+        : "<button class='restore' data-act='restore' data-id='" + esc(init.id) + "'>Restore this overtime</button>";
+      const b = document.querySelector("#restoreBtnWrap [data-act='restore']");
+      if(b) b.onclick = function(){ openRestore(init.id); };
+    }
+    if(!entries.length){ wrap.innerHTML = "<p class='empty'>No departments visible to you on this form.</p>"; return; }
+
+    const oe = await fetchAllIn("overtime_employees", "department_entry_id", "department_entry_id", entries.map(e => e.id));
+    const counts = {}; oe.forEach(r => { counts[r.department_entry_id] = (counts[r.department_entry_id] || 0) + 1; });
+
+    let html = "<table><thead><tr><th>Department</th><th>Units</th><th class='num'>Staff</th><th>Status</th><th></th></tr></thead><tbody>";
+    entries.slice().sort((a, b) => String(a.department).localeCompare(String(b.department))).forEach(e => {
+      const units = (!e.units || e.units === "ALL") ? "All units" : e.units;
+      html += "<tr class='clickrow' data-dept='" + esc(e.id) + "'><td><b>" + esc(e.department) + "</b></td><td>" + esc(units) + "</td><td class='num'>" + (counts[e.id] || 0) + "</td><td>" + stepTag(e.status) + "</td>" +
+        "<td><button class='mini' data-dept='" + esc(e.id) + "'>View</button></td></tr>";
+    });
+    html += "</tbody></table>";
+    wrap.innerHTML = html;
+    wrap.onclick = function(ev){ const el = ev.target.closest("[data-dept]"); if(el) openDept(el.getAttribute("data-dept")); };
+  }catch(e){ wrap.innerHTML = "<p class='empty' style='color:var(--red)'>" + esc(e.message || e) + "</p>"; }
+  loadHistory(id);
+}
+function restoredLines(detail){
+  const ds = (detail && detail.departments) || [];
+  if(!ds.length) return "";
+  return "<div class='muted'>" + ds.map(d => esc(d.department) + ": " + (d.previous_step_known ? "back at " + esc(STEP_LABEL[d.restored_to] || d.restored_to) : "previous step was not recorded, restarted at " + esc(STEP_LABEL[d.restored_to] || d.restored_to))).join("; ") + "</div>";
+}
+async function loadHistory(id){
+  const box = document.getElementById("histWrap");
+  box.innerHTML = "<p class='loading'>Loading...</p>";
+  const { data, error } = await sb.from("overtime_archive_log").select("action, actor_name, reason, created_at, detail").eq("initiation_id", String(id)).order("created_at", { ascending:false });
+  if(error){ box.innerHTML = "<p class='muted'>The history is not available yet.</p>"; return; }
+  if(!data || !data.length){ box.innerHTML = "<p class='muted'>No history recorded for this form.</p>"; return; }
+  box.innerHTML = "<table><thead><tr><th>What</th><th>Who</th><th>When</th><th>Reason</th></tr></thead><tbody>" + data.map(h =>
+    "<tr><td>" + (h.action === "restored" ? "<span class='tag green'>Restored</span>" : "<span class='tag arch'>Archived</span>") + "</td><td>" + esc(h.actor_name || "?") + "</td><td>" + esc(fmtWat(h.created_at)) + "</td><td class='reasoncell'>" + esc(h.reason || "") + (h.action === "restored" ? restoredLines(h.detail) : "") + "</td></tr>").join("") + "</tbody></table>";
+}
+
+// ---------- restore history (every restore, newest first) ----------
+let HIST_ROWS = [];
+function modeChanged(){
+  const hist = document.getElementById("fMode").value === "hist";
+  document.getElementById("lblAFrom").textContent = hist ? "Restored from" : "Archived from";
+  document.getElementById("lblATo").textContent = hist ? "Restored to" : "Archived to";
+  loadList();
+}
+async function loadHistoryList(){
+  const wrap = document.getElementById("listWrap");
+  const branch = document.getElementById("fBranch").value;
+  const from = document.getElementById("fFrom").value, to = document.getElementById("fTo").value;
+  const aFrom = document.getElementById("fAFrom").value, aTo = document.getElementById("fATo").value;
+  let q = sb.from("overtime_archive_log").select("initiation_id, form_number, section, overtime_date, actor_name, reason, created_at, detail").eq("action", "restored").order("created_at", { ascending:false }).limit(LIST_LIMIT);
+  if(branch !== "all") q = q.eq("section", branch); else if(!IS_SUPER) q = q.in("section", (ALLOWED_BRANCHES||[""]));
+  if(from) q = q.gte("overtime_date", from);
+  if(to) q = q.lte("overtime_date", to);
+  if(aFrom) q = q.gte("created_at", aFrom + "T00:00:00+01:00");
+  if(aTo) q = q.lte("created_at", aTo + "T23:59:59.999+01:00");
+  const { data, error } = await q;
+  if(error){ HIST_ROWS = []; wrap.innerHTML = "<p class='empty'>The restore history is not available yet. Ask IT to run Overtime_Restore_Setup.sql.</p>"; document.getElementById("listCount").textContent = ""; return; }
+  HIST_ROWS = (data||[]).filter(r => branchAllowed(r.section));
+  renderList();
+}
+function renderHistList(){
+  const wrap = document.getElementById("listWrap");
+  const term = document.getElementById("fSearch").value.trim().toLowerCase();
+  const rows = HIST_ROWS.filter(r => !term || ((r.form_number||"") + " " + (r.actor_name||"") + " " + (r.reason||"") + " " + ((r.detail && r.detail.archived_by)||"") + " " + ((r.detail && r.detail.archive_reason)||"")).toLowerCase().indexOf(term) !== -1);
+  document.getElementById("listCount").textContent = rows.length + " restore" + (rows.length === 1 ? "" : "s");
+  if(!rows.length){ wrap.innerHTML = "<p class='empty'>No restores found.</p>"; return; }
+  let html = "<table><thead><tr><th>Form No.</th><th>Branch</th><th>Overtime Date</th><th>Restored</th><th>Reason for restoring</th><th>Originally archived</th><th></th></tr></thead><tbody>";
+  rows.forEach(r => {
+    const d = r.detail || {};
+    html += "<tr class='clickrow' data-act='view' data-id='" + esc(r.initiation_id) + "'><td><b>" + esc(r.form_number || "") + "</b></td><td>" + esc(r.section || "") + "</td><td>" + esc(fmtDate(r.overtime_date)) + "</td>" +
+      "<td>" + esc(fmtWat(r.created_at)) + "<br><span class='muted'>by " + esc(r.actor_name || "?") + "</span></td><td class='reasoncell'>" + esc(r.reason || "") + restoredLines(d) + "</td>" +
+      "<td class='reasoncell'>" + esc(d.archived_by || "?") + (d.archived_at ? "<br><span class='muted'>" + esc(fmtWat(d.archived_at)) + "</span>" : "") + "<br>" + esc(d.archive_reason || "") + "</td>" +
+      "<td class='btnrow'><button class='mini' data-act='view' data-id='" + esc(r.initiation_id) + "'>View</button></td></tr>";
+  });
+  wrap.innerHTML = html + "</tbody></table>";
+}
+async function openDept(deptEntryId){
+  showView("unitView");
+  const wrap = document.getElementById("unitWrap");
+  wrap.innerHTML = "<p class='loading'>Loading...</p>";
+  try{
+    const entry = (CUR && CUR.entries || []).find(e => String(e.id) === String(deptEntryId));
+    const dept = entry ? entry.department : "";
+    const section = entry ? entry.section : (CUR && CUR.initiation ? CUR.initiation.section : "");
+    const rows = await fetchAllIn("overtime_employees", "employee_id, employee_code, employee_name, reason_for_overtime, hours_worked", "department_entry_id", [deptEntryId]);
+    rows.sort((a, b) => String(a.employee_name || "").localeCompare(String(b.employee_name || "")));
+    const internalIds = [...new Set(rows.map(r => r.employee_id).filter(Boolean))];
+    const umap = {};
+    for(let i = 0; i < internalIds.length; i += 100){
+      const { data: emps } = await sb.from("employees").select("id, employee_id, full_name, unit").in("id", internalIds.slice(i, i + 100));
+      (emps||[]).forEach(s => { umap[s.id] = s; });
+    }
+    document.getElementById("unitTitle").textContent = dept + (section ? " - " + section : "");
+    document.getElementById("unitInfo").innerHTML = "<div class='infobox'><b>Department:</b> " + esc(dept) + " &nbsp;|&nbsp; <b>Branch:</b> " + esc(section) + " &nbsp;|&nbsp; <b>Status:</b> " + (entry ? stepTag(entry.status) : "-") + "</div>";
+    const groups = {};
+    rows.forEach(r => {
+      const s = umap[r.employee_id] || {};
+      const unit = (s.unit && String(s.unit).trim()) ? s.unit : "(no unit)";
+      if(!unitAllowed(section, dept, unit === "(no unit)" ? "" : unit)) return;
+      (groups[unit] = groups[unit] || []).push({ code: r.employee_code || s.employee_id || "", name: r.employee_name || s.full_name || "", reason: r.reason_for_overtime || "", hours: r.hours_worked });
+    });
+    const unitNames = Object.keys(groups).sort();
+    if(!unitNames.length){ wrap.innerHTML = "<p class='empty'>No staff visible to you in this department.</p>"; return; }
+    let html = "";
+    unitNames.forEach(u => {
+      const list = groups[u];
+      html += "<h4>" + esc(u) + " <span class='muted'>(" + list.length + " staff)</span></h4><table><thead><tr><th>Staff ID</th><th>Name</th><th>Reason</th><th class='num'>Hours</th></tr></thead><tbody>";
+      list.forEach(p => { html += "<tr><td>" + esc(p.code) + "</td><td>" + esc(p.name) + "</td><td>" + esc(p.reason) + "</td><td class='num'>" + (p.hours != null ? esc(p.hours) : "") + "</td></tr>"; });
+      html += "</tbody></table>";
+    });
+    wrap.innerHTML = html;
+  }catch(e){ wrap.innerHTML = "<p class='empty' style='color:var(--red)'>" + esc(e.message || e) + "</p>"; }
+}
+function backToDept(){ if(CUR && CUR.initiation) openInitiation(CUR.initiation.id); else showView("listView"); }
+
+// ---------- RESTORE ----------
+function unitsOverlap(a, b){
+  const isAll = u => (u === "ALL" || u === null || u === undefined || u === "");
+  if(isAll(a) || isAll(b)) return true;
+  const sa = new Set(String(a).split(",").map(x => x.trim()).filter(Boolean));
+  return String(b).split(",").map(x => x.trim()).filter(Boolean).some(x => sa.has(x));
+}
+// Other live overtime for the same branch, date and department (and overlapping units). Restoring on top of it could count the same staff twice.
+async function findRestoreConflicts(t){
+  const names = [...new Set(t.entries.map(e => e.department))];
+  if(!names.length) return [];
+  const { data, error } = await sb.from("overtime_department_entries")
+    .select("id, department, units, status, overtime_initiations!inner(id, form_number, overtime_date, archived_at)")
+    .eq("section", t.section).eq("overtime_initiations.overtime_date", t.overtime_date).in("department", names).neq("status", "archived");
+  if(error) throw error;
+  const out = [];
+  (data||[]).forEach(r => {
+    const oi = r.overtime_initiations || {};
+    if(oi.archived_at || String(oi.id) === String(t.id)) return;
+    const mine = t.entries.filter(e => e.department === r.department);
+    if(mine.some(e => unitsOverlap(e.units, r.units))) out.push({ form_number: oi.form_number || "", department: r.department, units: r.units, status: r.status });
+  });
+  return out;
+}
+function restoreTarget(id){
+  const r = LIST_ROWS.find(x => String(x.id) === String(id));
+  if(r) return { id:r.id, form_number:r.form_number, section:r.section, overtime_date:r.overtime_date, entries:r.entries };
+  if(CUR && CUR.initiation && String(CUR.initiation.id) === String(id))
+    return { id:CUR.initiation.id, form_number:CUR.initiation.form_number, section:CUR.initiation.section, overtime_date:CUR.initiation.overtime_date,
+             entries:CUR.entries.map(e => ({ id:e.id, department:e.department, units:e.units, status:e.status, before:e.status_before_archive || null })) };
+  return null;
+}
+function wireTick(){
+  const tk = document.getElementById("restTick"); if(!tk) return;
+  tk.addEventListener("change", function(){ document.getElementById("restConfirm").disabled = !this.checked; });
+}
+async function openRestore(id){
+  if(!CAN_RESTORE || !RESTORE_READY) return;
+  const t = restoreTarget(id); if(!t) return;
+  REST_CUR = t; REST_CONFLICTS = [];
+  document.getElementById("restInfo").innerHTML =
+    "<b>Form No.:</b> " + esc(t.form_number) + " &nbsp;|&nbsp; <b>Branch:</b> " + esc(t.section) + " &nbsp;|&nbsp; <b>Overtime Date:</b> " + esc(fmtDate(t.overtime_date)) + "<br>" +
+    "<b>Departments:</b> " + (t.entries.length ? t.entries.map(e => esc(e.department)).join(", ") : "none");
+  document.getElementById("restPlan").innerHTML = "<b>What will happen</b><br>" + (t.entries.length ? t.entries.map(e => e.before
+    ? esc(e.department) + ": goes back to <b>" + esc(STEP_LABEL[e.before] || e.before) + "</b>"
+    : esc(e.department) + ": the previous step was not recorded, so it restarts at <b>" + esc(STEP_LABEL.awaiting_step2) + "</b> and is approved again").join("<br>") : "No departments.");
+  document.getElementById("restCheck").innerHTML = "<p class='loading'>Checking for other overtime on the same date...</p>";
+  document.getElementById("restReason").value = ""; document.getElementById("restErr").textContent = "";
+  document.getElementById("restConfirm").disabled = true; document.getElementById("restCancel").disabled = false;
+  document.getElementById("restModal").classList.add("open");
+  try{
+    REST_CONFLICTS = await findRestoreConflicts(t);
+    if(!REST_CONFLICTS.length){
+      document.getElementById("restCheck").innerHTML = "<div class='okbox'>No other live overtime was found for the same branch, date and department.</div>";
+    } else {
+      document.getElementById("restCheck").innerHTML = "<div class='warnbox'><b>Other overtime already exists for this date:</b><br>" +
+        REST_CONFLICTS.map(c => esc(c.form_number) + ": " + esc(c.department) + " (" + esc((!c.units || c.units === "ALL") ? "all units" : c.units) + "), " + esc(STEP_LABEL[c.status] || c.status)).join("<br>") +
+        "<label class='tick'><input type='checkbox' id='restTick'> I have checked that restoring this will not count the same staff twice.</label></div>";
+    }
+    wireTick();
+    document.getElementById("restConfirm").disabled = REST_CONFLICTS.length > 0;
+  }catch(e){
+    document.getElementById("restCheck").innerHTML = "<div class='warnbox'>Could not check for other overtime on this date: " + esc(e.message || e) + "<label class='tick'><input type='checkbox' id='restTick'> I have checked this myself.</label></div>";
+    REST_CONFLICTS = [{ unchecked:true }];
+    wireTick();
+  }
+  setTimeout(function(){ document.getElementById("restReason").focus(); }, 50);
+}
+function closeRestore(){ if(REST_BUSY) return; document.getElementById("restModal").classList.remove("open"); }
+function restoreError(e){
+  const m = (e && (e.message || e.details)) || String(e);
+  if((e && (e.code === "PGRST202" || e.code === "42883")) || (/Could not find the function|does not exist/i.test(m) && /overtime_restore/i.test(m)))
+    return "Restore is not set up in the database yet. Ask IT to run Overtime_Restore_Setup.sql.";
+  return m;
+}
+async function confirmRestore(){
+  if(REST_BUSY || !REST_CUR || !CAN_RESTORE) return;
+  const reason = document.getElementById("restReason").value.trim();
+  const err = document.getElementById("restErr");
+  if(reason.length < 5){ err.textContent = "Please give a reason (at least 5 characters)."; document.getElementById("restReason").focus(); return; }
+  if(REST_CONFLICTS.length){ const tk = document.getElementById("restTick"); if(!tk || !tk.checked){ err.textContent = "Please tick the box to confirm your check."; return; } }
+  REST_BUSY = true; err.textContent = "";
+  document.getElementById("restConfirm").disabled = true; document.getElementById("restCancel").disabled = true;
+  const t = REST_CUR;
+  try{
+    const { error } = await sb.rpc("overtime_restore_form", { p_initiation_id: String(t.id), p_reason: reason, p_confirm_overlap: REST_CONFLICTS.length > 0 });
+    if(error) throw error;
+    REST_BUSY = false; document.getElementById("restModal").classList.remove("open");
+    await logActivity("overtime_restored", ME.username + " restored overtime " + t.form_number + " (" + t.section + ", " + t.overtime_date + "). Reason: " + reason);
+    flash(t.form_number + " has been restored and is back in the steps.", false);
+    showView("listView"); await loadList();
+  }catch(e){
+    REST_BUSY = false; err.textContent = restoreError(e);
+    document.getElementById("restConfirm").disabled = false; document.getElementById("restCancel").disabled = false;
+  }
+}
+document.addEventListener("keydown", function(e){ if(e.key === "Escape") closeRestore(); });
+
+init();
+</script>
+<script src="../../assets/letterhead.js"></script>
+</body>
+</html>

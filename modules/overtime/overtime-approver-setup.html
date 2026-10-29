@@ -125,7 +125,7 @@
         </button>
         <button class="tile" onclick="showView('archView'); loadArch();">
           <div class="step">Archive</div><div class="name">Overtime Archive</div>
-          <div class="desc">Central. Staff who may archive an overtime started by mistake, so a new one can be initiated for the same date.</div>
+          <div class="desc">Central. Who may archive an overtime started by mistake, and who may restore it.</div>
         </button>
         <button class="tile" onclick="showView('viewerView'); onViewerBranch();">
           <div class="step">View only</div><div class="name">Overtime Viewer</div>
@@ -263,14 +263,34 @@
       <h3>Overtime Archive</h3>
       <p class="sub">Central across all branches. Staff chosen here see an Archive button in Manage Overtime, and can archive an overtime that was started by mistake.</p>
       <div class="hint">Archiving takes the whole overtime out of every step, so a new overtime can be initiated for the same date. Nothing is deleted: it is kept in the archive with the person's name and the reason they give, and only IT can bring it back. An overtime that has already been completed cannot be archived.</div>
-      <label style="margin-top:12px;">Add staff who may archive overtime (search by name or ID)</label>
-      <input type="text" id="arc_search" placeholder="Type a name or employee ID" oninput="renderPicker('arc')">
-      <div class="picker" id="arc_picker"></div>
-      <div class="selwrap" id="arc_sel"></div>
-      <div class="btnbar"><button class="green" onclick="saveArch()">Save Archive Staff</button></div>
+      <div id="arc_controls">
+        <label style="margin-top:12px;">Add staff who may archive overtime (search by name or ID)</label>
+        <input type="text" id="arc_search" placeholder="Type a name or employee ID" oninput="renderPicker('arc')">
+        <div class="picker" id="arc_picker"></div>
+        <div class="selwrap" id="arc_sel"></div>
+        <div class="btnbar"><button class="green" onclick="saveArch()">Save Archive Staff</button></div>
+      </div>
       <div class="status" id="arc_status"></div>
+      <div class="hint assignnote" style="display:none;">You do not have the right to add or remove these staff.</div>
       <h4>Currently allowed to archive (all branches)</h4>
       <div id="arc_list"></div>
+    </div>
+
+    <div class="card">
+      <h3>Overtime Restore</h3>
+      <p class="sub">Central across all branches. Staff chosen here can restore an archived overtime from the Overtime Archive page. IT can always restore.</p>
+      <div class="hint">Restoring puts the overtime back into the steps, each department at the step it was at. It is recorded with the person's name and the reason they give. Read-only Viewer Super Admins can never restore, even if listed here.</div>
+      <div id="res_controls">
+        <label style="margin-top:12px;">Add staff who may restore overtime (search by name or ID)</label>
+        <input type="text" id="res_search" placeholder="Type a name or employee ID" oninput="renderPicker('res')">
+        <div class="picker" id="res_picker"></div>
+        <div class="selwrap" id="res_sel"></div>
+        <div class="btnbar"><button class="green" onclick="saveRest()">Save Restore Staff</button></div>
+      </div>
+      <div class="status" id="res_status"></div>
+      <div class="hint assignnote" style="display:none;">You do not have the right to add or remove these staff.</div>
+      <h4>Currently allowed to restore (all branches)</h4>
+      <div id="res_list"></div>
     </div>
   </div>
 
@@ -316,7 +336,7 @@
 let ME = null;
 let EMPLOYEES = [];
 let DEPT_CACHE = {};                 // branch -> [dept names]
-const SEL = { init:new Set(), fill:new Set(), pm:new Set(), hrr:new Set(), hrp:new Set(), acc:new Set(), arc:new Set(), view:new Set() };
+const SEL = { init:new Set(), fill:new Set(), pm:new Set(), hrr:new Set(), hrp:new Set(), acc:new Set(), arc:new Set(), res:new Set(), view:new Set() };
 const PM_DEPTS = new Set();          // selected departments for the plant-manager scope
 
 // ---------- helpers ----------
@@ -351,6 +371,7 @@ async function init(){
       return;
     }
     document.getElementById("appArea").style.display = "block";
+    await checkAssignRight();
     await loadEmployees();
     await populateBranches();
     status.style.color = "var(--green)"; status.textContent = "Connected.";
@@ -673,14 +694,62 @@ async function saveArch(){
     st.className="status ok"; st.textContent="✅ Saved. They will now see the Archive button in Manage Overtime.";
     clearSel("arc"); await loadArch();
     loadOverviewIfOpen();
-  }catch(e){ st.className="status err"; st.textContent = archSetupError(e) ? "❌ " + archSetupError(e) : dupMsg(e, "already allowed to archive"); }
+  }catch(e){ st.className="status err"; st.textContent = archSetupError(e) ? "❌ " + archSetupError(e) : (/row-level security/i.test((e && e.message) || "") ? "❌ You are not allowed to assign these staff." : dupMsg(e, "already allowed to archive")); }
 }
 async function loadArch(){
+  applyAssignRight();
+  loadRest();
   const wrap = document.getElementById("arc_list");
   wrap.innerHTML = "<p class='loading'>Loading…</p>";
   const { data, error } = await sb.from("overtime_archivers").select("id, employee_id").order("id");
   if(error){ wrap.innerHTML = "<p class='status err'>❌ " + esc(archSetupError(error) || error.message) + "</p>"; return; }
   renderSimpleList(wrap, data||[], r=>nameFor(r.employee_id), r=>codeFor(r.employee_id), "overtime_archivers", "loadArch");
+  if(!CAN_ASSIGN) wrap.querySelectorAll("button.rm").forEach(b => b.remove());
+}
+
+// ---------- who may add or remove archive / restore staff: asked of the database, so the page and the database cannot disagree ----------
+let CAN_ASSIGN = true;
+async function checkAssignRight(){
+  try{
+    const { data, error } = await sb.rpc("overtime_can_assign_privileges");
+    if(!error && typeof data === "boolean") CAN_ASSIGN = data;     // not installed yet: keep the old behaviour
+  }catch(e){}
+}
+function applyAssignRight(){
+  ["arc_controls", "res_controls"].forEach(id => { const el = document.getElementById(id); if(el) el.style.display = CAN_ASSIGN ? "" : "none"; });
+  document.querySelectorAll(".assignnote").forEach(el => { el.style.display = CAN_ASSIGN ? "none" : "block"; });
+}
+
+// ==========================================================
+// OVERTIME RESTORE (central): who may restore an archived overtime
+// ==========================================================
+function restSetupError(e){
+  const m = (e && (e.message || e.details)) || "";
+  if((e && (e.code === "42P01" || e.code === "PGRST205")) || /overtime_restorers/i.test(m) && /(does not exist|schema cache)/i.test(m))
+    return "The restore feature is not set up in the database yet. Ask IT to run Overtime_Restore_Setup.sql.";
+  return "";
+}
+async function saveRest(){
+  const st = document.getElementById("res_status");
+  if(!SEL.res.size){ st.className="status err"; st.textContent="Select at least one person."; return; }
+  st.className="status"; st.textContent="Saving...";
+  try{
+    const rows = Array.from(SEL.res).map(id => ({ employee_id: id }));
+    const { error } = await sb.from("overtime_restorers").insert(rows);
+    if(error) throw error;
+    await logActivity("overtime_restorers_assigned", ME.username + " gave " + rows.length + " staff the privilege to restore overtime");
+    st.className="status ok"; st.textContent="✅ Saved. They can now restore from the Overtime Archive page.";
+    clearSel("res"); await loadRest();
+    loadOverviewIfOpen();
+  }catch(e){ st.className="status err"; st.textContent = restSetupError(e) ? "❌ " + restSetupError(e) : (/row-level security/i.test((e && e.message) || "") ? "❌ You are not allowed to assign these staff." : dupMsg(e, "already allowed to restore")); }
+}
+async function loadRest(){
+  const wrap = document.getElementById("res_list");
+  wrap.innerHTML = "<p class='loading'>Loading...</p>";
+  const { data, error } = await sb.from("overtime_restorers").select("id, employee_id").order("id");
+  if(error){ wrap.innerHTML = "<p class='status err'>❌ " + esc(restSetupError(error) || error.message) + "</p>"; return; }
+  renderSimpleList(wrap, data||[], r=>nameFor(r.employee_id), r=>codeFor(r.employee_id), "overtime_restorers", "loadRest");
+  if(!CAN_ASSIGN) wrap.querySelectorAll("button.rm").forEach(b => b.remove());
 }
 
 // ---------- shared list renderer + remove ----------
@@ -806,12 +875,13 @@ async function loadOverview(){
   const wrap = document.getElementById("overviewWrap");
   wrap.innerHTML = "<p class='loading'>Loading…</p>";
   try{
-    const [{ data: inits }, { data: fillers }, { data: apprs }, { data: viewers }, { data: archivers }] = await Promise.all([
+    const [{ data: inits }, { data: fillers }, { data: apprs }, { data: viewers }, { data: archivers }, { data: restorers }] = await Promise.all([
       sb.from("overtime_initiators").select("section, employee_id").order("section"),
       sb.from("overtime_step2_fillers").select("section, department, employee_id").order("section"),
       sb.from("overtime_step_approvers").select("section, step, employee_id, departments").order("step"),
       sb.from("overtime_viewers").select("section, employee_id").order("section"),
-      sb.from("overtime_archivers").select("employee_id").order("id")      // missing table just gives no rows
+      sb.from("overtime_archivers").select("employee_id").order("id"),      // missing table just gives no rows
+      sb.from("overtime_restorers").select("employee_id").order("id")
     ]);
     const rowsHtml = [];
     const push = (scope, role, people) => rowsHtml.push("<tr><td>" + esc(scope) + "</td><td>" + esc(role) + "</td><td>" + esc(people) + "</td></tr>");
@@ -842,6 +912,7 @@ async function loadOverview(){
       if(people.length) push("All branches (central)", stepLabel[step], people.join(", "));
     });
     if((archivers||[]).length) push("All branches (central)", "Overtime Archive", archivers.map(a=>nameFor(a.employee_id)).join(", "));
+    if((restorers||[]).length) push("All branches (central)", "Overtime Restore", restorers.map(a=>nameFor(a.employee_id)).join(", "));
 
     // viewers, per branch (view only)
     const byView = {};
