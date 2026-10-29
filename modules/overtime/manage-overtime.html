@@ -62,6 +62,21 @@
   .roview{background:#fff8e1;border:1px solid #f0d38a;color:#8a6d1a;border-radius:8px;padding:8px 12px;font-size:12px;font-weight:700;margin-bottom:12px;}
   :root:not([data-theme="light"]) .roview{background:rgba(240,211,138,.12);}
   .noaccess{color:var(--red);font-weight:bold;text-align:center;padding:30px;}
+  button.danger{background:var(--red);} button.danger:hover{background:#a52f23;}
+  .tag.arch{background:#6b7280;}
+  .arcnote{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px 12px;font-size:12.5px;margin-bottom:14px;line-height:1.6;}
+  .warnbox{background:#fff8e1;border:1px solid #f0d38a;color:#8a6d1a;border-radius:8px;padding:10px 12px;font-size:12.5px;line-height:1.55;margin:12px 0;}
+  :root:not([data-theme="light"]) .warnbox{background:rgba(240,211,138,.12);color:#f0d38a;}
+  textarea{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;background:var(--card);color:var(--text);min-height:84px;resize:vertical;}
+  textarea:focus{outline:2px solid var(--blue);border-color:var(--blue);}
+  .modal-bg{display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.5);align-items:center;justify-content:center;padding:14px;}
+  .modal-bg.open{display:flex;}
+  .modal{background:var(--card);border-radius:14px;padding:22px;max-width:520px;width:100%;max-height:92vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,.25);}
+  .modal h3{margin:0 0 8px;color:var(--navy);font-size:16px;}
+  .modal .btns{display:flex;gap:10px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap;}
+  .errline{color:var(--red);font-size:12.5px;font-weight:700;margin-top:8px;min-height:16px;}
+  .flash{display:none;position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:10000;padding:10px 18px;border-radius:10px;font-size:13px;font-weight:700;box-shadow:0 4px 16px rgba(0,0,0,.2);max-width:92vw;background:#dcfce7;color:#15803d;}
+  .flash.err{background:#fee2e2;color:#dc2626;}
 </style>
 </head>
 <body>
@@ -80,7 +95,7 @@
   <div id="listView">
     <div class="card">
       <h3>All Overtime</h3>
-      <p class="sub">Every overtime request and the step it has reached. View only, no editing.</p>
+      <p class="sub">Every overtime request and the step it has reached. View only, no editing.<span id="archSubNote"></span></p>
       <div class="filters">
         <div><label>Branch</label><select id="fBranch" onchange="loadList()"><option value="all">All allowed</option></select></div>
         <div><label>From (overtime date)</label><input type="date" id="fFrom" onchange="loadList()"></div>
@@ -99,6 +114,9 @@
         </div>
         <div><label>Department</label><select id="fDept" onchange="renderList()"><option value="all">All departments</option></select></div>
         <div><label>Search form / initiator</label><input type="text" id="fSearch" placeholder="Form no. or name" oninput="renderList()"></div>
+        <div id="fArchWrap" style="display:none;"><label>Archived</label>
+          <select id="fArchived" onchange="loadList()"><option value="hide">Hide</option><option value="show">Include</option><option value="only">Only</option></select>
+        </div>
         <div class="act"><button class="mini grey" onclick="loadList()">Refresh</button></div>
       </div>
       <div id="scopeNote" class="muted" style="margin-top:8px;"></div>
@@ -110,9 +128,11 @@
   <div id="deptView" style="display:none;">
     <div class="backbar"><button class="mini grey" onclick="backToList()">← Back to list</button></div>
     <div class="card">
-      <div class="roview">View only — this page does not change any overtime.</div>
+      <div class="roview">View only. The only change possible here is Archive, for staff who have been given that privilege.</div>
       <h3 id="deptTitle">Form</h3>
+      <div id="archBanner"></div>
       <div id="deptInfo"></div>
+      <div id="archBtnWrap" style="margin-bottom:12px;"></div>
       <h4>Departments &amp; units on this form</h4>
       <p class="sub">Click a department to see its units and staff.</p>
       <div id="deptWrap"></div>
@@ -123,7 +143,7 @@
   <div id="unitView" style="display:none;">
     <div class="backbar"><button class="mini grey" onclick="backToDept()">← Back to departments</button></div>
     <div class="card">
-      <div class="roview">View only — this page does not change any overtime.</div>
+      <div class="roview">View only. The only change possible on this page is Archive, for staff who have been given that privilege.</div>
       <h3 id="unitTitle">Department</h3>
       <div id="unitInfo"></div>
       <div id="unitWrap"></div>
@@ -137,13 +157,28 @@
 </div>
 </div>
 
+<div class="flash" id="flash"></div>
+<div class="modal-bg" id="archModal"><div class="modal">
+  <h3>Archive overtime</h3>
+  <div class="infobox" id="archInfo"></div>
+  <div class="warnbox">This takes the overtime out of every step, and lets a new overtime be initiated for the same date. Nothing is deleted: it is kept in the archive, with your name and the reason. Only IT can bring it back.</div>
+  <label for="archReason">Reason for archiving (required)</label>
+  <textarea id="archReason" maxlength="500" placeholder="For example: initiated for the wrong date"></textarea>
+  <div class="errline" id="archErr"></div>
+  <div class="btns"><button class="grey" id="archCancel" onclick="closeArchive()">Cancel</button><button class="danger" id="archConfirm" onclick="confirmArchive()">Archive this overtime</button></div>
+</div></div>
+
 <script>
 let ME = null;
 let IS_SUPER = false;
 let ALLOWED_BRANCHES = null;   // null = all (super admin); else array of branch names
 let SCOPE_ROWS = null;         // null = no fine scope (branch-only); else [{section, department, unit}]
 let LIST_ROWS = [];            // computed initiation rows for the list
-let CUR = null;                // { initiation, entries:[] }
+let CUR = null;                // { initiation, entries:[], fullyVisible }
+let CAN_ARCHIVE = false;       // itops3, or staff chosen in Overtime Approver Setup > Overtime Archive
+let ARCHIVE_READY = true;      // false when the archive step has not been installed in the database yet
+let ARCH_CUR = null, ARCH_BUSY = false;
+const ARCH_COLS = ", archived_at, archived_by_name, archive_reason";
 
 // ---------- helpers ----------
 function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
@@ -155,15 +190,16 @@ function fmtDate(iso){
 }
 
 const STEP_OF = { awaiting_step2:2, awaiting_step3:3, awaiting_step4:4, awaiting_step5:5, awaiting_step6:6,
-                  rejected_to_step2:2, rejected_to_step3:3, rejected_to_step4:4, rejected_to_step5:5, completed:99 };
+                  rejected_to_step2:2, rejected_to_step3:3, rejected_to_step4:4, rejected_to_step5:5, completed:99, archived:97 };
 const STEP_LABEL = {
   awaiting_step2:"Step 2 · Filling", awaiting_step3:"Step 3 · Staff Approval", awaiting_step4:"Step 4 · HR Review",
   awaiting_step5:"Step 5 · HR Payment", awaiting_step6:"Step 6 · Accounting", completed:"Completed",
   rejected_to_step2:"Returned to Step 2", rejected_to_step3:"Returned to Step 3",
-  rejected_to_step4:"Returned to Step 4", rejected_to_step5:"Returned to Step 5"
+  rejected_to_step4:"Returned to Step 4", rejected_to_step5:"Returned to Step 5", archived:"Archived"
 };
 function stepTag(status){
   if(status === "completed") return "<span class='tag green'>Completed</span>";
+  if(status === "archived") return "<span class='tag arch'>Archived</span>";
   if(String(status).indexOf("rejected") === 0) return "<span class='tag red'>" + esc(STEP_LABEL[status]||status) + "</span>";
   return "<span class='tag amber'>" + esc(STEP_LABEL[status]||status) + "</span>";
 }
@@ -207,6 +243,16 @@ async function computeScope(){
   }catch(e){ SCOPE_ROWS = null; }
 }
 
+// ---------- archive privilege ----------
+async function checkArchivePrivilege(){
+  CAN_ARCHIVE = false;
+  if(ME.readOnly) return;                       // viewer accounts can never archive
+  try{
+    const { data, error } = await sb.rpc("overtime_can_archive");
+    if(!error && data === true) CAN_ARCHIVE = true;
+  }catch(e){ /* the archive step is not installed yet: no Archive button */ }
+}
+
 // ---------- init ----------
 async function init(){
   const status = document.getElementById("connStatus");
@@ -214,7 +260,8 @@ async function init(){
     ME = await requireAuth("../../login.html");
     if(!ME) return;
     IS_SUPER = (ME.role === "super_admin");
-    if(ME.role !== "super_admin" && ME.role !== "admin" && ME.role !== "hr_console"){
+    await checkArchivePrivilege();
+    if(ME.role !== "super_admin" && ME.role !== "admin" && ME.role !== "hr_console" && !CAN_ARCHIVE){
       status.style.color = "var(--green)"; status.textContent = "Connected.";
       document.getElementById("noAccess").style.display = "block";
       return;
@@ -225,6 +272,7 @@ async function init(){
     document.getElementById("scopeNote").textContent = IS_SUPER
       ? "You can see every branch."
       : "You can see: " + ((ALLOWED_BRANCHES||[]).join(", ") || "no branch assigned") + (SCOPE_ROWS ? " (department/unit limited)" : "");
+    if(CAN_ARCHIVE) document.getElementById("archSubNote").textContent = " You can archive an overtime that was started by mistake.";
     await loadList();
     status.style.color = "var(--green)"; status.textContent = "Connected.";
   }catch(e){
@@ -254,21 +302,36 @@ async function loadList(){
     const from = document.getElementById("fFrom").value;
     const to = document.getElementById("fTo").value;
 
-    let q = sb.from("overtime_initiations").select("id, form_number, form_date, overtime_date, section, initiator_username").order("overtime_date", { ascending:false });
-    // Branch scope
-    if(branch !== "all"){ q = q.eq("section", branch); }
-    else if(!IS_SUPER){ q = q.in("section", (ALLOWED_BRANCHES||[""])); }
-    if(from) q = q.gte("overtime_date", from);
-    if(to) q = q.lte("overtime_date", to);
-
-    const { data: inits, error } = await q;
+    const buildQuery = (withArch) => {
+      let q = sb.from("overtime_initiations").select("id, form_number, form_date, overtime_date, section, initiator_username" + (withArch ? ARCH_COLS : "")).order("overtime_date", { ascending:false });
+      // Branch scope
+      if(branch !== "all"){ q = q.eq("section", branch); }
+      else if(!IS_SUPER){ q = q.in("section", (ALLOWED_BRANCHES||[""])); }
+      if(from) q = q.gte("overtime_date", from);
+      if(to) q = q.lte("overtime_date", to);
+      if(withArch){
+        const mode = document.getElementById("fArchived").value;
+        if(mode === "hide") q = q.is("archived_at", null);
+        else if(mode === "only") q = q.not("archived_at", "is", null);
+      }
+      return q;
+    };
+    let { data: inits, error } = await buildQuery(ARCHIVE_READY);
+    if(error && ARCHIVE_READY && /archived|column/i.test(error.message || "")){
+      // the archive step has not been installed in the database yet: carry on as before, without it
+      ARCHIVE_READY = false; CAN_ARCHIVE = false;
+      ({ data: inits, error } = await buildQuery(false));
+    }
     if(error) throw error;
+    document.getElementById("fArchWrap").style.display = ARCHIVE_READY ? "" : "none";
     const initList = (inits||[]).filter(i => branchAllowed(i.section));
     const ids = initList.map(i=>i.id);
 
     let entries = [];
+    const allCount = {};           // departments on each form, including any this person may not see
     if(ids.length){
       const { data: de } = await sb.from("overtime_department_entries").select("id, initiation_id, section, department, units, status, cycle").in("initiation_id", ids);
+      (de||[]).forEach(e => { allCount[e.initiation_id] = (allCount[e.initiation_id] || 0) + 1; });
       entries = (de||[]).filter(e => deptAllowed(e.section, e.department));
     }
     const entriesByInit = {};
@@ -287,6 +350,8 @@ async function loadList(){
       return {
         id:i.id, form_number:i.form_number||"", form_date:i.form_date, overtime_date:i.overtime_date,
         section:i.section, initiator:i.initiator_username||"",
+        archived_at:i.archived_at||null, archived_by:i.archived_by_name||"", archive_reason:i.archive_reason||"",
+        fullyVisible: es.length === (allCount[i.id] || 0),
         entries: es.map(e=>({ department:e.department, status:e.status, staff:(counts[e.id]||0) }))
       };
     }).filter(r => r.entries.length > 0 || IS_SUPER);   // hide empty-after-scope forms for admins
@@ -334,7 +399,9 @@ function renderList(){
   // With a department selected, the counts and current step describe that department only
   let rows = LIST_ROWS.map(r=>{
     const es = (deptF === "all") ? r.entries : r.entries.filter(e => normDept(e.department) === deptF);
-    return Object.assign({}, r, summarise(es));
+    const sm = summarise(es);
+    if(r.archived_at) sm.head = "arch|Archived";
+    return Object.assign({}, r, sm);
   });
   if(deptF !== "all") rows = rows.filter(r => r.total > 0);
 
@@ -351,8 +418,16 @@ function renderList(){
   let html = "<table><thead><tr><th>Form No.</th><th>Branch</th><th>Overtime Date</th><th>Initiator</th><th class='num'>Depts</th><th class='num'>Staff</th><th>Current Step</th><th></th></tr></thead><tbody>";
   rows.forEach(r=>{
     const [cls, txt] = r.head.split("|");
-    const tag = cls==="done" ? "green" : cls==="returned" ? "red" : cls==="grey" ? "grey" : "amber";
-    const prog = r.total ? (" <span class='muted'>(" + r.done + "/" + r.total + ")</span>") : "";
+    const tag = cls==="done" ? "green" : cls==="returned" ? "red" : (cls==="grey" || cls==="arch") ? "grey" : "amber";
+    const prog = (r.total && !r.archived_at) ? (" <span class='muted'>(" + r.done + "/" + r.total + ")</span>") : "";
+    const archTip = r.archived_at ? esc("Archived by " + (r.archived_by || "?") + " on " + fmtDate(r.archived_at) + ". Reason: " + (r.archive_reason || "")) : "";
+    let archBtn = "";
+    if(CAN_ARCHIVE && !r.archived_at){
+      const why = archiveBlockReason(r.fullyVisible, r.entries);
+      archBtn = why
+        ? " <button class='mini danger' disabled title='" + esc(why) + "'>Archive</button>"
+        : " <button class='mini danger' onclick=\"event.stopPropagation();openArchive('" + esc(r.id) + "')\">Archive</button>";
+    }
     html += "<tr class='clickrow' onclick=\"openInitiation(" + r.id + ")\">" +
       "<td><b>" + esc(r.form_number) + "</b></td>" +
       "<td>" + esc(r.section) + "</td>" +
@@ -360,8 +435,8 @@ function renderList(){
       "<td>" + esc(r.initiator) + "</td>" +
       "<td class='num'>" + r.total + "</td>" +
       "<td class='num'>" + r._staff + "</td>" +
-      "<td><span class='tag " + tag + "'>" + esc(txt) + "</span>" + prog + "</td>" +
-      "<td><button class='mini' onclick=\"event.stopPropagation();openInitiation(" + r.id + ")\">View</button></td></tr>";
+      "<td><span class='tag " + tag + "'" + (archTip ? " title='" + archTip + "'" : "") + ">" + esc(txt) + "</span>" + prog + "</td>" +
+      "<td style='white-space:nowrap;'><button class='mini' onclick=\"event.stopPropagation();openInitiation(" + r.id + ")\">View</button>" + archBtn + "</td></tr>";
   });
   html += "</tbody></table>";
   wrap.innerHTML = html;
@@ -373,10 +448,17 @@ async function openInitiation(id){
   const wrap = document.getElementById("deptWrap");
   wrap.innerHTML = "<p class='loading'>Loading…</p>";
   try{
-    const { data: init } = await sb.from("overtime_initiations").select("id, form_number, form_date, overtime_date, section, initiator_username, propose_hours").eq("id", id).single();
+    const { data: init } = await sb.from("overtime_initiations").select("id, form_number, form_date, overtime_date, section, initiator_username, propose_hours" + (ARCHIVE_READY ? ARCH_COLS : "")).eq("id", id).single();
     const { data: de } = await sb.from("overtime_department_entries").select("id, section, department, units, status, cycle").eq("initiation_id", id);
     const entries = (de||[]).filter(e => deptAllowed(e.section, e.department));
-    CUR = { initiation: init, entries };
+    CUR = { initiation: init, entries, fullyVisible: entries.length === (de||[]).length };
+
+    document.getElementById("archBanner").innerHTML = init.archived_at
+      ? "<div class='arcnote'><b>Archived</b> by " + esc(init.archived_by_name || "?") + " on " + fmtDate(init.archived_at) + ".<br><b>Reason:</b> " + esc(init.archive_reason || "") + "</div>" : "";
+    const why = (CAN_ARCHIVE && !init.archived_at) ? archiveBlockReason(CUR.fullyVisible, entries) : "";
+    document.getElementById("archBtnWrap").innerHTML = (CAN_ARCHIVE && !init.archived_at)
+      ? (why ? "<button class='danger' disabled title='" + esc(why) + "'>Archive this overtime</button><div class='muted' style='margin-top:6px;'>" + esc(why) + "</div>"
+             : "<button class='danger' onclick=\"openArchive('" + esc(init.id) + "')\">Archive this overtime</button>") : "";
 
     document.getElementById("deptTitle").textContent = "Form " + (init.form_number||"");
     document.getElementById("deptInfo").innerHTML = "<div class='infobox'>" +
@@ -408,6 +490,67 @@ async function openInitiation(id){
   }catch(e){ wrap.innerHTML = "<p class='empty' style='color:var(--red)'>❌ " + esc(e.message) + "</p>"; }
 }
 function backToList(){ showView("listView"); }
+
+// ---------- ARCHIVE ----------
+// Why the Archive button must be greyed out for a form (the database enforces the same rules).
+function archiveBlockReason(fullyVisible, entries){
+  if(!fullyVisible) return "Part of this form is outside your department scope, so you cannot archive it.";
+  if((entries || []).some(e => e.status === "completed")) return "This overtime has completed departments (already processed), so it cannot be archived.";
+  return "";
+}
+function flash(text, isErr){
+  const el = document.getElementById("flash"); el.textContent = text; el.className = "flash" + (isErr ? " err" : ""); el.style.display = "block";
+  clearTimeout(el._t); el._t = setTimeout(function(){ el.style.display = "none"; }, 6000);
+}
+function archiveTarget(id){
+  const r = LIST_ROWS.find(x => String(x.id) === String(id));
+  if(r) return { id: r.id, form_number: r.form_number, section: r.section, overtime_date: r.overtime_date, entries: r.entries };
+  if(CUR && CUR.initiation && String(CUR.initiation.id) === String(id))
+    return { id: CUR.initiation.id, form_number: CUR.initiation.form_number, section: CUR.initiation.section, overtime_date: CUR.initiation.overtime_date,
+             entries: CUR.entries.map(e => ({ department: e.department, status: e.status })) };
+  return null;
+}
+function openArchive(id){
+  if(!CAN_ARCHIVE) return;
+  const t = archiveTarget(id); if(!t) return;
+  ARCH_CUR = t;
+  document.getElementById("archInfo").innerHTML =
+    "<b>Form No.:</b> " + esc(t.form_number) + " &nbsp;|&nbsp; <b>Branch:</b> " + esc(t.section) + " &nbsp;|&nbsp; <b>Overtime Date:</b> " + fmtDate(t.overtime_date) + "<br>" +
+    "<b>Departments:</b> " + (t.entries.length ? t.entries.map(e => esc(e.department) + " (" + esc(STEP_LABEL[e.status] || e.status) + ")").join(", ") : "none");
+  document.getElementById("archReason").value = ""; document.getElementById("archErr").textContent = "";
+  document.getElementById("archConfirm").disabled = false; document.getElementById("archCancel").disabled = false;
+  document.getElementById("archModal").classList.add("open");
+  setTimeout(function(){ document.getElementById("archReason").focus(); }, 50);
+}
+function closeArchive(){ if(ARCH_BUSY) return; document.getElementById("archModal").classList.remove("open"); }
+function archiveError(e){
+  const m = (e && (e.message || e.details)) || String(e);
+  if((e && (e.code === "PGRST202" || e.code === "42883")) || /Could not find the function|does not exist/i.test(m) && /overtime_archive/i.test(m))
+    return "The archive feature is not set up in the database yet. Ask IT to run Overtime_Archive_Setup.sql.";
+  return m;
+}
+async function confirmArchive(){
+  if(ARCH_BUSY || !ARCH_CUR || !CAN_ARCHIVE) return;
+  const reason = document.getElementById("archReason").value.trim();
+  const err = document.getElementById("archErr");
+  if(reason.length < 5){ err.textContent = "Please give a reason (at least 5 characters)."; document.getElementById("archReason").focus(); return; }
+  ARCH_BUSY = true; err.textContent = "";
+  document.getElementById("archConfirm").disabled = true; document.getElementById("archCancel").disabled = true;
+  const formNo = ARCH_CUR.form_number;
+  try{
+    const { error } = await sb.rpc("overtime_archive_form", { p_initiation_id: String(ARCH_CUR.id), p_reason: reason });
+    if(error) throw error;
+    ARCH_BUSY = false; document.getElementById("archModal").classList.remove("open");
+    flash(formNo + " has been archived. A new overtime can now be initiated for that date.", false);
+    showView("listView");
+    await loadList();
+  }catch(e){
+    ARCH_BUSY = false;
+    err.textContent = archiveError(e);
+    document.getElementById("archConfirm").disabled = false; document.getElementById("archCancel").disabled = false;
+  }
+}
+document.addEventListener("keydown", function(e){ if(e.key === "Escape") closeArchive(); });
 
 // ---------- UNITS + STAFF ----------
 async function openDept(deptEntryId){
