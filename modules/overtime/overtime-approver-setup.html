@@ -123,6 +123,10 @@
           <div class="step">Step 6</div><div class="name">Accounting</div>
           <div class="desc">Central. Processes the payment. Assign one or more accounting staff.</div>
         </button>
+        <button class="tile" onclick="showView('archView'); loadArch();">
+          <div class="step">Archive</div><div class="name">Overtime Archive</div>
+          <div class="desc">Central. Staff who may archive an overtime started by mistake, so a new one can be initiated for the same date.</div>
+        </button>
         <button class="tile" onclick="showView('viewerView'); onViewerBranch();">
           <div class="step">View only</div><div class="name">Overtime Viewer</div>
           <div class="desc">Can watch overtime in the branches you choose. Cannot approve, reject or change anything.</div>
@@ -252,6 +256,24 @@
     </div>
   </div>
 
+  <!-- ================= OVERTIME ARCHIVE (central) ================= -->
+  <div id="archView" style="display:none;">
+    <div class="backbar"><button class="mini grey" onclick="home()">← Back to setup</button></div>
+    <div class="card">
+      <h3>Overtime Archive</h3>
+      <p class="sub">Central across all branches. Staff chosen here see an Archive button in Manage Overtime, and can archive an overtime that was started by mistake.</p>
+      <div class="hint">Archiving takes the whole overtime out of every step, so a new overtime can be initiated for the same date. Nothing is deleted: it is kept in the archive with the person's name and the reason they give, and only IT can bring it back. An overtime that has already been completed cannot be archived.</div>
+      <label style="margin-top:12px;">Add staff who may archive overtime (search by name or ID)</label>
+      <input type="text" id="arc_search" placeholder="Type a name or employee ID" oninput="renderPicker('arc')">
+      <div class="picker" id="arc_picker"></div>
+      <div class="selwrap" id="arc_sel"></div>
+      <div class="btnbar"><button class="green" onclick="saveArch()">Save Archive Staff</button></div>
+      <div class="status" id="arc_status"></div>
+      <h4>Currently allowed to archive (all branches)</h4>
+      <div id="arc_list"></div>
+    </div>
+  </div>
+
   <!-- ================= OVERTIME VIEWER (view only) ================= -->
   <div id="viewerView" style="display:none;">
     <div class="backbar"><button class="mini grey" onclick="home()">← Back to setup</button></div>
@@ -294,7 +316,7 @@
 let ME = null;
 let EMPLOYEES = [];
 let DEPT_CACHE = {};                 // branch -> [dept names]
-const SEL = { init:new Set(), fill:new Set(), pm:new Set(), hrr:new Set(), hrp:new Set(), acc:new Set(), view:new Set() };
+const SEL = { init:new Set(), fill:new Set(), pm:new Set(), hrr:new Set(), hrp:new Set(), acc:new Set(), arc:new Set(), view:new Set() };
 const PM_DEPTS = new Set();          // selected departments for the plant-manager scope
 
 // ---------- helpers ----------
@@ -310,7 +332,7 @@ async function logActivity(actionType, description){
 }
 
 function showView(id){
-  ["homeView","initView","fillerView","pmView","hrRevView","hrPayView","acctView","viewerView","overviewView"].forEach(v=>{
+  ["homeView","initView","fillerView","pmView","hrRevView","hrPayView","acctView","archView","viewerView","overviewView"].forEach(v=>{
     const el = document.getElementById(v); if(el) el.style.display = (v===id) ? "block" : "none";
   });
   try{ window.scrollTo(0,0); }catch(e){}
@@ -630,6 +652,37 @@ async function loadAcct(){
   renderSimpleList(wrap, data||[], r=>nameFor(r.employee_id), r=>codeFor(r.employee_id), "overtime_step_approvers", "loadAcct");
 }
 
+// ==========================================================
+// OVERTIME ARCHIVE (central): who may archive an overtime
+// ==========================================================
+function archSetupError(e){
+  const m = (e && (e.message || e.details)) || "";
+  if((e && (e.code === "42P01" || e.code === "PGRST205")) || /overtime_archivers/i.test(m) && /(does not exist|schema cache)/i.test(m))
+    return "The archive feature is not set up in the database yet. Ask IT to run Overtime_Archive_Setup.sql.";
+  return "";
+}
+async function saveArch(){
+  const st = document.getElementById("arc_status");
+  if(!SEL.arc.size){ st.className="status err"; st.textContent="Select at least one person."; return; }
+  st.className="status"; st.textContent="Saving…";
+  try{
+    const rows = Array.from(SEL.arc).map(id => ({ employee_id: id }));
+    const { error } = await sb.from("overtime_archivers").insert(rows);
+    if(error) throw error;
+    await logActivity("overtime_archivers_assigned", ME.username + " gave " + rows.length + " staff the privilege to archive overtime");
+    st.className="status ok"; st.textContent="✅ Saved. They will now see the Archive button in Manage Overtime.";
+    clearSel("arc"); await loadArch();
+    loadOverviewIfOpen();
+  }catch(e){ st.className="status err"; st.textContent = archSetupError(e) ? "❌ " + archSetupError(e) : dupMsg(e, "already allowed to archive"); }
+}
+async function loadArch(){
+  const wrap = document.getElementById("arc_list");
+  wrap.innerHTML = "<p class='loading'>Loading…</p>";
+  const { data, error } = await sb.from("overtime_archivers").select("id, employee_id").order("id");
+  if(error){ wrap.innerHTML = "<p class='status err'>❌ " + esc(archSetupError(error) || error.message) + "</p>"; return; }
+  renderSimpleList(wrap, data||[], r=>nameFor(r.employee_id), r=>codeFor(r.employee_id), "overtime_archivers", "loadArch");
+}
+
 // ---------- shared list renderer + remove ----------
 // ==========================================================
 // OVERTIME VIEWER (view only): pick the people, then tick the branches
@@ -753,11 +806,12 @@ async function loadOverview(){
   const wrap = document.getElementById("overviewWrap");
   wrap.innerHTML = "<p class='loading'>Loading…</p>";
   try{
-    const [{ data: inits }, { data: fillers }, { data: apprs }, { data: viewers }] = await Promise.all([
+    const [{ data: inits }, { data: fillers }, { data: apprs }, { data: viewers }, { data: archivers }] = await Promise.all([
       sb.from("overtime_initiators").select("section, employee_id").order("section"),
       sb.from("overtime_step2_fillers").select("section, department, employee_id").order("section"),
       sb.from("overtime_step_approvers").select("section, step, employee_id, departments").order("step"),
-      sb.from("overtime_viewers").select("section, employee_id").order("section")
+      sb.from("overtime_viewers").select("section, employee_id").order("section"),
+      sb.from("overtime_archivers").select("employee_id").order("id")      // missing table just gives no rows
     ]);
     const rowsHtml = [];
     const push = (scope, role, people) => rowsHtml.push("<tr><td>" + esc(scope) + "</td><td>" + esc(role) + "</td><td>" + esc(people) + "</td></tr>");
@@ -787,6 +841,7 @@ async function loadOverview(){
       const people = (apprs||[]).filter(a=>a.step===step).map(a=>nameFor(a.employee_id));
       if(people.length) push("All branches (central)", stepLabel[step], people.join(", "));
     });
+    if((archivers||[]).length) push("All branches (central)", "Overtime Archive", archivers.map(a=>nameFor(a.employee_id)).join(", "));
 
     // viewers, per branch (view only)
     const byView = {};
