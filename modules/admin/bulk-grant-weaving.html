@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Grant Access: Weaving Staff</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>(function(){function apply(t){if(t)document.documentElement.setAttribute("data-theme",t);}window.addEventListener("message",function(e){if(e.data&&e.data.rumbuTheme)apply(e.data.rumbuTheme);});try{apply(localStorage.getItem("rumbu_theme"));}catch(e){}})();</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+:root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;--amber:#d97706;}
+*{box-sizing:border-box;}
+body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;color:var(--text);}
+.wrap{max-width:1100px;margin:0 auto;}
+.page-head{background:linear-gradient(130deg,#1F3864 0%,#2E75B6 100%);border-radius:14px;padding:18px 22px;margin-bottom:16px;color:#fff;}
+.page-head h2{margin:0 0 4px;font-size:18px;font-weight:800;color:#fff;}
+.page-head p{margin:0;font-size:12px;opacity:.9;color:#fff;}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;}
+.card h3{color:var(--navy);margin:0 0 10px;font-size:14px;font-weight:800;}
+.card p,.card li{font-size:13px;line-height:1.6;}
+.banner{border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:13px;font-weight:600;}
+.banner.err{background:#fdecea;color:#7a1f16;border:1px solid #f5b5ad;}
+.banner.warn{background:#fff4e0;color:#7a4b00;border:1px solid #f1cf94;}
+.banner.ok{background:#e6f4ea;color:#14532d;border:1px solid #a6d6b5;}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;}
+.tile{border:1px solid var(--line);border-radius:12px;padding:14px;text-align:center;background:var(--card);}
+.tile .n{font-size:26px;font-weight:800;color:var(--navy);}
+.tile .l{font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;margin-top:4px;}
+.tile.good .n{color:var(--green);}.tile.warn .n{color:var(--amber);}.tile.bad .n{color:var(--red);}
+button{padding:10px 18px;border:none;border-radius:8px;background:var(--blue);color:#fff;font-weight:700;cursor:pointer;font-size:13px;}
+button:hover{background:var(--blue-dark);}
+button:disabled{opacity:.5;cursor:not-allowed;}
+button.go{background:var(--green);}
+button.stop{background:var(--red);}
+button.alt{background:#64748b;}
+.btns{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px;}
+.table-scroll{overflow-x:auto;max-height:340px;overflow-y:auto;}
+table{width:100%;border-collapse:collapse;font-size:12px;}
+th,td{border:1px solid var(--line);padding:6px 8px;text-align:left;}
+thead th{background:var(--navy);color:#fff;position:sticky;top:0;font-size:11px;}
+.bar{height:14px;background:#e5e7eb;border-radius:8px;overflow:hidden;margin:10px 0;}
+.bar>div{height:100%;width:0;background:var(--green);transition:width .2s;}
+.log{font-family:Consolas,monospace;font-size:11px;background:#0f172a;color:#cbd5e1;border-radius:8px;padding:10px;min-height:60px;max-height:140px;overflow:auto;white-space:pre-wrap;}
+.pill{display:inline-block;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:700;color:#fff;}
+.pill.create{background:#2E75B6;}.pill.link{background:#7c3aed;}.pill.fail{background:var(--red);}.pill.ok{background:var(--green);}.pill.skip{background:#64748b;}
+code{background:#eef2f7;padding:1px 6px;border-radius:4px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="page-head">
+  <h2>🔑 Grant Access: Weaving Staff</h2>
+  <p>One-time tool. Gives every Weaving employee a login. Their pages and branch are granted automatically.</p>
+</div>
+
+<div id="banner"></div>
+
+<div class="card" id="infoCard">
+  <h3>What this does</h3>
+  <ul style="margin:0;padding-left:18px;">
+    <li>Finds every employee whose department or unit is Weaving and who has <b>no login yet</b>.</li>
+    <li>Creates the login with username = <b>Employee ID</b> and temporary password <code>12345678</code>. They are made to change it on first login, exactly like Grant Access.</li>
+    <li>Staff who already have a login are left alone. A login that already exists for an Employee ID is linked, and its password is <b>not</b> touched.</li>
+    <li>The database then gives each linked Weaving login its three Staff Evaluation pages and its branch, so nobody opens Manage Role.</li>
+    <li>Safe to run again: it only handles staff who are still without a login.</li>
+  </ul>
+</div>
+
+<div class="card" id="scanCard" style="display:none;">
+  <h3>Scan result</h3>
+  <div class="tiles" id="tiles"></div>
+  <div id="notice" style="margin-top:12px;"></div>
+  <div class="btns">
+    <button class="go" id="runBtn" onclick="startRun()" disabled>Grant access</button>
+    <button class="stop" id="stopBtn" onclick="stopRun()" style="display:none;">Stop after current person</button>
+    <button class="alt" id="scanBtn" onclick="scan()">🔄 Scan again</button>
+  </div>
+</div>
+
+<div class="card" id="previewCard" style="display:none;">
+  <h3 id="previewTitle">Staff to be processed</h3>
+  <div class="table-scroll"><table id="previewTable"></table></div>
+</div>
+
+<div class="card" id="skipCard" style="display:none;">
+  <h3>Cannot be processed automatically</h3>
+  <div class="table-scroll"><table id="skipTable"></table></div>
+</div>
+
+<div class="card" id="runCard" style="display:none;">
+  <h3 id="runTitle">Working…</h3>
+  <div class="bar"><div id="barFill"></div></div>
+  <div id="runCount" style="font-size:13px;font-weight:700;"></div>
+  <div class="log" id="logBox"></div>
+</div>
+
+<div class="card" id="resultCard" style="display:none;">
+  <h3>Result</h3>
+  <div class="tiles" id="resultTiles"></div>
+  <div id="resultNotes" style="margin-top:12px;"></div>
+  <div class="btns"><button class="alt" onclick="downloadCsv()">⬇ Download result (CSV)</button></div>
+</div>
+</div>
+
+<script>
+/*==PURE-START==*/
+const TEMP_PASSWORD="12345678";
+const STAFF_PAGES=["staff-evaluation/staff-dashboard","staff-evaluation/my-asset-report","staff-evaluation/manage-query"];
+/* identical to the edge function's rule for building the login e-mail */
+function emailFor(username){return String(username).toLowerCase().replace(/[^a-z0-9._-]/g,"")+"@rumbu.internal";}
+
+/* employees: rows of the employees table (Weaving only)
+   profileByKey: Map  email(lowercase) -> profile,  "u:"+username(lowercase) -> profile
+   linkedElsewhere: Set of profile ids already linked to some employee row */
+function planGrants(employees,profileByKey,linkedElsewhere){
+  const plan={has:[],create:[],link:[],skip:[]};
+  const seen=new Map();
+  employees.forEach(e=>{
+    if(e.linked_profile_id){plan.has.push(e);return;}
+    const empId=String(e.employee_id==null?"":e.employee_id).trim();
+    if(!empId){plan.skip.push({emp:e,reason:"No Employee ID on the employee record"});return;}
+    const email=emailFor(empId);
+    if(email.split("@")[0]===""){plan.skip.push({emp:e,reason:"Employee ID has no usable letters or digits"});return;}
+    if(seen.has(email)){plan.skip.push({emp:e,reason:"Same login name as "+seen.get(email)+" (duplicate or look-alike Employee ID)"});return;}
+    seen.set(email,empId);
+    const existing=profileByKey.get(email)||profileByKey.get("u:"+empId.toLowerCase());
+    if(existing){
+      if(linkedElsewhere.has(existing.id)){plan.skip.push({emp:e,reason:"A login with this name already belongs to another employee"});return;}
+      plan.link.push({emp:e,username:empId,profileId:existing.id});return;
+    }
+    plan.create.push({emp:e,username:empId});
+  });
+  return plan;
+}
+function chunk(a,n){const o=[];for(let i=0;i<a.length;i+=n)o.push(a.slice(i,i+n));return o;}
+function csvCell(v){const s=String(v==null?"":v);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;}
+/*==PURE-END==*/
+
+const $=id=>document.getElementById(id);
+const esc=v=>String(v==null?"":v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+let ME=null,PLAN=null,RESULTS=[],STOP=false,RUNNING=false,EDGE="";
+
+async function callEdge(payload){
+  const {data:{session}}=await sb.auth.getSession();       // refreshes the token if needed
+  if(!session)throw new Error("Your session has expired. Sign in again.");
+  const res=await fetch(EDGE,{method:"post",headers:{"Authorization":"Bearer "+session.access_token,"Content-Type":"application/json"},body:JSON.stringify(payload)});
+  const data=await res.json().catch(()=>({}));
+  if(!res.ok)throw new Error(data.error||("HTTP "+res.status));
+  return data;
+}
+
+async function init(){
+  try{
+    ME=await requireAuth("../../login.html");
+    if(!ME)return;
+    EDGE=SUPABASE_URL+"/functions/v1/swift-handler";
+    if(ME.role!=="super_admin"){
+      $("banner").innerHTML='<div class="banner err">This tool is for Super Admins only.</div>';
+      $("infoCard").style.display="none";return;
+    }
+    if(ME.readOnly){
+      $("banner").innerHTML='<div class="banner warn">This account is view-only, so the Grant button is disabled by the system. You can still scan to see what would happen. To grant access, sign in with the IT administrator account (itops3).</div>';
+    }
+    await scan();
+  }catch(e){$("banner").innerHTML='<div class="banner err">❌ '+esc(e.message)+'</div>';console.error(e);}
+}
+
+async function fetchWeavingEmployees(){
+  const out=[];let from=0;
+  for(;;){
+    const {data,error}=await sb.from("employees")
+      .select("id,employee_id,full_name,department,unit,branch,linked_profile_id,has_system_access")
+      .or("department.ilike.%weaving%,unit.ilike.%weaving%").order("employee_id").range(from,from+999);
+    if(error)throw new Error("Employee list: "+error.message);
+    out.push(...(data||[]));
+    if(!data||data.length<1000)break;
+    from+=1000;
+  }
+  return out;
+}
+
+async function scan(){
+  if(RUNNING)return;
+  $("scanBtn").disabled=true;$("runBtn").disabled=true;
+  $("scanCard").style.display="block";
+  $("tiles").innerHTML='<div class="tile"><div class="n">…</div><div class="l">Scanning</div></div>';
+  try{
+    const emps=await fetchWeavingEmployees();
+    const todo=emps.filter(e=>!e.linked_profile_id);
+
+    // existing logins that already use one of these usernames / e-mails
+    const keys=[...new Set(todo.map(e=>String(e.employee_id==null?"":e.employee_id).trim()).filter(Boolean))];
+    const profileByKey=new Map();
+    const profileIds=new Set();
+    for(const c of chunk(keys,100)){
+      const [byUser,byMail]=await Promise.all([
+        sb.from("profiles").select("id,username,email").in("username",c),
+        sb.from("profiles").select("id,username,email").in("email",c.map(emailFor))]);
+      for(const r of [byUser,byMail]){
+        if(r.error)throw new Error("Logins lookup: "+r.error.message);
+        (r.data||[]).forEach(p=>{profileIds.add(p.id);
+          if(p.email)profileByKey.set(String(p.email).toLowerCase(),p);
+          if(p.username)profileByKey.set("u:"+String(p.username).toLowerCase(),p);});
+      }
+    }
+    // are any of those logins already linked to some employee?
+    const linkedElsewhere=new Set();
+    for(const c of chunk([...profileIds],100)){
+      const {data,error}=await sb.from("employees").select("linked_profile_id").in("linked_profile_id",c);
+      if(error)throw new Error("Link lookup: "+error.message);
+      (data||[]).forEach(r=>linkedElsewhere.add(r.linked_profile_id));
+    }
+    PLAN=planGrants(emps,profileByKey,linkedElsewhere);
+    renderPlan(emps.length);
+  }catch(e){
+    $("tiles").innerHTML="";
+    $("notice").innerHTML='<div class="banner err">❌ '+esc(e.message)+'</div>';console.error(e);
+  }finally{$("scanBtn").disabled=false;}
+}
+
+function renderPlan(total){
+  const P=PLAN,n=P.create.length+P.link.length;
+  $("tiles").innerHTML=
+    `<div class="tile"><div class="n">${total}</div><div class="l">Weaving staff</div></div>`+
+    `<div class="tile good"><div class="n">${P.has.length}</div><div class="l">Already have a login</div></div>`+
+    `<div class="tile warn"><div class="n">${P.create.length}</div><div class="l">New logins to create</div></div>`+
+    `<div class="tile"><div class="n">${P.link.length}</div><div class="l">Existing logins to link</div></div>`+
+    `<div class="tile ${P.skip.length?'bad':''}"><div class="n">${P.skip.length}</div><div class="l">Cannot process</div></div>`;
+  const rb=$("runBtn");
+  rb.textContent=n?`Grant access to ${n} staff`:"Nothing to do";
+  rb.disabled=!n||!!ME.readOnly;
+  $("notice").innerHTML=n?"":'<div class="banner ok">Every Weaving employee that can be processed already has a login.</div>';
+
+  const rows=P.create.map(x=>({x,a:"create"})).concat(P.link.map(x=>({x,a:"link"})));
+  $("previewCard").style.display=rows.length?"block":"none";
+  $("previewTitle").textContent="Staff to be processed ("+rows.length+(rows.length>200?", first 200 shown":"")+")";
+  $("previewTable").innerHTML='<thead><tr><th>Employee ID</th><th>Name</th><th>Branch</th><th>Action</th></tr></thead><tbody>'+
+    rows.slice(0,200).map(r=>`<tr><td>${esc(r.x.username)}</td><td>${esc(r.x.emp.full_name)}</td><td>${esc(r.x.emp.branch||"(blank)")}</td>`+
+      `<td><span class="pill ${r.a}">${r.a==="create"?"Create login":"Link existing login"}</span></td></tr>`).join("")+"</tbody>";
+  $("skipCard").style.display=P.skip.length?"block":"none";
+  $("skipTable").innerHTML='<thead><tr><th>Employee ID</th><th>Name</th><th>Reason</th></tr></thead><tbody>'+
+    P.skip.map(s=>`<tr><td>${esc(s.emp.employee_id||"(none)")}</td><td>${esc(s.emp.full_name)}</td><td>${esc(s.reason)}</td></tr>`).join("")+"</tbody>";
+}
+
+function log(msg){const b=$("logBox");b.textContent+=msg+"\n";b.scrollTop=b.scrollHeight;}
+function stopRun(){STOP=true;$("stopBtn").disabled=true;log("Stopping after the current person…");}
+
+async function startRun(){
+  if(RUNNING||!PLAN)return;
+  const items=PLAN.create.map(x=>({...x,mode:"create"})).concat(PLAN.link.map(x=>({...x,mode:"link"})));
+  if(!items.length)return;
+  if(!confirm(`Grant access to ${items.length} Weaving staff?\n\n`+
+    `New logins: ${PLAN.create.length}\nExisting logins to link: ${PLAN.link.length}\n\n`+
+    `Username: Employee ID\nTemporary password: ${TEMP_PASSWORD}\nThey must change it on first login.`))return;
+  RUNNING=true;STOP=false;RESULTS=[];
+  $("runBtn").disabled=true;$("scanBtn").disabled=true;$("stopBtn").style.display="inline-block";$("stopBtn").disabled=false;
+  $("runCard").style.display="block";$("resultCard").style.display="none";$("logBox").textContent="";
+  $("runTitle").textContent="Working…";
+  let done=0;
+  for(const it of items){
+    if(STOP)break;
+    const r={employee_id:it.username,name:it.emp.full_name||"",action:it.mode==="create"?"Create login":"Link existing login",status:"",note:"",profileId:null,forced:null};
+    try{
+      let profileId=it.profileId;
+      if(it.mode==="create"){
+        const c=await callEdge({action:"create_user",username:it.username,password:TEMP_PASSWORD});
+        profileId=c.id;
+        try{const {error}=await sb.rpc("kwp_mark_password_reset",{target_profile_id:profileId});r.forced=!error;}catch(e){r.forced=false;}
+        if(!r.forced)r.note="Login created but NOT forced to change the temporary password";
+      }
+      await callEdge({action:"link_employee",employee_id:it.emp.id,profile_id:profileId});
+      r.profileId=profileId;r.status=it.mode==="create"?"created":"linked";
+      try{await sb.from("activity_log").insert({actor_id:ME.id,actor_username:ME.username,actor_role:ME.role,section_id:ME.sectionId,
+        action_type:"access_granted",description:ME.username+" granted access to \""+(it.emp.full_name||"")+"\" ("+it.username+") by bulk Weaving grant"});}catch(e){}
+      log("✔ "+it.username+"  "+(it.emp.full_name||"")+"  ("+r.status+")");
+    }catch(e){
+      r.status="failed";r.note=e.message||String(e);log("✖ "+it.username+"  "+r.note);
+    }
+    RESULTS.push(r);done++;
+    $("barFill").style.width=Math.round(done/items.length*100)+"%";
+    $("runCount").textContent=done+" of "+items.length+" processed";
+    await sleep(60);
+  }
+  $("stopBtn").style.display="none";
+  $("runTitle").textContent=STOP?"Stopped":"Verifying…";
+  await verify();
+  RUNNING=false;$("scanBtn").disabled=false;
+  $("runTitle").textContent=STOP?"Stopped (you can scan again to continue)":"Finished";
+  await scan();
+}
+
+/* confirm the database really gave each processed login its pages and branch */
+async function verify(){
+  const ok=RESULTS.filter(r=>r.profileId&&(r.status==="created"||r.status==="linked"));
+  const failed=RESULTS.filter(r=>r.status==="failed");
+  const notForced=RESULTS.filter(r=>r.forced===false);
+  let missingPages=[],missingBranch=[],pagesRegistered=true,verifyError="";
+  try{
+    const {data:pg,error:pe}=await sb.from("pages").select("id,module_path").in("module_path",STAFF_PAGES);
+    if(pe)throw new Error(pe.message);
+    const pageIds=(pg||[]).map(p=>p.id);
+    pagesRegistered=pageIds.length===STAFF_PAGES.length;
+    const havePages=new Map(),haveSec=new Set();
+    for(const c of chunk(ok.map(r=>r.profileId),100)){
+      const [ap,ps]=await Promise.all([
+        sb.from("assigned_pages").select("profile_id,page_id").in("profile_id",c),
+        sb.from("profile_sections").select("profile_id").in("profile_id",c)]);
+      if(ap.error)throw new Error(ap.error.message);
+      if(ps.error)throw new Error(ps.error.message);
+      (ap.data||[]).forEach(r=>{if(pageIds.includes(r.page_id)){if(!havePages.has(r.profile_id))havePages.set(r.profile_id,new Set());havePages.get(r.profile_id).add(r.page_id);}});
+      (ps.data||[]).forEach(r=>haveSec.add(r.profile_id));
+    }
+    ok.forEach(r=>{
+      if(!pagesRegistered||(havePages.get(r.profileId)||new Set()).size<pageIds.length)missingPages.push(r);
+      if(!haveSec.has(r.profileId))missingBranch.push(r);
+    });
+  }catch(e){verifyError=e.message;}
+
+  const created=RESULTS.filter(r=>r.status==="created").length,linked=RESULTS.filter(r=>r.status==="linked").length;
+  $("resultCard").style.display="block";
+  $("resultTiles").innerHTML=
+    `<div class="tile good"><div class="n">${created}</div><div class="l">Logins created</div></div>`+
+    `<div class="tile"><div class="n">${linked}</div><div class="l">Existing logins linked</div></div>`+
+    `<div class="tile ${failed.length?'bad':''}"><div class="n">${failed.length}</div><div class="l">Failed</div></div>`+
+    `<div class="tile ${missingPages.length?'bad':'good'}"><div class="n">${ok.length-missingPages.length}</div><div class="l">Have all 3 pages</div></div>`+
+    `<div class="tile ${missingBranch.length?'warn':'good'}"><div class="n">${ok.length-missingBranch.length}</div><div class="l">Have a branch</div></div>`;
+  let notes="";
+  if(verifyError)notes+=`<div class="banner warn">Could not verify pages and branches automatically: ${esc(verifyError)}</div>`;
+  if(!pagesRegistered)notes+='<div class="banner err">The three Staff Evaluation pages are not registered yet. Run Part 1 of staff-evaluation-setup.sql, then run Part 4 to give these logins their pages.</div>';
+  else if(missingPages.length)notes+=`<div class="banner err">${missingPages.length} login(s) did not receive their pages. The automatic grant is probably not installed yet. Run Parts 2 and 4 of staff-evaluation-setup.sql; that fixes everyone in one go.</div>`;
+  if(missingBranch.length)notes+=`<div class="banner warn">${missingBranch.length} login(s) have no branch, because the employee's Branch does not match a branch name. They would see "No Branch is assigned" on the home screen. Run check 5b in the setup script to see which Branch values do not match.</div>`;
+  if(notForced.length)notes+=`<div class="banner err">${notForced.length} new login(s) were NOT forced to change the temporary password. Fix with:<br><code>UPDATE profiles SET must_change_password = true WHERE username IN (${notForced.map(r=>"'"+String(r.employee_id).replace(/'/g,"''")+"'").join(", ")});</code></div>`;
+  if(failed.length)notes+=`<div class="banner warn">${failed.length} person(s) failed. See the CSV for the reason, then press “Scan again” to retry them.</div>`;
+  if(!notes)notes='<div class="banner ok">All done. Every login has its pages and branch, and must change the temporary password on first login.</div>';
+  $("resultNotes").innerHTML=notes;
+}
+
+function downloadCsv(){
+  const head=["Employee ID","Name","Action","Result","Note"];
+  const lines=[head.join(",")].concat(RESULTS.map(r=>[r.employee_id,r.name,r.action,r.status,r.note].map(csvCell).join(",")));
+  const blob=new Blob([lines.join("\r\n")],{type:"text/csv"});
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="weaving_access_result.csv";document.body.appendChild(a);a.click();a.remove();
+}
+
+init();
+</script>
+</body>
+</html>

@@ -432,26 +432,24 @@ async function generateDetailed(){
   });
 
   // ── Overall Production Summary — mirrors GAS generateWeavingPDF top section ──
-  const overallA = prod.reduce((s,r)=>s+Number(r.a_double||0)+Number(r.a_single||0),0);
-  const overallB = prod.reduce((s,r)=>s+Number(r.b||0),0);
-  const overallC = prod.reduce((s,r)=>s+Number(r.c||0),0);
-  const overallTotal  = prod.reduce((s,r)=>s+Number(r.total||0),0);
-  const overallTarget = prod.reduce((s,r)=>s+Number(r.target||0),0);
+  // Every figure below is built from the same per-asset rows the tables use (rows is already scaled to the
+  // chosen work hours), so this summary and the GRAND TOTAL row can never disagree.
+  const overallA = rows.reduce((s,r)=>s+r.A,0);
+  const overallB = rows.reduce((s,r)=>s+r.B,0);
+  const overallC = rows.reduce((s,r)=>s+r.C,0);
+  const overallTotal  = rows.reduce((s,r)=>s+r.total,0);
+  const overallTarget = rows.reduce((s,r)=>s+r.target,0);
   const overallAssetsUsed = new Set(prod.map(r=>r.assets)).size;
-  // downtime totals for overall summary
+  // total downtime of every whitelisted machine in the range (includes machines with no production)
   const dtMap = downtimeByAsset(f);
   const totalDowntime = Object.values(dtMap).reduce((s,v)=>s+v,0);
   // MLD (Mat Loss by Downtime) across all assets
-  let totalMLD = 0;
-  Object.values(groups).forEach(g=>{
-    const tgt = g.target * (f.workMinutes/660);
-    const D = dtMap[g.asset]||0;
-    totalMLD += Math.round((tgt*D)/(f.workMinutes*(g.occ||1)));
-  });
+  const totalMLD = rows.reduce((s,r)=>s+r.MLD,0);
   const overallATG = overallTarget - totalMLD;
   const overallMLU = overallTotal  - overallATG;
-  const overallPercB   = overallTotal>0 ? Math.round((overallB/overallTotal)*100) : 0;
-  const overallPercC   = overallTotal>0 ? Math.round((overallC/overallTotal)*100) : 0;
+  // %B and %C are shares of Total output, shown to 2 decimals exactly like the %B column in the tables
+  const overallPercB   = overallTotal>0 ? (overallB/overallTotal*100).toFixed(2) : "0.00";
+  const overallPercC   = overallTotal>0 ? (overallC/overallTotal*100).toFixed(2) : "0.00";
   const overallProdEff = overallTarget>0 ? Math.round((overallTotal/overallTarget)*100) : 0;
   const overallActEff  = overallATG>0    ? Math.round((overallTotal/overallATG)*100)    : 0;
 
@@ -517,8 +515,8 @@ async function generateDetailed(){
         `<td>${Math.round(unitTot.B)}</td><td>${Math.round(unitTot.C)}</td><td>${Math.round(unitTot.total)}</td>` +
         `<td>${Math.round(unitTot.target)}</td><td>${Math.round(unitTot.D)}</td><td>${Math.round(unitTot.MLD)}</td>` +
         `<td>${Math.round(unitTot.ATG)}</td><td>${Math.round(unitTot.MLU)}</td>` +
-        `<td>${unitTot.ATG?Math.round(unitTot.A/unitTot.ATG*100):"-"}</td>` +
-        `<td>${unitTot.ATG?(unitTot.B/unitTot.ATG*100).toFixed(2):"-"}</td>` +
+        `<td>${unitTot.total?Math.round(unitTot.A/unitTot.total*100):"-"}</td>` +
+        `<td>${unitTot.total?(unitTot.B/unitTot.total*100).toFixed(2):"-"}</td>` +
         `<td>${unitTot.ATG?Math.round(unitTot.total/unitTot.ATG*100):"-"}</td></tr>`;
       Object.keys(shedTot).forEach(k=> shedTot[k]+=unitTot[k]);
     });
@@ -527,8 +525,8 @@ async function generateDetailed(){
       `<td>${Math.round(shedTot.B)}</td><td>${Math.round(shedTot.C)}</td><td>${Math.round(shedTot.total)}</td>` +
       `<td>${Math.round(shedTot.target)}</td><td>${Math.round(shedTot.D)}</td><td>${Math.round(shedTot.MLD)}</td>` +
       `<td>${Math.round(shedTot.ATG)}</td><td>${Math.round(shedTot.MLU)}</td>` +
-      `<td>${shedTot.ATG?Math.round(shedTot.A/shedTot.ATG*100):"-"}</td>` +
-      `<td>${shedTot.ATG?(shedTot.B/shedTot.ATG*100).toFixed(2):"-"}</td>` +
+      `<td>${shedTot.total?Math.round(shedTot.A/shedTot.total*100):"-"}</td>` +
+      `<td>${shedTot.total?(shedTot.B/shedTot.total*100).toFixed(2):"-"}</td>` +
       `<td>${shedTot.ATG?Math.round(shedTot.total/shedTot.ATG*100):"-"}</td></tr>`;
     html += "</table>";
     Object.keys(grand).forEach(k=> grand[k]+=shedTot[k]);
@@ -539,8 +537,8 @@ async function generateDetailed(){
     `<td>${Math.round(grand.B)}</td><td>${Math.round(grand.C)}</td><td>${Math.round(grand.total)}</td>` +
     `<td>${Math.round(grand.target)}</td><td>${Math.round(grand.D)}</td><td>${Math.round(grand.MLD)}</td>` +
     `<td>${Math.round(grand.ATG)}</td><td>${Math.round(grand.MLU)}</td>` +
-    `<td>${grand.ATG?Math.round(grand.A/grand.ATG*100):"-"}</td>` +
-    `<td>${grand.ATG?(grand.B/grand.ATG*100).toFixed(2):"-"}</td>` +
+    `<td>${grand.total?Math.round(grand.A/grand.total*100):"-"}</td>` +
+    `<td>${grand.total?(grand.B/grand.total*100).toFixed(2):"-"}</td>` +
     `<td>${grand.ATG?Math.round(grand.total/grand.ATG*100):"-"}</td></tr></table>`;
 
   // Advanced Morning vs Night analysis — only when Shift = All
