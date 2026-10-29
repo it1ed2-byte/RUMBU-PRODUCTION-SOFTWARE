@@ -64,6 +64,7 @@ code{background:#eef2f7;padding:1px 6px;border-radius:4px;}
     <li>Staff who already have a login are left alone. A login that already exists for an Employee ID is linked, and its password is <b>not</b> touched.</li>
     <li>The database then gives each linked Weaving login its three Staff Evaluation pages and its branch, so nobody opens Manage Role.</li>
     <li>Safe to run again: it only handles staff who are still without a login.</li>
+    <li><b>Before you start: close every other Rumbu tab</b> and stay on this one until it says Finished. The main app signs you out after 15 minutes without activity, which also ends this tab's session and stops the run part-way.</li>
   </ul>
 </div>
 
@@ -140,14 +141,20 @@ function csvCell(v){const s=String(v==null?"":v);return /[",\n]/.test(s)?'"'+s.r
 const $=id=>document.getElementById(id);
 const esc=v=>String(v==null?"":v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-let ME=null,PLAN=null,RESULTS=[],STOP=false,RUNNING=false,EDGE="";
+let ME=null,PLAN=null,RESULTS=[],STOP=false,RUNNING=false,EDGE="",SESSION_LOST=false;
 
+function sessionError(msg){const e=new Error(msg);e.sessionLost=true;return e;}
 async function callEdge(payload){
   const {data:{session}}=await sb.auth.getSession();       // refreshes the token if needed
-  if(!session)throw new Error("Your session has expired. Sign in again.");
+  if(!session)throw sessionError("Your login session has ended.");
   const res=await fetch(EDGE,{method:"post",headers:{"Authorization":"Bearer "+session.access_token,"Content-Type":"application/json"},body:JSON.stringify(payload)});
   const data=await res.json().catch(()=>({}));
-  if(!res.ok)throw new Error(data.error||("HTTP "+res.status));
+  if(!res.ok){
+    // The server rejected the login itself (not this person's record): every further call would fail the same way.
+    if(res.status===401||/invalid session|invalid jwt|jwt expired|not authenticated/i.test(data.error||""))
+      throw sessionError(data.error||"Your login session has ended.");
+    throw new Error(data.error||("HTTP "+res.status));
+  }
   return data;
 }
 
@@ -253,8 +260,9 @@ async function startRun(){
   if(!items.length)return;
   if(!confirm(`Grant access to ${items.length} Weaving staff?\n\n`+
     `New logins: ${PLAN.create.length}\nExisting logins to link: ${PLAN.link.length}\n\n`+
-    `Username: Employee ID\nTemporary password: ${TEMP_PASSWORD}\nThey must change it on first login.`))return;
-  RUNNING=true;STOP=false;RESULTS=[];
+    `Username: Employee ID\nTemporary password: ${TEMP_PASSWORD}\nThey must change it on first login.\n\n`+
+    `Have you closed all other Rumbu tabs? An idle main-app tab signs you out after 15 minutes and stops this run.`))return;
+  RUNNING=true;STOP=false;SESSION_LOST=false;RESULTS=[];
   $("runBtn").disabled=true;$("scanBtn").disabled=true;$("stopBtn").style.display="inline-block";$("stopBtn").disabled=false;
   $("runCard").style.display="block";$("resultCard").style.display="none";$("logBox").textContent="";
   $("runTitle").textContent="Working…";
@@ -266,7 +274,7 @@ async function startRun(){
       let profileId=it.profileId;
       if(it.mode==="create"){
         const c=await callEdge({action:"create_user",username:it.username,password:TEMP_PASSWORD});
-        profileId=c.id;
+        profileId=c.id;r.profileId=profileId;
         try{const {error}=await sb.rpc("kwp_mark_password_reset",{target_profile_id:profileId});r.forced=!error;}catch(e){r.forced=false;}
         if(!r.forced)r.note="Login created but NOT forced to change the temporary password";
       }
@@ -276,6 +284,15 @@ async function startRun(){
         action_type:"access_granted",description:ME.username+" granted access to \""+(it.emp.full_name||"")+"\" ("+it.username+") by bulk Weaving grant"});}catch(e){}
       log("✔ "+it.username+"  "+(it.emp.full_name||"")+"  ("+r.status+")");
     }catch(e){
+      if(e.sessionLost){
+        // Stop at once. Do not keep calling the server for everyone else.
+        r.status="stopped";
+        r.note=r.profileId?"Login session ended after this login was created. Scan again to finish linking it."
+                          :"Login session ended before anything was changed for this person.";
+        SESSION_LOST=true;RESULTS.push(r);done++;
+        log("■ "+it.username+"  login session ended. Stopping.");
+        break;
+      }
       r.status="failed";r.note=e.message||String(e);log("✖ "+it.username+"  "+r.note);
     }
     RESULTS.push(r);done++;
@@ -284,11 +301,31 @@ async function startRun(){
     await sleep(60);
   }
   $("stopBtn").style.display="none";
-  $("runTitle").textContent=STOP?"Stopped":"Verifying…";
+  const notAttempted=items.length-RESULTS.length;
+  $("runTitle").textContent=SESSION_LOST?"Stopped: login session ended":STOP?"Stopped":"Verifying…";
   await verify();
+  if(SESSION_LOST)await sessionLossBanner(notAttempted);
   RUNNING=false;$("scanBtn").disabled=false;
+  if(SESSION_LOST)return;                       // the session is gone, so a re-scan would only add confusing errors
   $("runTitle").textContent=STOP?"Stopped (you can scan again to continue)":"Finished";
   await scan();
+}
+
+async function sessionLossBanner(notAttempted){
+  const done=RESULTS.filter(r=>r.status==="created"||r.status==="linked").length;
+  let detail="";
+  try{
+    const {data,error}=await sb.auth.getUser();
+    detail=(error||!data||!data.user)
+      ?"The browser confirms this login was ended (signed out elsewhere, or expired)."
+      :"The browser still shows you as signed in but the server rejected the token. Reload this page and try once more. If it fails again at the first person, send the message in the log to IT.";
+  }catch(e){detail="Could not re-check the login: "+e.message;}
+  $("resultNotes").innerHTML=
+    `<div class="banner err"><b>Your login session ended, so the tool stopped instead of continuing.</b><br>`+
+    `${done} person(s) were completed, ${notAttempted} were not attempted. Only the last person listed in the CSV may be half done, and scanning again finishes them.<br>${esc(detail)}<br><br>`+
+    `The usual cause is another Rumbu tab: the main app signs you out after 15 minutes without activity, and that ends this tab's session too.<br>`+
+    `<b>To continue:</b> close every other Rumbu tab, sign in again as itops3, open this tool, press <b>Scan again</b>, then Grant. It carries on with the people who still have no login.</div>`+
+    $("resultNotes").innerHTML;
 }
 
 /* confirm the database really gave each processed login its pages and branch */
