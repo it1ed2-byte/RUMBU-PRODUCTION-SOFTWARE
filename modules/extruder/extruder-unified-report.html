@@ -88,6 +88,41 @@
 function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
 const SECTION_DISPLAY_MAP = { "Rumbu Mainmat": "Rumbu Mainmat", "MamaSannu": "Mama Sannu" };
 
+// ---- targets: one rule on every Extruder page ----
+// A record is one extruder shift. Records from the entry form use the extruder's per-shift target (the number shown on the form).
+// Older records that carry a type and a machine count keep their original target: machines x rpm x denier x 720 minutes.
+// If a per-shift number changes, change it in every page that has this block, until targets are kept in the database.
+const EXTRUDER_TARGETS = {
+  "Extruder 1":   1463.0,
+  "Extruder 2":   2325.6,
+  "Extruder 3":   2325.6,
+  "Extruder 4":   1394.2,
+  "Extruder 5":   1520.0,
+  "Extruder MSN": 1450.0
+};
+const SHIFT_MINUTES = 720;
+function getRPM(type){
+  const map = {
+    "No.1": { rpm: 170, denier: 0.39/1000 },
+    "No.2": { rpm: 130, denier: 0.50/1000 },
+    "No.3": { rpm: 110, denier: 0.63/1000 },
+    "No.4": { rpm: 110, denier: 0.81/1000 }
+  };
+  return map[type] || { rpm: 0, denier: 0 };
+}
+function canonExtruder(n){
+  const k = String(n==null?"":n).toUpperCase().replace(/\s+/g,"");
+  return k.indexOf("MAMASANNU")>=0 ? "EXTRUDERMSN" : k;       // "Extruder MamaSannu" and "Extruder MSN" are the same machine
+}
+const TARGET_BY_KEY = {}; Object.keys(EXTRUDER_TARGETS).forEach(k=>{ TARGET_BY_KEY[canonExtruder(k)] = EXTRUDER_TARGETS[k]; });
+function shiftTarget(name){ return TARGET_BY_KEY[canonExtruder(name)] || 0; }
+function rowTarget(r){
+  const g = getRPM(r.type_col), n = r.number_of_machine;
+  if(n!=null && n!=="" && g.rpm>0) return (Number(n)||0) * g.rpm * g.denier * SHIFT_MINUTES;
+  return shiftTarget(r.extruder_name);
+}
+
+
 let ME = null;
 let CONTROL_ROWS = [], JOB_CODES_ROWS = [], PROD_ROWS = [], WASTE_ROWS = [], SHUTDOWN_ROWS = [], RECO_ROWS = [];
 let lastRows = [], nurseRows = [];
@@ -115,19 +150,27 @@ function typeMultiplier(t){
   return n===1 ? 170 : n===2 ? 130 : (n===3||n===4) ? 110 : null;
 }
 
-async function fetchAllRows(table, query){
-  let all = [], offset = 0; const pageSize = 1000;
-  const q = query || "";
-  for(let guard=0; guard<500; guard++){
-    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
-    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=*" + q, { headers });
-    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+// Reads EVERY page of a query (the database returns at most 1,000 rows per request) in a stable order.
+async function fetchAllPages(url, headers, order){
+  const out = []; const size = 1000;
+  for(let offset=0, guard=0; guard<500; guard++, offset+=size){
+    let res = await fetch(url + (order ? "&order="+order : ""), { headers: Object.assign({}, headers, { "Range-Unit":"items", "Range": offset+"-"+(offset+size-1) }) });
+    if(res.status===416) break;                       // past the last row
+    if(res.status===400 && order){                    // that ordering column does not exist on this table: read without it
+      order = null; guard--; offset -= size; continue;
+    }
+    if(!res.ok) throw new Error("HTTP "+res.status);
     const batch = await res.json();
-    all = all.concat(batch);
-    if(batch.length < pageSize) break;
-    offset += pageSize;
+    for(let i=0;i<batch.length;i++) out.push(batch[i]);
+    if(batch.length < size) break;
   }
-  return all;
+  return out;
+}
+
+async function fetchAllRows(table, query){
+  const order = table === "extruder_new" ? "date_col.asc,extruder_name.asc,shift.asc,section.asc" : "id.asc";
+  try{ return await fetchAllPages(SUPABASE_URL + "/rest/v1/" + table + "?select=*" + (query||""), authHeaders(), order); }
+  catch(e){ throw new Error(table + ": " + (e.message||e)); }
 }
 
 async function init(){
@@ -397,36 +440,46 @@ async function loadExtras(){
   }catch(e){ document.getElementById("recoBody").innerHTML = "<p class='hint'>❌ " + (e.message||e) + "</p>"; }
 }
 
+
+// Production by extruder. Target = the sum of each record's target (one record = one shift), so %A, %B, %C and %P are shares of the real target.
+function productionGroups(){
+  const grouped = {};
+  PROD_ROWS.filter(r=>passesBaseFilter(r)).forEach(r=>{
+    const name = r.extruder_name || "(blank)";
+    if(!grouped[name]) grouped[name] = { A:0,B:0,C:0,Total:0,Target:0,Shifts:0 };
+    const g = grouped[name];
+    g.A += Number(r.a||0); g.B += Number(r.b||0); g.C += Number(r.c||0); g.Total += Number(r.total||0);
+    g.Target += rowTarget(r); g.Shifts++;
+  });
+  return grouped;
+}
+function productionTablesHtml(grouped, mode){
+  const scr = mode !== "print";
+  const names = Object.keys(grouped).sort((x,y)=>x.localeCompare(y, undefined, {numeric:true}));
+  const th = (t,n)=> "<th" + (scr&&n ? ' class="num"' : "") + ">" + t + "</th>";
+  const td = (v,n)=> "<td" + (scr&&n ? ' class="num"' : "") + ">" + v + "</td>";
+  const head = t => scr ? '<h4 class="fault-head">'+t+'</h4><div class="table-scroll"><table>' : '<h3 style="color:#000;">'+t+'</h3><table>';
+  const tail = scr ? "</tbody></table></div>" : "</tbody></table>";
+  const pc = (n,T)=> T>0 ? pct(n,T)+"%" : "-";
+  const one = (title, key, label)=>{
+    let h = head(title) + "<thead><tr>" + th("Extruder") + th(label,1) + th("Target",1) + th("%"+label,1) + "</tr></thead><tbody>";
+    names.forEach(n=>{ const g=grouped[n]; h += "<tr>" + td(esc(n)) + td(num(Math.round(g[key])),1) + td(num(Math.round(g.Target)),1) + td(pc(g[key],g.Target),1) + "</tr>"; });
+    return h + tail;
+  };
+  let comb = head("Combined Production") + "<thead><tr>" + th("Extruder") + th("A",1) + th("B",1) + th("C",1) + th("Total",1) + th("Target",1) + th("%A",1) + th("%B",1) + th("%C",1) + th("%P",1) + "</tr></thead><tbody>";
+  names.forEach(n=>{ const g=grouped[n];
+    comb += "<tr>" + td(esc(n)) + td(num(Math.round(g.A)),1) + td(num(Math.round(g.B)),1) + td(num(Math.round(g.C)),1) + td(num(Math.round(g.Total)),1) + td(num(Math.round(g.Target)),1)
+          + td(pc(g.A,g.Target),1) + td(pc(g.B,g.Target),1) + td(pc(g.C,g.Target),1) + td(pc(g.Total,g.Target),1) + "</tr>"; });
+  comb += tail;
+  const note = (scr ? "<p class='hint'>" : "<p style='font-size:11px;color:#444;'>") + "Target = each extruder's per-shift target for every shift recorded. %A, %B, %C and %P are shares of that target. A dash means no target is set for that extruder.</p>";
+  return one("A Production","A","A") + one("B Production","B","B") + one("C Production","C","C") + comb + note;
+}
+
 function renderProduction(){
   const el = document.getElementById("prodBody");
-  const filtered = PROD_ROWS.filter(r=>passesBaseFilter(r));
-  const grouped = {};
-  filtered.forEach(r=>{
-    const name = r.extruder_name || "(blank)";
-    if(!grouped[name]) grouped[name] = { A:0,B:0,C:0,Total:0 };
-    grouped[name].A += Number(r.a||0);
-    grouped[name].B += Number(r.b||0);
-    grouped[name].C += Number(r.c||0);
-    grouped[name].Total += Number(r.total||0);
-  });
-  const names = Object.keys(grouped);
-  if(!names.length){ el.innerHTML = "<p class='hint'>No production data.</p>"; return; }
-
-  let a = `<h4 class="fault-head">A Production</h4><div class="table-scroll"><table><thead><tr><th>Extruder</th><th class="num">A</th><th class="num">Target</th><th class="num">%A</th></tr></thead><tbody>`;
-  let b = `<h4 class="fault-head">B Production</h4><div class="table-scroll"><table><thead><tr><th>Extruder</th><th class="num">B</th><th class="num">Target</th><th class="num">%B</th></tr></thead><tbody>`;
-  let cG = `<h4 class="fault-head">C Production</h4><div class="table-scroll"><table><thead><tr><th>Extruder</th><th class="num">C</th><th class="num">Target</th><th class="num">%C</th></tr></thead><tbody>`;
-  let comb = `<h4 class="fault-head">Combined Production</h4><div class="table-scroll"><table><thead><tr><th>Extruder</th><th class="num">A</th><th class="num">B</th><th class="num">C</th><th class="num">Total</th><th class="num">Target</th><th class="num">%A</th><th class="num">%B</th><th class="num">%C</th><th class="num">%P</th></tr></thead><tbody>`;
-
-  names.forEach(name=>{
-    const g = grouped[name];
-    const A=Math.round(g.A), B=Math.round(g.B), C=Math.round(g.C), T=Math.round(g.Total||1), tot=A+B+C;
-    a += `<tr><td>${esc(name)}</td><td class="num">${num(A)}</td><td class="num">${num(T)}</td><td class="num">${pct(A,T)}%</td></tr>`;
-    b += `<tr><td>${esc(name)}</td><td class="num">${num(B)}</td><td class="num">${num(T)}</td><td class="num">${pct(B,T)}%</td></tr>`;
-    cG += `<tr><td>${esc(name)}</td><td class="num">${num(C)}</td><td class="num">${num(T)}</td><td class="num">${pct(C,T)}%</td></tr>`;
-    comb += `<tr><td>${esc(name)}</td><td class="num">${num(A)}</td><td class="num">${num(B)}</td><td class="num">${num(C)}</td><td class="num">${num(tot)}</td><td class="num">${num(T)}</td><td class="num">${pct(A,T)}%</td><td class="num">${pct(B,T)}%</td><td class="num">${pct(C,T)}%</td><td class="num">${pct(tot,T)}%</td></tr>`;
-  });
-  a += "</tbody></table></div>"; b += "</tbody></table></div>"; cG += "</tbody></table></div>"; comb += "</tbody></table></div>";
-  el.innerHTML = a + b + cG + comb;
+  const grouped = productionGroups();
+  if(!Object.keys(grouped).length){ el.innerHTML = "<p class='hint'>No production data.</p>"; return; }
+  el.innerHTML = productionTablesHtml(grouped, "screen");
 }
 
 function renderWaste(){
@@ -535,30 +588,9 @@ function extrasPDF(){
     out += `<h2 style="color:#000;margin-top:18px;">Nurse Performance</h2><table><thead><tr><th>Nurse</th><th>Jobs</th><th>Total Repair</th><th>Avg Repair</th><th>Total Waiting</th><th>Total Downtime</th><th>Loss (kg)</th></tr></thead><tbody>${body}</tbody></table>`;
   }
 
-  const filtered = PROD_ROWS.filter(r=>passesBaseFilter(r));
-  const grouped = {};
-  filtered.forEach(r=>{
-    const name = r.extruder_name || "(blank)";
-    if(!grouped[name]) grouped[name] = { A:0,B:0,C:0,Total:0 };
-    grouped[name].A += Number(r.a||0); grouped[name].B += Number(r.b||0);
-    grouped[name].C += Number(r.c||0); grouped[name].Total += Number(r.total||0);
-  });
-  const names = Object.keys(grouped);
-  if(names.length){
-    let a="",b="",cG="",comb="";
-    names.forEach(name=>{
-      const g=grouped[name];
-      const A=Math.round(g.A),B=Math.round(g.B),C=Math.round(g.C),T=Math.round(g.Total||1),tot=A+B+C;
-      a += `<tr><td>${esc(name)}</td><td>${num(A)}</td><td>${num(T)}</td><td>${pct(A,T)}%</td></tr>`;
-      b += `<tr><td>${esc(name)}</td><td>${num(B)}</td><td>${num(T)}</td><td>${pct(B,T)}%</td></tr>`;
-      cG += `<tr><td>${esc(name)}</td><td>${num(C)}</td><td>${num(T)}</td><td>${pct(C,T)}%</td></tr>`;
-      comb += `<tr><td>${esc(name)}</td><td>${num(A)}</td><td>${num(B)}</td><td>${num(C)}</td><td>${num(tot)}</td><td>${num(T)}</td><td>${pct(A,T)}%</td><td>${pct(B,T)}%</td><td>${pct(C,T)}%</td><td>${pct(tot,T)}%</td></tr>`;
-    });
-    out += `<h2 style="color:#000;margin-top:18px;">Production Report</h2>` +
-      `<h3 style="color:#000;">A Production</h3><table><thead><tr><th>Extruder</th><th>A</th><th>Target</th><th>%A</th></tr></thead><tbody>${a}</tbody></table>` +
-      `<h3 style="color:#000;">B Production</h3><table><thead><tr><th>Extruder</th><th>B</th><th>Target</th><th>%B</th></tr></thead><tbody>${b}</tbody></table>` +
-      `<h3 style="color:#000;">C Production</h3><table><thead><tr><th>Extruder</th><th>C</th><th>Target</th><th>%C</th></tr></thead><tbody>${cG}</tbody></table>` +
-      `<h3 style="color:#000;">Combined Production</h3><table><thead><tr><th>Extruder</th><th>A</th><th>B</th><th>C</th><th>Total</th><th>Target</th><th>%A</th><th>%B</th><th>%C</th><th>%P</th></tr></thead><tbody>${comb}</tbody></table>`;
+  const grouped = productionGroups();
+  if(Object.keys(grouped).length){
+    out += `<h2 style="color:#000;margin-top:18px;">Production Report</h2>` + productionTablesHtml(grouped, "print");
   }
 
   const wFiltered = WASTE_ROWS.filter(r=>passesBaseFilter(r));

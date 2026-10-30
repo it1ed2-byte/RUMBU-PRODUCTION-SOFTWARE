@@ -187,6 +187,10 @@
 
 <script>
 // ── Extruder targets (no target column in DB — derived here) ─
+// ---- targets: one rule on every Extruder page ----
+// A record is one extruder shift. Records from the entry form use the extruder's per-shift target (the number shown on the form).
+// Older records that carry a type and a machine count keep their original target: machines x rpm x denier x 720 minutes.
+// If a per-shift number changes, change it in every page that has this block, until targets are kept in the database.
 const EXTRUDER_TARGETS = {
   "Extruder 1":   1463.0,
   "Extruder 2":   2325.6,
@@ -195,6 +199,27 @@ const EXTRUDER_TARGETS = {
   "Extruder 5":   1520.0,
   "Extruder MSN": 1450.0
 };
+const SHIFT_MINUTES = 720;
+function getRPM(type){
+  const map = {
+    "No.1": { rpm: 170, denier: 0.39/1000 },
+    "No.2": { rpm: 130, denier: 0.50/1000 },
+    "No.3": { rpm: 110, denier: 0.63/1000 },
+    "No.4": { rpm: 110, denier: 0.81/1000 }
+  };
+  return map[type] || { rpm: 0, denier: 0 };
+}
+function canonExtruder(n){
+  const k = String(n==null?"":n).toUpperCase().replace(/\s+/g,"");
+  return k.indexOf("MAMASANNU")>=0 ? "EXTRUDERMSN" : k;       // "Extruder MamaSannu" and "Extruder MSN" are the same machine
+}
+const TARGET_BY_KEY = {}; Object.keys(EXTRUDER_TARGETS).forEach(k=>{ TARGET_BY_KEY[canonExtruder(k)] = EXTRUDER_TARGETS[k]; });
+function shiftTarget(name){ return TARGET_BY_KEY[canonExtruder(name)] || 0; }
+function rowTarget(r){
+  const g = getRPM(r.type_col), n = r.number_of_machine;
+  if(n!=null && n!=="" && g.rpm>0) return (Number(n)||0) * g.rpm * g.denier * SHIFT_MINUTES;
+  return shiftTarget(r.extruder_name);
+}
 
 const EXTRUDER_BY_SECTION = {
   "Rumbu Mainmat":     ["Extruder 1","Extruder 2","Extruder 3","Extruder 4","Extruder 5"],
@@ -208,7 +233,8 @@ let ME=null, MY_SECTIONS=[];
 function authHeaders(){
   return {"apikey":SUPABASE_ANON_KEY,"Authorization":"Bearer "+SUPABASE_ANON_KEY};
 }
-function iso(d){ return d.toISOString().slice(0,10); }
+function localISO(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+function iso(d){ return localISO(d); }
 function R(v){ return Math.round(Number(v)||0); }
 function pct(part,whole){ return whole?(part/whole)*100:0; }
 function fmtDate(d){
@@ -216,10 +242,25 @@ function fmtDate(d){
   return new Date(d).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"});
 }
 
-// Target per shift for a given extruder name
-function getTarget(name){ return EXTRUDER_TARGETS[name]||0; }
 
 // ── Init ──────────────────────────────────────────────────
+// Reads EVERY page of a query (the database returns at most 1,000 rows per request) in a stable order.
+async function fetchAllPages(url, headers, order){
+  const out = []; const size = 1000;
+  for(let offset=0, guard=0; guard<500; guard++, offset+=size){
+    let res = await fetch(url + (order ? "&order="+order : ""), { headers: Object.assign({}, headers, { "Range-Unit":"items", "Range": offset+"-"+(offset+size-1) }) });
+    if(res.status===416) break;                       // past the last row
+    if(res.status===400 && order){                    // that ordering column does not exist on this table: read without it
+      order = null; guard--; offset -= size; continue;
+    }
+    if(!res.ok) throw new Error("HTTP "+res.status);
+    const batch = await res.json();
+    for(let i=0;i<batch.length;i++) out.push(batch[i]);
+    if(batch.length < size) break;
+  }
+  return out;
+}
+
 async function init(){
   const cs=document.getElementById("connStatus");
   try{
@@ -283,7 +324,7 @@ async function runReport(){
     // extruder_name, section, a, b, c, total
     // No target column in DB — calculated client-side from EXTRUDER_TARGETS
     let url=SUPABASE_URL+"/rest/v1/extruder_new"+
-      "?select=extruder_name,section,a,b,c,total"+
+      "?select=extruder_name,section,type_col,number_of_machine,a,b,c,total"+
       "&date_col=gte."+from+"&date_col=lte."+to;
 
     if(shift)    url+="&shift=eq."         +encodeURIComponent(shift);
@@ -295,9 +336,7 @@ async function runReport(){
       url+="&section=in.("+encodeURIComponent(list)+")";
     }
 
-    const res=await fetch(url,{headers:authHeaders()});
-    if(!res.ok) throw new Error("extruder_new: HTTP "+res.status);
-    const rows=await res.json();
+    const rows=await fetchAllPages(url, authHeaders(), "date_col.asc,extruder_name.asc,shift.asc,section.asc");
 
     status.className="status ok";
     status.textContent=rows.length.toLocaleString()+" record(s) loaded.";
@@ -331,7 +370,7 @@ function render(rows,filters){
     agg[key].b      +=Number(r.b||0);
     agg[key].c      +=Number(r.c||0);
     agg[key].total  +=Number(r.total||0);
-    agg[key].target +=getTarget(r.extruder_name); // 1 record = 1 shift
+    agg[key].target +=rowTarget(r); // 1 record = 1 shift
   });
 
   const data=Object.values(agg).sort((a,b)=>
@@ -342,6 +381,8 @@ function render(rows,filters){
     a:s.a+d.a, b:s.b+d.b, c:s.c+d.c, total:s.total+d.total, target:s.target+d.target
   }),{a:0,b:0,c:0,total:0,target:0});
 
+  const noTarget=[...new Set(rows.filter(r=>r.extruder_name && rowTarget(r)===0).map(r=>r.extruder_name))];
+  if(noTarget.length){ const st=document.getElementById("status"); st.className="status err"; st.textContent+=" No target is set for: "+noTarget.join(", ")+" (their production is counted, their target is 0)."; }
   const achPct=pct(grand.total,grand.target);
   const achCls=achPct>=100?"good":achPct>=80?"warn":"bad";
 

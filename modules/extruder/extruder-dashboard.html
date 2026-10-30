@@ -91,7 +91,8 @@
     <div class="card">
       <h3>Best Performers (by efficiency)</h3>
       <div class="bests" id="bests"></div>
-      <div style="font-size:11px;color:#6b7280;margin-top:10px;">Efficiency = Total ÷ Target × 100. Target = machines × rpm × denier × 720 (per type). "Best" excludes very small samples so a single lucky row cannot top the list.</div>
+      <div style="font-size:11px;color:#6b7280;margin-top:10px;">Efficiency = Total / Target x 100. Target = each extruder's per-shift target (the one shown on the entry form) for every shift recorded. "Best" excludes very small samples so a single lucky row cannot top the list.</div>
+      <div id="noTargetNote" style="font-size:12px;color:#c0392b;font-weight:700;margin-top:6px;"></div>
     </div>
 
     <div class="grid2">
@@ -112,7 +113,19 @@
 const SECTION_LABEL = { "Rumbu Mainmat":"Rumbu Mainmat", "MamaSannu":"Mama Sannu" };
 let ME = null, MY_SECTIONS = [], ROWS = [];
 
-// ---- production target model (copied from production-report) ----
+// ---- targets: one rule on every Extruder page ----
+// A record is one extruder shift. Records from the entry form use the extruder's per-shift target (the number shown on the form).
+// Older records that carry a type and a machine count keep their original target: machines x rpm x denier x 720 minutes.
+// If a per-shift number changes, change it in every page that has this block, until targets are kept in the database.
+const EXTRUDER_TARGETS = {
+  "Extruder 1":   1463.0,
+  "Extruder 2":   2325.6,
+  "Extruder 3":   2325.6,
+  "Extruder 4":   1394.2,
+  "Extruder 5":   1520.0,
+  "Extruder MSN": 1450.0
+};
+const SHIFT_MINUTES = 720;
 function getRPM(type){
   const map = {
     "No.1": { rpm: 170, denier: 0.39/1000 },
@@ -122,8 +135,17 @@ function getRPM(type){
   };
   return map[type] || { rpm: 0, denier: 0 };
 }
-const SHIFT_MINUTES = 720;
-function rowTarget(r){ const rpm=getRPM(r.type_col); return num(r.number_of_machine)*rpm.rpm*rpm.denier*SHIFT_MINUTES; }
+function canonExtruder(n){
+  const k = String(n==null?"":n).toUpperCase().replace(/\s+/g,"");
+  return k.indexOf("MAMASANNU")>=0 ? "EXTRUDERMSN" : k;       // "Extruder MamaSannu" and "Extruder MSN" are the same machine
+}
+const TARGET_BY_KEY = {}; Object.keys(EXTRUDER_TARGETS).forEach(k=>{ TARGET_BY_KEY[canonExtruder(k)] = EXTRUDER_TARGETS[k]; });
+function shiftTarget(name){ return TARGET_BY_KEY[canonExtruder(name)] || 0; }
+function rowTarget(r){
+  const g = getRPM(r.type_col), n = r.number_of_machine;
+  if(n!=null && n!=="" && g.rpm>0) return (Number(n)||0) * g.rpm * g.denier * SHIFT_MINUTES;
+  return shiftTarget(r.extruder_name);
+}
 
 function num(v){ const x=parseFloat(v); return isNaN(x)?0:x; }
 function fmt(v){ return Math.round(v).toLocaleString(); }
@@ -154,7 +176,8 @@ async function init(){
   }
 }
 
-function iso(d){ return d.toISOString().slice(0,10); }
+function localISO(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+function iso(d){ return localISO(d); }
 function setRange(range, btn){
   document.querySelectorAll(".qbtn").forEach(b=>b.classList.remove("active"));
   if(btn) btn.classList.add("active");
@@ -175,10 +198,11 @@ async function fetchRows(fromDate, toDate, sectionFilter){
   else { const list=MY_SECTIONS.map(s=>`"${s}"`).join(","); sectionClause="&section=in.("+encodeURIComponent(list)+")"; }
   const cols="date_col,section,shift,extruder_name,type_col,number_of_machine,a,b,c,total";
   const base=SUPABASE_URL+"/rest/v1/extruder_new?select="+cols
-    +"&date_col=gte."+fromDate+"&date_col=lte."+toDate+sectionClause+"&order=date_col.asc";
+    +"&date_col=gte."+fromDate+"&date_col=lte."+toDate+sectionClause+"&order=date_col.asc,extruder_name.asc,shift.asc,section.asc";
   for(let guard=0; guard<400; guard++){
     const headers=Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset+"-"+(offset+pageSize-1) });
     const res=await fetch(base,{headers});
+    if(res.status===416) break;
     if(!res.ok) throw new Error("extruder_new: HTTP "+res.status);
     const batch=await res.json();
     all=all.concat(batch);
@@ -248,11 +272,15 @@ function renderKPIs(rows){
 }
 
 function renderBests(rows){
+  const hasType = rows.some(r=>r.type_col);          // the entry form does not record a type, so this only applies to older records
   const defs=[
     {t:"Best Extruder", key:r=>r.extruder_name},
-    {t:"Best Type", key:r=>r.type_col},
+    ...(hasType ? [{t:"Best Type", key:r=>r.type_col}] : []),
     {t:"Best Shift", key:r=>r.shift}
   ];
+  const noTarget=[...new Set(rows.filter(r=>r.extruder_name && rowTarget(r)===0).map(r=>r.extruder_name))];
+  const note=document.getElementById("noTargetNote");
+  if(note) note.textContent = noTarget.length ? "No target is set for: "+noTarget.join(", ")+". Their production is counted but their target is 0." : "";
   document.getElementById("bests").innerHTML=defs.map(d=>{
     const best=bestByEfficiency(rows,d.key);
     if(!best) return `<div class="best"><div class="t">${d.t}</div><div class="v">—</div></div>`;
@@ -288,9 +316,11 @@ function renderCharts(rows, section){
   const gf=document.querySelectorAll("#chartGrade .fill");
   if(gf[0]) gf[0].classList.add("a"); if(gf[1]) gf[1].classList.add("b"); if(gf[2]) gf[2].classList.add("c"); if(gf[3]) gf[3].classList.add("t");
 
-  // By type
+  // By type (only when the records carry a type)
   const typeMap=sumBy(rows, r=>r.type_col, r=>num(r.total));
-  hbars("chartType", Object.entries(typeMap).sort((a,b)=>b[1]-a[1]));
+  const typeCard=document.getElementById("chartType").closest(".card");
+  if(Object.keys(typeMap).length){ typeCard.style.display=""; hbars("chartType", Object.entries(typeMap).sort((a,b)=>b[1]-a[1])); }
+  else { typeCard.style.display="none"; }
 
   // Top 10 extruders by production
   const exMap=sumBy(rows, r=>r.extruder_name, r=>num(r.total));
