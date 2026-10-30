@@ -93,7 +93,11 @@
     <ol>
       <li><b>Production starts automatically</b> when the plant manager sends an agent's material here (Stage 7). He also chooses the <b>company</b> the flake is made for, and can change it while the run is open.</li>
       <li><b>External material into production</b> — if material from an external source (e.g. Kano Wash Plant, Lagos) was used, the assigned person records the source, LOT, and quantity.</li>
+<<<<<<< Updated upstream
       <li><b>Batch entry:</b> add a batch each time one is made: the grade (<b>AA</b>, <b>AB</b> or <b>BB</b>), the weight of <b>each bag</b>, and the <b>supervisor(s)</b> and <b>shift leader</b> ID (their names appear by themselves). Keep adding batches until the material is finished.</li>
+=======
+      <li><b>Batch entry:</b> add a batch each time one is made: the grade (chosen from the active grades), the weight of <b>each bag</b>, and the <b>supervisor(s)</b> and <b>shift leader</b> ID (their names appear by themselves). Keep adding batches until the material is finished.</li>
+>>>>>>> Stashed changes
       <li>The lab (Stage 9) tests each batch as you add it. <b>Result approval:</b> when the lab submits a result, the result approver sees it <b>beside the company's limits</b>, then passes the batch or asks for a <b>retest</b> or a <b>rerun</b>.</li>
       <li><b>Labels:</b> once a batch is approved, the labels person generates, prints and downloads its QR labels.</li>
       <li>When every batch is approved and the material is finished, the batch-entry person presses <b>Complete Production</b>. Waste = Rumbu weight − total flake batched, distributed across categories proportionally.</li>
@@ -129,7 +133,11 @@
         <div class="grid3">
           <div><label>Batch Date *</label><input type="date" id="bfDate"></div>
           <div><label>Grade *</label>
+<<<<<<< Updated upstream
             <select id="bfGrade" onchange="onGradeChange()"><option value="">— select —</option><option value="AA">AA</option><option value="AB">AB</option><option value="BB">BB</option></select></div>
+=======
+            <select id="bfGrade" onchange="onGradeChange()"><option value="">— select —</option></select></div>
+>>>>>>> Stashed changes
           <div><label>Number of bags *</label><input type="number" class="no-spinner" id="bfBags" min="1" max="30" step="1" value="3" inputmode="numeric" oninput="onBagCount()"></div>
         </div>
         <label>Weight of each bag (kg) *</label>
@@ -304,6 +312,7 @@ function bStatus(b){ return b.batch_status || (b.bags_generated_at?"approved":"p
 function bGrade(b){ return b.grade || (num(b.qty_aa)>0&&num(b.qty_ab)>0 ? "AA+AB" : (num(b.qty_aa)>0?"AA":(num(b.qty_ab)>0?"AB":"—"))); }
 function gradeKg(b){
   const t=bTotal(b);
+<<<<<<< Updated upstream
   if(b.grade==="AA") return {aa:t,ab:0,bb:0};
   if(b.grade==="AB") return {aa:0,ab:t,bb:0};
   if(b.grade==="BB") return {aa:0,ab:0,bb:t};
@@ -312,6 +321,48 @@ function gradeKg(b){
   return {aa:0,ab:0,bb:0};
 }
 function runGradeKg(list){ return list.reduce((s,b)=>{ const g=gradeKg(b); s.aa+=g.aa; s.ab+=g.ab; s.bb+=g.bb; return s; },{aa:0,ab:0,bb:0}); }
+=======
+  if(b.grade==="AA") return {aa:t,ab:0,bb:0,other:{}};
+  if(b.grade==="AB") return {aa:0,ab:t,bb:0,other:{}};
+  if(b.grade==="BB") return {aa:0,ab:0,bb:t,other:{}};
+  if(b.grade) return {aa:0,ab:0,bb:0,other:{[b.grade]:t}};          // any grade added on the Manage QR Code page
+  const a=num(b.qty_aa), c=num(b.qty_ab);
+  if(a+c>0) return {aa:t*a/(a+c), ab:t*c/(a+c), bb:0, other:{}};
+  return {aa:0,ab:0,bb:0,other:{}};
+}
+function runGradeKg(list){ return list.reduce((s,b)=>{ const g=gradeKg(b); s.aa+=g.aa; s.ab+=g.ab; s.bb+=g.bb; Object.keys(g.other||{}).forEach(k=>{ s.other[k]=(s.other[k]||0)+g.other[k]; }); return s; },{aa:0,ab:0,bb:0,other:{}}); }
+function otherGradeTiles(g){ return Object.keys(g.other||{}).sort().map(k=>`<div class="tile"><div class="v">${fmt(g.other[k])}</div><div class="l">${esc(k)} flake (kg)</div></div>`).join(""); }
+function otherGradeRows(saved, live){ const src=(saved&&Object.keys(saved).length)?saved:(live||{}); return Object.keys(src).sort().map(k=>[k+" flake (kg)", fmt(src[k])]); }
+function otherKgObject(o){ const r={}; Object.keys(o||{}).sort().forEach(k=>{ r[k]=parseFloat(o[k].toFixed(2)); }); return r; }
+
+// ---- grades: the list is managed on the Manage QR Code page ----
+const BUILTIN_GRADES=["AA","AB","BB"];
+let GRADES=[];
+async function loadGrades(){
+  const builtin=()=>BUILTIN_GRADES.map((c,i)=>({code:c,description:"",is_active:true,sort_order:(i+1)*10}));
+  try{
+    const { data, error } = await sb.from("pet_grades").select("code,description,is_active,sort_order").order("sort_order").order("code");
+    if(error) throw error;
+    GRADES=(data&&data.length)?data:builtin();
+  }catch(e){ GRADES=builtin(); }                 // the list is not set up yet: behave exactly as before
+}
+// a NEW batch may use an active grade; a batch that already has a grade keeps it even if it is hidden later
+function gradeAllowed(code, current){ if(!code) return false; if(current && code===current) return true; return GRADES.some(g=>g.code===code && g.is_active); }
+function fillGradeSelect(selected){
+  const sel=document.getElementById("bfGrade"); if(!sel) return;
+  const keep=(selected!=null)?selected:sel.value;
+  const opts=GRADES.filter(g=>g.is_active || g.code===keep);
+  sel.innerHTML='<option value="">-- select --</option>'
+    + opts.map(g=>'<option value="'+esc(g.code)+'">'+esc(g.code)+(g.is_active?'':' (hidden)')+(g.description?' - '+esc(g.description):'')+'</option>').join("")
+    + ((keep && !opts.some(g=>g.code===keep)) ? '<option value="'+esc(keep)+'">'+esc(keep)+' (not in the list)</option>' : "");
+  sel.value=keep||"";
+}
+// ---- lab tests on a batch (every upload is kept; the latest is the result on file) ----
+let RUN_ATTEMPTS={};
+function testsFor(b){ const rr=b.rerun_count||0; return (RUN_ATTEMPTS[b.id]||[]).filter(a=>(a.rerun_no||0)===rr).slice().sort((x,y)=>x.attempt_no-y.attempt_no); }
+function testWord(a){ return a.passed===false?"FAILED":"PASSED"; }
+function testsSummary(list){ return list.map(a=>"Test "+a.attempt_no+" "+testWord(a)).join(", "); }
+>>>>>>> Stashed changes
 function statusPill(s){
   const m={ produced:["p-wait","Waiting for lab"], retest_requested:["p-bad","Retest requested"], lab_done:["p-info","Lab submitted — review needed"],
             approved:["p-ok","Approved"], rerun_requested:["p-bad","Rerun requested — edit and resubmit"] };
@@ -323,6 +374,7 @@ async function init(){
   try{
     ME=await requireAuth("../../login.html");
     if(!ME) return;
+    await loadGrades(); fillGradeSelect("");
     const { data: secData } = await sb.from("app_sections").select("name").order("name");
     ALL_SECTIONS = (secData||[]).map(s=>s.name);
 
@@ -425,6 +477,10 @@ async function openProdReview(collectionId){
         ["AA flake (kg)", fmt(prod.total_aa_kg!=null?prod.total_aa_kg:g.aa)],
         ["AB flake (kg)", fmt(prod.total_ab_kg!=null?prod.total_ab_kg:g.ab)],
         ["BB flake (kg)", fmt(prod.total_bb_kg!=null?prod.total_bb_kg:g.bb)],
+<<<<<<< Updated upstream
+=======
+        ...otherGradeRows(prod.other_grade_kg, g.other),
+>>>>>>> Stashed changes
         ["Total Production (kg)", prod.total_production_kg],
       ]},
       { heading: "Waste Data", rows: [
@@ -525,10 +581,14 @@ function computeProductionPlusWaste(){
 async function loadRunData(collectionId){
   const { data:bs } = await sb.from("pet_lab_batches").select("*").eq("collection_id",collectionId);
   RUN_BATCHES=(bs||[]).slice().sort((a,b)=>a.batch_no-b.batch_no);
-  RUN_RESULTS={}; RUN_BAGS={};
+  RUN_RESULTS={}; RUN_BAGS={}; RUN_ATTEMPTS={};
   if(RUN_BATCHES.length){
     const { data:res } = await sb.from("pet_flake_scan_results").select("id,batch_id,passed,sample_weight,metal_pieces,scan_id").in("batch_id",RUN_BATCHES.map(b=>b.id));
     (res||[]).forEach(r=>{ RUN_RESULTS[r.batch_id]=r; });
+    try{
+      const { data:att, error:attErr } = await sb.from("pet_flake_scan_attempts").select("id,batch_id,rerun_no,attempt_no,passed,sample_weight,metal_pieces,scan_id,batch_status_at_upload,uploaded_by_name,uploaded_at").in("batch_id",RUN_BATCHES.map(b=>b.id)).order("attempt_no");
+      if(!attErr) (att||[]).forEach(a=>{ (RUN_ATTEMPTS[a.batch_id]=RUN_ATTEMPTS[a.batch_id]||[]).push(a); });
+    }catch(e){}
     const { data:bags } = await sb.from("pet_stage4_bags").select("*").eq("collection_id",collectionId).order("bag_index");
     (bags||[]).forEach(b=>{ if(b.batch_id!=null){ (RUN_BAGS[b.batch_id]=RUN_BAGS[b.batch_id]||[]).push(b); } });
   }
@@ -563,6 +623,10 @@ function renderRunOverview(){
     <div class="tile"><div class="v">${fmt(g.aa)}</div><div class="l">AA flake (kg)</div></div>
     <div class="tile"><div class="v">${fmt(g.ab)}</div><div class="l">AB flake (kg)</div></div>
     <div class="tile"><div class="v">${fmt(g.bb)}</div><div class="l">BB flake (kg)</div></div>
+<<<<<<< Updated upstream
+=======
+    ${otherGradeTiles(g)}
+>>>>>>> Stashed changes
     <div class="tile ${review?"warn":""}"><div class="v">${approved} / ${RUN_BATCHES.length}</div><div class="l">Batches approved</div></div>`;
 
   renderBatchList();
@@ -589,7 +653,8 @@ function batchCard(b){
   const weights=Array.isArray(b.bag_weights)?b.bag_weights:[];
   const chips=weights.map((w,i)=>`<span class="bagchip">Bag ${i+1}: ${fmt(w)} kg</span>`).join("");
   const flake = !res ? `<span class="pill p-wait">Flake result: not uploaded</span>` : (res.passed===false?`<span class="pill p-bad">Flake result: FAILED</span>`:`<span class="pill p-ok">Flake result: PASSED</span>`);
-  const hist = (b.retest_count||b.rerun_count) ? ` · retests ${b.retest_count||0} · reruns ${b.rerun_count||0}` : "";
+  const nTests = testsFor(b).length;
+  const hist = ((b.retest_count||b.rerun_count) ? ` · retests ${b.retest_count||0} · reruns ${b.rerun_count||0}` : "") + (nTests>1 ? ` · lab tests ${nTests}` : "");
   let actions="";
   const quiet=t=>`<span style="font-size:12.5px;color:var(--muted);align-self:center;">${t}</span>`;
   if(st==="produced"||st==="rerun_requested"){
@@ -749,6 +814,7 @@ async function lookupEmp(kind){
 function resetBatchForm(){
   EDITING=null;
   document.getElementById("bfDate").value=todayStr();
+  fillGradeSelect("");
   document.getElementById("bfGrade").value="";
   document.getElementById("bfBags").value=3;
   renderWeightInputs(3,[]);
@@ -772,6 +838,7 @@ function editBatch(id){
   if(st!=="produced" && st!=="rerun_requested"){ alert("This batch can no longer be edited."); return; }
   EDITING=id;
   document.getElementById("bfDate").value=b.batch_date||todayStr();
+  fillGradeSelect(b.grade||"");
   document.getElementById("bfGrade").value=b.grade||"";
   const w=Array.isArray(b.bag_weights)?b.bag_weights:[];
   document.getElementById("bfBags").value=b.bag_count||w.length||3;
@@ -812,7 +879,11 @@ async function saveBatch(){
   const n=parseInt(document.getElementById("bfBags").value)||0;
   const ins=Array.from(document.querySelectorAll("#bfWeights input"));
   if(!date){ bad("Batch date is required."); return; }
+<<<<<<< Updated upstream
   if(grade!=="AA"&&grade!=="AB"&&grade!=="BB"){ bad("Select the grade: AA, AB or BB."); return; }
+=======
+  { const curB=EDITING?RUN_BATCHES.find(x=>x.id===EDITING):null; if(!gradeAllowed(grade, curB?curB.grade:null)){ bad("Select a grade from the list."); return; } }
+>>>>>>> Stashed changes
   if(n<1||n>30||ins.length!==n){ bad("Enter the number of bags (1 to 30)."); return; }
   const weights=ins.map(i=>i.value===""?NaN:parseFloat(i.value));
   if(weights.some(w=>isNaN(w)||w<=0)){ bad("Every bag needs a weight above 0 kg."); return; }
@@ -950,10 +1021,11 @@ async function openReview(id){
   const b=RUN_BATCHES.find(x=>x.id===id); if(!b) return;
   await refreshCompany();
   const companyId=PROD_REC.company_id||null, companyName=PROD_REC.company_name||"";
-  const [{ data:resRows }, { data:log }, stdRes] = await Promise.all([
+  const [{ data:resRows }, { data:log }, stdRes, attRes] = await Promise.all([
     sb.from("pet_flake_scan_results").select("*").eq("batch_id",id).limit(1),
     sb.from("pet_activity_log").select("action,note,actor_username,created_at").eq("collection_id",CURRENT_PROD.id).ilike("note","Batch "+b.batch_no+" %").order("created_at",{ascending:false}).limit(12),
-    companyId ? sb.from("pet_company_standards").select("*").eq("company_id",companyId).eq("is_active",true).order("sort_order").order("id") : Promise.resolve({ data:[] })
+    companyId ? sb.from("pet_company_standards").select("*").eq("company_id",companyId).eq("is_active",true).order("sort_order").order("id") : Promise.resolve({ data:[] }),
+    sb.from("pet_flake_scan_attempts").select("rerun_no,attempt_no,passed,sample_weight,metal_pieces,batch_status_at_upload,uploaded_by_name,uploaded_at").eq("batch_id",id).order("rerun_no").order("attempt_no")
   ]);
   const r=(resRows&&resRows[0])||null;
   const lines=(stdRes&&stdRes.data)||[];
@@ -987,6 +1059,12 @@ async function openReview(id){
       ${secLine("Material A",r.material_a_enabled,r.material_a_passed,r.material_a_total_purity,r.material_a_limit_total_purity,r.material_a_categories)}
       ${secLine("Material B",r.material_b_enabled,r.material_b_passed,r.material_b_total_purity,r.material_b_limit_total_purity,r.material_b_categories)}
     </tbody></table>`;
+  const allTests=(attRes&&!attRes.error&&attRes.data)||[];
+  const curTests=allTests.filter(a=>(a.rerun_no||0)===(b.rerun_count||0));
+  const olderTests=allTests.length-curTests.length;
+  const testsHtml = !allTests.length ? `<div class="kv" style="color:var(--muted);">No test history is on file for this batch (history is kept from when it was set up).</div>` : `
+    <div class="kv" style="margin-bottom:4px;"><b>${curTests.length===1?"Tested once.":"Tested "+curTests.length+" times."}</b>${curTests.length>1?" "+esc(testsSummary(curTests))+".":""}${olderTests?` <span style="color:var(--muted);">Before the rerun: ${olderTests} earlier test${olderTests===1?"":"s"}.</span>`:""}</div>
+    <table><thead><tr><th>Test</th><th>Result</th><th>When</th><th>By</th><th>Sample</th><th>Metal</th></tr></thead><tbody>${curTests.map(a=>`<tr><td><b>${a.attempt_no}</b>${a.batch_status_at_upload==="retest_requested"?` <span style="color:var(--muted);">(retest you asked for)</span>`:""}</td><td><span class="pill ${a.passed===false?"p-bad":"p-ok"}">${testWord(a)}</span></td><td>${esc(fmtDT(a.uploaded_at))}</td><td>${esc(a.uploaded_by_name||"--")}</td><td>${esc(a.sample_weight??"--")} g</td><td>${esc(a.metal_pieces??0)}</td></tr>`).join("")}</tbody></table>`;
   const histHtml = (log&&log.length) ? `<table><thead><tr><th>When</th><th>Who</th><th>What</th></tr></thead><tbody>${log.map(l=>`<tr><td>${esc(fmtDT(l.created_at))}</td><td>${esc(l.actor_username||"—")}</td><td>${esc(l.note||l.action)}</td></tr>`).join("")}</tbody></table>` : `<p style="font-size:12px;color:var(--muted);">No earlier history for this batch.</p>`;
 
   const canDecide = CAN.review && bStatus(b)==="lab_done";
@@ -1011,6 +1089,7 @@ async function openReview(id){
     ${weights.length?`<div class="bagchips">${weights.map((w,i)=>`<span class="bagchip">Bag ${i+1}: ${fmt(w)} kg</span>`).join("")}</div>`:""}
     <div class="sec-title">Company standard compared with the lab result</div>${stdHtml}
     <div class="sec-title">Lab result</div>${resHtml}
+    <div class="sec-title">Lab tests on this batch</div>${testsHtml}
     <div class="sec-title">History of this batch</div>${histHtml}
     ${decisionHtml}
     <div id="rvStatus" style="margin-top:10px;font-size:13px;font-weight:700;min-height:16px;"></div>`;
@@ -1099,9 +1178,18 @@ async function generateLabels(id){
     flash(id,"Generating...");
     const n=b.bag_count||(Array.isArray(b.bag_weights)?b.bag_weights.length:0);
     // AA and AB use the original function; BB uses generate_batch_bags_bb (see PET_Grade_BB_Migration.sql)
+<<<<<<< Updated upstream
     const { error } = b.grade==="BB"
       ? await sb.rpc("generate_batch_bags_bb",{ p_batch_id:id, p_n:n })
       : await sb.rpc("generate_batch_bags",{ p_batch_id:id, p_aa:b.grade==="AA"?n:0, p_ab:b.grade==="AB"?n:0 });
+=======
+    // AA and AB use the original function; BB uses generate_batch_bags_bb; any grade added later uses generate_batch_bags_grade
+    const { error } = b.grade==="BB"
+      ? await sb.rpc("generate_batch_bags_bb",{ p_batch_id:id, p_n:n })
+      : (b.grade==="AA"||b.grade==="AB"||!b.grade)
+        ? await sb.rpc("generate_batch_bags",{ p_batch_id:id, p_aa:b.grade==="AA"?n:0, p_ab:b.grade==="AB"?n:0 })
+        : await sb.rpc("generate_batch_bags_grade",{ p_batch_id:id, p_grade:b.grade, p_n:n });
+>>>>>>> Stashed changes
     if(error) throw new Error(error.message);
     OPEN_LABELS.add(id);
     await loadRunData(CURRENT_PROD.id);
@@ -1374,6 +1462,7 @@ async function openProdForm(id){
   CAN=dutiesFor(c.section);
   QC_WASTE = wasteFromQc(qc, c.rumbu_weighbridge_weight);
   OPEN_LABELS=new Set();
+  await loadGrades(); fillGradeSelect("");
   await loadRunData(c.id);
 
   document.getElementById("prodSummary").innerHTML=`
@@ -1486,7 +1575,11 @@ async function completeProduction(){
     sections: [
       { heading: "Production Time", rows: [["Production Start", fmtDT(PROD_REC.production_start)],["Production End (last batch recorded)", fmtDT(endIso)]]},
       { heading: "Batches", rows: [["Number of Batches", RUN_BATCHES.length],["All batches approved", "Yes"]]},
+<<<<<<< Updated upstream
       { heading: "Production Entry", rows: [["AA flake (kg)", g.aa.toFixed(2)],["AB flake (kg)", g.ab.toFixed(2)],["BB flake (kg)", g.bb.toFixed(2)],["Total Production (kg)", total.toFixed(2)]]},
+=======
+      { heading: "Production Entry", rows: [["AA flake (kg)", g.aa.toFixed(2)],["AB flake (kg)", g.ab.toFixed(2)],["BB flake (kg)", g.bb.toFixed(2)],...Object.keys(g.other||{}).sort().map(k=>[k+" flake (kg)", g.other[k].toFixed(2)]),["Total Production (kg)", total.toFixed(2)]]},
+>>>>>>> Stashed changes
       { heading: "Waste (Rumbu Weight − Total Batched)", rows: [
         ...WASTE_KEYS.map(([k,l])=>[l, (parseFloat(document.getElementById("pfKg_"+k)?.value)||0).toFixed(2)+" kg"]),
         ["Total Waste (kg)", actualWaste.toFixed(2)],["Accepted Waste — 3% of Rumbu (kg)", accepted.toFixed(2)],["Unacceptable Waste (kg)", unacc.toFixed(2)]]},
@@ -1524,6 +1617,10 @@ async function proceedWithComplete(){
       total_aa_kg:          parseFloat(g.aa.toFixed(2)),
       total_ab_kg:          parseFloat(g.ab.toFixed(2)),
       total_bb_kg:          parseFloat(g.bb.toFixed(2)),
+<<<<<<< Updated upstream
+=======
+      ...(Object.keys(g.other||{}).length ? { other_grade_kg: otherKgObject(g.other) } : {}),
+>>>>>>> Stashed changes
       batch_count:          RUN_BATCHES.length,
       total_production_kg:  totalProduction,
       waste_coloured_kg:    readCat("coloured"), waste_labels_kg: readCat("labels"), waste_caps_rings_kg: readCat("caps_rings"), waste_non_food_kg: readCat("non_food"),
@@ -1560,7 +1657,7 @@ async function proceedWithComplete(){
 
 function closeProdForm(){
   document.getElementById("prodForm").style.display="none";
-  CURRENT_PROD=null; CURRENT_PROD_ID=null; PROD_REC={}; RUN_BATCHES=[]; RUN_RESULTS={}; RUN_BAGS={}; EDITING=null;
+  CURRENT_PROD=null; CURRENT_PROD_ID=null; PROD_REC={}; RUN_BATCHES=[]; RUN_RESULTS={}; RUN_BAGS={}; RUN_ATTEMPTS={}; EDITING=null;
 }
 
 // ---------------- KANO MATERIAL USED ----------------

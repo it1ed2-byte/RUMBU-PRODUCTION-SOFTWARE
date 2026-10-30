@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Visitor Attendance — Enter Visitor</title>
+<title>Enter Visitor</title>
 <link rel="stylesheet" href="../../styles.css">
 <script>
   (function(){
@@ -14,162 +14,309 @@
 </script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="../../auth.js"></script>
+<script src="visitor-common.js"></script>
 <style>
-  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;}
-  *{box-sizing:border-box;}
-  body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;color:var(--text);}
-  .wrap{max-width:720px;margin:0 auto;}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;}
-  .card h3{color:var(--navy);margin:0 0 4px;font-size:16px;}
-  .card .sub{color:var(--blue);font-size:12px;margin:0 0 14px;}
-  label{display:block;font-size:12px;font-weight:bold;color:var(--text);margin:10px 0 4px;}
-  input,textarea,select{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;}
-  textarea{resize:vertical;min-height:60px;}
-  .row{display:flex;gap:12px;flex-wrap:wrap;}
-  .row > div{flex:1;min-width:180px;}
-  button{padding:11px 16px;border:none;border-radius:8px;font-weight:bold;font-size:14px;cursor:pointer;background:var(--blue);color:#fff;margin-top:14px;}
-  button:hover{background:var(--blue-dark);}
-  .status{margin-top:10px;font-weight:bold;font-size:13px;min-height:16px;}
-  .status.ok{color:var(--green);} .status.err{color:var(--red);}
-  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;}
+  .ok-banner{background:#dcfce7;border:1px solid #86efac;color:#15803d;border-radius:8px;padding:12px 14px;font-weight:700;font-size:14px;margin-bottom:14px}
+  .extra-list{display:grid;grid-template-columns:1fr 1fr;gap:8px 20px}
+  .extra-row{display:flex;gap:6px;align-items:center}
+  .extra-row input{flex:1}
+  @media(max-width:700px){.extra-list{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
 
-<div class="wrap">
-<button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;margin-bottom:12px;background:var(--navy);">&larr; Back to Menu</button>
-<div id="connStatus">Loading...</div>
-
-<div class="card">
-  <h3>Enter Visitor</h3>
-  <p class="sub" id="branchNote"></p>
-
-  <div class="row">
-    <div>
-      <label>Branch</label>
-      <select id="branch"></select>
-    </div>
-    <div>
-      <label>Date</label>
-      <input type="date" id="visitDate">
-    </div>
-  </div>
-
-  <div class="row">
-    <div>
-      <label>Visitor Name</label>
-      <input type="text" id="visitorName" placeholder="Full name">
-    </div>
-    <div>
-      <label>Phone</label>
-      <input type="text" id="phone" placeholder="e.g. 0803...">
-    </div>
-  </div>
-
-  <div class="row">
-    <div>
-      <label>Company / Organization (optional)</label>
-      <input type="text" id="company" placeholder="e.g. ABC Ltd">
-    </div>
-    <div>
-      <label>Person / Department Visiting</label>
-      <input type="text" id="visiting" placeholder="Who / which dept">
-    </div>
-  </div>
-
-  <label>Purpose of Visit</label>
-  <textarea id="purpose" placeholder="Reason for the visit"></textarea>
-
-  <button onclick="save()">Check In Visitor</button>
-  <div class="status" id="status"></div>
+<div class="card" id="viewOnlyCard" style="display:none;">
+  <h2>🪪 Enter Visitor</h2>
+  <div class="notice">You have view-only access, so you cannot register visitors. You can open Visitor History to view and print records.</div>
 </div>
+
+<div class="card" id="noBranchCard" style="display:none;">
+  <h2>🪪 Enter Visitor</h2>
+  <div class="notice">Your account is not assigned to a branch, so you cannot register visitors. Please contact your administrator.</div>
+</div>
+
+<div class="card" id="formCard" style="display:none;">
+  <h2>🪪 Enter Visitor</h2>
+  <div class="status-line" id="connStatus">Connecting...</div>
+  <div class="ok-banner" id="okBanner" style="display:none;"></div>
+
+  <div class="grid">
+    <div class="sec-title">Visitor details</div>
+    <div>
+      <label>Branch <span class="req">*</span></label>
+      <select id="f_branch" onchange="onBranchChange()"></select>
+    </div>
+    <div>
+      <label>Phone number <span class="req">*</span></label>
+      <input type="text" id="f_phone" inputmode="tel" placeholder="e.g. 08031234567" onchange="lookupPhone()" onblur="lookupPhone()">
+      <div class="hint" id="phoneHint"></div>
+    </div>
+    <div>
+      <label>Full name <span class="req">*</span></label>
+      <input type="text" id="f_name" placeholder="Visitor's full name" autocomplete="off" oninput="countPeople()">
+    </div>
+    <div>
+      <label>Company / Organisation</label>
+      <input type="text" id="f_company" placeholder="Where the visitor is from (optional)">
+    </div>
+    <div>
+      <label>Number of people</label>
+      <input type="number" id="f_group" value="1" readonly>
+      <div class="hint">Counted automatically from the names entered.</div>
+    </div>
+    <div>
+      <label>Visiting with other people?</label>
+      <button type="button" class="btn-accent" id="btnAddPerson" onclick="addPerson()">+ Add Another Person</button>
+    </div>
+    <div class="full" id="extraWrap" style="display:none;">
+      <label>Other people with this visitor</label>
+      <div class="extra-list" id="extraNames"></div>
+    </div>
+    <div class="full">
+      <label>Address <span class="req">*</span></label>
+      <textarea id="f_address" style="min-height:56px;" placeholder="Visitor's home or office address"></textarea>
+    </div>
+    <div>
+      <label>ID type</label>
+      <select id="f_idtype"></select>
+    </div>
+    <div>
+      <label>ID number</label>
+      <input type="text" id="f_idnumber" placeholder="Required if an ID type is chosen" autocomplete="off">
+    </div>
+
+    <div class="sec-title">Visit details</div>
+    <div>
+      <label>Purpose of visit <span class="req">*</span></label>
+      <select id="f_purpose"></select>
+    </div>
+    <div>
+      <label>Person to visit <span class="req">*</span></label>
+      <input type="text" id="f_host" placeholder="Name of the staff member being visited" autocomplete="off">
+    </div>
+    <div>
+      <label>Department to visit</label>
+      <select id="f_dept"></select>
+    </div>
+    <div>
+      <label>Visitor badge number</label>
+      <input type="text" id="f_badge" placeholder="If a badge is issued (optional)" autocomplete="off">
+    </div>
+    <div>
+      <label>Vehicle plate number</label>
+      <input type="text" id="f_vehicle" placeholder="If the visitor comes with a vehicle (optional)" autocomplete="off">
+    </div>
+    <div>
+      <label>Items brought in</label>
+      <input type="text" id="f_items" placeholder="e.g. laptop, tools, samples (optional)" autocomplete="off">
+    </div>
+    <div class="full">
+      <label>Remarks</label>
+      <textarea id="f_remarks" style="min-height:56px;" placeholder="Anything else worth recording (optional)"></textarea>
+    </div>
+  </div>
+
+  <div class="btn-row">
+    <button id="btnRegister" class="btn-primary" onclick="registerVisitor()">Register Visitor</button>
+    <button id="btnClear" class="btn-ghost" onclick="clearForm()">Clear Form</button>
+  </div>
+  <div class="msg" id="msg"></div>
 </div>
 
 <script>
-let ME = null;
-function todayISO(){ return new Date().toISOString().slice(0,10); }
+var ME = null, BRANCHES = [], SAVING = false, PREV = null, EXTRA_MAX = 49;
+function $(id){ return document.getElementById(id); }
+function normPhone(v){ return String(v || "").replace(/[\s\-().]/g, ""); }
+function validPhone(p){ return /^\+?\d{7,15}$/.test(p); }
+function one(v){ return String(v || "").replace(/\s+/g, " ").trim(); }   // single-line text
+function many(v){ return String(v || "").trim(); }                         // multi-line text
 
-async function logActivity(actionType, description){
-  try{
-    await sb.from("activity_log").insert({
-      actor_id: ME.id, actor_username: ME.username, actor_role: ME.role,
-      section_id: ME.sectionId, action_type: actionType, description: description
-    });
-  }catch(e){ console.warn("Activity log write failed (non-fatal):", e); }
+function fillSelect(id, items, placeholder){
+  $(id).innerHTML = '<option value="">' + vsEsc(placeholder) + '</option>' +
+    items.map(function(x){ return '<option value="' + vsEsc(x) + '">' + vsEsc(x) + '</option>'; }).join("");
 }
 
+async function loadDepartments(){
+  var branch = $("f_branch").value, sel = $("f_dept");
+  sel.innerHTML = '<option value="">Not specific / general</option>';
+  if(!branch) return;
+  var r = await sb.from("departments").select("name").eq("section", branch).order("name");
+  if(r.error){ console.warn("Departments could not be loaded:", r.error.message); return; }
+  var seen = {};
+  (r.data || []).forEach(function(d){
+    if(seen[d.name]) return; seen[d.name] = 1;
+    var o = document.createElement("option"); o.value = d.name; o.textContent = d.name; sel.appendChild(o);
+  });
+}
+async function onBranchChange(){ await loadDepartments(); }
+
+// Returning visitors: look the phone number up and offer to reuse their earlier details.
+async function lookupPhone(){
+  var phone = normPhone($("f_phone").value), hint = $("phoneHint");
+  PREV = null; hint.innerHTML = "";
+  if(!validPhone(phone)) return;
+  var r = await sb.from("visitors")
+    .select("full_name,company,address,id_type,id_number,vehicle_plate")
+    .eq("phone", phone).order("time_in", { ascending: false }).limit(1);
+  if(r.error || !r.data || !r.data.length) return;
+  if(normPhone($("f_phone").value) !== phone) return;         // the user kept typing
+  PREV = r.data[0];
+  hint.innerHTML = 'Returning visitor: <b>' + vsEsc(PREV.full_name) + '</b>. ' +
+    '<a href="#" onclick="usePrevious();return false;" style="color:var(--accent);font-weight:700;">Use previous details</a>';
+}
+function usePrevious(){
+  if(!PREV) return;
+  $("f_name").value = PREV.full_name || "";
+  $("f_company").value = PREV.company || "";
+  $("f_address").value = PREV.address || "";
+  $("f_idtype").value = PREV.id_type || "";
+  $("f_idnumber").value = PREV.id_number || "";
+  $("f_vehicle").value = PREV.vehicle_plate || "";
+  $("phoneHint").textContent = "Previous details filled in. Please confirm they are still correct.";
+}
+
+function setMsg(text, cls){ var m = $("msg"); m.className = "msg" + (cls ? " " + cls : ""); m.textContent = text; }
+function problem(text, fieldId){
+  setMsg("❌ " + text, "err");
+  if(fieldId){ var f = $(fieldId); if(f){ f.focus(); } }
+  $("formCard").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+function lock(on){ SAVING = on; $("btnRegister").disabled = on; $("btnClear").disabled = on; }
+
+/* ── Other people in the same group ── */
+function extraNames(){
+  return Array.prototype.map.call(document.querySelectorAll("#extraNames .extra-name"), function(i){ return one(i.value); }).filter(Boolean);
+}
+function countPeople(){
+  var n = (one($("f_name").value) ? 1 : 0) + extraNames().length;
+  $("f_group").value = String(Math.max(1, n));
+}
+function addPerson(){
+  var list = $("extraNames");
+  if(list.children.length >= EXTRA_MAX){ vsFlash("You can add up to " + EXTRA_MAX + " other people. For a bigger group, register it in more than one entry.", "err"); return; }
+  var row = document.createElement("div"); row.className = "extra-row";
+  row.innerHTML = '<input type="text" class="extra-name" placeholder="Full name of another person" autocomplete="off" oninput="countPeople()">' +
+                  '<button type="button" class="btn-sm btn-ghost" title="Remove this person" onclick="removePerson(this)">✕</button>';
+  list.appendChild(row);
+  $("extraWrap").style.display = "block";
+  row.firstChild.focus();
+  countPeople();
+}
+function removePerson(btn){
+  var row = btn.parentNode; row.parentNode.removeChild(row);
+  if(!$("extraNames").children.length) $("extraWrap").style.display = "none";
+  countPeople();
+}
+
+function showOk(text){ var b = $("okBanner"); b.textContent = text; b.style.display = "block"; window.scrollTo(0, 0); }
+function hideOk(){ $("okBanner").style.display = "none"; }
+
+async function registerVisitor(){
+  if(SAVING) return;
+  var v = {
+    branch: $("f_branch").value,
+    full_name: one($("f_name").value),
+    phone: normPhone($("f_phone").value),
+    company: one($("f_company").value) || null,
+    address: many($("f_address").value),
+    id_type: $("f_idtype").value || null,
+    id_number: one($("f_idnumber").value) || null,
+    purpose: $("f_purpose").value,
+    person_to_visit: one($("f_host").value),
+    department_visited: $("f_dept").value || null,
+    group_size: 1,
+    vehicle_plate: one($("f_vehicle").value).toUpperCase() || null,
+    items_carried: one($("f_items").value) || null,
+    badge_number: one($("f_badge").value) || null,
+    remarks: many($("f_remarks").value) || null
+  };
+
+  if(!v.branch) return problem("Select the branch.", "f_branch");
+  if(!v.phone) return problem("Enter the visitor's phone number.", "f_phone");
+  if(!validPhone(v.phone)) return problem("The phone number looks wrong. Use digits only, 7 to 15 digits, with an optional + at the start.", "f_phone");
+  if(v.full_name.length < 2) return problem("Enter the visitor's full name.", "f_name");
+  if(!v.address) return problem("Enter the visitor's address.", "f_address");
+  if(v.id_type && !v.id_number) return problem("Enter the ID number, or clear the ID type.", "f_idnumber");
+  if(v.id_number && !v.id_type) return problem("Choose the ID type for the ID number entered.", "f_idtype");
+  if(!v.purpose) return problem("Choose the purpose of the visit.", "f_purpose");
+  if(!v.person_to_visit) return problem("Enter the person being visited.", "f_host");
+
+  var others = extraNames();
+  for(var k = 0; k < others.length; k++){
+    if(others[k].length < 2) return problem("Each extra name must be at least 2 letters. Remove or complete \"" + others[k] + "\".", "f_name");
+  }
+  var seen = {}; seen[v.full_name.toLowerCase()] = 1;
+  for(var m = 0; m < others.length; m++){
+    var key = others[m].toLowerCase();
+    if(seen[key]) return problem("The name \"" + others[m] + "\" is entered more than once in this group.", "f_name");
+    seen[key] = 1;
+  }
+  v.group_size = 1 + others.length;
+  if(others.length) v.companions = others;       // only sent when there are other people
+
+  lock(true); setMsg("Registering...", "");
+  try{
+    // Guard against registering the same person twice by mistake
+    var dup = await sb.from("visitors").select("visitor_number,time_in,full_name")
+      .eq("branch", v.branch).eq("phone", v.phone).eq("status", "checked_in").limit(1);
+    if(!dup.error && dup.data && dup.data.length){
+      var d = dup.data[0];
+      if(!confirm(d.full_name + " (" + d.visitor_number + ") is already on site since " + vsFmtDateTime(d.time_in) +
+                  " with this phone number.\n\nRegister another visit anyway?")){
+        setMsg("", ""); lock(false); return;
+      }
+    }
+
+    var r = await sb.from("visitors").insert(v).select().single();
+    if(r.error){
+      var denied = r.error.code === "42501" || /row-level security/i.test(r.error.message || "");
+      throw new Error(denied ? "You do not have permission to register visitors for this branch." : r.error.message);
+    }
+    var saved = r.data;
+    clearForm();
+    showOk("✅ Visitor added successfully: " + saved.full_name +
+           (saved.group_size > 1 ? " and " + (saved.group_size - 1) + (saved.group_size === 2 ? " other" : " others") : "") +
+           " (" + saved.visitor_number + "). The form is ready for the next visitor.");
+  }catch(e){
+    setMsg("❌ " + (e.message || e), "err");
+  }finally{
+    lock(false);
+  }
+}
+
+function clearForm(){
+  ["f_phone","f_name","f_company","f_address","f_idnumber","f_host","f_badge","f_vehicle","f_items","f_remarks"].forEach(function(id){ $(id).value = ""; });
+  $("extraNames").innerHTML = ""; $("extraWrap").style.display = "none"; $("f_group").value = "1";
+  $("f_idtype").value = ""; $("f_purpose").value = ""; $("f_dept").value = "";
+  $("phoneHint").textContent = ""; PREV = null; setMsg("", ""); hideOk();
+}
 async function init(){
-  const status = document.getElementById("connStatus");
+  var s = $("connStatus");
   try{
     ME = await requireAuth("../../login.html");
     if(!ME) return;
-    document.getElementById("visitDate").value = todayISO();
-    populateBranches();
-    document.getElementById("branchNote").textContent = "Signed in as " + ME.username;
-    status.style.color = "#1d8a4e"; status.textContent = "Connected.";
+    if(ME.readOnly){ $("viewOnlyCard").style.display = "block"; return; }
+    BRANCHES = await vsBranches(ME);
+    if(!BRANCHES.length){ $("noBranchCard").style.display = "block"; return; }
+
+    fillSelect("f_idtype", VS_ID_TYPES, "No ID shown");
+    fillSelect("f_purpose", VS_PURPOSES, "Select purpose");
+    var bsel = $("f_branch");
+    if(BRANCHES.length === 1){
+      bsel.innerHTML = '<option value="' + vsEsc(BRANCHES[0]) + '">' + vsEsc(BRANCHES[0]) + '</option>';
+      bsel.disabled = true;
+    } else {
+      fillSelect("f_branch", BRANCHES, "Select branch");
+    }
+    $("formCard").style.display = "block";
+    $("formCard").addEventListener("input", hideOk);
+    s.textContent = "Connected as " + ME.username;
+    await loadDepartments();
   }catch(e){
-    status.style.color = "#c0392b"; status.textContent = "❌ " + e.message; console.error(e);
+    $("formCard").style.display = "block";
+    s.style.color = "#dc2626"; s.textContent = "Error: " + (e.message || e);
   }
 }
-
-function populateBranches(){
-  const sel = document.getElementById("branch");
-  sel.innerHTML = "";
-  if(ME.role === "super_admin"){
-    sb.from("app_sections").select("name").order("name").then(({data})=>{
-      (data || []).forEach(s=>{
-        const o = document.createElement("option"); o.value = s.name; o.textContent = s.name; sel.appendChild(o);
-      });
-    });
-    sel.disabled = false; return;
-  }
-  const mine = ME.sectionNames || [];
-  if(!mine.length){
-    const o = document.createElement("option"); o.value = ""; o.textContent = "— no branch assigned —"; sel.appendChild(o);
-    sel.disabled = true; return;
-  }
-  mine.forEach(name=>{
-    const o = document.createElement("option"); o.value = name; o.textContent = name; sel.appendChild(o);
-  });
-  sel.disabled = (mine.length === 1);
-}
-
-async function save(){
-  const status = document.getElementById("status");
-  const g = id => document.getElementById(id).value.trim();
-  const branch = g("branch");
-  const visitorName = g("visitorName");
-
-  if(!visitorName){ status.className = "status err"; status.textContent = "Visitor name is required."; return; }
-  if(!branch){ status.className = "status err"; status.textContent = "No Branch available — ask your Super Admin to assign you a Branch."; return; }
-  if(ME.role !== "super_admin" && (ME.sectionNames || []).indexOf(branch) === -1){
-    status.className = "status err"; status.textContent = "You are not assigned to that Branch."; return;
-  }
-
-  status.className = "status"; status.textContent = "Saving...";
-  try{
-    const { error } = await sb.from("visitor_attendance").insert({
-      branch: branch,
-      visit_date: g("visitDate") || todayISO(),
-      visitor_name: visitorName,
-      phone: g("phone") || null,
-      company: g("company") || null,
-      visiting: g("visiting") || null,
-      purpose: g("purpose") || null,
-      time_in: new Date().toISOString(),
-      status: "inside",
-      created_by_username: ME.username
-    });
-    if(error) throw error;
-    await logActivity("visitor_checkin", ME.username + " checked in visitor " + visitorName);
-    status.className = "status ok"; status.textContent = "✅ " + visitorName + " checked in.";
-    ["visitorName","phone","company","visiting","purpose"].forEach(id => document.getElementById(id).value = "");
-    document.getElementById("visitDate").value = todayISO();
-  }catch(e){
-    status.className = "status err"; status.textContent = "❌ " + e.message;
-  }
-}
-
 init();
 </script>
 </body>

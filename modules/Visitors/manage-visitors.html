@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Visitor Attendance — Manage Visitors</title>
+<title>Manage Visitors</title>
 <link rel="stylesheet" href="../../styles.css">
 <script>
   (function(){
@@ -14,226 +14,233 @@
 </script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="../../auth.js"></script>
-<style>
-  :root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;--amber:#d97706;}
-  *{box-sizing:border-box;}
-  body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;color:var(--text);}
-  .wrap{max-width:1100px;margin:0 auto;}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px;}
-  .card h3{color:var(--navy);margin:0 0 4px;font-size:16px;}
-  .card .sub{color:var(--blue);font-size:12px;margin:0 0 14px;}
-  label{display:block;font-size:12px;font-weight:bold;color:var(--text);margin:10px 0 4px;}
-  input,select{width:100%;padding:9px;border:1px solid var(--line);border-radius:8px;font-size:14px;font-family:inherit;}
-  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;}
-  .row > div{flex:1;min-width:150px;}
-  button{padding:10px 14px;border:none;border-radius:8px;font-weight:bold;font-size:13px;cursor:pointer;background:var(--blue);color:#fff;}
-  button:hover{background:var(--blue-dark);}
-  button.mini{padding:6px 10px;font-size:12px;}
-  button.del{background:var(--red);}
-  button.del:hover{background:#96242e;}
-  button.pdf{background:#6b7280;}
-  button.pdf:hover{background:#4b5563;}
-  .status{margin-top:10px;font-weight:bold;font-size:13px;min-height:16px;}
-  .status.ok{color:var(--green);} .status.err{color:var(--red);}
-  #connStatus{font-size:12px;font-weight:bold;text-align:center;margin-bottom:10px;}
-  table{width:100%;border-collapse:collapse;margin-top:12px;font-size:13px;}
-  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top;}
-  thead th{background:var(--navy);color:#fff;font-size:12px;}
-  tbody tr:nth-child(even){background:#f6f8fb;}
-  .tag{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:bold;color:#fff;}
-  .tag.inside{background:var(--amber);}
-  .tag.checked_out{background:var(--green);}
-</style>
+<script src="visitor-common.js"></script>
 </head>
 <body>
 
-<div class="wrap">
-<button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;margin-bottom:12px;background:var(--navy);">&larr; Back to Menu</button>
-<div id="connStatus">Loading...</div>
-
 <div class="card">
-  <h3>Manage Visitors</h3>
-  <p class="sub" id="scopeNote"></p>
-  <div class="row">
-    <div>
-      <label>From Date</label>
-      <input type="date" id="fromDate">
+  <h2>🚪 Manage Visitors</h2>
+  <div class="status-line" id="connStatus">Connecting...</div>
+  <div class="notice" id="viewOnlyNote" style="display:none;">You have view-only access. You can see who is on site and print the list, but you cannot check visitors out.</div>
+
+  <div class="chips" id="chips"></div>
+
+  <div class="toolbar">
+    <div id="branchBox" style="display:none;">
+      <label>Branch</label>
+      <select id="filterBranch" onchange="loadData()"></select>
+    </div>
+    <div class="grow">
+      <label>Search</label>
+      <input type="text" id="filterSearch" placeholder="Search name, phone, company, host, badge or vehicle" oninput="onSearch()">
     </div>
     <div>
-      <label>To Date</label>
-      <input type="date" id="toDate">
-    </div>
-    <div>
-      <label>Status</label>
-      <select id="statusFilter" onchange="applyFilters()">
-        <option value="">All</option>
-        <option value="inside">Inside</option>
-        <option value="checked_out">Checked-out</option>
+      <label>Rows</label>
+      <select id="filterRows" onchange="onSearch()">
+        <option value="10">10 rows</option>
+        <option value="25" selected>25 rows</option>
+        <option value="50">50 rows</option>
+        <option value="100">100 rows</option>
       </select>
     </div>
-    <div>
-      <label>Search (name / phone / company)</label>
-      <input type="text" id="search" placeholder="Type to filter" oninput="applyFilters()">
-    </div>
-    <div style="flex:0 0 auto;">
-      <button onclick="loadRecords()">Refresh</button>
-    </div>
-    <div style="flex:0 0 auto;">
-      <button class="pdf" onclick="printList()">PDF / Print</button>
-    </div>
+    <div style="min-width:0;"><button class="btn-ghost" onclick="loadData()">⟳ Refresh</button></div>
+    <div style="min-width:0;"><button class="btn-accent" onclick="printOnSite()">Print On-Site List</button></div>
   </div>
-  <div class="status" id="status"></div>
+
+  <p class="count-label" id="countLabel"></p>
+  <div class="table-wrap"><div id="tableArea">Loading...</div></div>
+  <div class="pagination" id="paginationArea"></div>
+  <p class="hint" style="margin-top:12px;" id="updatedAt"></p>
 </div>
 
-<div class="card">
-  <div id="tableWrap"></div>
-</div>
+<!-- Check-out confirmation -->
+<div class="modal-bg" id="coModal">
+  <div class="modal">
+    <h3>Check Out Visitor</h3>
+    <div class="kv" id="coInfo"></div>
+    <div class="warn" id="coWarn" style="display:none;"></div>
+    <p style="font-size:14px;margin:0 0 12px;">Are you sure <b id="coName"></b> is leaving the premises?</p>
+    <label>Comments <span id="coOpt" class="hint" style="display:inline;">(optional)</span></label>
+    <textarea id="coComment" maxlength="500" placeholder="e.g. Left after the meeting. Delivery note signed by stores."></textarea>
+    <div class="msg" id="coMsg"></div>
+    <div class="modal-btns">
+      <button class="btn-ghost" id="coCancel" onclick="closeCo()">Cancel</button>
+      <button class="btn-primary" id="coConfirm" onclick="confirmCo()">Confirm Check Out</button>
+    </div>
+  </div>
 </div>
 
 <script>
-let ME = null;
-let ALL = [];
-let VIEW = [];
-const COMPANY = "Rumbu Industries Limited";
+var ME = null, BRANCHES = [], ROWS = [], FILTERED = [], page = 1, CAN_WRITE = false, CO = null, CO_STALE = false, BUSY = false, TRUNC = false;
+function $(id){ return document.getElementById(id); }
+function rpp(){ return Number($("filterRows").value) || 25; }
+function isStale(r){ return vsDay(r.time_in) < vsToday(); }                 // checked in on an earlier day
+function isLong(r){ return vsMinutes(r.time_in, new Date()) >= VS_OVERSTAY_HOURS * 60; }
 
-async function logActivity(actionType, description){
+async function loadData(silent){
+  if(!silent) $("tableArea").innerHTML = "Loading...";
   try{
-    await sb.from("activity_log").insert({
-      actor_id: ME.id, actor_username: ME.username, actor_role: ME.role,
-      section_id: ME.sectionId, action_type: actionType, description: description
+    var branch = $("filterBranch").value;
+    var res = await vsFetchAll(function(){
+      var q = sb.from("visitors").select("*").eq("status", "checked_in")
+        .order("time_in", { ascending: true }).order("id");
+      if(branch) q = q.eq("branch", branch);
+      else if(ME.role !== "super_admin") q = q.in("branch", BRANCHES);
+      return q;
     });
-  }catch(e){ console.warn("Activity log write failed (non-fatal):", e); }
+    ROWS = res.rows; TRUNC = res.truncated;
+    $("updatedAt").textContent = "Last updated " + vsFmtTime(new Date()) + " WAT. This list refreshes by itself every minute.";
+    applyFilter();
+  }catch(e){
+    if(!silent) $("tableArea").innerHTML = '<p class="empty" style="color:#dc2626;">❌ ' + vsEsc(e.message || e) + '</p>';
+  }
 }
 
+function onSearch(){ page = 1; applyFilter(); }
+
+function applyFilter(){
+  var q = $("filterSearch").value.trim().toLowerCase();
+  FILTERED = !q ? ROWS.slice() : ROWS.filter(function(r){
+    return [r.full_name, vsCompanions(r).join(" "), r.phone, r.company, r.person_to_visit, r.department_visited, r.badge_number, r.vehicle_plate, r.visitor_number, r.purpose]
+      .join(" ").toLowerCase().indexOf(q) !== -1;
+  });
+  renderChips(); renderTable();
+}
+
+// The summary boxes were removed. Only a warning is shown, and only when someone from an earlier day was never checked out.
+function renderChips(){
+  var earlier = 0;
+  ROWS.forEach(function(r){ if(isStale(r)) earlier++; });
+  $("chips").innerHTML = earlier ? '<span class="chip c-red">From earlier days, not checked out<b>' + earlier + '</b></span>' : '';
+}
+
+function renderTable(){
+  var total = FILTERED.length, per = rpp(), totalPages = Math.max(1, Math.ceil(total / per));
+  if(page > totalPages) page = totalPages;
+  var start = (page - 1) * per, end = Math.min(start + per, total), rows = FILTERED.slice(start, end);
+  $("countLabel").textContent = total + " visitor" + (total === 1 ? "" : "s") + " on site" +
+    (FILTERED.length !== ROWS.length ? " (filtered from " + ROWS.length + ")" : "") +
+    (TRUNC ? ". Only the first " + VS_MAX_ROWS + " are shown." : "");
+  if(!rows.length){
+    $("tableArea").innerHTML = '<p class="empty">' + (ROWS.length ? "No visitors match your search." : "No visitors are on site right now.") + '</p>';
+    $("paginationArea").innerHTML = ""; return;
+  }
+  var multi = BRANCHES.length > 1;
+  var h = '<table><thead><tr><th>#</th><th>Visitor No</th><th>Name</th><th>Phone</th><th>Company</th>' + (multi ? '<th>Branch</th>' : '') +
+          '<th>Visiting</th><th>Purpose</th><th class="num">People</th><th>Badge</th><th>Time In</th><th>On Site</th>' + (CAN_WRITE ? '<th>Action</th>' : '') + '</tr></thead><tbody>';
+  rows.forEach(function(r, i){
+    var stale = isStale(r), cls = stale ? "row-stale" : (isLong(r) ? "row-long" : "");
+    h += '<tr class="' + cls + '"><td>' + (start + i + 1) + '</td><td><b>' + vsEsc(r.visitor_number) + '</b></td>' +
+      '<td>' + vsEsc(r.full_name) + (vsCompanions(r).length ? '<br><span class="hint">' + vsEsc(vsWithText(r)) + '</span>' : '') + '</td><td>' + vsEsc(r.phone) + '</td><td>' + vsEsc(r.company || "-") + '</td>' +
+      (multi ? '<td>' + vsEsc(r.branch) + '</td>' : '') +
+      '<td>' + vsEsc(r.person_to_visit) + (r.department_visited ? '<br><span class="hint">' + vsEsc(r.department_visited) + '</span>' : '') + '</td>' +
+      '<td>' + vsEsc(r.purpose) + '</td><td class="num">' + (r.group_size || 1) + '</td><td>' + vsEsc(r.badge_number || "-") + '</td>' +
+      '<td>' + vsFmtDate(r.time_in) + '<br>' + vsFmtTime(r.time_in) + '</td>' +
+      '<td>' + vsDuration(r.time_in, new Date()) + (stale ? '<br><span class="badge b-stale">Earlier day</span>' : (isLong(r) ? '<br><span class="badge b-on">Long stay</span>' : '')) + '</td>' +
+      (CAN_WRITE ? '<td><button class="btn-sm btn-accent" onclick="openCo(\'' + r.id + '\')">Check Out</button></td>' : '') + '</tr>';
+  });
+  $("tableArea").innerHTML = h + '</tbody></table>';
+  $("paginationArea").innerHTML = vsPager(page, totalPages, start, end, total, "goPage");
+}
+function goPage(p){ var tp = Math.max(1, Math.ceil(FILTERED.length / rpp())); if(p < 1 || p > tp) return; page = p; renderTable(); }
+
+/* ── Check out ── */
+function openCo(id){
+  var r = ROWS.find(function(x){ return x.id === id; }); if(!r || !CAN_WRITE) return;
+  CO = r; CO_STALE = isStale(r);
+  $("coName").textContent = r.full_name + (r.group_size > 1 ? " and " + (r.group_size - 1) + " other" + (r.group_size > 2 ? "s" : "") : "");
+  $("coInfo").innerHTML =
+    '<div><label>Visitor number</label><span>' + vsEsc(r.visitor_number) + '</span></div>' +
+    '<div><label>Time in</label><span>' + vsEsc(vsFmtDateTime(r.time_in)) + '</span></div>' +
+    '<div><label>Visiting</label><span>' + vsEsc(r.person_to_visit) + '</span></div>' +
+    '<div><label>Time on site</label><span>' + vsEsc(vsDuration(r.time_in, new Date())) + '</span></div>' +
+    (vsCompanions(r).length ? '<div class="full"><label>Group members</label><span>' + vsEsc(vsCompanions(r).join(", ")) + '</span></div>' : '');
+  var warn = $("coWarn");
+  if(CO_STALE){
+    warn.style.display = "block";
+    warn.textContent = "This visitor checked in on " + vsFmtDate(r.time_in) + " and was never checked out. The time out will be recorded as right now, so please state in the comments when the visitor actually left.";
+    $("coOpt").textContent = "(required for this visitor)";
+  } else { warn.style.display = "none"; $("coOpt").textContent = "(optional)"; }
+  $("coComment").value = ""; $("coMsg").textContent = ""; $("coMsg").className = "msg";
+  $("coModal").classList.add("open");
+  setTimeout(function(){ $("coComment").focus(); }, 50);
+}
+function closeCo(){ if(BUSY) return; $("coModal").classList.remove("open"); CO = null; }
+
+async function confirmCo(){
+  if(BUSY || !CO || !CAN_WRITE) return;
+  var comment = $("coComment").value.trim(), m = $("coMsg");
+  if(CO_STALE && !comment){ m.className = "msg err"; m.textContent = "❌ Please state when this visitor actually left."; $("coComment").focus(); return; }
+  BUSY = true; $("coConfirm").disabled = true; $("coCancel").disabled = true; m.className = "msg"; m.textContent = "Checking out...";
+  var who = CO.full_name;
+  try{
+    // Only a visitor who is still checked in can be updated, so two guards cannot both check out the same person
+    var r = await sb.from("visitors").update({ status: "checked_out", checkout_comment: comment || null })
+      .eq("id", CO.id).eq("status", "checked_in").select("id,time_out");
+    if(r.error) throw r.error;
+    BUSY = false; $("coConfirm").disabled = false; $("coCancel").disabled = false;
+    if(!r.data || !r.data.length){
+      closeCo();
+      vsFlash(who + " was not updated. They may already have been checked out by someone else, or you do not have permission. The list has been refreshed.", "err");
+    } else {
+      closeCo();
+      vsFlash(who + " checked out at " + vsFmtTime(r.data[0].time_out) + " WAT.", "ok");
+    }
+    await loadData(true);
+  }catch(e){
+    BUSY = false; $("coConfirm").disabled = false; $("coCancel").disabled = false;
+    m.className = "msg err"; m.textContent = "❌ " + (e.message || e);
+  }
+}
+
+/* ── Print the on-site list (also useful as an emergency roll call) ── */
+function printOnSite(){
+  if(!FILTERED.length){ vsFlash("There is nobody on site to print.", "err"); return; }
+  var branch = $("filterBranch").value || (BRANCHES.length === 1 ? BRANCHES[0] : "All branches");
+  var people = 0; FILTERED.forEach(function(r){ people += r.group_size || 1; });
+  var multi = BRANCHES.length > 1 && !$("filterBranch").value;
+  var html = vsPrintHead("Visitors On Site") +
+    '<div class="pr-title">Visitors On Site</div>' +
+    '<div class="pr-meta"><b>Branch:</b> ' + vsEsc(branch) + '</div>' +
+    '<div class="pr-meta"><b>As at:</b> ' + vsEsc(vsNowLabel()) + '</div>' +
+    '<div class="pr-meta"><b>Visits on site:</b> ' + FILTERED.length + ' &nbsp; <b>People on site:</b> ' + people + '</div>' +
+    '<table class="pr-table"><thead><tr><th>No</th><th>Visitor No</th><th>Name</th><th>Phone</th><th>Company</th>' + (multi ? '<th>Branch</th>' : '') +
+    '<th>Visiting</th><th>People</th><th>Badge</th><th>Time In</th><th>On Site</th></tr></thead><tbody>' +
+    FILTERED.map(function(r, i){
+      return '<tr><td>' + (i + 1) + '</td><td>' + vsEsc(r.visitor_number) + '</td><td>' + vsEsc(r.full_name) + (vsCompanions(r).length ? '<br><i>' + vsEsc(vsWithText(r)) + '</i>' : '') + '</td><td>' + vsEsc(r.phone) + '</td><td>' + vsEsc(r.company || "-") + '</td>' +
+        (multi ? '<td>' + vsEsc(r.branch) + '</td>' : '') +
+        '<td>' + vsEsc(r.person_to_visit) + (r.department_visited ? ' (' + vsEsc(r.department_visited) + ')' : '') + '</td><td>' + (r.group_size || 1) + '</td><td>' + vsEsc(r.badge_number || "-") + '</td>' +
+        '<td>' + vsEsc(vsFmtDateTime(r.time_in)) + '</td><td>' + vsDuration(r.time_in, new Date()) + '</td></tr>';
+    }).join("") +
+    '</tbody></table><div class="pr-end">Printed by ' + vsEsc(ME.username) + '</div>';
+  vsPrint(html, "A4 landscape", true);
+}
+
+document.addEventListener("keydown", function(e){ if(e.key === "Escape") closeCo(); });
+
 async function init(){
-  const status = document.getElementById("connStatus");
+  var s = $("connStatus");
   try{
     ME = await requireAuth("../../login.html");
     if(!ME) return;
-    document.getElementById("scopeNote").textContent = ME.role === "super_admin"
-      ? "Showing visitors from every Branch."
-      : "Showing visitors for your own Branch only" + (ME.sectionName ? " (" + ME.sectionName + ")." : ".");
-    status.style.color = "#1d8a4e"; status.textContent = "Connected.";
-    await loadRecords();
-  }catch(e){
-    status.style.color = "#c0392b"; status.textContent = "❌ " + e.message; console.error(e);
-  }
-}
-
-async function loadRecords(){
-  const status = document.getElementById("status");
-  status.className = "status"; status.textContent = "Loading...";
-  try{
-    let q = sb.from("visitor_attendance").select("*").order("time_in",{ascending:false});
-    if(ME.role !== "super_admin"){
-      if(ME.sectionNames && ME.sectionNames.length){ q = q.in("branch", ME.sectionNames); }
-      else { q = q.eq("branch","___none___"); }
+    CAN_WRITE = !ME.readOnly;
+    if(!CAN_WRITE) $("viewOnlyNote").style.display = "block";
+    BRANCHES = await vsBranches(ME);
+    if(!BRANCHES.length){ s.textContent = "Your account is not assigned to a branch."; $("tableArea").innerHTML = ""; return; }
+    if(BRANCHES.length > 1){
+      $("branchBox").style.display = "block";
+      $("filterBranch").innerHTML = '<option value="">All branches</option>' +
+        BRANCHES.map(function(b){ return '<option value="' + vsEsc(b) + '">' + vsEsc(b) + '</option>'; }).join("");
+    } else {
+      $("filterBranch").innerHTML = '<option value="' + vsEsc(BRANCHES[0]) + '">' + vsEsc(BRANCHES[0]) + '</option>';
     }
-    const { data, error } = await q;
-    if(error) throw error;
-    ALL = data || [];
-    status.className = "status ok"; status.textContent = ALL.length + " record(s) loaded.";
-    applyFilters();
+    s.textContent = "Connected as " + ME.username + (BRANCHES.length === 1 ? " · " + BRANCHES[0] : "");
+    await loadData();
+    setInterval(function(){ if(!$("coModal").classList.contains("open")) loadData(true); }, 60000);
   }catch(e){
-    status.className = "status err"; status.textContent = "❌ " + e.message;
+    s.style.color = "#dc2626"; s.textContent = "Error: " + (e.message || e);
   }
 }
-
-function applyFilters(){
-  const from = document.getElementById("fromDate").value;
-  const to = document.getElementById("toDate").value;
-  const st = document.getElementById("statusFilter").value;
-  const search = document.getElementById("search").value.trim().toLowerCase();
-  let rows = ALL.slice();
-  if(from) rows = rows.filter(r => (r.visit_date||"") >= from);
-  if(to)   rows = rows.filter(r => (r.visit_date||"") <= to);
-  if(st)   rows = rows.filter(r => (r.status||"inside") === st);
-  if(search){
-    rows = rows.filter(r =>
-      (r.visitor_name||"").toLowerCase().includes(search) ||
-      (r.phone||"").toLowerCase().includes(search) ||
-      (r.company||"").toLowerCase().includes(search));
-  }
-  VIEW = rows;
-  render(rows);
-}
-
-function fmt(ts){ return ts ? new Date(ts).toLocaleString() : ""; }
-
-function render(rows){
-  const wrap = document.getElementById("tableWrap");
-  if(!rows.length){ wrap.innerHTML = "<p>No records match.</p>"; return; }
-  const canDelete = (ME.role === "super_admin" || ME.role === "admin");
-  let html = "<table><thead><tr>" +
-    "<th>Date</th><th>Name</th><th>Phone</th><th>Company</th><th>Visiting</th>" +
-    "<th>Purpose</th><th>Branch</th><th>Time In</th><th>Time Out</th><th>Status</th>" +
-    (canDelete ? "<th></th>" : "") + "</tr></thead><tbody>";
-  rows.forEach(r=>{
-    const st = r.status || "inside";
-    html += "<tr>" +
-      `<td>${r.visit_date||""}</td>` +
-      `<td>${r.visitor_name||""}</td>` +
-      `<td>${r.phone||""}</td>` +
-      `<td>${r.company||""}</td>` +
-      `<td>${r.visiting||""}</td>` +
-      `<td>${r.purpose||""}</td>` +
-      `<td>${r.branch||""}</td>` +
-      `<td>${fmt(r.time_in)}</td>` +
-      `<td>${fmt(r.time_out)}</td>` +
-      `<td><span class="tag ${st}">${st === "checked_out" ? "CHECKED-OUT" : "INSIDE"}</span></td>` +
-      (canDelete ? `<td><button class="mini del" onclick="removeRow(${r.id})">Delete</button></td>` : "") +
-    "</tr>";
-  });
-  html += "</tbody></table>";
-  wrap.innerHTML = html;
-}
-
-async function removeRow(id){
-  const r = ALL.find(x => x.id === id);
-  if(!r) return;
-  if(!confirm("Delete visitor record for " + r.visitor_name + "?")) return;
-  const status = document.getElementById("status");
-  status.className = "status"; status.textContent = "Deleting...";
-  try{
-    const { error } = await sb.from("visitor_attendance").delete().eq("id", id);
-    if(error) throw error;
-    await logActivity("visitor_deleted", ME.username + " deleted visitor record for " + r.visitor_name);
-    status.className = "status ok"; status.textContent = "✅ Deleted.";
-    await loadRecords();
-  }catch(e){
-    status.className = "status err"; status.textContent = "❌ " + e.message;
-  }
-}
-
-function printList(){
-  if(!VIEW.length){ alert("Nothing to print for the current filter."); return; }
-  let rows = VIEW.map(r => `
-    <tr>
-      <td>${r.visit_date||""}</td><td>${r.visitor_name||""}</td><td>${r.phone||""}</td>
-      <td>${r.company||""}</td><td>${r.visiting||""}</td><td>${r.branch||""}</td>
-      <td>${fmt(r.time_in)}</td><td>${fmt(r.time_out)}</td>
-      <td>${(r.status||"inside")==="checked_out"?"Checked-out":"Inside"}</td>
-    </tr>`).join("");
-  const html = `
-<html><head><style>
-@page { size:A4 landscape; margin:30pt; }
-body { font-family:var(--sans); font-size:10pt; margin:0; padding:20px; }
-h2 { text-align:center; margin:0 0 2px; } h3 { text-align:center; margin:0 0 16px; font-weight:normal; }
-table { width:100%; border-collapse:collapse; }
-th,td { border:1px solid #333; padding:5px 7px; text-align:left; }
-th { background:#1F3864; color:#fff; }
-</style></head><body>
-<h2>${COMPANY}</h2>
-<h3>Visitor Attendance Register</h3>
-<table><thead><tr>
-<th>Date</th><th>Name</th><th>Phone</th><th>Company</th><th>Visiting</th><th>Branch</th><th>Time In</th><th>Time Out</th><th>Status</th>
-</tr></thead><tbody>${rows}</tbody></table>
-</body></html>`;
-  const w = window.open("", "_blank");
-  w.document.write(html); w.document.close();
-  w.onload = function(){ w.focus(); w.print(); };
-}
-
 init();
 </script>
 </body>

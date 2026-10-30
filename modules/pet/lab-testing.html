@@ -55,7 +55,7 @@
   <div class="guide-box">
     <b>How Stage 9 — Lab Testing works</b>
     <ol>
-      <li><b>Production adds each batch</b> in Stage 8 as soon as it is made: grade (AA or AB), the weight of every bag, the operator and the shift leader. It appears here straight away.</li>
+      <li><b>Production adds each batch</b> in Stage 8 as soon as it is made: grade, the weight of every bag, the operator and the shift leader. It appears here straight away.</li>
       <li>For <b>each batch</b>: take the sample, test it, <b>upload the Flake Scan result</b>, then press <b>Submit result to Production</b>. Submitting marks that batch as tested, and you move to the next batch.</li>
       <li>The <b>result approver</b> in production then compares your result with the company's limits, and passes it, asks for a <b>retest</b> (you upload a new result for the same batch) or asks for a <b>rerun</b> (production makes the batch again). QR labels are released only after approval.</li>
     </ol>
@@ -133,7 +133,7 @@
   </div>
 </div>
 <script>
-let ME=null, ALL_SECTIONS=[], MY_SECTIONS=[], RUN=null, BATCHES=[], RESULTS={};
+let ME=null, ALL_SECTIONS=[], MY_SECTIONS=[], RUN=null, BATCHES=[], RESULTS={}, ATTEMPTS={};
 // A run is open from the plant manager's approval (Stage 7) until Production is completed.
 const RUN_STATUSES=["stage4_filling","rejected_to_stage4","stage4_bagging"];
 const AWAITING_LAB=["produced","retest_requested"];
@@ -149,6 +149,15 @@ function bTotal(b){ return b.total_kg!=null ? num(b.total_kg) : num(b.colored_fl
 function bStatus(b){ return b.batch_status || (b.bags_generated_at?"approved":"produced"); }
 function bGrade(b){ return b.grade || (num(b.qty_aa)>0&&num(b.qty_ab)>0 ? "AA+AB" : (num(b.qty_aa)>0?"AA":(num(b.qty_ab)>0?"AB":"—"))); }
 
+// ---- tests on a batch: every upload is kept, the latest one is the result on file ----
+function testsFor(b){ const rr=b.rerun_count||0; return (ATTEMPTS[b.id]||[]).filter(a=>(a.rerun_no||0)===rr).slice().sort((x,y)=>x.attempt_no-y.attempt_no); }
+function testWord(a){ return a.passed===false?"FAILED":"PASSED"; }
+function testsSummary(list){ return list.map(a=>"Test "+a.attempt_no+" "+testWord(a)).join(", "); }
+function testsTable(list){
+  return `<table><thead><tr><th>Test</th><th>Result</th><th>When</th><th>By</th><th>Sample</th><th>Metal</th></tr></thead><tbody>${list.map(a=>
+    `<tr><td><b>${a.attempt_no}</b>${a.batch_status_at_upload==="retest_requested"?` <span style="color:var(--muted);">(retest asked by Production)</span>`:""}</td><td><span class="pill ${a.passed===false?"p-bad":"p-ok"}">${testWord(a)}</span></td><td>${esc(fmtDT(a.uploaded_at))}</td><td>${esc(a.uploaded_by_name||"--")}</td><td>${esc(a.sample_weight??"--")} g</td><td>${esc(a.metal_pieces??0)}</td></tr>`).join("")}</tbody></table>`;
+}
+function nextTestNo(b){ const t=testsFor(b); return t.length ? t[t.length-1].attempt_no+1 : (RESULTS[b.id] ? 2 : 1); }
 function statusPill(s){
   const m={ produced:["p-wait","Waiting for lab"], retest_requested:["p-bad","Retest requested"], lab_done:["p-info","Submitted — awaiting production review"],
             approved:["p-ok","Approved"], rerun_requested:["p-bad","Rerun requested"] };
@@ -207,10 +216,15 @@ async function openRun(id){
   if(!prod.id){ alert("Production has not started this run yet, so there are no batches to test."); return; }
 
   BATCHES=(c.pet_lab_batches||[]).slice().sort((a,b)=>b.batch_no-a.batch_no);   // newest first
-  RESULTS={};
+  RESULTS={}; ATTEMPTS={};
   if(BATCHES.length){
     const { data:res } = await sb.from("pet_flake_scan_results").select("id,batch_id,passed,sample_weight,metal_pieces,scan_id,filename,updated_at").in("batch_id",BATCHES.map(b=>b.id));
     (res||[]).forEach(r=>{ RESULTS[r.batch_id]=r; });
+    // every test of every batch, kept since the test history was set up (if that is not installed yet, the page works as before)
+    try{
+      const { data:att, error:attErr } = await sb.from("pet_flake_scan_attempts").select("id,batch_id,rerun_no,attempt_no,passed,sample_weight,metal_pieces,scan_id,batch_status_at_upload,uploaded_by_name,uploaded_at").in("batch_id",BATCHES.map(b=>b.id)).order("attempt_no");
+      if(!attErr) (att||[]).forEach(a=>{ (ATTEMPTS[a.batch_id]=ATTEMPTS[a.batch_id]||[]).push(a); });
+    }catch(e){}
   }
   RUN={ c, off, prod };
   renderRun();
@@ -246,26 +260,37 @@ function batchCard(b){
   const chips = weights.length ? weights.map((w,i)=>`<span class="bagchip">Bag ${i+1}: ${fmt(w)} kg</span>`).join("") : "";
   const resPill = !res ? `<span class="pill p-wait">Flake result: not uploaded</span>` : (res.passed===false ? `<span class="pill p-bad">Flake result: FAILED</span>` : `<span class="pill p-ok">Flake result: PASSED</span>`);
   const retestNote = (st==="retest_requested" && b.decision_note) ? `<div class="note-box"><b>Retest requested by production:</b> ${esc(b.decision_note)}<br><span style="color:var(--muted);">Upload a new Flake Scan result for this same batch, then submit again.</span></div>` : "";
+  const testsNote = (testsFor(b).length>1) ? `<div class="kv" style="margin-top:6px;"><b>Tested ${testsFor(b).length} times:</b> ${esc(testsSummary(testsFor(b)))}</div>` : "";
   const people = (b.operator_name||b.shift_leader_name) ? `<div class="kv"><b>Operator:</b> ${esc(b.operator_name||"—")} · <b>Shift leader:</b> ${esc(b.shift_leader_name||"—")}</div>` : "";
 
+  const tests=testsFor(b);
+  const failedNow = !!res && res.passed===false;
+  const nextNo = nextTestNo(b);
+  const oldResultNote = (res && !tests.length) ? `<div class="kv" style="margin:4px 0;color:var(--muted);">The result on file was uploaded before test history was kept, so it is not listed below.</div>` : "";
+  const testsBox = tests.length ? `<div class="kv" style="margin:8px 0 4px;"><b>Tests on this batch:</b> ${tests.length}</div>${testsTable(tests)}` : "";
+  const failBox = failedNow ? `<div class="note-box" style="border-left:4px solid #dc2626;"><b>The latest test FAILED.</b> You can retest the sample and upload the new result <b>before</b> sending it to Production. Every test is kept in the history of this batch, so the history will show it was tested ${nextNo} times.</div>` : "";
+  const uploadLabel = !res ? "Upload Flake Scan Result" : (failedNow ? "Upload retest result (Test "+nextNo+")" : "Upload another result (Test "+nextNo+")");
+  const step2Help = !res ? "<b>Locked until the Flake Scan result is uploaded (Step 1).</b>"
+    : (failedNow ? "The latest test failed. You can retest first (Step 1), or submit it as it is and Production will decide." : "Submitting marks this batch as tested. Production will then review it.");
   let body="";
   if(canWork){
     body=`
       <div class="step">
         <div class="step-title">Step 1 — Flake Scan result</div>
-        <div class="step-help">Upload the <b>_full.csv</b> export from the Flake Scan machine for <b>this batch's</b> sample. Uploading again replaces the result on file.</div>
-        ${res?`<div class="kv" style="margin-bottom:6px;">On file: <b>${res.passed===false?"FAILED":"PASSED"}</b> · sample ${esc(res.sample_weight??"—")} g · metal pieces ${esc(res.metal_pieces??0)} · scan ${esc(res.scan_id||"—")}</div>`:""}
-        <button class="btn-sm" onclick="openFlakeScanModal(${b.id})">📂 ${res?"Replace":"Upload"} Flake Scan Result</button>
+        <div class="step-help">Upload the <b>_full.csv</b> export from the Flake Scan machine for <b>this batch's</b> sample. If you test the sample again, upload the new result: the earlier test stays in the history.</div>
+        ${res?`<div class="kv" style="margin-bottom:6px;">On file: <b>${res.passed===false?"FAILED":"PASSED"}</b> &middot; sample ${esc(res.sample_weight??"--")} g &middot; metal pieces ${esc(res.metal_pieces??0)} &middot; scan ${esc(res.scan_id||"--")}</div>`:""}
+        ${failBox}${oldResultNote}${testsBox}
+        <button class="btn-sm" style="margin-top:8px;" onclick="openFlakeScanModal(${b.id})">${uploadLabel}</button>
       </div>
       <div class="step">
         <div class="step-title">Step 2 — Submit to Production</div>
-        <div class="step-help">${res?"Submitting marks this batch as tested. Production will then review it.":"<b>Locked until the Flake Scan result is uploaded (Step 1).</b>"}</div>
+        <div class="step-help">${step2Help}</div>
         <button onclick="submitBatch(${b.id})" ${res?"":"disabled"}>Submit result to Production</button>
       </div>`;
   } else if(st==="lab_done"){
-    body=`<div class="step"><div class="step-help">Submitted ${esc(fmtDT(b.lab_submitted_at))}. Result on file: <b>${res?(res.passed===false?"FAILED":"PASSED"):"—"}</b>. Waiting for production to approve, or to ask for a retest or rerun.</div></div>`;
+    body=`<div class="step"><div class="step-help">Submitted ${esc(fmtDT(b.lab_submitted_at))}. Result on file: <b>${res?(res.passed===false?"FAILED":"PASSED"):"—"}</b>. Waiting for production to approve, or to ask for a retest or rerun.</div>${testsNote}</div>`;
   } else if(st==="approved"){
-    body=`<div class="step"><div class="step-help">Approved ${esc(fmtDT(b.decision_at))}. Result on file: <b>${res?(res.passed===false?"FAILED":"PASSED"):"—"}</b>. QR labels are released in Stage 8.</div></div>`;
+    body=`<div class="step"><div class="step-help">Approved ${esc(fmtDT(b.decision_at))}. Result on file: <b>${res?(res.passed===false?"FAILED":"PASSED"):"—"}</b>. QR labels are released in Stage 8.</div>${testsNote}</div>`;
   } else if(st==="rerun_requested"){
     body=`<div class="step"><div class="note-box"><b>Rerun requested by production:</b> ${esc(b.decision_note||"—")}<br><span style="color:var(--muted);">Production is making this batch again. It will reappear here when ready for a new result.</span></div></div>`;
   }
@@ -274,7 +299,7 @@ function batchCard(b){
     <div class="batch-head">
       <div><b style="font-size:14px;color:var(--heading);">Batch ${b.batch_no}</b>
         <span style="color:var(--muted);font-size:12px;">· ${esc(fmtD(b.batch_date))} · Grade <b>${esc(bGrade(b))}</b> · ${b.bag_count||weights.length||"—"} bags · ${fmt(bTotal(b))} kg</span></div>
-      <div>${statusPill(st)}${resPill}</div>
+      <div>${statusPill(st)}${resPill}${testsFor(b).length>1?`<span class="pill p-info">${testsFor(b).length} tests</span>`:""}</div>
     </div>
     ${people}
     ${chips?`<div class="bagchips">${chips}</div>`:""}
@@ -300,14 +325,17 @@ async function submitBatch(id){
   const b=BATCHES.find(x=>x.id===id); if(!b) return;
   if(!RESULTS[id]){ flash(id,"Upload this batch's Flake Scan result first (Step 1).","var(--bad)"); return; }
   if(!AWAITING_LAB.includes(bStatus(b))){ flash(id,"This batch is not waiting for the lab any more. Refresh the page.","var(--bad)"); return; }
-  if(!confirm("Submit the result for Batch "+b.batch_no+" to Production?\n\nResult on file: "+(RESULTS[id].passed===false?"FAILED":"PASSED"))) return;
+  const tests=testsFor(b), latestFailed=RESULTS[id].passed===false;
+  if(!confirm("Submit the result for Batch "+b.batch_no+" to Production?\n\nResult on file: "+(latestFailed?"FAILED":"PASSED")
+      +(tests.length>1?"\nTests so far: "+testsSummary(tests):"")
+      +(latestFailed?"\n\nThe latest test FAILED. If you can retest the sample, press Cancel and upload the new result first. Press OK to send it as it is, and Production will decide.":""))) return;
   flash(id,"Submitting...");
   const { data, error } = await sb.from("pet_lab_batches")
     .update({ batch_status:"lab_done", lab_submitted_at:new Date().toISOString(), lab_submitted_by:ME.id })
     .eq("id",id).in("batch_status",AWAITING_LAB).select("id");
   if(error){ flash(id,"Could not submit: "+esc(error.message),"var(--bad)"); return; }
   if(!data||!data.length){ flash(id,"Nothing was updated. The batch changed state; refresh the page.","var(--bad)"); return; }
-  await logAct("lab_result_submitted","Batch "+b.batch_no+" tested — Flake Scan "+(RESULTS[id].passed===false?"FAILED":"PASSED")+(b.retest_count?(" (retest "+b.retest_count+")"):""));
+  await logAct("lab_result_submitted","Batch "+b.batch_no+" tested — Flake Scan "+(RESULTS[id].passed===false?"FAILED":"PASSED")+(tests.length>1?(" after "+tests.length+" tests ("+testsSummary(tests)+")"):"")+(b.retest_count?(" (retest "+b.retest_count+")"):""));
   await openRun(RUN.c.id);
 }
 
@@ -330,7 +358,7 @@ function openFlakeScanModal(batchId){
   document.getElementById("fsSubmitStatus").textContent = "";
   document.getElementById("fsCsvFile").value = "";
   document.getElementById("fsModalSubtitle").textContent =
-    "Production run: " + RUN.c.form_number + " — Batch " + FS_BATCH.batch_no;
+    "Production run: " + RUN.c.form_number + " — Batch " + FS_BATCH.batch_no + ", this will be Test " + nextTestNo(FS_BATCH);
   document.getElementById("flakeScanModal").style.display = "block";
   document.body.style.overflow = "hidden";
 }
@@ -494,16 +522,34 @@ async function fsSubmitResult(){
     uploaded_by: ME.id, updated_at: new Date().toISOString()
   };
   try{
+    // 1. Keep this test in the batch history FIRST. If the database refuses it (for example the batch has already moved on),
+    //    the result on file is not touched. If the history is not installed yet, carry on exactly as before.
+    let attemptNo = null;
+    const { data:att, error:aErr } = await sb.from("pet_flake_scan_attempts").insert({
+      batch_id: FS_BATCH.id, production_id: RUN.prod.id, passed: p.passed, sample_weight: p.sample_weight,
+      metal_pieces: p.metal_pieces, scan_id: p.scan_id, filename: p.filename, payload: payload
+    }).select("attempt_no").single();
+    if(aErr){
+      const m = aErr.message || "";
+      const missing = aErr.code === "42P01" || aErr.code === "PGRST205" || (/pet_flake_scan_attempts/i.test(m) && /(does not exist|schema cache)/i.test(m));
+      if(!missing) throw aErr;
+    } else attemptNo = att.attempt_no;
+    // 2. The latest result on file (what every other page reads)
     const { error } = await sb.from("pet_flake_scan_results").upsert(payload, { onConflict: "batch_id" });
     if(error) throw error;
+    const word = p.passed===false ? "FAILED" : "PASSED";
     await sb.from("pet_activity_log").insert({
       collection_id: RUN.c.id,
       action: "flake_scan_uploaded", stage: "stage9",
       actor_profile_id: ME.id, actor_username: ME.username,
       old_status: null, new_status: null,
-      note: "Flake Scan result uploaded for " + RUN.c.form_number + " — Batch " + FS_BATCH.batch_no
+      note: attemptNo
+        ? "Batch " + FS_BATCH.batch_no + " test " + attemptNo + " uploaded: " + word + " (sample " + (p.sample_weight ?? "--") + " g, metal pieces " + (p.metal_pieces ?? 0) + ")"
+        : "Flake Scan result uploaded for " + RUN.c.form_number + " — Batch " + FS_BATCH.batch_no
     });
-    st.style.color="var(--ok)"; st.textContent="✅ Saved. Now press Submit result to Production.";
+    st.style.color = p.passed===false ? "var(--bad)" : "var(--ok)";
+    st.textContent = (attemptNo ? "\u2705 Saved as Test " + attemptNo + ": " + word + ". " : "\u2705 Saved. ")
+      + (p.passed===false ? "You can retest the sample and upload another result, or submit this one to Production." : "Now press Submit result to Production.");
     setTimeout(async ()=>{ closeFlakeScanModal(); await openRun(RUN.c.id); }, 1200);
   }catch(e){
     st.style.color="var(--bad)"; st.textContent="❌ " + e.message;
