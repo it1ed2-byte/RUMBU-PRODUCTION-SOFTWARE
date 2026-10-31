@@ -682,7 +682,7 @@ function onBagCount(){
   updateBagPreviews();
 }
 function onGradeChange(){ updateBagPreviews(); }
-// Show predicted label numbers — based on the highest assigned number in the DB + pending batches
+// Show predicted label numbers: the highest number already printed for this grade, plus the bags of every batch (in any run) still waiting for labels
 async function updateBagPreviews(){
   const grade=document.getElementById("bfGrade").value;
   const year=new Date().getFullYear();
@@ -691,19 +691,31 @@ async function updateBagPreviews(){
     document.querySelectorAll(".bag-seq-preview").forEach(e=>e.remove());
     return;
   }
-  // Fetch the single highest reference_number for this grade+year — much more reliable than count:exact
-  const { data: topBag } = await sb.from("pet_stage4_bags")
-    .select("reference_number")
-    .ilike("reference_number",`${grade}-${year}-%`)
-    .order("reference_number",{ ascending:false })
-    .limit(1);
+  // 1. Highest number already printed on a bag for this grade and year
+  const [{ data: topBag }, { data: waiting }] = await Promise.all([
+    sb.from("pet_stage4_bags")
+      .select("reference_number")
+      .ilike("reference_number",`${grade}-${year}-%`)
+      .order("reference_number",{ ascending:false })
+      .limit(1),
+    // 2. Batches of this grade, in EVERY production run, that are saved but have no labels yet.
+    //    Their bags will take the next numbers first. Before, only the batches of the run on
+    //    screen were counted, so a new run started again from 1.
+    sb.from("pet_lab_batches")
+      .select("id,bag_count,bag_weights,bags_generated_at,created_at")
+      .eq("grade",grade)
+      .is("bags_generated_at",null)
+      .gte("created_at",`${year}-01-01T00:00:00`)
+  ]);
   // Extract the numeric sequence from e.g. "AA-2026-00006" → 6
   const maxAssigned = (topBag && topBag[0])
     ? (parseInt(topBag[0].reference_number.split("-")[2])||0)
     : 0;
-  // Add any saved-but-not-yet-labeled batches of this grade in the current run
-  const pending=RUN_BATCHES.filter(b=>bGrade(b)===grade&&!(RUN_BAGS[b.id]?.length))
-                            .reduce((s,b)=>s+(b.bag_count||(Array.isArray(b.bag_weights)?b.bag_weights.length:0)),0);
+  // The batch being edited is left out: its bags are the ones shown in the form.
+  const pending=(waiting||[]).filter(b=>!b.bags_generated_at && b.id!==EDITING && !(RUN_BAGS[b.id]?.length))
+                             .reduce((s,b)=>s+(b.bag_count||(Array.isArray(b.bag_weights)?b.bag_weights.length:0)),0);
+  // A newer request may have started while this one was waiting; only the latest one draws.
+  if(document.getElementById("bfGrade").value!==grade) return;
   const start=maxAssigned+pending+1;
   inputs.forEach((inp,i)=>{
     let prev=inp.parentElement.querySelector(".bag-seq-preview");
