@@ -642,7 +642,7 @@ function batchCard(b){
     if(!CAN.labels) actions = gen ? quiet("Labels are ready. The labels person prints and downloads them.") : quiet("Approved. Waiting for the labels person to generate the labels.");
     else actions = gen ? `<button class="btn-sm" onclick="toggleLabels(${b.id})">${OPEN_LABELS.has(b.id)?"Hide labels":"Show / print labels"}</button>
       ${OPEN_LABELS.has(b.id)?`<button class="btn-sm" onclick="printLabels(${b.id})">🖨️ Print labels</button>`:""}
-      ${b.labels_pdf_url?`<a href="${esc(b.labels_pdf_url)}" target="_blank" style="font-size:12.5px;align-self:center;">Download labels PDF</a>`:`<button class="btn-ghost btn-sm" onclick="rebuildPdf(${b.id})">Create labels PDF</button>`}`
+      ${b.labels_pdf_url?`<a href="${esc(b.labels_pdf_url)}" target="_blank" style="font-size:12.5px;align-self:center;">Download labels PDF</a><button class="btn-ghost btn-sm" title="Replace the saved PDF with one drawn in the current label design" onclick="rebuildPdf(${b.id},true)">Rebuild PDF (current design)</button>`:`<button class="btn-ghost btn-sm" onclick="rebuildPdf(${b.id})">Create labels PDF</button>`}`
       : `<button class="btn-sm" onclick="generateLabels(${b.id})">Generate labels</button>`;
   }
   const note = ((st==="retest_requested"||st==="rerun_requested") && b.decision_note) ? `<div class="note-box"><b>${st==="retest_requested"?"Retest":"Rerun"} reason:</b> ${esc(b.decision_note)}</div>` : "";
@@ -1177,9 +1177,11 @@ async function generateLabels(id){
     updateBagPreviews(); // refresh predicted numbers — this batch is now labeled so count advances
   }catch(e){ flash(id,"❌ "+esc(e.message),"var(--bad)"); }
 }
-async function rebuildPdf(id){
+async function rebuildPdf(id, replacing){
   if(!needDuty("labels")) return;
   const b=RUN_BATCHES.find(x=>x.id===id); if(!b) return;
+  if(replacing && !confirm("Replace the saved labels PDF for batch "+b.batch_no+" with one drawn in the current label design?\n\nLabels already printed and stuck on bags are not affected. Reports will link to the new PDF. The old PDF file is kept in storage but no longer linked."))
+    return;
   try{ OPEN_LABELS.add(id); renderBatchList(); await archiveLabelsPdf(b); await loadRunData(CURRENT_PROD.id); renderRunOverview(); }
   catch(e){ flash(id,"❌ "+esc(e.message),"var(--bad)"); }
 }
@@ -1451,7 +1453,11 @@ async function archiveLabelsPdf(b){
   const { data: urlData } = sb.storage.from("pet-attachments").getPublicUrl(path);
   const { error: e1 } = await sb.from("pet_lab_batches").update({ labels_pdf_url: urlData.publicUrl }).eq("id", b.id);
   if(e1) throw new Error(e1.message);
-  await sb.from("pet_stage4_production").update({ labels_pdf_url: urlData.publicUrl }).eq("id", CURRENT_PROD_ID);   // latest batch's PDF, for the reports page
+  // the run-level link (used by the reports list) always points at the LATEST batch's PDF, so rebuilding an older batch must not take it over
+  const lastNo = Math.max.apply(null, (RUN_BATCHES||[]).map(x=>x.batch_no||0));
+  if(!RUN_BATCHES || !RUN_BATCHES.length || (b.batch_no||0) >= lastNo){
+    await sb.from("pet_stage4_production").update({ labels_pdf_url: urlData.publicUrl }).eq("id", CURRENT_PROD_ID);
+  }
 }
 
 // ---------------------------- open / complete a run ----------------------------
