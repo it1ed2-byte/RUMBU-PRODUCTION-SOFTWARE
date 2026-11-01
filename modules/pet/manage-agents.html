@@ -88,6 +88,7 @@
         <select id="fSection">
           <option value="">Loading branches...</option>
         </select>
+        <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-weight:400;font-size:12px;color:var(--muted);cursor:pointer;"><input type="checkbox" id="fAllBranches" onchange="onAllBranches()" style="width:auto;margin:0;"> Show all branches</label>
       </div>
     </div>
     <label>Address</label>
@@ -117,18 +118,27 @@
 <script>
 let ME = null, AGENTS = [], BRANCHES = [], EDITING_ID = null;
 
+// The two PET plants are what the list shows by default. "Show all branches" lists every branch in the app, so a new PET branch
+// (or any branch an agent should belong to) can be chosen straight away, with no change to this page.
+const DEFAULT_PET_BRANCHES = ["LagosAgbara", "KanoWash"];
+let ALL_BRANCH_NAMES = [];
 async function loadBranches(){
-  // PET collection currently only happens at these two sites — matches the
-  // same restriction applied at Initiation.
-  const ACTIVE_PET_BRANCHES = ["LagosAgbara", "KanoWash"];
-  const { data, error } = await sb.from("app_sections").select("name").in("name", ACTIVE_PET_BRANCHES).order("name");
+  const { data, error } = await sb.from("app_sections").select("name").order("name");
   if(error) throw new Error("Could not load branches: "+error.message);
-  BRANCHES = (data||[]).map(s=>s.name);
-  const sel = document.getElementById("fSection");
-  sel.innerHTML = BRANCHES.length
-    ? `<option value="">-- Select --</option>` + BRANCHES.map(b=>`<option value="${b}">${b}</option>`).join("")
-    : `<option value="">No branches configured</option>`;
+  ALL_BRANCH_NAMES = (data||[]).map(x=>x.name);
+  BRANCHES = ALL_BRANCH_NAMES.filter(n => DEFAULT_PET_BRANCHES.indexOf(n) >= 0);
+  renderBranchOptions(false, "");
 }
+function renderBranchOptions(showAll, keep){
+  const sel = document.getElementById("fSection");
+  const current = keep !== undefined ? keep : sel.value;
+  const list = showAll ? ALL_BRANCH_NAMES : BRANCHES;
+  sel.innerHTML = list.length
+    ? `<option value="">-- Select --</option>` + list.map(b=>`<option value="${esc(b)}">${esc(b)}</option>`).join("")
+    : `<option value="">No branches configured</option>`;
+  if(current && list.indexOf(current) >= 0) sel.value = current;   // keep the choice when switching between the short and the full list
+}
+function onAllBranches(){ renderBranchOptions(document.getElementById("fAllBranches").checked); }
 
 async function init(){
   const cs = document.getElementById("connStatus");
@@ -191,6 +201,8 @@ async function openAdd(){
   EDITING_ID = null;
   document.getElementById("modalTitle").textContent = "Add Agent";
   clearForm();
+  document.getElementById("fAllBranches").checked = false;
+  renderBranchOptions(false, "");
   document.getElementById("fCode").value = "";
   document.getElementById("codeNote").textContent = "Type the agent's code exactly as it is in Kissflow, for example KN-01.";
   document.getElementById("modal").classList.add("open");
@@ -202,6 +214,9 @@ function openEdit(id){
   const a = AGENTS.find(x=>x.id===id);
   if(!a) return;
   document.getElementById("modalTitle").textContent = "Edit Agent";
+  const outside = !!a.section && BRANCHES.indexOf(a.section) < 0;   // an agent on some other branch: show the full list so it stays selected
+  document.getElementById("fAllBranches").checked = outside;
+  renderBranchOptions(outside, a.section || "");
   document.getElementById("fCode").value = a.agent_code;
   document.getElementById("codeNote").textContent = "Changing the code also changes it on every collection already recorded for this agent.";
   document.getElementById("fName").value = a.agent_name;
