@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stage 10 — Odoo Packaging — PET Collection</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme")||"navy"); }catch(e){} })();
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) document.documentElement.setAttribute("data-theme",e.data.rumbuTheme); });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1100px;margin:0 auto;}
+  #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);}
+  h2.pg{margin:0 0 4px;color:var(--heading);}
+  .sub{font-size:13px;color:var(--muted);margin:0 0 14px;line-height:1.6;}
+  .pill{display:inline-block;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:700;margin-left:6px;}
+  .p-ok{background:#dcfce7;color:#166534;} .p-bad{background:#fee2e2;color:#991b1b;} .p-wait{background:#fef3c7;color:#92400e;} .p-info{background:#dbeafe;color:#1e40af;}
+  .btn-sm{padding:6px 12px;font-size:12px;width:auto;}
+  .batch-card{border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:12px;background:var(--card);}
+  .bagchips{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 6px;}
+  .bagchip{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12px;font-weight:700;}
+  .toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:14px 0;}
+  .fbtn{padding:7px 14px;border:1px solid var(--line-2);border-radius:20px;background:var(--card);color:var(--heading);font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit;width:auto;}
+  .fbtn.on{background:var(--accent);color:var(--logo-fg);border-color:var(--accent);}
+  .search{flex:1 1 220px;min-width:200px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);}
+  .batch-card .bh{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:6px;}
+  .batch-card .bh b{font-size:15px;color:var(--heading);}
+  .batch-card .meta{font-size:12.5px;color:var(--muted);margin:4px 0 8px;line-height:1.6;}
+  table.bg{width:100%;border-collapse:collapse;margin:6px 0 8px;font-size:13px;}
+  table.bg th{text-align:left;font-size:11px;color:var(--muted);padding:5px 8px;border-bottom:1px solid var(--line);}
+  table.bg td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:middle;}
+  table.bg input{width:100%;max-width:240px;padding:7px 9px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);text-transform:uppercase;}
+  .actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:6px;}
+  .msg{font-size:12.5px;font-weight:700;min-height:16px;margin-top:6px;color:var(--muted);}
+  .quiet{font-size:12.5px;color:var(--muted);}
+  .empty{padding:24px;text-align:center;color:var(--muted);border:1px dashed var(--line);border-radius:10px;}
+  /* Bag labels (wide label, about A5 landscape, 2 per A4 sheet) */
+  .qr-grid{margin-top:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(min(420px,100%),1fr));gap:14px;}
+  .bag-label{border:1px solid #cbd5e1;border-radius:8px;overflow:hidden;background:#fff;line-height:0;}
+  .bag-label canvas{width:100%;height:auto;display:block;}
+  #printSheet{display:none;}
+  @media print{
+    @page{size:A4 portrait;margin:7mm 5mm;}
+    body.printing-labels > *:not(#printSheet){display:none!important;}
+    body.printing-labels #printSheet{display:block;}
+    #printSheet .print-label{display:block;width:200mm;height:137mm;margin:0 0 7mm 0;break-inside:avoid;page-break-inside:avoid;}
+    #printSheet .print-label:nth-child(2n){margin-bottom:0;break-after:page;page-break-after:always;}
+    #printSheet .print-label:last-child{break-after:auto;page-break-after:auto;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <button class="no-print" onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;margin-bottom:12px;background:var(--accent);color:var(--logo-fg);">&larr; Back</button>
+  <div id="connStatus">Loading...</div>
+
+  <div class="card-panel">
+    <h2 class="pg">Stage 10 &mdash; Odoo Packaging</h2>
+    <p class="sub">Every approved batch appears here by itself. Generate and print its labels, then, once the bags are packed in Odoo, press <b>Bagged in Odoo</b>, enter the Odoo package number of each bag and submit.</p>
+    <div id="dutyNote" class="sub"></div>
+    <div class="toolbar">
+      <button class="fbtn" id="f_all" onclick="setFilter('all')">All</button>
+      <button class="fbtn" id="f_waiting" onclick="setFilter('waiting')">Waiting for Odoo packaging</button>
+      <button class="fbtn" id="f_packed" onclick="setFilter('packed')">Packed in Odoo</button>
+      <input class="search" id="searchBox" type="search" placeholder="Search form number, agent, pack reference or Odoo package number" oninput="onSearch(this.value)">
+      <button class="btn-ghost btn-sm" onclick="refreshAll()">Refresh</button>
+    </div>
+    <div id="list"></div>
+    <div id="more" style="text-align:center;margin-top:10px;"></div>
+  </div>
+</div>
+
+<script>
+// rumbu.vercel.app is attached to the current Production deployment.
+var QR_LOOKUP_BASE = "https://rumbu.vercel.app/modules/pet/bag-lookup.html";
+
+let ME = null, IS_SUPER = false, DUTY_SECTIONS = new Set();
+let ROWS = [];                      // [{ b: batch, c: collection, prodId, bags: [...] }]
+let RUN_ALL = {};                   // collection id -> every batch of that run (id, batch_no), so the run-level PDF link follows the latest batch
+let FILTER = "waiting", SEARCH = "", SHOWN = 50;
+let EDITING = new Set(), DRAFT = {}, NOTICE = {};
+let PINNED = new Set();             // batches changed in this visit stay on screen (with their message) until the filter is changed or the page refreshed
+const AGE_WARN = 3;                 // days an approved batch can wait before it is flagged (same limit as the PET Dashboard)
+const NUM_RE = /^[A-Z0-9][A-Z0-9._\/-]{1,39}$/;
+
+function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+const num = v => parseFloat(v) || 0;
+const fmt = n => Number(n||0).toLocaleString(undefined,{maximumFractionDigits:2});
+const fmtD = iso => iso ? new Date(iso).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"}) : "—";
+function ageDays(iso){ if(!iso) return null; return Math.floor((Date.now() - Date.parse(iso)) / 86400000); }
+function canDo(section){ return IS_SUPER || DUTY_SECTIONS.has(section); }
+function rowOf(id){ return ROWS.find(r => r.b.id === id); }
+function chunk(a, n){ const o = []; for(let i = 0; i < a.length; i += n) o.push(a.slice(i, i + n)); return o; }
+function rpcMessage(error, what){
+  const m = (error && error.message) || "";
+  if((error && error.code === "PGRST202") || /could not find the function/i.test(m)) return "Stage 10 needs a database update that has not been applied yet. Ask IT to run pet_stage10_odoo.sql.";
+  return "Could not " + what + ": " + m;
+}
+
+// ---------------------------------------------------------------------------------------------
+// The label code below is copied word for word from the Production page (Stage 8), so a label
+// printed here is identical to one printed there. If the label design changes, change both pages.
+// ---------------------------------------------------------------------------------------------
+/*LABEL-KIT-START*/
+// ---------------------------- wide bag label ----------------------------
+// One label is about A5 landscape. It is a little under 210 x 148 mm so that two fit on one A4 sheet inside normal printer margins.
+// The label is drawn once (drawBagLabel). The same drawing feeds the screen preview, the print sheet and the archived PDF.
+var LABEL_MM = { w:200, h:137 };
+var LABEL_QR_MM = 34;               // size of the QR symbol itself (about the same as before); its white margin comes on top of this
+var LABEL_LANGS = ["en"];           // languages printed in the handling guide
+var LABEL_GUIDE = [
+  { icon:"dry",   en:["KEEP DRY","Store under cover"] },
+  { icon:"sun",   en:["PROTECT FROM SUN","Cover when outdoors"] },
+  { icon:"loops", en:["LIFT BY ALL LOOPS","Keep loops vertical"] },
+  { icon:"under", en:["NEVER STAND UNDER","A lifted bag"] },
+  { icon:"drag",  en:["DO NOT DRAG","Lift it, never pull"] }
+];
+// To print a second language, add its two lines to each entry above (for example  ha:["...","..."]) and add its code to LABEL_LANGS.
+// Do that only after a native speaker has checked the wording.
+var LB_NAVY = "#1F3864", LB_BLUE = "#2E75B6", LB_RED = "#C00000";
+var LABEL_WEB = "rumbuindustries.com", LABEL_MAIL = "info@rumbuindustries.com";   // printed under the address in the header
+var LABEL_ABOUT_URL = "https://rumbu.vercel.app/about";                            // the "About Rumbu" QR opens this page
+var LABEL_ABOUT_QR_MM = 26;                                                        // size aimed for; drawn as whole pixels per module, so a little smaller
+var LABEL_CONTACTS = [];                                                           // footer numbers: { office, phone }, up to 5, loaded from About Rumbu
+
+function lbFont(size, weight){ return (weight || "normal") + " " + size + "px Arial, Helvetica, sans-serif"; }
+function lbText(ctx, s, x, y, o){
+  o = o || {}; var size = o.size || 4;
+  ctx.font = lbFont(size, o.weight);
+  if(o.maxW){ while(size > 1 && ctx.measureText(s).width > o.maxW){ size -= 0.1; ctx.font = lbFont(size, o.weight); } }
+  ctx.fillStyle = o.color || "#000"; ctx.textAlign = o.align || "left"; ctx.textBaseline = "alphabetic";
+  ctx.fillText(s, x, y);
+}
+function lbRR(ctx, x, y, w, h, r){
+  ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+function lbDate(iso){
+  var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ""));
+  if(!m) return "";
+  var mon = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][parseInt(m[2], 10) - 1];
+  return parseInt(m[3], 10) + " " + mon + " " + m[1];
+}
+
+// Handling pictograms, drawn in a box about 12 x 12 mm centred on (cx, cy). They follow the meaning of the ISO 780 symbols.
+function lbIcon(ctx, kind, cx, cy){
+  ctx.save(); ctx.translate(cx, cy); ctx.lineWidth = 0.85; ctx.lineCap = "round"; ctx.lineJoin = "round";
+  ctx.strokeStyle = LB_NAVY; ctx.fillStyle = LB_NAVY; ctx.setLineDash([]);
+  function line(x1, y1, x2, y2){ ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); }
+  function prohibit(){ ctx.strokeStyle = LB_RED; ctx.lineWidth = 0.9; ctx.beginPath(); ctx.arc(0, 0, 6.3, 0, Math.PI * 2); ctx.stroke(); line(-4.45, -4.45, 4.45, 4.45); }
+  if(kind === "dry"){
+    ctx.beginPath(); ctx.arc(0, -0.6, 5.4, Math.PI, 0); ctx.closePath(); ctx.stroke();
+    line(0, -0.6, 0, 4.2); ctx.beginPath(); ctx.arc(-1.0, 4.2, 1.0, 0, Math.PI); ctx.stroke();
+    ctx.lineWidth = 0.7; line(-4.6, 2.2, -4.0, 3.6); line(4.6, 2.2, 5.2, 3.6); line(-2.4, 5.4, -1.8, 6.4); line(3.0, 4.0, 3.6, 5.0);
+  } else if(kind === "sun"){
+    ctx.beginPath(); ctx.arc(0, -1.2, 2.4, 0, Math.PI * 2); ctx.stroke();
+    for(var i = 0; i < 8; i++){ var a = i * Math.PI / 4; line(Math.cos(a) * 3.7, -1.2 + Math.sin(a) * 3.7, Math.cos(a) * 5.4, -1.2 + Math.sin(a) * 5.4); }
+    ctx.lineWidth = 1.1; line(-5.4, 5.6, 5.4, 5.6);
+  } else if(kind === "loops"){
+    ctx.beginPath(); ctx.arc(0, -5.2, 1.0, 0, Math.PI * 2); ctx.stroke();
+    line(-4.2, -3.6, 4.2, -3.6); line(0, -4.2, 0, -3.6);
+    line(-4.2, -3.6, -3.4, 0.4); line(-1.4, -3.6, -1.2, 0.4); line(1.4, -3.6, 1.2, 0.4); line(4.2, -3.6, 3.4, 0.4);
+    ctx.beginPath(); ctx.rect(-4.2, 0.4, 8.4, 5.6); ctx.stroke();
+  } else if(kind === "under"){
+    ctx.save(); ctx.translate(0, 0.2); ctx.scale(0.72, 0.72); ctx.lineWidth = 1.15;
+    ctx.beginPath(); ctx.rect(-4, -6.6, 8, 3.2); ctx.stroke(); line(0, -6.6, 0, -7.6);
+    ctx.beginPath(); ctx.arc(0, 0.2, 1.3, 0, Math.PI * 2); ctx.fill();
+    line(0, 1.6, 0, 5); line(-2.4, 2.8, 2.4, 2.8); line(0, 5, -2, 7.4); line(0, 5, 2, 7.4);
+    ctx.restore(); prohibit();
+  } else if(kind === "drag"){
+    ctx.save(); ctx.translate(0, 0.2); ctx.scale(0.72, 0.72); ctx.lineWidth = 1.15;
+    ctx.beginPath(); ctx.rect(-5.6, -5, 7, 6); ctx.stroke();
+    line(-6.8, 3.6, 6, 3.6); line(6, 3.6, 4.4, 2.2); line(6, 3.6, 4.4, 5);
+    ctx.restore(); prohibit();
+  }
+  ctx.restore();
+}
+
+// Builds the QR matrix with the library the page already loads. Level Q: denser than M but far less dense than H, so each module prints larger.
+function lbQrModel(text){
+  if(typeof QRCode === "undefined") return null;
+  var tmp = document.createElement("div");
+  var q = new QRCode(tmp, { text: text, width: 64, height: 64, correctLevel: QRCode.CorrectLevel.Q });
+  return q._oQRCode || null;
+}
+// Draws the QR with a whole number of pixels per module, so every module is crisp (the library's own drawing uses fractional pixels and blurs the edges)
+function lbDrawQr(ctx, model, cxPx, topPx, targetPx){
+  var n = model.getModuleCount(), cell = Math.max(1, Math.floor(targetPx / n)), size = cell * n;
+  var x0 = Math.round(cxPx - size / 2), y0 = Math.round(topPx);
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = "#000";
+  for(var r = 0; r < n; r++){ for(var c = 0; c < n; c++){ if(model.isDark(r, c)) ctx.fillRect(x0 + c * cell, y0 + r * cell, cell, cell); } }
+  ctx.restore();
+  return { cell: cell, size: size, modules: n };
+}
+
+// d = { ref, kg, grade, date, batchNo, index, count, url }   k = pixels per millimetre
+function drawBagLabel(canvas, d, k){
+  var W = LABEL_MM.w, H = LABEL_MM.h;
+  canvas.width = Math.round(W * k); canvas.height = Math.round(H * k);
+  var ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.save(); ctx.scale(k, k);
+
+  ctx.strokeStyle = "#94a3b8"; ctx.lineWidth = 0.3; ctx.setLineDash([2, 1.5]); ctx.strokeRect(0.5, 0.5, W - 1, H - 1); ctx.setLineDash([]);
+
+  // header: company, address, website and email
+  lbRR(ctx, 3, 3, 194, 22.5, 2.2); ctx.fillStyle = LB_NAVY; ctx.fill();
+  lbText(ctx, "RUMBU INDUSTRIES GROUP", 8, 11, { size: 6.4, weight: "bold", color: "#fff" });
+  lbText(ctx, "KM4, Hadejia Road, Kano State, Nigeria", 8, 16.3, { size: 3.5, color: "#dbe4f3" });
+  lbText(ctx, LABEL_WEB + "   |   " + LABEL_MAIL, 8, 21, { size: 3.4, weight: "bold", color: "#fff", maxW: 120 });
+  lbText(ctx, "PET FLAKES", 192, 13.6, { size: 8.6, weight: "bold", color: "#fff", align: "right" });
+  lbText(ctx, "Recycled bottle flakes", 192, 19.6, { size: 3.5, color: "#dbe4f3", align: "right" });
+
+  // the three cards sit 1.5 mm lower than they used to, because the header is 1.5 mm taller
+  ctx.save(); ctx.translate(0, 1.5);
+
+  // grade, net weight and pack reference (the grade is still the largest text on the label)
+  lbRR(ctx, 3, 27, 61, 64, 2.2); ctx.fillStyle = "#EAF0F9"; ctx.fill();
+  lbText(ctx, "GRADE", 8, 33.6, { size: 3, weight: "bold", color: LB_BLUE });
+  lbText(ctx, d.grade || "-", 33.5, 55.6, { size: 27, weight: "bold", color: LB_NAVY, align: "center", maxW: 52 });
+  lbText(ctx, "NET WEIGHT", 8, 63.4, { size: 3, weight: "bold", color: LB_BLUE });
+  lbText(ctx, (d.kg != null ? Number(d.kg).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "--") + " KG", 8, 73.4, { size: 9.6, weight: "bold", color: LB_NAVY, maxW: 52 });
+  ctx.strokeStyle = "#c9d6ea"; ctx.lineWidth = 0.3; ctx.beginPath(); ctx.moveTo(8, 77.4); ctx.lineTo(59, 77.4); ctx.stroke();
+  lbText(ctx, "PACK REFERENCE", 8, 81.6, { size: 2.7, weight: "bold", color: "#64748b" });
+  lbText(ctx, d.ref || "", 8, 87.2, { size: 5.4, weight: "bold", color: LB_NAVY, maxW: 51 });
+
+  // verify QR block (the QR itself is drawn last)
+  lbRR(ctx, 68, 27, 60, 64, 2.2); ctx.fillStyle = "#fff"; ctx.fill(); ctx.strokeStyle = "#cbd5e1"; ctx.lineWidth = 0.3; ctx.stroke();
+  lbText(ctx, "SCAN TO VERIFY", 98, 33.4, { size: 3.3, weight: "bold", color: LB_NAVY, align: "center" });
+  lbText(ctx, "Scan for the bag record", 98, 82.6, { size: 2.9, color: "#334155", align: "center" });
+  lbText(ctx, "Password needed for details", 98, 87.2, { size: 2.9, color: "#64748b", align: "center" });
+
+  // About Rumbu block: the second QR, and the origin
+  lbRR(ctx, 132, 27, 65, 64, 2.2); ctx.fillStyle = "#fff"; ctx.fill(); ctx.strokeStyle = "#cbd5e1"; ctx.lineWidth = 0.3; ctx.stroke();
+  lbText(ctx, "ABOUT RUMBU", 164.5, 33.4, { size: 3.3, weight: "bold", color: LB_NAVY, align: "center" });
+  lbText(ctx, "Scan for website and contacts", 164.5, 66.8, { size: 2.9, color: "#334155", align: "center" });
+  ctx.strokeStyle = "#e2e8f0"; ctx.lineWidth = 0.25; ctx.beginPath(); ctx.moveTo(136, 74.6); ctx.lineTo(193, 74.6); ctx.stroke();
+  lbText(ctx, "Made in Nigeria", 164.5, 85.4, { size: 6.8, weight: "bold", color: LB_NAVY, align: "center", maxW: 57 });
+  ctx.restore();   // end of the 1.5 mm shift
+
+  // handling and storage guide (a little shorter than before, so the contact numbers fit underneath)
+  lbRR(ctx, 3, 95.5, 194, 29.5, 2.2); ctx.fillStyle = "#F3F6FA"; ctx.fill();
+  lbText(ctx, "HANDLING AND STORAGE", 8, 99.8, { size: 3.1, weight: "bold", color: LB_BLUE });
+  LABEL_GUIDE.forEach(function(g, i){
+    var cx = 26.4 + i * 36.8;
+    lbIcon(ctx, g.icon, cx, 108.4);
+    if(LABEL_LANGS.length === 1){
+      var t = g[LABEL_LANGS[0]] || g.en;
+      lbText(ctx, t[0], cx, 118.6, { size: 2.9, weight: "bold", color: LB_NAVY, align: "center", maxW: 35 });
+      lbText(ctx, t[1] || "", cx, 122.4, { size: 2.7, color: "#475569", align: "center", maxW: 35 });
+    } else {
+      LABEL_LANGS.forEach(function(lg, j){
+        var t2 = g[lg] || g.en;
+        lbText(ctx, t2[0], cx, 118.2 + j * 3.4, { size: 2.7, weight: "bold", color: LB_NAVY, align: "center", maxW: 35 });
+      });
+    }
+  });
+
+  // footer: the phone numbers set in About Rumbu (the contacts ticked Show), numbers only, spread evenly across the label
+  var cs = (LABEL_CONTACTS || []).slice(0, 5);
+  if(cs.length){
+    var cw = 194 / cs.length, ns = 4.4, pad = cs.length >= 5 ? 8 : 4;   // with five numbers, more air between them
+    cs.forEach(function(c){ var sz = 4.4; ctx.font = lbFont(sz, "bold"); while(sz > 2 && ctx.measureText(c.phone).width > cw - pad){ sz -= 0.1; ctx.font = lbFont(sz, "bold"); } ns = Math.min(ns, sz); });   // one size for all, so a long number never makes the others look uneven
+    cs.forEach(function(c, i){
+      var cx = 3 + cw * (i + 0.5);
+      if(i > 0){ ctx.strokeStyle = "#dbe3ee"; ctx.lineWidth = 0.25; ctx.beginPath(); ctx.moveTo(3 + cw * i, 128.3); ctx.lineTo(3 + cw * i, 133.8); ctx.stroke(); }
+      lbText(ctx, c.phone, cx, 132.5, { size: ns, weight: "bold", color: LB_NAVY, align: "center" });
+    });
+  }
+  ctx.restore();
+
+  // QR codes last, in whole device pixels. Margin: 4 modules of white on every side (the white block behind each is larger than that)
+  var model = lbQrModel(d.url || "");
+  if(model){ lbDrawQr(ctx, model, 98 * k, 41.7 * k, LABEL_QR_MM * k); }
+  else { ctx.save(); ctx.scale(k, k); lbText(ctx, "QR library not loaded", 98, 59.5, { size: 3, color: LB_RED, align: "center" }); ctx.restore(); }
+  var aboutModel = lbQrModel(LABEL_ABOUT_URL);
+  if(aboutModel){ lbDrawQr(ctx, aboutModel, 164.5 * k, 40 * k, LABEL_ABOUT_QR_MM * k); }
+}
+/*LABEL-KIT-END*/
+
+function bagWeightFor(b,i,bag){
+  if(bag && bag.weight_kg!=null) return num(bag.weight_kg);
+  const w=Array.isArray(b.bag_weights)?b.bag_weights:[]; return w[i]!=null?num(w[i]):null;
+}
+// Writes each bag's weight and grade onto the bag rows the database just generated.
+async function applyBagWeights(b){
+  const bags=RUN_BAGS[b.id]||[]; const w=Array.isArray(b.bag_weights)?b.bag_weights:[];
+  let failed=0;
+  for(let i=0;i<bags.length && i<w.length;i++){
+    const { error } = await sb.from("pet_stage4_bags").update({ weight_kg:w[i], grade:b.grade }).eq("id",bags[i].id);
+    if(error) failed++;
+  }
+  if(failed) console.warn(failed+" bag weight(s) could not be saved on the bag rows; labels use the batch's weights instead.");
+}
+async function refreshLabelContacts(){
+  try{
+    const r = await sb.rpc("get_about_rumbu");
+    if(!r.error && r.data && Array.isArray(r.data.contacts)){
+      LABEL_CONTACTS = r.data.contacts.filter(c=>c && String(c.phone||"").trim()).slice(0,5)
+        .map(c=>({ office:String(c.office||"").trim(), phone:String(c.phone).trim() }));
+    }
+  }catch(e){ /* keep what was loaded before */ }
+}
+
+function labelData(b){
+  const bags=RUN_BAGS[b.id]||[];
+  return bags.map((bag,i)=>({
+    ref:bag.reference_number, kg:bagWeightFor(b,i,bag), grade:bag.grade||b.grade||"",
+    date:b.batch_date||"", batchNo:b.batch_no, index:i+1, count:bags.length,
+    url:QR_LOOKUP_BASE+"?ref="+encodeURIComponent(bag.reference_number)
+  }));
+}
+// Screen preview: 4 pixels per millimetre keeps 30 labels light on memory; print and PDF use 10 pixels per millimetre (254 dpi)
+function buildGrid(b){
+  const grid=document.getElementById("qr_"+b.id); if(!grid) return;
+  grid.innerHTML="";
+  labelData(b).forEach(l=>{
+    const cell=document.createElement("div"); cell.className="bag-label";
+    const cv=document.createElement("canvas"); cell.appendChild(cv); grid.appendChild(cell);
+    drawBagLabel(cv,l,4);
+  });
+}
+function toggleLabels(id){
+  if(OPEN_LABELS.has(id)) OPEN_LABELS.delete(id); else OPEN_LABELS.add(id);
+  renderBatchList();
+}
+// Prints the labels two per A4 sheet. The sheet is built from sharp images, then the page is hidden so only the sheet prints.
+async function printLabels(id){
+  if(!needDuty("labels")) return;
+  const b=RUN_BATCHES.find(x=>x.id===id); if(!b) return;
+  try{
+    flash(id,"Preparing the print sheet...");
+    await refreshLabelContacts();
+    const sheet=document.createElement("div"); sheet.id="printSheet";
+    const cv=document.createElement("canvas"); const imgs=[];
+    for(const l of labelData(b)){
+      drawBagLabel(cv,l,10);
+      const img=new Image(); img.className="print-label"; img.src=cv.toDataURL("image/png");
+      sheet.appendChild(img); imgs.push(img);
+      await new Promise(r=>setTimeout(r,0));
+    }
+    cv.width=cv.height=0;
+    document.body.appendChild(sheet);
+    await Promise.all(imgs.map(i=>(i.decode?i.decode().catch(()=>{}):Promise.resolve())));
+    document.body.classList.add("printing-labels");
+    const done=()=>{ document.body.classList.remove("printing-labels"); sheet.remove(); window.removeEventListener("afterprint",done); };
+    window.addEventListener("afterprint",done);
+    flash(id,"");
+    window.print();
+  }catch(e){ document.body.classList.remove("printing-labels"); const s=document.getElementById("printSheet"); if(s) s.remove(); flash(id,"? "+esc(e.message),"var(--bad)"); }
+}
+
+// Archived PDF: A4 portrait, two labels per sheet, each label placed as a 254 dpi image
+async function archiveLabelsPdf(b){
+  if(!window.jspdf) throw new Error("PDF library not loaded");
+  if(!OPEN_LABELS.has(b.id)){ OPEN_LABELS.add(b.id); }
+  await refreshLabelContacts();
+  const labels=labelData(b);
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit:"mm", format:"a4", orientation:"portrait" });
+  const X=5, Y=[7, 7+LABEL_MM.h+7];
+  const cv=document.createElement("canvas");
+  for(let i=0;i<labels.length;i++){
+    const slot=i%2;
+    if(i>0 && slot===0) doc.addPage();
+    drawBagLabel(cv,labels[i],10);
+    doc.addImage(cv.toDataURL("image/png"),"PNG",X,Y[slot],LABEL_MM.w,LABEL_MM.h,undefined,"FAST");
+    if(slot===0){
+      doc.setFont("helvetica","normal"); doc.setFontSize(6.5); doc.setTextColor(100,116,139);
+      doc.text("PET Production - Bag Labels - "+(CURRENT_PROD.form_number||"")+" - Batch "+b.batch_no+" - Grade "+(b.grade||""), X, 4.6);
+    }
+    await new Promise(r=>setTimeout(r,0));
+  }
+  cv.width=cv.height=0;
+  const blob = doc.output("blob");
+  const path = `labels/${CURRENT_PROD.id}-b${b.batch_no}-${Date.now()}.pdf`;
+  const { error: upErr } = await sb.storage.from("pet-attachments").upload(path, blob, { contentType:"application/pdf" });
+  if(upErr) throw new Error(upErr.message);
+  const { data: urlData } = sb.storage.from("pet-attachments").getPublicUrl(path);
+  const { error: e1 } = await sb.from("pet_lab_batches").update({ labels_pdf_url: urlData.publicUrl }).eq("id", b.id);
+  if(e1) throw new Error(e1.message);
+  // the run-level link (used by the reports list) always points at the LATEST batch's PDF, so rebuilding an older batch must not take it over
+  const lastNo = Math.max.apply(null, (RUN_BATCHES||[]).map(x=>x.batch_no||0));
+  if(!RUN_BATCHES || !RUN_BATCHES.length || (b.batch_no||0) >= lastNo){
+    await sb.from("pet_stage4_production").update({ labels_pdf_url: urlData.publicUrl }).eq("id", CURRENT_PROD_ID);
+  }
+}
+// ---------------------------------------------------------------------------------------------
+// Stage 10 itself
+// ---------------------------------------------------------------------------------------------
+// The copied label code works on "the run on screen". Stage 10 lists many runs, so before any label action the globals are pointed at the right run.
+let CURRENT_PROD = null, CURRENT_PROD_ID = null, RUN_BATCHES = [], RUN_BAGS = {}, OPEN_LABELS = new Set(), CTX = null;
+function useRun(id){
+  const row = rowOf(id); CTX = row || null; if(!row) return null;
+  CURRENT_PROD = { id: row.c.id, form_number: row.c.form_number };
+  CURRENT_PROD_ID = row.prodId;
+  RUN_BATCHES = (RUN_ALL[row.c.id] || []).slice();
+  return row;
+}
+function needDuty(){
+  if(CTX && CTX.c && canDo(CTX.c.section)) return true;
+  alert("You are not assigned to Stage 10 for this branch. Ask an administrator to add you under Manage Assignments, Stage 10.");
+  return false;
+}
+// the copied code reports progress into the batch card
+function flash(id, msg, color){
+  NOTICE[id] = msg ? { msg: msg, color: color || "var(--muted)" } : null;
+  const el = document.getElementById("bs_" + id); if(el){ el.style.color = color || "var(--muted)"; el.innerHTML = msg || ""; }
+}
+
+async function fetchIn(table, cols, col, ids, extra){
+  let out = [];
+  for(const part of chunk(ids, 150)){
+    let q = sb.from(table).select(cols).in(col, part);
+    if(extra) q = extra(q);
+    const { data, error } = await q; if(error) throw error;
+    out = out.concat(data || []);
+  }
+  return out;
+}
+
+async function loadAll(){
+  const { data: bt, error } = await sb.from("pet_lab_batches")
+    .select("id,collection_id,batch_no,grade,bag_count,bag_weights,batch_date,batch_status,decision_at,labels_pdf_url,bags_generated_at,odoo_packed_at,odoo_packed_by_name")
+    .eq("batch_status", "approved").order("decision_at", { ascending: false, nullsFirst: false }).limit(1000);
+  if(error){
+    if(/odoo_packed/i.test(error.message || "")) throw new Error("Stage 10 needs a database update that has not been applied yet. Ask IT to run pet_stage10_odoo.sql.");
+    throw error;
+  }
+  const batches = bt || [], colIds = [...new Set(batches.map(b => b.collection_id))];
+  const [cols, prods, allB, bags] = colIds.length ? await Promise.all([
+    fetchIn("pet_collections", "id,form_number,agent_name,agent_code,section", "id", colIds),
+    fetchIn("pet_stage4_production", "id,collection_id", "collection_id", colIds),
+    fetchIn("pet_lab_batches", "id,collection_id,batch_no", "collection_id", colIds),
+    fetchIn("pet_stage4_bags", "id,collection_id,batch_id,bag_index,reference_number,weight_kg,grade,odoo_package_no,odoo_packed_at", "batch_id", batches.map(b => b.id), q => q.order("bag_index"))
+  ]) : [[], [], [], []];
+  const colBy = {}; cols.forEach(c => { colBy[c.id] = c; });
+  const prodBy = {}; prods.forEach(p => { prodBy[p.collection_id] = p.id; });
+  RUN_ALL = {}; allB.forEach(x => { (RUN_ALL[x.collection_id] = RUN_ALL[x.collection_id] || []).push({ id: x.id, batch_no: x.batch_no, collection_id: x.collection_id }); });
+  RUN_BAGS = {}; bags.forEach(g => { (RUN_BAGS[g.batch_id] = RUN_BAGS[g.batch_id] || []).push(g); });
+  ROWS = batches.map(b => ({ b: b, c: colBy[b.collection_id] || {}, prodId: prodBy[b.collection_id], bags: RUN_BAGS[b.id] || [] }));
+}
+
+// reload one batch and its bags after a change, without losing the rest of the page
+async function reloadBatch(id){
+  const row = rowOf(id); if(!row) return;
+  const { data: b, error } = await sb.from("pet_lab_batches")
+    .select("id,collection_id,batch_no,grade,bag_count,bag_weights,batch_date,batch_status,decision_at,labels_pdf_url,bags_generated_at,odoo_packed_at,odoo_packed_by_name").eq("id", id).single();
+  if(error) throw error;
+  const { data: bags, error: e2 } = await sb.from("pet_stage4_bags")
+    .select("id,collection_id,batch_id,bag_index,reference_number,weight_kg,grade,odoo_package_no,odoo_packed_at").eq("batch_id", id).order("bag_index");
+  if(e2) throw e2;
+  row.b = b; row.bags = bags || []; RUN_BAGS[id] = row.bags;
+}
+
+// ---------------- filter, search, list ----------------
+function isPacked(r){ return !!r.b.odoo_packed_at; }
+function setFilter(f){ FILTER = f; SHOWN = 50; PINNED.clear(); renderBatchList(); }
+function onSearch(v){ SEARCH = String(v || "").toLowerCase().trim(); SHOWN = 50; renderBatchList(); }
+function showMore(){ SHOWN += 50; renderBatchList(); }
+function matches(r){
+  if(!PINNED.has(r.b.id)){
+    if(FILTER === "waiting" && isPacked(r)) return false;
+    if(FILTER === "packed" && !isPacked(r)) return false;
+  }
+  if(!SEARCH) return true;
+  const hay = [r.c.form_number, r.c.agent_name, r.c.agent_code, r.c.section, "batch " + r.b.batch_no, r.b.grade]
+    .concat(r.bags.map(g => g.reference_number)).concat(r.bags.map(g => g.odoo_package_no)).join(" ").toLowerCase();
+  return hay.indexOf(SEARCH) >= 0;
+}
+
+function statusPill(r){
+  return isPacked(r)
+    ? `<span class="pill p-ok">Packed in Odoo</span>`
+    : `<span class="pill p-wait">Waiting for Odoo packaging</span>`;
+}
+
+function bagTable(r){
+  if(!r.bags.length) return `<div class="quiet" style="margin:6px 0;">Labels have not been generated yet, so there are no bags to pack.</div>`;
+  const id = r.b.id, editing = EDITING.has(id), draft = DRAFT[id] || {};
+  const rows = r.bags.map((g, i) => {
+    let cell;
+    if(editing){
+      const v = draft[g.id] != null ? draft[g.id] : (g.odoo_package_no || "");
+      cell = `<input type="text" id="odoo_${id}_${g.id}" maxlength="40" placeholder="e.g. AB-03041" autocomplete="off" value="${esc(v)}" oninput="onOdooInput(${id},${g.id},this)">`;
+    } else {
+      cell = g.odoo_package_no ? `<b>${esc(g.odoo_package_no)}</b>` : `<span class="quiet">—</span>`;
+    }
+    return `<tr><td>${i + 1}</td><td><b>${esc(g.reference_number)}</b></td><td>${fmt(bagWeightFor(r.b, i, g))} kg</td><td>${cell}</td></tr>`;
+  }).join("");
+  return `<table class="bg"><thead><tr><th>Bag</th><th>Pack reference</th><th>Weight</th><th>Odoo package number</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function actionsHtml(r){
+  const id = r.b.id, can = canDo(r.c.section), hasBags = r.bags.length > 0, editing = EDITING.has(id), packed = isPacked(r);
+  const parts = [];
+  if(!can){
+    parts.push(`<span class="quiet">View only. Only people assigned to Stage 10 for ${esc(r.c.section || "this branch")} can generate labels or record Odoo packaging.</span>`);
+    if(hasBags && r.b.labels_pdf_url) parts.push(`<a href="${esc(r.b.labels_pdf_url)}" target="_blank" style="font-size:12.5px;align-self:center;">Download labels PDF</a>`);
+    return parts.join(" ");
+  }
+  if(!hasBags){
+    parts.push(`<button class="btn-sm" onclick="generateLabels10(${id})">Generate labels</button>`);
+    return parts.join(" ");
+  }
+  parts.push(`<button class="btn-sm" onclick="showLabels(${id})">${OPEN_LABELS.has(id) ? "Hide labels" : "Show / print labels"}</button>`);
+  if(OPEN_LABELS.has(id)) parts.push(`<button class="btn-sm" onclick="printLabels10(${id})">🖨️ Print labels</button>`);
+  if(r.b.labels_pdf_url){
+    parts.push(`<a href="${esc(r.b.labels_pdf_url)}" target="_blank" style="font-size:12.5px;align-self:center;">Download labels PDF</a>`);
+    parts.push(`<button class="btn-ghost btn-sm" title="Replace the saved PDF with one drawn in the current label design" onclick="rebuildPdf10(${id},true)">Rebuild PDF (current design)</button>`);
+  } else {
+    parts.push(`<button class="btn-ghost btn-sm" onclick="rebuildPdf10(${id})">Create labels PDF</button>`);
+  }
+  if(editing){
+    parts.push(`<button class="btn-sm" onclick="submitOdoo(${id})">Submit</button>`);
+    parts.push(`<button class="btn-ghost btn-sm" onclick="cancelOdoo(${id})">Cancel</button>`);
+  } else if(packed){
+    parts.push(`<button class="btn-ghost btn-sm" onclick="openOdoo(${id})">Edit package numbers</button>`);
+    parts.push(`<button class="btn-ghost btn-sm" onclick="clearOdoo(${id})">Mark as not packed</button>`);
+  } else {
+    parts.push(`<button class="btn-sm" onclick="openOdoo(${id})">Bagged in Odoo</button>`);
+  }
+  return parts.join(" ");
+}
+
+function cardHtml(r){
+  const id = r.b.id, age = ageDays(r.b.decision_at);
+  const wait = !isPacked(r) && age != null && age > AGE_WARN;
+  const total = r.bags.reduce((s, g, i) => s + num(bagWeightFor(r.b, i, g)), 0);
+  const bits = [
+    esc(r.c.agent_name || "—") + (r.c.agent_code ? " (" + esc(r.c.agent_code) + ")" : ""),
+    esc(r.c.section || "—"),
+    "Approved " + fmtD(r.b.decision_at),
+    (r.b.bag_count || r.bags.length) + " bag" + ((r.b.bag_count || r.bags.length) === 1 ? "" : "s") + (r.bags.length ? " · " + fmt(total) + " kg" : "")
+  ];
+  const packedInfo = isPacked(r) ? ` <span class="quiet">· packed ${fmtD(r.b.odoo_packed_at)}${r.b.odoo_packed_by_name ? " by " + esc(r.b.odoo_packed_by_name) : ""}</span>` : "";
+  const waitChip = wait ? ` <span class="pill p-bad">Waiting ${age} days, over the ${AGE_WARN} day limit</span>` : "";
+  const n = NOTICE[id];
+  return `<div class="batch-card" id="card_${id}">
+    <div class="bh"><b>${esc(r.c.form_number || "—")} &middot; Batch ${esc(r.b.batch_no)} &middot; Grade ${esc(r.b.grade || "—")}</b><span>${statusPill(r)}${waitChip}</span></div>
+    <div class="meta">${bits.join(" &middot; ")}${packedInfo}</div>
+    ${bagTable(r)}
+    <div class="actions">${actionsHtml(r)}</div>
+    <div class="msg" id="bs_${id}"${n ? ` style="color:${n.color}"` : ""}>${n ? n.msg : ""}</div>
+    ${OPEN_LABELS.has(id) ? `<div class="qr-grid" id="qr_${id}"></div>` : ""}
+  </div>`;
+}
+
+function renderBatchList(){
+  const nAll = ROWS.length, nPacked = ROWS.filter(isPacked).length, nWait = nAll - nPacked;
+  document.getElementById("f_all").textContent = "All (" + nAll + ")";
+  document.getElementById("f_waiting").textContent = "Waiting for Odoo packaging (" + nWait + ")";
+  document.getElementById("f_packed").textContent = "Packed in Odoo (" + nPacked + ")";
+  ["all", "waiting", "packed"].forEach(f => document.getElementById("f_" + f).classList.toggle("on", FILTER === f));
+  const list = document.getElementById("list"), vis = ROWS.filter(matches);
+  if(!vis.length){
+    list.innerHTML = `<div class="empty">${nAll ? "Nothing matches this filter." : "No batch has been approved yet. Approved batches appear here by themselves."}</div>`;
+    document.getElementById("more").innerHTML = "";
+    return;
+  }
+  list.innerHTML = vis.slice(0, SHOWN).map(cardHtml).join("");
+  document.getElementById("more").innerHTML = vis.length > SHOWN ? `<button class="btn-ghost btn-sm" onclick="showMore()">Show ${Math.min(50, vis.length - SHOWN)} more of ${vis.length - SHOWN} remaining</button>` : "";
+  vis.slice(0, SHOWN).forEach(r => { if(OPEN_LABELS.has(r.b.id)){ useRun(r.b.id); buildGrid(r.b); } });
+}
+
+// ---------------- Odoo package numbers ----------------
+function openOdoo(id){
+  const r = rowOf(id); if(!r) return;
+  EDITING.add(id);
+  DRAFT[id] = {}; r.bags.forEach(g => { if(g.odoo_package_no) DRAFT[id][g.id] = g.odoo_package_no; });
+  flash(id, ""); renderBatchList();
+  const first = r.bags[0] && document.getElementById("odoo_" + id + "_" + r.bags[0].id); if(first) first.focus();
+}
+function cancelOdoo(id){ EDITING.delete(id); delete DRAFT[id]; flash(id, ""); renderBatchList(); }
+function onOdooInput(id, bagId, el){
+  el.value = el.value.toUpperCase().replace(/[^A-Z0-9._\/-]/g, "");   // capitals only; spaces and odd characters are dropped as typed
+  (DRAFT[id] = DRAFT[id] || {})[bagId] = el.value;
+}
+
+async function submitOdoo(id){
+  const r = rowOf(id); if(!r) return;
+  useRun(id); if(!needDuty()) return;
+  const items = [], seen = {};
+  for(let i = 0; i < r.bags.length; i++){
+    const g = r.bags[i], el = document.getElementById("odoo_" + id + "_" + g.id);
+    const v = String((el ? el.value : (DRAFT[id] || {})[g.id]) || "").trim().toUpperCase();
+    if(!v) return flash(id, "Enter the Odoo package number of bag " + (i + 1) + " (" + esc(g.reference_number) + ").", "var(--bad)");
+    if(!NUM_RE.test(v)) return flash(id, "\"" + esc(v) + "\" is not a valid Odoo package number. Use letters, numbers and - . / only, 2 to 40 characters, for example AB-03041.", "var(--bad)");
+    if(seen[v]) return flash(id, "The number " + esc(v) + " is used on two bags of this batch. Each bag has its own Odoo package.", "var(--bad)");
+    seen[v] = true;
+    const clash = ROWS.find(x => x.b.id !== id && x.bags.some(y => y.odoo_package_no && String(y.odoo_package_no).toUpperCase() === v));
+    if(clash){ const other = clash.bags.find(y => y.odoo_package_no && String(y.odoo_package_no).toUpperCase() === v); return flash(id, "The number " + esc(v) + " is already used by bag " + esc(other.reference_number) + ".", "var(--bad)"); }
+    items.push({ bag_id: g.id, number: v });
+  }
+  flash(id, "Saving...");
+  const { error } = await sb.rpc("pet_save_odoo_packaging", { p_batch_id: id, p_numbers: items });
+  if(error) return flash(id, esc(rpcMessage(error, "save the package numbers")), "var(--bad)");
+  try{ await reloadBatch(id); }catch(e){ /* the numbers are saved; a refresh will show them */ }
+  EDITING.delete(id); delete DRAFT[id]; PINNED.add(id);
+  flash(id, "✅ Saved. This batch is now Packed in Odoo.", "var(--ok)");
+  renderBatchList();
+}
+
+async function clearOdoo(id){
+  const r = rowOf(id); if(!r) return;
+  useRun(id); if(!needDuty()) return;
+  if(!confirm("Mark batch " + r.b.batch_no + " of " + (r.c.form_number || "this collection") + " as NOT packed in Odoo?\n\nThe Odoo package numbers saved for its bags will be removed and the batch goes back to Waiting for Odoo packaging.")) return;
+  flash(id, "Saving...");
+  const { error } = await sb.rpc("pet_clear_odoo_packaging", { p_batch_id: id });
+  if(error) return flash(id, esc(rpcMessage(error, "change the batch")), "var(--bad)");
+  try{ await reloadBatch(id); }catch(e){}
+  PINNED.add(id);
+  flash(id, "This batch is back to Waiting for Odoo packaging.", "var(--ok)");
+  renderBatchList();
+}
+
+// ---------------- labels (same buttons as Stage 8) ----------------
+function showLabels(id){ useRun(id); toggleLabels(id); }
+function printLabels10(id){ useRun(id); return printLabels(id); }
+
+async function generateLabels10(id){
+  const row = useRun(id); if(!row) return;
+  if(!needDuty()) return;
+  const b = row.b;
+  try{
+    flash(id, "Generating...");
+    const n = b.bag_count || (Array.isArray(b.bag_weights) ? b.bag_weights.length : 0);
+    // the same three database functions Stage 8 uses: AA and AB, BB, and any grade added later
+    const { error } = b.grade === "BB"
+      ? await sb.rpc("generate_batch_bags_bb", { p_batch_id: id, p_n: n })
+      : (b.grade === "AA" || b.grade === "AB" || !b.grade)
+        ? await sb.rpc("generate_batch_bags", { p_batch_id: id, p_aa: b.grade === "AA" ? n : 0, p_ab: b.grade === "AB" ? n : 0 })
+        : await sb.rpc("generate_batch_bags_grade", { p_batch_id: id, p_grade: b.grade, p_n: n });
+    if(error) throw new Error(error.message);
+    OPEN_LABELS.add(id);
+    await reloadBatch(id); useRun(id);
+    await applyBagWeights(row.b);
+    await reloadBatch(id); useRun(id);
+    await archiveLabelsPdf(row.b);
+    await reloadBatch(id);
+    flash(id, "✅ Labels generated.", "var(--ok)");
+    renderBatchList();
+  }catch(e){ flash(id, "❌ " + esc(e.message), "var(--bad)"); }
+}
+
+async function rebuildPdf10(id, replacing){
+  const row = useRun(id); if(!row) return;
+  if(!needDuty()) return;
+  if(replacing && !confirm("Replace the saved labels PDF for batch " + row.b.batch_no + " with one drawn in the current label design?\n\nLabels already printed and stuck on bags are not affected. Reports will link to the new PDF. The old PDF file is kept in storage but no longer linked.")) return;
+  try{
+    OPEN_LABELS.add(id); flash(id, "Building the PDF...");
+    await archiveLabelsPdf(row.b);
+    await reloadBatch(id);
+    flash(id, "✅ Labels PDF saved.", "var(--ok)");
+    renderBatchList();
+  }catch(e){ flash(id, "❌ " + esc(e.message), "var(--bad)"); }
+}
+
+async function refreshAll(){
+  PINNED.clear();
+  const cs = document.getElementById("connStatus");
+  try{ await loadAll(); renderBatchList(); cs.style.color = "var(--ok)"; cs.textContent = "Connected."; }
+  catch(e){ cs.style.color = "var(--bad)"; cs.textContent = "Error: " + e.message; }
+}
+
+async function init(){
+  const cs = document.getElementById("connStatus");
+  try{
+    ME = await requireAuth("../../login.html");
+    if(!ME) return;
+    IS_SUPER = ME.role === "super_admin";
+    const { data: duty } = await sb.from("pet_stage_fillers").select("section").eq("profile_id", ME.id).eq("stage", "stage10");
+    DUTY_SECTIONS = new Set((duty || []).map(r => r.section));
+    const secs = [...DUTY_SECTIONS].sort();
+    document.getElementById("dutyNote").innerHTML = IS_SUPER
+      ? "<b>Your access:</b> Super Admin, all branches."
+      : secs.length ? "<b>You can record Odoo packaging for:</b> " + esc(secs.join(", ")) + ". Other branches are view only."
+                    : "You can view this page, but you are not assigned to Stage 10 for any branch. Ask an administrator to add you under Manage Assignments, Stage 10.";
+    await loadAll();
+    if(!ROWS.some(r => !isPacked(r))) FILTER = "all";   // nothing waiting: show everything instead of an empty page
+    renderBatchList();
+    cs.style.color = "var(--ok)"; cs.textContent = "Connected.";
+  }catch(e){
+    cs.style.color = "var(--bad)"; cs.textContent = "Error: " + e.message;
+    document.getElementById("list").innerHTML = "";
+  }
+}
+init();
+</script>
+</body>
+</html>
