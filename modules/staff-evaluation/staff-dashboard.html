@@ -97,7 +97,21 @@ svg{width:100%;height:auto;display:block;}
   </div>
 
   <div id="m_dash" style="display:none;">
+    <div class="section-label">📦 Production Output</div>
     <div class="kpis" id="m_kpis" style="margin-bottom:16px;"></div>
+
+    <div class="card">
+      <h3>📅 Attendance (Monday to Saturday)</h3>
+      <p id="m_attNote" style="font-size:11px;color:var(--muted);margin:-6px 0 12px;"></p>
+      <div class="kpis" id="m_attKpis"></div>
+    </div>
+
+    <div class="card">
+      <h3>⚙ Machine and Efficiency Metrics</h3>
+      <p id="m_metNote" style="font-size:11px;color:var(--muted);margin:-6px 0 12px;"></p>
+      <div class="kpis" id="m_metricsKpis"></div>
+    </div>
+
     <div class="card">
       <h3>🏆 Best Performers (by Efficiency)</h3>
       <div class="bests" id="m_bests"></div>
@@ -354,7 +368,7 @@ async function init(){
 }
 
 /* ═════════════════════════ MANAGEMENT VIEW ═════════════════════════ */
-const MGR={sections:[],empSet:new Set()};
+const MGR={sections:[],empSet:new Set(),excluded:new Set()};
 
 async function fetchWeavingEmployeeIds(){
   const out=[]; let from=0;
@@ -389,6 +403,11 @@ async function initManager(){
   $("m_scope").innerHTML=`<span class="staff-badge">👷 ${MGR.empSet.size} Weaving operators tracked</span> `+
     `<span style="font-size:11px;color:var(--muted);">Use the Operator field to focus on one person.</span>`;
 
+  try{   // job codes that do not count as downtime (same list the personal view uses)
+    const jr=await fetch(SUPABASE_URL+"/rest/v1/job_table?select=job_code",{headers:authHeaders()});
+    if(jr.ok){const j=await jr.json();MGR.excluded=new Set(j.map(r=>r.job_code));}
+  }catch(e){}
+
   $("m_opSearch").addEventListener("keydown",e=>{if(e.key==="Enter")runManager();});
   setRange("m","month",document.querySelector("#m_quickbar .qbtn.active"));
   cs.style.color="var(--green)";cs.textContent="Connected.";
@@ -410,7 +429,7 @@ async function runManager(){
       ? "&section=eq."+encodeURIComponent(section)
       : "&section=in.("+encodeURIComponent(MGR.sections.map(s=>`"${s}"`).join(","))+")";
     let rows=await fetchPaged(MW_TABLE,
-      "date_col,shift,mat_type,group_name,assets,a_double,a_single,b,c,total,target,shed,units,section,operator_name,operator_id,rank",
+      "date_col,shift,work_type,mat_type,group_name,assets,a_double,a_single,b,c,total,target,shed,units,section,operator_name,operator_id,rank",
       "&date_col=gte."+from+"&date_col=lte."+to+secClause,"&order=date_col.asc");
 
     // Scope to Weaving employees client-side (avoids a very long operator_id IN (...) URL).
@@ -419,27 +438,120 @@ async function runManager(){
     const excluded=fetched-rows.length;
     if(excluded>0) note.textContent=`⚠ ${excluded} production row(s) excluded: their operator ID is not in the Weaving employee list.`;
 
+    const pool=rows;                       // all shifts, every operator in scope (used for attendance)
+    const matchesQ=r=>(r.operator_name||"").toLowerCase().includes(q)||String(r.operator_id||"").toLowerCase().includes(q);
+    const attPool=q?pool.filter(matchesQ):pool;   // attendance ignores the shift filter, like the personal view
     if(shift!=="All")rows=rows.filter(r=>r.shift===shift);
-    if(q)rows=rows.filter(r=>(r.operator_name||"").toLowerCase().includes(q)||String(r.operator_id||"").toLowerCase().includes(q));
+    if(q)rows=rows.filter(matchesQ);
 
     status.className="status ok";status.textContent="";
     if(!rows.length){$("m_dash").style.display="none";status.textContent="No data for these filters.";return;}
+
+    // Downtime records and query counts; a failure here must not hide the rest of the dashboard.
+    status.className="status";status.textContent="Loading downtime and query data...";
+    const opIds=[...new Set(rows.map(r=>String(r.operator_id)))];
+    const assets=[...new Set(rows.map(r=>r.assets).filter(Boolean))];
+    const [ctrlRes,qRes]=await Promise.allSettled([fetchControlRows(from,to,assets),countQueries(opIds)]);
+    const ctrlRows=ctrlRes.status==="fulfilled"?ctrlRes.value:null;
+    const queryCount=qRes.status==="fulfilled"?qRes.value:null;
+    if(ctrlRes.status==="rejected")console.error("control fetch:",ctrlRes.reason);
+    if(qRes.status==="rejected")console.error("query count:",qRes.reason);
+    status.className="status ok";status.textContent="";
+
     $("m_dash").style.display="block";
-    renderManagerKpis(rows);renderManagerBests(rows);renderManagerCharts(rows);
+    renderManagerKpis(rows,queryCount);
+    renderManagerAttendance(from,to,pool,attPool);
+    renderManagerMetrics(rows,ctrlRows);
+    renderManagerBests(rows);renderManagerCharts(rows);
   }catch(e){status.className="status err";status.textContent="❌ "+e.message;console.error(e);}
 }
 
-function renderManagerKpis(rows){
+/* Downtime log for the machines in view, fetched in chunks so the URL stays short. */
+async function fetchControlRows(from,to,assets){
+  if(!assets.length)return [];
+  const chunks=[];for(let i=0;i<assets.length;i+=40)chunks.push(assets.slice(i,i+40));
+  const parts=await Promise.all(chunks.map(c=>{
+    const inList=c.map(a=>'"'+String(a).replace(/"/g,'\\"')+'"').join(",");
+    return fetchPaged("control","*","&date=gte."+from+"&date=lte."+to+"&assets=in.("+encodeURIComponent(inList)+")","");
+  }));
+  const all=[].concat(...parts);
+  all.forEach(normalizeCtrl);
+  return all;
+}
+
+/* All-time HR query count for the operators in view (same meaning as the personal tile). */
+async function countQueries(ids){
+  if(!ids.length)return 0;
+  const chunks=[];for(let i=0;i<ids.length;i+=80)chunks.push(ids.slice(i,i+80));
+  const res=await Promise.all(chunks.map(c=>sb.from("hr_queries").select("id",{count:"exact",head:true}).in("employee_id",c)));
+  let total=0;
+  res.forEach(r=>{if(r.error)throw new Error("Queries: "+r.error.message);total+=(r.count||0);});
+  return total;
+}
+
+function renderManagerKpis(rows,queryCount){
   const t=totals(rows);const e=eff(t.tot,t.tg);
   const ops=new Set(rows.map(r=>r.operator_id).filter(Boolean)).size;
+  const pA=t.tot?Math.round(t.a/t.tot*100):0, pB=t.tot?Math.round(t.b/t.tot*100):0;
   $("m_kpis").innerHTML=tilesHtml([
     {n:ops,l:"Active Operators"},
     {n:fmt(t.tot),l:"Total Mats"},
     {n:fmt(t.a),l:"A Grade",cls:"good",sub:`Dbl ${fmt(t.ad)} · Sgl ${fmt(t.as)}`},
+    {n:pA+"%",l:"%A (A/Total)",cls:"good"},
     {n:fmt(t.b),l:"B Grade",cls:"warn"},
+    {n:pB+"%",l:"%B (B/Total)",cls:"warn"},
     {n:fmt(t.c),l:"C Grade"},
     {n:fmt(t.tg),l:"Total Target"},
-    {n:e.toFixed(1)+"%",l:"Overall Efficiency",cls:e>=90?"good":e>=75?"teal":"warn"}
+    {n:e.toFixed(1)+"%",l:"Overall Efficiency",cls:e>=90?"good":e>=75?"teal":"warn"},
+    {n:queryCount==null?"—":fmt(queryCount),l:"Total Queries",cls:queryCount==null?"":(queryCount>0?"bad":"good"),sub:"All time, operators in view"}
+  ]);
+}
+
+/* Attendance: the personal rule applied to each operator, then summed (operator-days). */
+function renderManagerAttendance(from,to,pool,attPool){
+  const sched=getMonSatDates(from,to);
+  // classifyAttendance only needs the kinds of work done each day, so reduce the plant-wide rows to unique date/type pairs.
+  const seen=new Set(), lite=[];
+  pool.forEach(r=>{const k=r.date_col+"|"+(r.work_type||"");if(!seen.has(k)){seen.add(k);lite.push({date_col:r.date_col,work_type:r.work_type});}});
+  const byOp={};
+  attPool.forEach(r=>{const k=String(r.operator_id);(byOp[k]=byOp[k]||[]).push(r);});
+  const T={scheduled:0,present:0,absent:0,holiday:0,otDays:0,coverDays:0};
+  const ops=Object.keys(byOp);
+  ops.forEach(k=>{const a=classifyAttendance(sched,byOp[k],lite);Object.keys(T).forEach(f=>{T[f]+=a[f];});});
+  $("m_attNote").textContent=`Totals across ${ops.length} operator${ops.length===1?"":"s"}; each operator is counted once per day. Only operators with production records in the period are included, so an operator absent for the whole period is not counted.`;
+  $("m_attKpis").innerHTML=tilesHtml([
+    {n:fmt(T.scheduled),l:"Scheduled Days (Mon to Sat)",cls:"blue"},
+    {n:fmt(T.present),l:"Days Present",cls:"good"},
+    {n:fmt(T.absent),l:"Days Absent",cls:T.absent>0?"bad":"good"},
+    {n:fmt(T.holiday),l:"Holidays / Off Days",cls:"teal"},
+    {n:fmt(T.otDays),l:"Overtime Days",cls:"warn"},
+    {n:fmt(T.coverDays),l:"Cover Duty Days",cls:"purple"}
+  ]);
+}
+
+/* Machine metrics: the personal formulae applied to each operator, then summed, so the totals
+   reconcile with what each operator sees on their own dashboard. */
+function renderManagerMetrics(rows,ctrlRows){
+  if(!ctrlRows){
+    $("m_metNote").textContent="";
+    $("m_metricsKpis").innerHTML="<p style='color:var(--red);font-size:13px;margin:0;'>Downtime records could not be loaded. Click Run to try again.</p>";
+    return;
+  }
+  const byOp={};
+  rows.forEach(r=>{const k=String(r.operator_id);(byOp[k]=byOp[k]||[]).push(r);});
+  let down=0,MLD=0,ATG=0,MLU=0,tot=0;
+  Object.values(byOp).forEach(rs=>{
+    const m=computeMetrics(rs,ctrlRows,MGR.excluded);
+    down+=m.downtime;MLD+=m.MLD;ATG+=m.ATG;MLU+=m.MLU;tot+=m.total;
+  });
+  const effA=ATG?tot/ATG*100:0;
+  $("m_metNote").textContent=`Summed across ${Object.keys(byOp).length} operator${Object.keys(byOp).length===1?"":"s"}: downtime is counted for each operator on the machines they ran.`;
+  $("m_metricsKpis").innerHTML=tilesHtml([
+    {n:fmt(down)+" min",l:"Total Downtime"},
+    {n:fmt(MLD),l:"MLD"},
+    {n:fmt(ATG),l:"ATG (Adj. Target)",cls:"teal"},
+    {n:fmt(MLU),l:"MLU",cls:MLU>=0?"warn":"good"},
+    {n:effA.toFixed(1)+"%",l:"Efficiency (Total ÷ ATG)",cls:effA>=90?"good":effA>=75?"teal":"warn"}
   ]);
 }
 
