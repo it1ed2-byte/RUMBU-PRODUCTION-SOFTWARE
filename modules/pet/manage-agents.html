@@ -64,8 +64,9 @@
     <h3 id="modalTitle">Add Agent</h3>
     <div class="grid2">
       <div>
-        <label>Agent Code <span style="color:var(--muted);font-weight:400;">(auto-generated)</span></label>
-        <input type="text" id="fCode" readonly style="background:var(--bg);">
+        <label>Agent Code * <span style="color:var(--muted);font-weight:400;">(from Kissflow)</span></label>
+        <input type="text" id="fCode" maxlength="20" placeholder="e.g. KN-01" autocomplete="off" autocapitalize="characters" spellcheck="false" style="text-transform:uppercase;" oninput="this.value=this.value.toUpperCase().replace(/[^A-Z0-9-]/g,'')">
+        <div id="codeNote" style="font-size:12px;color:var(--muted);margin-top:4px;min-height:16px;"></div>
       </div>
       <div>
         <label>Category</label>
@@ -153,13 +154,13 @@ function renderTable(list){
   const body = document.getElementById("agentBody");
   if(!list.length){ body.innerHTML=`<tr><td colspan="9" style="text-align:center;color:var(--muted);">No agents found.</td></tr>`; return; }
   body.innerHTML = list.map(a=>`<tr>
-    <td><b>${a.agent_code}</b></td>
-    <td>${a.agent_name}</td>
-    <td>${a.section||"—"}</td>
-    <td>${a.phone||"—"}</td>
-    <td>${a.category||"—"}</td>
-    <td>${a.bank_name||"—"}</td>
-    <td>${a.bank_account_number||"—"}</td>
+    <td><b>${esc(a.agent_code)}</b></td>
+    <td>${esc(a.agent_name)}</td>
+    <td>${esc(a.section||"—")}</td>
+    <td>${esc(a.phone||"—")}</td>
+    <td>${esc(a.category||"—")}</td>
+    <td>${esc(a.bank_name||"—")}</td>
+    <td>${esc(a.bank_account_number||"—")}</td>
     <td><span class="badge ${a.is_active?'active':'inactive'}">${a.is_active?'Active':'Inactive'}</span></td>
     <td>
       <button class="act-btn edit" onclick="openEdit(${a.id})">Edit</button>
@@ -173,19 +174,27 @@ function filterTable(){
   renderTable(AGENTS.filter(a=> (a.agent_name+a.agent_code).toLowerCase().includes(q)));
 }
 
-async function generateCode(){
-  const { data } = await sb.from("pet_agents").select("agent_code").order("id",{ascending:false}).limit(1);
-  if(!data||!data.length) return "AGT-001";
-  const num = parseInt((data[0].agent_code||"AGT-000").split("-")[1]||"0") + 1;
-  return "AGT-" + String(num).padStart(3,"0");
+// Agent codes are the Kissflow codes, typed in (for example KN-01). Letters, numbers and dashes only, 2 to 20 characters.
+const CODE_RE = /^[A-Z0-9][A-Z0-9-]{1,19}$/;
+function normCode(v){ return String(v||"").trim().toUpperCase(); }
+function esc(t){ return String(t==null?"":t).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+
+// How many collections already carry this agent (so the confirmation can say how many will follow a code change)
+async function countCollections(agentId){
+  try{
+    const { count, error } = await sb.from("pet_collections").select("id",{count:"exact",head:true}).eq("agent_id", agentId);
+    return error ? null : count;
+  }catch(e){ return null; }
 }
 
 async function openAdd(){
   EDITING_ID = null;
   document.getElementById("modalTitle").textContent = "Add Agent";
   clearForm();
-  document.getElementById("fCode").value = await generateCode();
+  document.getElementById("fCode").value = "";
+  document.getElementById("codeNote").textContent = "Type the agent's code exactly as it is in Kissflow, for example KN-01.";
   document.getElementById("modal").classList.add("open");
+  document.getElementById("fCode").focus();
 }
 
 function openEdit(id){
@@ -194,6 +203,7 @@ function openEdit(id){
   if(!a) return;
   document.getElementById("modalTitle").textContent = "Edit Agent";
   document.getElementById("fCode").value = a.agent_code;
+  document.getElementById("codeNote").textContent = "Changing the code also changes it on every collection already recorded for this agent.";
   document.getElementById("fName").value = a.agent_name;
   document.getElementById("fPhone").value = a.phone||"";
   document.getElementById("fSection").value = a.section||"";
@@ -217,13 +227,24 @@ function closeModal(){ document.getElementById("modal").classList.remove("open")
 
 async function saveAgent(){
   const st = document.getElementById("modalStatus");
+  const fail = m => { st.style.color="var(--bad)"; st.textContent=m; };
   const name = document.getElementById("fName").value.trim();
   const section = document.getElementById("fSection").value;
-  if(!name){ st.style.color="var(--bad)"; st.textContent="Agent name is required."; return; }
-  if(!section){ st.style.color="var(--bad)"; st.textContent="Select a branch."; return; }
+  const code = normCode(document.getElementById("fCode").value);
+  const current = EDITING_ID ? AGENTS.find(a=>a.id===EDITING_ID) : null;
+  const codeChanged = !!current && normCode(current.agent_code) !== code;   // compared the way it is typed, so an untouched old code never counts as a change
 
-  const payload = {
-    agent_code:         document.getElementById("fCode").value,
+  // The code is checked when adding, or when an edit actually changes it (an unchanged old code is never blocked).
+  if(!EDITING_ID || codeChanged){
+    if(!code) return fail("Enter the agent code from Kissflow, for example KN-01.");
+    if(!CODE_RE.test(code)) return fail("The code can only use letters, numbers and dashes, 2 to 20 characters, for example KN-01.");
+    const clash = AGENTS.find(a => a.id !== EDITING_ID && normCode(a.agent_code) === code);
+    if(clash) return fail("The code " + code + " is already used by " + clash.agent_name + ".");
+  }
+  if(!name) return fail("Agent name is required.");
+  if(!section) return fail("Select a branch.");
+
+  const fields = {
     agent_name:         name,
     phone:              document.getElementById("fPhone").value.trim()||null,
     section:            section,
@@ -234,12 +255,33 @@ async function saveAgent(){
     bank_account_name:  document.getElementById("fBankAccName").value.trim()||null,
   };
 
-  st.style.color="var(--muted)"; st.textContent="Saving...";
-  const { error } = EDITING_ID
-    ? await sb.from("pet_agents").update(payload).eq("id", EDITING_ID)
-    : await sb.from("pet_agents").insert(payload);
+  // A changed code is applied by the database in one step: the agent AND every collection that carries a copy of the code.
+  if(codeChanged){
+    const n = await countCollections(EDITING_ID);
+    const msg = "Change the code from " + current.agent_code + " to " + code + "?"
+      + (n ? "\n\nIt will also be changed on the " + n + " collection" + (n===1?"":"s") + " already recorded for this agent." : "");
+    if(!confirm(msg)) return;
+    st.style.color="var(--muted)"; st.textContent="Saving...";
+    const { error: rpcErr } = await sb.rpc("pet_change_agent_code", { p_agent_id: EDITING_ID, p_new_code: code });
+    if(rpcErr){
+      const missing = rpcErr.code === "PGRST202" || /could not find the function/i.test(rpcErr.message||"");
+      return fail(missing
+        ? "Changing a code needs a database update that has not been applied yet. Ask IT to run pet_agent_codes.sql."
+        : "Could not change the code: " + rpcErr.message);
+    }
+  } else {
+    st.style.color="var(--muted)"; st.textContent="Saving...";
+  }
 
-  if(error){ st.style.color="var(--bad)"; st.textContent="Error: "+error.message; return; }
+  const { error } = EDITING_ID
+    ? await sb.from("pet_agents").update(fields).eq("id", EDITING_ID)
+    : await sb.from("pet_agents").insert(Object.assign({ agent_code: code }, fields));
+
+  if(error){
+    if(codeChanged){ await loadAgents(); return fail("The code was changed to " + code + ", but the other changes were not saved: " + error.message); }
+    const dup = error.code === "23505" || /duplicate key|unique/i.test(error.message||"");
+    return fail(dup ? "The code " + code + " is already used by another agent." : "Error: " + error.message);
+  }
   st.style.color="var(--ok)"; st.textContent="Saved.";
   await loadAgents();
   setTimeout(closeModal, 800);
