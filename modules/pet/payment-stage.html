@@ -40,9 +40,9 @@
   <div id="connStatus" style="font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);">Loading...</div>
 
   <div class="guide-box">
-    <b>How Stage 3 — Payment works</b>
+    <b>How Stage 5 — Payment works</b>
     <ol>
-      <li><b>Initial Payment (before offloading):</b> pick the collection, enter the <b>Odoo PO number</b> and attach the <b>Initial Payment receipt</b>. Next: Stage 4 — Bottle Offloading.</li>
+      <li><b>Initial Payment (after offloading):</b> pick the collection, enter the <b>Odoo PO number</b> and attach the <b>Initial Payment receipt</b>. Next: Stage 6 — Quality Control.</li>
       <li><b>Final Payment (after Production is completed):</b> these appear lower down only once Production has been completed. Check the deduction worked out from the waste, enter the <b>deduction amount</b> and attach the <b>Final Payment receipt</b>. This completes the collection.</li>
       <li>If approvers are assigned to this stage, one of them reviews it next; if none are assigned, it moves straight on.</li>
     </ol>
@@ -50,7 +50,7 @@
 
   <!-- Phase 1 -->
   <div id="p1FillSection" style="display:none;">
-    <div class="phase-header">Stage 3 — Initial Payment</div>
+    <div class="phase-header">Stage 5 — Initial Payment</div>
     <div class="phase-body">
       <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Collections approved by Quality Control awaiting first payment entry.</p>
       <div class="panel-title" id="p1FillQueueTitle" style="font-size:13px;margin-bottom:8px;">Your Queue</div>
@@ -146,8 +146,21 @@
 <script>
 let ME=null, CURRENT_P1=null, CURRENT_P2=null, ALL_SECTIONS=[], P1_QUEUE_DATA=[], P2_QUEUE_DATA=[];
 
-const NEXT_STATUS={stage3p1:'stage4a_offloading_filling', stage3p2:'completed'};
-const REJECT_STATUS={stage3p1:'rejected_to_stage2', stage3p2:'rejected_to_stage4'};
+// ---- Stage order: Rumbu Weight Details is Stage 3, Payment is Stage 5 ----
+// flow_version 2 (every new collection): Inspection > Rumbu Weight (3) > Offloading (4) > Payment (5) > Quality Control (6).
+// flow_version 1 (collections already past Inspection when the change went live): the old order, Payment > Offloading > Rumbu Weight > Quality Control.
+// A collection with no flow_version (column not added yet) is treated as 1, so nothing changes until pet_flow_swap.sql has been run.
+const FLOW_NEXT = {
+  1:{ stage2:'stage3p1_filling', stage3p1:'stage4a_offloading_filling', stage4a:'stage4b_weight_filling', stage4b:'stage4c_qc_filling', stage4c:'stage4d_production_approval', stage3p2:'completed' },
+  2:{ stage2:'stage4b_weight_filling', stage4b:'stage4a_offloading_filling', stage4a:'stage3p1_filling', stage3p1:'stage4c_qc_filling', stage4c:'stage4d_production_approval', stage3p2:'completed' }
+};
+const FLOW_REJECT = {
+  1:{ stage2:'rejected_to_stage1', stage3p1:'rejected_to_stage2', stage4a:'rejected_to_stage3p1', stage4b:'rejected_to_stage4a', stage4c:'rejected_to_stage4b', stage3p2:'rejected_to_stage4' },
+  2:{ stage2:'rejected_to_stage1', stage4b:'rejected_to_stage2', stage4a:'rejected_to_stage4b', stage3p1:'rejected_to_stage4a', stage4c:'rejected_to_stage3p1', stage3p2:'rejected_to_stage4' }
+};
+const flowOf = c => (c && Number(c.flow_version)===2) ? 2 : 1;
+const nextStatusFor   = (stage, c) => FLOW_NEXT[flowOf(c)][stage];
+const rejectStatusFor = (stage, c) => FLOW_REJECT[flowOf(c)][stage];
 
 async function init(){
   const cs=document.getElementById("connStatus");
@@ -422,7 +435,7 @@ async function proceedWithP1Submit(){
 
     const oldStatus=CURRENT_P1.status;
     const needsApproval = await stageHasApprovers("stage3p1", CURRENT_P1.section);
-    const nextStatus = needsApproval ? "stage3p1_approval" : NEXT_STATUS.stage3p1;
+    const nextStatus = needsApproval ? "stage3p1_approval" : nextStatusFor('stage3p1', CURRENT_P1);
     const { error: stErr } = await sb.from("pet_collections").update({ status:nextStatus, updated_at:new Date().toISOString() }).eq("id",CURRENT_P1.id);
     if(stErr) throw new Error("Payment data was saved, but could not advance status: "+stErr.message);
     const { error: logErr } = await sb.from("pet_activity_log").insert({ collection_id:CURRENT_P1.id, action:"stage3p1_filled", stage:"stage3p1", actor_profile_id:ME.id, actor_username:ME.username, old_status:oldStatus, new_status:nextStatus });
@@ -517,7 +530,7 @@ async function proceedWithP2Submit(){
 
     const oldStatus=CURRENT_P2.status;
     const needsApproval = await stageHasApprovers("stage3p2", CURRENT_P2.section);
-    const nextStatus = needsApproval ? "stage3p2_approval" : NEXT_STATUS.stage3p2;
+    const nextStatus = needsApproval ? "stage3p2_approval" : nextStatusFor('stage3p2', CURRENT_P2);
     const { error: stErr } = await sb.from("pet_collections").update({ status:nextStatus, updated_at:new Date().toISOString() }).eq("id",CURRENT_P2.id);
     if(stErr) throw new Error("Payment data was saved, but could not advance status: "+stErr.message);
     const { error: logErr } = await sb.from("pet_activity_log").insert({ collection_id:CURRENT_P2.id, action:"stage3p2_filled", stage:"stage3p2", actor_profile_id:ME.id, actor_username:ME.username, old_status:oldStatus, new_status:nextStatus });
@@ -533,13 +546,13 @@ function closeP2Form(){ document.getElementById("p2Form").style.display="none"; 
 async function decide(collectionId, stage, decision, note){
   if(decision==="rejected"&&!note){ alert("Rejection reason is required."); return; }
   try{
-    const { data:c, error:cErr }=await sb.from("pet_collections").select("section,cycle,status").eq("id",collectionId).single();
+    const { data:c, error:cErr }=await sb.from("pet_collections").select("*").eq("id",collectionId).single();
     if(cErr) throw new Error("Could not load collection: "+cErr.message);
     const { error: apprErr } = await sb.from("pet_approvals").insert({ collection_id:collectionId, stage, cycle:c.cycle, approver_profile_id:ME.id, approver_username:ME.username, decision, correction_note:note||null, decided_at:new Date().toISOString() });
     if(apprErr) throw new Error("Could not record your decision: "+apprErr.message);
 
     if(decision==="rejected"){
-      const newStatus=REJECT_STATUS[stage];
+      const newStatus=rejectStatusFor(stage, c);
       const { error: updErr } = await sb.from("pet_collections").update({ status:newStatus, cycle:(c.cycle||1)+1, updated_at:new Date().toISOString() }).eq("id",collectionId);
       if(updErr) throw new Error("Could not update status: "+updErr.message);
       const { error: logErr } = await sb.from("pet_activity_log").insert({ collection_id:collectionId, action:"rejected", stage, actor_profile_id:ME.id, actor_username:ME.username, old_status:c.status, new_status:newStatus, note });
@@ -547,7 +560,7 @@ async function decide(collectionId, stage, decision, note){
     } else {
       const allApproved=(ME.role==="super_admin") ? true : await checkAllApproved(collectionId,stage,c.cycle,c.section);
       if(allApproved){
-        const newStatus=stage==="stage3p2"?"completed":NEXT_STATUS[stage];
+        const newStatus=stage==="stage3p2"?"completed":nextStatusFor(stage, c);
         const { error: updErr } = await sb.from("pet_collections").update({ status:newStatus, updated_at:new Date().toISOString() }).eq("id",collectionId);
         if(updErr) throw new Error("Could not advance status: "+updErr.message);
         const { error: logErr } = await sb.from("pet_activity_log").insert({ collection_id:collectionId, action:"approved_all", stage, actor_profile_id:ME.id, actor_username:ME.username, old_status:c.status, new_status:newStatus });
