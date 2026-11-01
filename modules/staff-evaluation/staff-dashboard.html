@@ -66,6 +66,7 @@ svg{width:100%;height:auto;display:block;}
 .dtable th,.dtable td{border:1px solid var(--line);padding:6px 8px;text-align:center;white-space:nowrap;}
 .dtable th{background:var(--navy);color:#fff;font-size:11px;position:sticky;top:0;z-index:1;}
 .dtable td.left{text-align:left;}
+.dtable td.grp{text-align:left;font-weight:800;background:var(--bg);color:var(--navy);}
 .colorHigh{background:#d9ead3;color:#1a4731;}.colorMedium{background:#fce5cd;color:#1f2937;}.colorLow{background:#f4cccc;color:#1f2937;}
 </style>
 </head>
@@ -478,7 +479,7 @@ async function runManager(){
     renderManagerKpis(rows,queryCount);
     renderManagerAttendance(from,to,pool,attPool);
     renderManagerMetrics(rows,ctrlRows);
-    if(ydRes.status==="fulfilled")showYesterday("m",ydRes.value,true);else showYesterdayError("m",ydRes.reason);
+    if(ydRes.status==="fulfilled")showYesterday("m",ydRes.value);else showYesterdayError("m",ydRes.reason);
     renderManagerBests(rows);renderManagerCharts(rows);
   }catch(e){status.className="status err";status.textContent="❌ "+e.message;console.error(e);}
 }
@@ -624,31 +625,50 @@ function yesterdayIso(){const d=new Date();d.setDate(d.getDate()-1);return iso(d
 const YD_MIN_A=93;   // same %A target as My Asset Report
 const YD_COLS="date_col,shift,work_type,assets,a_double,a_single,b,c,total,target,operator_id,operator_name";
 
-/* One row per machine (per operator in the management view), same columns and formulae as My Asset Report. */
-function renderYesterday(boxId,day,rows,ctrlRows,excluded,withOperator){
-  const note=`<p style="font-size:11px;color:var(--muted);margin:-6px 0 12px;">${dmy(day)}</p>`;
-  if(!rows.length){$(boxId).innerHTML=note+"<p style='color:var(--muted);font-size:13px;margin:0;'>No production recorded yesterday.</p>";return;}
+/* One row per machine, same formulae as My Asset Report. Date, Shift and Operator are written under the
+   card title when they are the same for every row; when shift or operator varies (management view, or a
+   staff member who worked two shifts) the varying part is shown as a label row above each group instead. */
+function renderYesterday(boxId,day,rows,ctrlRows,excluded){
+  const lbl=(k,v)=>`<b>${k}:</b> <span style="color:var(--navy);font-weight:700;">${esc(v)}</span>`;
+  const info=parts=>`<p style="font-size:12px;color:var(--muted);margin:-6px 0 12px;">${parts.join(" &nbsp;·&nbsp; ")}</p>`;
+  if(!rows.length){$(boxId).innerHTML=info([lbl("Date",dmy(day))])+"<p style='color:var(--muted);font-size:13px;margin:0;'>No production recorded yesterday.</p>";return;}
+
+  const opName=r=>r.operator_name||String(r.operator_id);
+  const shifts=[...new Set(rows.map(r=>r.shift||""))];
+  const ops=[...new Set(rows.map(r=>String(r.operator_id)))];
+  const shiftVaries=shifts.length>1, opVaries=ops.length>1;
+  const head=[lbl("Date",dmy(day))];
+  if(!shiftVaries&&shifts[0])head.push(lbl("Shift",shifts[0]));
+  if(!opVaries)head.push(lbl("Operator",opName(rows[0])));
+
   const clr=v=>v>=YD_MIN_A?"colorHigh":v>=85?"colorMedium":"colorLow";   // colour %A and %P only
   const g={};
   rows.forEach(r=>{
-    const k=[r.shift||"",withOperator?String(r.operator_id):"",r.assets||"—",r.work_type||""].join("||");
+    const k=[opName(r),String(r.operator_id),r.shift||"",r.assets||"—",r.work_type||""].join("||");
     (g[k]=g[k]||[]).push(r);
   });
-  let html=note+`<div class="table-scroll"><table class="dtable"><tr><th>Date</th><th>Shift</th>${withOperator?"<th>Operator</th>":""}<th>Asset</th><th>Work Type</th><th>A</th><th>B</th><th>C</th><th>Total</th><th>Target</th><th>Down (min)</th><th>ATG</th><th>MLU</th><th>%A</th><th>%B</th><th>%C</th><th>%P</th></tr>`;
+  const COLS=14;
+  let html=info(head)+`<div class="table-scroll"><table class="dtable"><tr><th>Asset</th><th>Work Type</th><th>A</th><th>B</th><th>C</th><th>Total</th><th>Target</th><th>Down (min)</th><th>ATG</th><th>MLU</th><th>%A</th><th>%B</th><th>%C</th><th>%P</th></tr>`;
+  let lastLabel=null;
   Object.keys(g).sort().forEach(k=>{
     const rs=g[k], f=rs[0], m=computeMetrics(rs,ctrlRows,excluded);
+    const parts=[];
+    if(opVaries)parts.push("Operator: "+opName(f));
+    if(shiftVaries)parts.push("Shift: "+(f.shift||"—"));
+    const label=parts.join("  ·  ");
+    if(label&&label!==lastLabel)html+=`<tr><td class="grp" colspan="${COLS}">${esc(label)}</td></tr>`;
+    lastLabel=label;
     const A=Math.round(m.A), B=Math.round(m.B), C=Math.round(m.C), T=Math.round(m.total);
     const pA=T?Math.round(A/T*100):0, pB=T?Math.round(B/T*100):0, pC=T?Math.round(C/T*100):0;
     const pP=m.ATG?Math.round(T/m.ATG*100):0;
-    html+=`<tr><td>${dmy(f.date_col)}</td><td>${esc(f.shift||"")}</td>${withOperator?`<td class="left">${esc(f.operator_name||f.operator_id)}</td>`:""}`+
-      `<td class="left">${esc(f.assets||"—")}</td><td>${esc(f.work_type||"Normal")}</td>`+
+    html+=`<tr><td class="left">${esc(f.assets||"—")}</td><td>${esc(f.work_type||"Normal")}</td>`+
       `<td>${A}</td><td>${B}</td><td>${C}</td><td>${T}</td><td>${Math.round(m.target)}</td><td>${Math.round(m.downtime)}</td><td>${m.ATG}</td><td>${m.MLU}</td>`+
       `<td class="${clr(pA)}">${pA}%</td><td>${pB}%</td><td>${pC}%</td><td class="${clr(pP)}">${pP}%</td></tr>`;
   });
   $(boxId).innerHTML=html+`</table></div>`;
 }
-function showYesterday(prefix,yd,withOperator){
-  renderYesterday(prefix+"_yesterday",yd.day,yd.rows,yd.ctrl,prefix==="m"?MGR.excluded:PER.excluded,withOperator);
+function showYesterday(prefix,yd){
+  renderYesterday(prefix+"_yesterday",yd.day,yd.rows,yd.ctrl,prefix==="m"?MGR.excluded:PER.excluded);
 }
 function showYesterdayError(prefix,e){
   console.error("Yesterday production:",e);
@@ -741,7 +761,7 @@ async function runPersonal(){
     renderAttendance(from,to,myRows,allRows);
     renderMetrics(mine,ctrlRows);
     renderPersonalCharts(mine);
-    try{showYesterday("p",await ydP,false);}catch(e){showYesterdayError("p",e);}
+    try{showYesterday("p",await ydP);}catch(e){showYesterdayError("p",e);}
   }catch(e){status.className="status err";status.textContent="❌ "+e.message;console.error(e);}
 }
 
