@@ -19,19 +19,33 @@
   #connStatus{font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);}
   h2.pg{margin:0 0 4px;color:var(--heading);}
   .sub{font-size:13px;color:var(--muted);margin:0 0 14px;line-height:1.6;}
-  .pill{display:inline-block;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:700;margin-left:6px;}
+  .pill{display:inline-block;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:700;white-space:nowrap;}
   .p-ok{background:#dcfce7;color:#166534;} .p-bad{background:#fee2e2;color:#991b1b;} .p-wait{background:#fef3c7;color:#92400e;} .p-info{background:#dbeafe;color:#1e40af;}
   .btn-sm{padding:6px 12px;font-size:12px;width:auto;}
-  .batch-card{border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:12px;background:var(--card);}
+  .batch-card{border:1px solid var(--line);border-radius:10px;margin-bottom:8px;background:var(--card);overflow:hidden;}
+  .batch-card.open{border-color:var(--line-2);box-shadow:0 1px 4px rgba(0,0,0,.06);}
+  .batch-card .bh{display:flex;align-items:center;gap:10px;padding:10px 14px;cursor:pointer;user-select:none;}
+  .batch-card .bh:hover{background:var(--bg);}
+  .batch-card .bh:focus-visible{outline:2px solid var(--accent);outline-offset:-2px;}
+  .batch-card .chev{flex:0 0 auto;width:14px;font-size:12px;color:var(--muted);transition:transform .15s;}
+  .batch-card.open .chev{transform:rotate(90deg);}
+  .batch-card .bt{flex:1 1 auto;min-width:0;}
+  .batch-card .bt b{font-size:14px;color:var(--heading);}
+  .batch-card .meta{font-size:12px;color:var(--muted);margin-top:2px;line-height:1.5;}
+  .batch-card .br{flex:0 0 auto;display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:6px;text-align:right;}
+  .batch-card .prog{font-size:11.5px;font-weight:700;color:var(--muted);white-space:nowrap;}
+  .batch-card .bb{padding:4px 14px 12px 38px;border-top:1px solid var(--line);}
+  .batch-card .msg:empty{display:none;}
+  .batch-card > .msg{padding:0 14px 8px 38px;margin-top:0;}
+  .listbar{display:flex;justify-content:flex-end;gap:8px;margin:-6px 0 8px;}
+  .linkbtn{background:none;border:none;padding:0;color:var(--accent);font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit;width:auto;}
+  @media (max-width:640px){ .batch-card .bh{flex-wrap:wrap;} .batch-card .br{width:100%;justify-content:flex-start;padding-left:24px;} .batch-card .bb,.batch-card > .msg{padding-left:14px;} }
   .bagchips{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 6px;}
   .bagchip{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:3px 8px;font-size:12px;font-weight:700;}
   .toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:14px 0;}
   .fbtn{padding:7px 14px;border:1px solid var(--line-2);border-radius:20px;background:var(--card);color:var(--heading);font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit;width:auto;}
   .fbtn.on{background:var(--accent);color:var(--logo-fg);border-color:var(--accent);}
   .search{flex:1 1 220px;min-width:200px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);}
-  .batch-card .bh{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:6px;}
-  .batch-card .bh b{font-size:15px;color:var(--heading);}
-  .batch-card .meta{font-size:12.5px;color:var(--muted);margin:4px 0 8px;line-height:1.6;}
   table.bg{width:100%;border-collapse:collapse;margin:6px 0 8px;font-size:13px;}
   table.bg th{text-align:left;font-size:11px;color:var(--muted);padding:5px 8px;border-bottom:1px solid var(--line);}
   table.bg td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:middle;}
@@ -62,7 +76,7 @@
 
   <div class="card-panel">
     <h2 class="pg">Stage 10 &mdash; Odoo Packaging</h2>
-    <p class="sub">Every approved batch appears here by itself. Generate and print its labels, then, once the bags are packed in Odoo, press <b>Bagged in Odoo</b>, enter the Odoo package number of each bag and submit.</p>
+    <p class="sub">Every approved batch appears here by itself. Generate and print its labels, then, once the bags are packed in Odoo, open the batch (click its title), press <b>Bagged in Odoo</b>, enter the Odoo package number of each bag and submit.</p>
     <div id="dutyNote" class="sub"></div>
     <div class="toolbar">
       <button class="fbtn" id="f_all" onclick="setFilter('all')">All</button>
@@ -71,6 +85,7 @@
       <input class="search" id="searchBox" type="search" placeholder="Search form number, agent, pack reference or Odoo package number" oninput="onSearch(this.value)">
       <button class="btn-ghost btn-sm" onclick="refreshAll()">Refresh</button>
     </div>
+    <div class="listbar" id="listbar"></div>
     <div id="list"></div>
     <div id="more" style="text-align:center;margin-top:10px;"></div>
   </div>
@@ -85,6 +100,7 @@ let ROWS = [];                      // [{ b: batch, c: collection, prodId, bags:
 let RUN_ALL = {};                   // collection id -> every batch of that run (id, batch_no), so the run-level PDF link follows the latest batch
 let FILTER = "waiting", SEARCH = "", SHOWN = 50;
 let EDITING = new Set(), DRAFT = {}, NOTICE = {};
+let OPEN = new Set();               // batches whose bag list is showing (click the batch title to open or close)
 let PINNED = new Set();             // batches changed in this visit stay on screen (with their message) until the filter is changed or the page refreshed
 const AGE_WARN = 3;                 // days an approved batch can wait before it is flagged (same limit as the PET Dashboard)
 const NUM_RE = /^[A-Z0-9][A-Z0-9._\/-]{1,39}$/;
@@ -513,7 +529,6 @@ function actionsHtml(r){
   if(OPEN_LABELS.has(id)) parts.push(`<button class="btn-sm" onclick="printLabels10(${id})">🖨️ Print labels</button>`);
   if(r.b.labels_pdf_url){
     parts.push(`<a href="${esc(r.b.labels_pdf_url)}" target="_blank" style="font-size:12.5px;align-self:center;">Download labels PDF</a>`);
-    parts.push(`<button class="btn-ghost btn-sm" title="Replace the saved PDF with one drawn in the current label design" onclick="rebuildPdf10(${id},true)">Rebuild PDF (current design)</button>`);
   } else {
     parts.push(`<button class="btn-ghost btn-sm" onclick="rebuildPdf10(${id})">Create labels PDF</button>`);
   }
@@ -529,26 +544,52 @@ function actionsHtml(r){
   return parts.join(" ");
 }
 
+function isOpen(id){ return OPEN.has(id) || EDITING.has(id) || OPEN_LABELS.has(id); }
+function toggleCard(id){
+  if(isOpen(id)){
+    if(EDITING.has(id)) return flash(id, "Submit or cancel the package numbers before closing this batch.", "var(--bad)");
+    OPEN.delete(id); OPEN_LABELS.delete(id);
+  } else OPEN.add(id);
+  renderBatchList();
+}
+function cardKey(e, id){ if(e.key === "Enter" || e.key === " "){ e.preventDefault(); toggleCard(id); } }
+function setAllOpen(on){
+  ROWS.filter(matches).slice(0, SHOWN).forEach(r => {
+    if(on) OPEN.add(r.b.id);
+    else if(!EDITING.has(r.b.id)){ OPEN.delete(r.b.id); OPEN_LABELS.delete(r.b.id); }
+  });
+  renderBatchList();
+}
+
 function cardHtml(r){
-  const id = r.b.id, age = ageDays(r.b.decision_at);
+  const id = r.b.id, age = ageDays(r.b.decision_at), open = isOpen(id);
   const wait = !isPacked(r) && age != null && age > AGE_WARN;
   const total = r.bags.reduce((s, g, i) => s + num(bagWeightFor(r.b, i, g)), 0);
+  const nBags = r.b.bag_count || r.bags.length;
   const bits = [
     esc(r.c.agent_name || "—") + (r.c.agent_code ? " (" + esc(r.c.agent_code) + ")" : ""),
     esc(r.c.section || "—"),
     "Approved " + fmtD(r.b.decision_at),
-    (r.b.bag_count || r.bags.length) + " bag" + ((r.b.bag_count || r.bags.length) === 1 ? "" : "s") + (r.bags.length ? " · " + fmt(total) + " kg" : "")
+    nBags + " bag" + (nBags === 1 ? "" : "s") + (r.bags.length ? " · " + fmt(total) + " kg" : "")
   ];
-  const packedInfo = isPacked(r) ? ` <span class="quiet">· packed ${fmtD(r.b.odoo_packed_at)}${r.b.odoo_packed_by_name ? " by " + esc(r.b.odoo_packed_by_name) : ""}</span>` : "";
-  const waitChip = wait ? ` <span class="pill p-bad">Waiting ${age} days, over the ${AGE_WARN} day limit</span>` : "";
+  const packedInfo = isPacked(r) ? ` · packed ${fmtD(r.b.odoo_packed_at)}${r.b.odoo_packed_by_name ? " by " + esc(r.b.odoo_packed_by_name) : ""}` : "";
+  const waitChip = wait ? `<span class="pill p-bad" title="Over the ${AGE_WARN} day limit">Waiting ${age} days</span>` : "";
+  const numbered = r.bags.filter(g => g.odoo_package_no).length;
+  const prog = r.bags.length ? `<span class="prog">${numbered}/${r.bags.length} Odoo numbers</span>` : `<span class="prog">No labels yet</span>`;
   const n = NOTICE[id];
-  return `<div class="batch-card" id="card_${id}">
-    <div class="bh"><b>${esc(r.c.form_number || "—")} &middot; Batch ${esc(r.b.batch_no)} &middot; Grade ${esc(r.b.grade || "—")}</b><span>${statusPill(r)}${waitChip}</span></div>
-    <div class="meta">${bits.join(" &middot; ")}${packedInfo}</div>
-    ${bagTable(r)}
-    <div class="actions">${actionsHtml(r)}</div>
+  return `<div class="batch-card${open ? " open" : ""}" id="card_${id}">
+    <div class="bh" role="button" tabindex="0" aria-expanded="${open}" onclick="toggleCard(${id})" onkeydown="cardKey(event,${id})" title="${open ? "Hide the bags" : "Show the bags"}">
+      <span class="chev">&#9654;</span>
+      <div class="bt"><b>${esc(r.c.form_number || "—")} &middot; Batch ${esc(r.b.batch_no)} &middot; Grade ${esc(r.b.grade || "—")}</b>
+        <div class="meta">${bits.join(" &middot; ")}${packedInfo}</div></div>
+      <div class="br">${prog}${waitChip}${statusPill(r)}</div>
+    </div>
+    ${open ? `<div class="bb">
+      ${bagTable(r)}
+      <div class="actions">${actionsHtml(r)}</div>
+      ${OPEN_LABELS.has(id) ? `<div class="qr-grid" id="qr_${id}"></div>` : ""}
+    </div>` : ""}
     <div class="msg" id="bs_${id}"${n ? ` style="color:${n.color}"` : ""}>${n ? n.msg : ""}</div>
-    ${OPEN_LABELS.has(id) ? `<div class="qr-grid" id="qr_${id}"></div>` : ""}
   </div>`;
 }
 
@@ -562,8 +603,10 @@ function renderBatchList(){
   if(!vis.length){
     list.innerHTML = `<div class="empty">${nAll ? "Nothing matches this filter." : "No batch has been approved yet. Approved batches appear here by themselves."}</div>`;
     document.getElementById("more").innerHTML = "";
+    document.getElementById("listbar").innerHTML = "";
     return;
   }
+  document.getElementById("listbar").innerHTML = `<button class="linkbtn" onclick="setAllOpen(true)">Open all</button><span class="quiet">|</span><button class="linkbtn" onclick="setAllOpen(false)">Close all</button>`;
   list.innerHTML = vis.slice(0, SHOWN).map(cardHtml).join("");
   document.getElementById("more").innerHTML = vis.length > SHOWN ? `<button class="btn-ghost btn-sm" onclick="showMore()">Show ${Math.min(50, vis.length - SHOWN)} more of ${vis.length - SHOWN} remaining</button>` : "";
   vis.slice(0, SHOWN).forEach(r => { if(OPEN_LABELS.has(r.b.id)){ useRun(r.b.id); buildGrid(r.b); } });
