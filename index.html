@@ -91,6 +91,7 @@
 .quick-links .ql-nav{flex:0 0 auto;width:30px;height:30px;border-radius:50%;border:1px solid var(--line-2);background:var(--bg);color:var(--heading);font-size:17px;line-height:1;cursor:pointer;font-family:inherit;}
 .quick-links .ql-nav:hover{border-color:var(--accent);}
 .ql-menu{position:fixed;z-index:60;min-width:220px;max-width:300px;background:var(--card);border:1px solid var(--line-2);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.18);padding:6px;display:flex;flex-direction:column;}
+.ql-menu-head{font-size:10.5px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);padding:8px 12px 4px;}
 .ql-menu-item{text-align:left;background:none;border:0;border-radius:8px;padding:10px 12px;min-height:40px;font-size:13px;font-weight:600;color:var(--heading);cursor:pointer;font-family:inherit;}
 .ql-menu-item:hover{background:var(--bg);}
 .ql-menu-item.active{background:var(--accent);color:var(--logo-fg);}
@@ -536,12 +537,13 @@
     { n:6, path:"pet/qc-stage",            short:"Quality",    full:"Quality Control" },
     { n:7, path:"pet/production-approval", short:"Approval",   full:"Production Approval" },
     { n:8, path:"pet/production-stage",    short:"Production", full:"Production" },
-    { n:9, path:"pet/lab-testing",         short:"Lab",        full:"Lab Testing" }
+    { n:9, path:"pet/lab-testing",         short:"Lab",        full:"Lab Testing" },
+    { n:10, path:"pet/odoo-packaging",     short:"Odoo",       full:"Odoo Packaging" }
   ];
   const PET_GROUPS = [
-    { key:"monitor", label:"Monitor and reports", paths:["pet/dashboard","pet/collections","pet/production-report","pet/activity-log","pet/lot-map","pet/flake-lots","pet/flake-scan-upload"] },
-    { key:"export",  label:"Export and external", collapsed:true, paths:["pet/export-delivery","pet/external-material-intake","pet/external-material-monitor","pet/kano-material-intake","pet/kano-lot-monitor"] },
-    { key:"setup",   label:"Setup",               collapsed:true, paths:["pet/manage-agents","pet/manage-assignments","pet/manage-companies","pet/manage-export-assignments","pet/manage-export-clients","pet/manage-lots","pet/manage-qr-password"] }
+    { key:"monitor", label:"Monitor and reports", short:"Reports", paths:["pet/dashboard","pet/collections","pet/production-report","pet/activity-log","pet/lot-map","pet/flake-lots","pet/flake-scan-upload"] },
+    { key:"export",  label:"Export and external", short:"Export", collapsed:true, paths:["pet/export-delivery","pet/external-material-intake","pet/external-material-monitor","pet/kano-material-intake","pet/kano-lot-monitor"] },
+    { key:"setup",   label:"Setup",               short:"Setup", collapsed:true, paths:["pet/manage-agents","pet/manage-assignments","pet/manage-companies","pet/manage-export-assignments","pet/manage-export-clients","pet/manage-lots","pet/manage-qr-password"] }
   ];
   function petEsc(t){ return String(t).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
   function petOpen(path, label){
@@ -555,14 +557,14 @@
     const take = path => { const p = byPath[path]; if(p) used.add(path); return p || null; };
     const home = take(PET_HOME);
     const stages = PET_STAGES.map(s => Object.assign({}, s, { page: take(s.path) }));
-    const groups = PET_GROUPS.map(g => ({ key:g.key, label:g.label, collapsed:!!g.collapsed, pages: g.paths.map(take).filter(Boolean) }));
+    const groups = PET_GROUPS.map(g => ({ key:g.key, label:g.label, short:g.short, collapsed:!!g.collapsed, pages: g.paths.map(take).filter(Boolean) }));
     const other = pages.filter(p => !used.has(p.module_path));
     return { home, stages, groups, other };
   }
 
   // What is waiting FOR THIS PERSON at each stage: collections to fill (or send back for correction) in the branches where they
   // are a filler for that stage, plus collections to review in the branches where they are an approver. A Super Admin sees every
-  // branch. Stages 1, 8 and 9 show no number (initiating and production are not queue based, lab work is counted per batch).
+  // branch. Stages 1, 8 and 9 show no number (initiating and production are not queue based, lab work is counted per batch). Stage 10 is counted separately below.
   // Same status lists the stage pages use for their own queues. Cached for 20 seconds. If it cannot be read, no number shows.
   const PET_COUNT_RULES = [
     { n:2, code:"stage2",   fill:["submitted","rejected_to_stage2"],                       appr:["stage2_approval"] },
@@ -604,6 +606,33 @@
           if(!isNaN(t) && (o.oldest === null || t < o.oldest)) o.oldest = t;
         });
       });
+      // Stage 10: approved batches still waiting to be packed in Odoo, in the branches where this person is assigned to Stage 10 (Super Admin: all).
+      // Kept apart so that, if Stage 10 is not set up yet, only its own number is missing and the other stages still count.
+      try{
+        const [bt, f10] = await Promise.all([
+          sb.from("pet_lab_batches").select("id,collection_id,decision_at").eq("batch_status", "approved").is("odoo_packed_at", null).limit(5000),
+          isSuper ? { data: [] } : sb.from("pet_stage_fillers").select("section").eq("profile_id", ME.id).eq("stage", "stage10")
+        ]);
+        if(bt.error) throw bt.error;
+        if(f10.error) throw f10.error;
+        const mySecs = isSuper ? null : (f10.data || []).map(r => r.section);
+        const o10 = { waiting:0, returned:0, oldest:null };
+        if((bt.data || []).length && (isSuper || mySecs.length)){
+          const ids = [...new Set(bt.data.map(b => b.collection_id))], secOf = {};
+          for(let i = 0; i < ids.length; i += 150){
+            const r = await sb.from("pet_collections").select("id,section").in("id", ids.slice(i, i + 150));
+            if(r.error) throw r.error;
+            (r.data || []).forEach(c => { secOf[c.id] = c.section; });
+          }
+          bt.data.forEach(b => {
+            if(mySecs && mySecs.indexOf(secOf[b.collection_id]) < 0) return;
+            o10.waiting++;
+            const t = b.decision_at ? Date.parse(b.decision_at) : NaN;
+            if(!isNaN(t) && (o10.oldest === null || t < o10.oldest)) o10.oldest = t;
+          });
+        }
+        out[10] = o10;
+      }catch(e){ /* Stage 10 is not set up yet: its pill simply shows no number */ }
       PET_COUNTS = out; PET_COUNTS_AT = Date.now();
     }catch(e){ PET_COUNTS = null; }
     return PET_COUNTS;
@@ -635,7 +664,8 @@
     const list = key === "other" ? S.other : ((S.groups.find(g => g.key === key) || { pages: [] }).pages);
     const m = document.createElement("div");
     m.id = "qlMenu"; m.className = "ql-menu"; m.setAttribute("data-key", key); m.setAttribute("role", "menu");
-    m.innerHTML = list.map(p => '<button role="menuitem" class="ql-menu-item' + (p.module_path === CURRENT_PAGE ? " active" : "") + '" onclick="petCloseGroupMenu();' + petEsc(petOpen(p.module_path, p.name)) + '">' + petEsc(p.name) + '</button>').join("");
+    const full = key === "other" ? "Other" : ((PET_GROUPS.find(g => g.key === key) || {}).label || "");
+    m.innerHTML = '<div class="ql-menu-head">' + petEsc(full) + '</div>' + list.map(p => '<button role="menuitem" class="ql-menu-item' + (p.module_path === CURRENT_PAGE ? " active" : "") + '" onclick="petCloseGroupMenu();' + petEsc(petOpen(p.module_path, p.name)) + '">' + petEsc(p.name) + '</button>').join("");
     document.body.appendChild(m);
     const r = btn.getBoundingClientRect();
     m.style.top = (r.bottom + 6) + "px";
@@ -667,13 +697,13 @@
         }
       });
     }
-    const groups = S.groups.filter(g => g.pages.length).map(g => ({ key:g.key, label:g.label, pages:g.pages }));
-    if(S.other.length) groups.push({ key:"other", label:"Other", pages:S.other });
+    const groups = S.groups.filter(g => g.pages.length).map(g => ({ key:g.key, label:g.label, short:g.short, pages:g.pages }));
+    if(S.other.length) groups.push({ key:"other", label:"Other", short:"Other", pages:S.other });
     if(groups.length){
       h += '<span class="ql-sep" aria-hidden="true"></span>';
       groups.forEach(g => {
         const active = g.pages.some(p => p.module_path === cur);
-        h += '<button class="ql-item ql-group' + (active ? " active" : "") + '" aria-haspopup="true" onclick="petToggleGroupMenu(this,\'' + g.key + '\')">' + petEsc(g.label) + ' <span aria-hidden="true">&#9662;</span></button>';
+        h += '<button class="ql-item ql-group' + (active ? " active" : "") + '" aria-haspopup="true" title="' + petEsc(g.label) + '" aria-label="' + petEsc(g.label) + '" onclick="petToggleGroupMenu(this,\'' + g.key + '\')">' + petEsc(g.short) + ' <span aria-hidden="true">&#9662;</span></button>';
       });
     }
     bar.innerHTML = h;
