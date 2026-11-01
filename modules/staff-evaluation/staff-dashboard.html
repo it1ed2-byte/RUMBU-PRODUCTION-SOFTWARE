@@ -61,6 +61,12 @@ svg{width:100%;height:auto;display:block;}
 .staff-badge{background:color-mix(in srgb,var(--blue) 12%,var(--bg));border:1px solid var(--line);border-radius:20px;padding:4px 12px;font-size:12px;font-weight:700;color:var(--navy);display:inline-block;}
 .rank-badge{display:inline-flex;align-items:center;gap:8px;background:var(--bg);border:1.5px solid var(--line);border-radius:24px;padding:8px 16px;font-size:13px;font-weight:700;color:var(--navy);margin-bottom:14px;}
 .rank-badge .rank-num{font-size:22px;font-weight:900;color:var(--blue);}
+.table-scroll{overflow:auto;max-height:520px;}
+.dtable{width:100%;border-collapse:collapse;font-size:12px;}
+.dtable th,.dtable td{border:1px solid var(--line);padding:6px 8px;text-align:center;white-space:nowrap;}
+.dtable th{background:var(--navy);color:#fff;font-size:11px;position:sticky;top:0;z-index:1;}
+.dtable td.left{text-align:left;}
+.colorHigh{background:#d9ead3;color:#1a4731;}.colorMedium{background:#fce5cd;color:#1f2937;}.colorLow{background:#f4cccc;color:#1f2937;}
 </style>
 </head>
 <body>
@@ -110,6 +116,11 @@ svg{width:100%;height:auto;display:block;}
       <h3>⚙ Machine and Efficiency Metrics</h3>
       <p id="m_metNote" style="font-size:11px;color:var(--muted);margin:-6px 0 12px;"></p>
       <div class="kpis" id="m_metricsKpis"></div>
+    </div>
+
+    <div class="card">
+      <h3>Yesterday Production</h3>
+      <div id="m_yesterday"><p style="color:var(--muted);font-size:13px;margin:0;">Loading…</p></div>
     </div>
 
     <div class="card">
@@ -163,6 +174,11 @@ svg{width:100%;height:auto;display:block;}
     <div class="card">
       <h3>⚙ Machine and Efficiency Metrics</h3>
       <div class="kpis" id="p_metricsKpis"></div>
+    </div>
+
+    <div class="card">
+      <h3>Yesterday Production</h3>
+      <div id="p_yesterday"><p style="color:var(--muted);font-size:13px;margin:0;">Loading…</p></div>
     </div>
 
     <div class="grid2">
@@ -451,7 +467,7 @@ async function runManager(){
     status.className="status";status.textContent="Loading downtime and query data...";
     const opIds=[...new Set(rows.map(r=>String(r.operator_id)))];
     const assets=[...new Set(rows.map(r=>r.assets).filter(Boolean))];
-    const [ctrlRes,qRes]=await Promise.allSettled([fetchControlRows(from,to,assets),countQueries(opIds)]);
+    const [ctrlRes,qRes,ydRes]=await Promise.allSettled([fetchControlRows(from,to,assets),countQueries(opIds),loadYesterdayManager(secClause,shift,matchesQ,q)]);
     const ctrlRows=ctrlRes.status==="fulfilled"?ctrlRes.value:null;
     const queryCount=qRes.status==="fulfilled"?qRes.value:null;
     if(ctrlRes.status==="rejected")console.error("control fetch:",ctrlRes.reason);
@@ -462,6 +478,7 @@ async function runManager(){
     renderManagerKpis(rows,queryCount);
     renderManagerAttendance(from,to,pool,attPool);
     renderManagerMetrics(rows,ctrlRows);
+    if(ydRes.status==="fulfilled")showYesterday("m",ydRes.value,true);else showYesterdayError("m",ydRes.reason);
     renderManagerBests(rows);renderManagerCharts(rows);
   }catch(e){status.className="status err";status.textContent="❌ "+e.message;console.error(e);}
 }
@@ -599,6 +616,56 @@ function renderManagerCharts(rows){
     "#2E75B6","#1F3864","Total mats per day");
 }
 
+/* ═════════════ YESTERDAY PRODUCTION (shared by both views) ═════════════
+   Always the previous calendar day, whatever date range is chosen. Follows the other filters. */
+const MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function dmy(s){const p=String(s).split("-");return p.length===3?(p[2]+" "+MONTHS[Number(p[1])-1]+" "+p[0]):String(s);}
+function yesterdayIso(){const d=new Date();d.setDate(d.getDate()-1);return iso(d);}
+const YD_MIN_A=93;   // same %A target as My Asset Report
+const YD_COLS="date_col,shift,work_type,assets,a_double,a_single,b,c,total,target,operator_id,operator_name";
+
+/* One row per machine (per operator in the management view), same columns and formulae as My Asset Report. */
+function renderYesterday(boxId,day,rows,ctrlRows,excluded,withOperator){
+  const note=`<p style="font-size:11px;color:var(--muted);margin:-6px 0 12px;">${dmy(day)}</p>`;
+  if(!rows.length){$(boxId).innerHTML=note+"<p style='color:var(--muted);font-size:13px;margin:0;'>No production recorded yesterday.</p>";return;}
+  const clr=v=>v>=YD_MIN_A?"colorHigh":v>=85?"colorMedium":"colorLow";   // colour %A and %P only
+  const g={};
+  rows.forEach(r=>{
+    const k=[r.shift||"",withOperator?String(r.operator_id):"",r.assets||"—",r.work_type||""].join("||");
+    (g[k]=g[k]||[]).push(r);
+  });
+  let html=note+`<div class="table-scroll"><table class="dtable"><tr><th>Date</th><th>Shift</th>${withOperator?"<th>Operator</th>":""}<th>Asset</th><th>Work Type</th><th>A</th><th>B</th><th>C</th><th>Total</th><th>Target</th><th>Down (min)</th><th>ATG</th><th>MLU</th><th>%A</th><th>%B</th><th>%C</th><th>%P</th></tr>`;
+  Object.keys(g).sort().forEach(k=>{
+    const rs=g[k], f=rs[0], m=computeMetrics(rs,ctrlRows,excluded);
+    const A=Math.round(m.A), B=Math.round(m.B), C=Math.round(m.C), T=Math.round(m.total);
+    const pA=T?Math.round(A/T*100):0, pB=T?Math.round(B/T*100):0, pC=T?Math.round(C/T*100):0;
+    const pP=m.ATG?Math.round(T/m.ATG*100):0;
+    html+=`<tr><td>${dmy(f.date_col)}</td><td>${esc(f.shift||"")}</td>${withOperator?`<td class="left">${esc(f.operator_name||f.operator_id)}</td>`:""}`+
+      `<td class="left">${esc(f.assets||"—")}</td><td>${esc(f.work_type||"Normal")}</td>`+
+      `<td>${A}</td><td>${B}</td><td>${C}</td><td>${T}</td><td>${Math.round(m.target)}</td><td>${Math.round(m.downtime)}</td><td>${m.ATG}</td><td>${m.MLU}</td>`+
+      `<td class="${clr(pA)}">${pA}%</td><td>${pB}%</td><td>${pC}%</td><td class="${clr(pP)}">${pP}%</td></tr>`;
+  });
+  $(boxId).innerHTML=html+`</table></div>`;
+}
+function showYesterday(prefix,yd,withOperator){
+  renderYesterday(prefix+"_yesterday",yd.day,yd.rows,yd.ctrl,prefix==="m"?MGR.excluded:PER.excluded,withOperator);
+}
+function showYesterdayError(prefix,e){
+  console.error("Yesterday production:",e);
+  $(prefix+"_yesterday").innerHTML="<p style='color:var(--red);font-size:13px;margin:0;'>Yesterday's production could not be loaded. Refresh to try again.</p>";
+}
+
+async function loadYesterdayManager(secClause,shift,matchesQ,q){
+  const day=yesterdayIso();
+  let rows=await fetchPaged(MW_TABLE,YD_COLS+",section","&date_col=eq."+day+secClause,"");
+  rows=rows.filter(r=>MGR.empSet.has(String(r.operator_id)));
+  if(shift!=="All")rows=rows.filter(r=>r.shift===shift);
+  if(q)rows=rows.filter(matchesQ);
+  const assets=[...new Set(rows.map(r=>r.assets).filter(Boolean))];
+  const ctrl=await fetchControlRows(day,day,assets);
+  return {day,rows,ctrl};
+}
+
 /* ═════════════════════════ PERSONAL VIEW ═════════════════════════ */
 const PER={empId:null,excluded:new Set()};
 
@@ -641,6 +708,7 @@ async function runPersonal(){
   status.className="status";status.textContent="Loading production data...";
   try{
     const dateClause="&date_col=gte."+from+"&date_col=lte."+to;
+    const ydP=loadYesterdayPersonal(shift);ydP.catch(()=>{});   // yesterday, independent of the date range
     // Start the slow peer query and the query-count lookup straight away...
     const myP=fetchPaged(MW_TABLE,"date_col,shift,work_type,mat_type,assets,shed,a_double,a_single,b,c,total,target,operator_id,operator_name",
         dateClause+"&operator_id=eq."+encodeURIComponent(PER.empId),"&order=date_col.asc");
@@ -673,7 +741,17 @@ async function runPersonal(){
     renderAttendance(from,to,myRows,allRows);
     renderMetrics(mine,ctrlRows);
     renderPersonalCharts(mine);
+    try{showYesterday("p",await ydP,false);}catch(e){showYesterdayError("p",e);}
   }catch(e){status.className="status err";status.textContent="❌ "+e.message;console.error(e);}
+}
+
+async function loadYesterdayPersonal(shift){
+  const day=yesterdayIso();
+  let rows=await fetchPaged(MW_TABLE,YD_COLS,"&date_col=eq."+day+"&operator_id=eq."+encodeURIComponent(PER.empId),"");
+  if(shift!=="All")rows=rows.filter(r=>r.shift===shift);
+  const assets=[...new Set(rows.map(r=>r.assets).filter(Boolean))];
+  const ctrl=await fetchControlRows(day,day,assets);
+  return {day,rows,ctrl};
 }
 
 function renderPeerRank(peers){
