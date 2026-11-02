@@ -69,7 +69,11 @@
       </div>
       <div id="branchFilterWrap">
         <label>Branch</label>
-        <select id="branchFilter"><option value="">All (my scope)</option></select>
+        <select id="branchFilter" onchange="onBranchChange()"><option value="">All (my scope)</option></select>
+      </div>
+      <div id="typeFilterWrap">
+        <label>Device type</label>
+        <select id="typeFilter"><option value="">All types</option></select>
       </div>
       <div id="statusFilterWrap" style="display:none;">
         <label>Status</label>
@@ -78,6 +82,7 @@
       <div style="flex:0 0 auto;"><button onclick="run()">Run Report</button></div>
       <div style="flex:0 0 auto;"><button class="print" onclick="downloadPdf()">Download PDF</button></div>
     </div>
+    <div class="hint" id="typeHint"></div>
     <div class="row" style="margin-top:4px;">
       <div>
         <label>Filter by date</label>
@@ -210,6 +215,7 @@ async function init(){
     document.getElementById("appArea").style.display = "block";
     fillDateBasis();
     await loadRef();
+    await loadTypes();
   }catch(e){
     status.style.color = "#c0392b"; status.textContent = "❌ " + e.message; console.error(e);
   }
@@ -244,6 +250,63 @@ function scope(q){
   return q;
 }
 
+// ---- Device type filter ----
+// The Type list shows only the device types that really exist in the branch chosen above (or in your whole scope when
+// no branch is chosen), so every choice gives a report with something in it. It is read again whenever the branch changes.
+let typeLoadToken = 0;
+function onBranchChange(){ loadTypes(); }
+async function loadTypes(){
+  const my = ++typeLoadToken;
+  const sel = document.getElementById("typeFilter"), hint = document.getElementById("typeHint");
+  const prev = sel.value;
+  const seen = {};
+  try{
+    for(let from = 0; ; from += 1000){      // Supabase returns at most 1000 rows per request, so read page by page
+      const { data, error } = await scope(sb.from("it_devices").select("type")).order("id").range(from, from + 999);
+      if(error) throw error;
+      (data||[]).forEach(d => { if(d.type && String(d.type).trim()) seen[d.type] = true; });
+      if(!data || data.length < 1000) break;
+    }
+  }catch(e){
+    if(my === typeLoadToken) hint.textContent = "Could not load the device types (" + e.message + "). Reports still run for all types.";
+    return;
+  }
+  if(my !== typeLoadToken) return;           // a newer branch choice has taken over
+  const types = Object.keys(seen).sort((a,b)=>a.localeCompare(b));
+  sel.innerHTML = '<option value="">All types</option>' + types.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join("");
+  if(prev && seen[prev]){ sel.value = prev; hint.textContent = ""; }
+  else{
+    sel.value = "";
+    hint.textContent = prev ? ("There is no \"" + prev + "\" device in this selection, so the type was reset to All types.") : "";
+  }
+}
+// The records behind the other reports (assignments, repairs, maintenance, movement, disposals) store the device they
+// belong to but not its type, so a device type is applied through the devices of that type.
+async function deviceIdsOfType(typ){
+  let ids = [];
+  for(let from = 0; ; from += 1000){
+    const { data, error } = await sb.from("it_devices").select("id").eq("type", typ).order("id").range(from, from + 999);
+    if(error) throw error;
+    ids = ids.concat((data||[]).map(d => d.id));
+    if(!data || data.length < 1000) break;
+  }
+  return ids;
+}
+// Runs one report query. With no device type chosen (typeIds is null) it is exactly the single query it always was.
+// With a type, the records are read for those devices 100 at a time, so the web address never gets too long.
+// build() must return a fresh query each time it is called.
+async function fetchRecords(build, typeIds, newestFirstBy){
+  if(typeIds === null) return await build();
+  let all = [], chunks = 0;
+  for(let i = 0; i < typeIds.length; i += 100){
+    const { data, error } = await build().in("device_id", typeIds.slice(i, i + 100));
+    if(error) return { data: null, error };
+    all = all.concat(data || []); chunks++;
+  }
+  if(newestFirstBy && chunks > 1) all.sort((a,b)=>{ const x = String(a[newestFirstBy]||""), y = String(b[newestFirstBy]||""); return x < y ? 1 : x > y ? -1 : 0; });
+  return { data: all, error: null };
+}
+
 async function run(){
   const status = document.getElementById("status");
   status.className="status"; status.textContent="Running...";
@@ -251,12 +314,16 @@ async function run(){
   const from = gv("dateFrom"), to = gv("dateTo"), hasRange = !!(from || to);
   if(from && to && from > to){ status.className="status err"; status.textContent="❌ The From date is after the To date."; return; }
   const basis = gv("dateBasis"), basisLabel = ((DATE_BASES[r]||[]).find(o => o[0] === basis) || [])[1] || "";
+  const typ = gv("typeFilter");
+  const isDeviceReport = (r==="full_register" || r==="by_status" || r==="by_branch" || r==="by_department");
   try{
     let headers=[], rows=[], title="", recs=[], addBasisCol=false, statusText="";
+    const typeIds = (typ && !isDeviceReport) ? await deviceIdsOfType(typ) : null;   // null = no device type chosen
     if(r==="full_register" || r==="by_status" || r==="by_branch" || r==="by_department"){
       let q = scope(sb.from("it_devices").select("*"));
       const stF = gv("statusFilter");
       if(r==="by_status" && stF){ q = q.eq("status", stF); statusText = stF; }
+      if(typ) q = q.eq("type", typ);
       q = applyDateRange(q, basis);
       const { data, error } = await q; if(error) throw error;
       let devs = data||[];
@@ -267,25 +334,25 @@ async function run(){
       recs = devs; addBasisCol = hasRange;     // none of the three dates is a column, so show the one used
       title = ({full_register:"Full Device Register", by_status:"Devices by Status"+(stF?": "+stF:""), by_branch:"Devices by Branch", by_department:"Devices by Department"})[r];
     } else if(r==="active_assignments"){
-      let q = scope(sb.from("it_assignments").select("*")).is("date_returned", null);
-      q = applyDateRange(q, basis);
-      const { data, error } = await q; if(error) throw error;
+      const { data, error } = await fetchRecords(() => applyDateRange(scope(sb.from("it_assignments").select("*")).is("date_returned", null), basis), typeIds);
+      if(error) throw error;
       headers = ["Code","Device","Assigned To","Branch","Issued","By"];
       rows = (data||[]).map(a=>[a.assign_code, a.device_label, a.assigned_name, a.branch, fmt(a.date_assigned), a.assigned_by]);
       title = "Active Assignments";
     } else if(r==="open_repairs" || r==="all_repairs"){
-      let q = scope(sb.from("it_repairs").select("*"));
-      if(r==="open_repairs") q = q.eq("status","Open");
-      q = applyDateRange(q, basis);
-      const { data, error } = await q; if(error) throw error;
+      const { data, error } = await fetchRecords(() => {
+        let q = scope(sb.from("it_repairs").select("*"));
+        if(r==="open_repairs") q = q.eq("status","Open");
+        return applyDateRange(q, basis);
+      }, typeIds);
+      if(error) throw error;
       headers = ["Code","Device","Fault","Reported","Technician","Cost","Status"];
       rows = (data||[]).map(x=>[x.repair_code, x.device_label, x.fault_description, fmt(x.date_reported), x.technician, money(x.cost), x.status]);
       recs = data||[]; addBasisCol = hasRange && basis === "date_resolved";
       title = r==="open_repairs" ? "Open Repairs" : "All Repairs";
     } else if(r==="maintenance_due" || r==="all_maintenance"){
-      let q = scope(sb.from("it_maintenance").select("*"));
-      q = applyDateRange(q, basis);
-      const { data, error } = await q; if(error) throw error;
+      const { data, error } = await fetchRecords(() => applyDateRange(scope(sb.from("it_maintenance").select("*")), basis), typeIds);
+      if(error) throw error;
       let m = data||[];
       if(r==="maintenance_due"){
         m = m.filter(x=>x.status!=="Completed");
@@ -298,16 +365,14 @@ async function run(){
       rows = m.map(x=>[x.maint_code, x.device_label, x.type, fmt(x.scheduled_date), fmt(x.date_performed), fmt(x.next_due_date), x.status]);
       title = (r==="maintenance_due") ? (hasRange ? "Maintenance Due" : "Maintenance Due (next 7 days)") : "All Maintenance";
     } else if(r==="movement_history"){
-      let q = scope(sb.from("it_movement").select("*"));
-      q = applyDateRange(q, basis).order("move_date",{ascending:false});
-      const { data, error } = await q; if(error) throw error;
+      const { data, error } = await fetchRecords(() => applyDateRange(scope(sb.from("it_movement").select("*")), basis).order("move_date",{ascending:false}), typeIds, "move_date");
+      if(error) throw error;
       headers = ["Code","Date","Device","From","To","Reason","By"];
       rows = (data||[]).map(x=>[x.move_code, fmt(x.move_date), x.device_label, loc(x.from_branch,x.from_department,x.from_unit,x.from_location), loc(x.to_branch,x.to_department,x.to_unit,x.to_location), x.reason, x.moved_by]);
       title = "Movement History";
     } else if(r==="disposals"){
-      let q = scope(sb.from("it_disposal").select("*"));
-      q = applyDateRange(q, basis).order("disposal_date",{ascending:false});
-      const { data, error } = await q; if(error) throw error;
+      const { data, error } = await fetchRecords(() => applyDateRange(scope(sb.from("it_disposal").select("*")), basis).order("disposal_date",{ascending:false}), typeIds, "disposal_date");
+      if(error) throw error;
       headers = ["Code","Device","Branch","Method","Reason","Date","Recovery"];
       rows = (data||[]).map(x=>[x.disposal_code, x.device_label, x.branch, x.method, x.reason, fmt(x.disposal_date), money(x.recovery_value)]);
       title = "Disposals";
@@ -321,9 +386,9 @@ async function run(){
     const bf = document.getElementById("branchFilter").value;
     const branchText = bf || (itSeesAllBranches(ME) ? "All branches" : "All my branches");
     lastTitle=title; lastRows=rows; lastHeaders=headers;
-    lastMeta = { title, periodText, branchText, from, to, hasRange };
+    lastMeta = { title, periodText, branchText, typeText: typ, from, to, hasRange };
     renderTable(headers, rows);
-    document.getElementById("count").textContent = rows.length + " row(s). " + periodText + ".";
+    document.getElementById("count").textContent = rows.length + " row(s). " + periodText + "." + (typ ? " Device type: " + typ + "." : "");
     status.textContent="";
   }catch(e){
     status.className="status err"; status.textContent="❌ "+e.message;
@@ -363,8 +428,9 @@ function pdfFileName(){
   const titleCase = t => t.replace(/[^A-Za-z0-9]+/g, " ").trim().split(" ").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join("_");
   const dm = ymd => fmtYmd(ymd).replace(/ /g, "_");
   const m = lastMeta;
+  const typePart = m.typeText ? "_" + titleCase(m.typeText) : "";
   const period = m.from && m.to ? dm(m.from) + "_to_" + dm(m.to) : (m.from ? "From_" + dm(m.from) : (m.to ? "Up_To_" + dm(m.to) : "As_At_" + dm(todayWAT())));
-  return "IT_Inventory_" + titleCase(m.title) + "_" + period + ".pdf";
+  return "IT_Inventory_" + titleCase(m.title) + typePart + "_" + period + ".pdf";
 }
 function downloadPdf(){
   if(!lastMeta){ alert("Run a report first."); return; }
@@ -382,7 +448,7 @@ function downloadPdf(){
   y += 19; doc.setFontSize(11); doc.setTextColor(...BLUE);
   doc.text(pdfSafe(lastMeta.periodText), MX, y);
   y += 15; doc.setFont("helvetica","normal"); doc.setFontSize(9); doc.setTextColor(80,80,80);
-  doc.text(pdfSafe("Branch: " + lastMeta.branchText), MX, y);
+  doc.text(pdfSafe("Branch: " + lastMeta.branchText + (lastMeta.typeText ? "   |   Device type: " + lastMeta.typeText : "")), MX, y);
   y += 12; doc.text(pdfSafe("Generated " + stampWAT() + (ME && ME.username ? " by " + ME.username : "") + "   |   " + n + " record(s)"), MX, y);
 
   if(n){
