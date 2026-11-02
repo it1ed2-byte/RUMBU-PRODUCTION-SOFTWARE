@@ -10,7 +10,7 @@
 <script src="../../auth.js"></script>
 <script src="../../table-resolver.js"></script>
 <style>
-:root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;--amber:#d97706;--teal:#0f766e;--purple:#7c3aed;}
+:root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--red:var(--bad);--green:var(--ok);--amber:var(--warn);--teal:#0f766e;--purple:#7c3aed;}
 *{box-sizing:border-box;}
 body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;color:var(--text);}
 .wrap{max-width:1250px;margin:0 auto;}
@@ -49,7 +49,7 @@ button:hover{background:var(--blue-dark);}
 .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;}
 .bar-row{display:flex;align-items:center;gap:10px;margin:7px 0;font-size:13px;}
 .bar-row .lbl{width:38%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.bar-row .track{flex:1;background:#eef2f7;border-radius:6px;height:16px;overflow:hidden;}
+.bar-row .track{flex:1;background:var(--bg);border-radius:6px;height:16px;overflow:hidden;}
 .bar-row .fill{height:100%;background:var(--blue);}
 .bar-row .fill.a{background:var(--green);}.bar-row .fill.b{background:var(--amber);}
 .bar-row .fill.c{background:var(--red);}.bar-row .fill.t{background:#94a3b8;}.bar-row .fill.teal{background:var(--teal);}
@@ -68,7 +68,7 @@ svg{width:100%;height:auto;display:block;}
 .dtable td.left{text-align:left;}
 .dtable td.grp{text-align:left;font-weight:800;background:var(--bg);color:var(--navy);}
 .colorHigh{background:#d9ead3;color:#1a4731;}.colorMedium{background:#fce5cd;color:#1f2937;}.colorLow{background:#f4cccc;color:#1f2937;}
-.dtable tr.optot td{font-weight:800;background:#eef2f7;border-top:2px solid #94a3b8;}
+.dtable tr.optot td{font-weight:800;background:var(--bg);border-top:2px solid #94a3b8;}
 .dtable th.sortable{cursor:pointer;user-select:none;}
 .dtable th.sortable:hover{filter:brightness(1.25);}
 .incnote{font-size:12px;color:var(--muted);margin:-4px 0 12px;}
@@ -316,16 +316,27 @@ function incentivePeriod(today){
   const mon=new Date(sat.getFullYear(),sat.getMonth(),sat.getDate()-12);
   return {from:iso(mon),to:iso(sat)};
 }
-/* One line per operator, from Normal rows only. */
+/* Incentive counts the A grade mats made in Normal production. B and C grade mats are not part of it. */
+function incentiveSummary(rows){
+  let a=0,ad=0,as=0,tg=0,at=0; const ops=new Set();
+  rows.filter(isNormalWork).forEach(r=>{
+    const A=n(r.a_double)+n(r.a_single);
+    a+=A; ad+=n(r.a_double); as+=n(r.a_single); tg+=n(r.target); if(n(r.target)>0)at+=A;
+    if(r.operator_id!=null&&r.operator_id!=="")ops.add(String(r.operator_id));
+  });
+  return {a,ad,as,tg,ops:ops.size,eff:eff(at,tg)};
+}
+/* One line per operator, from Normal rows only. tot = A grade mats. */
 function incentiveByOperator(rows){
   const m={};
   rows.filter(isNormalWork).forEach(r=>{
     const id=r.operator_id==null?"":String(r.operator_id); if(!id)return;
-    const o=m[id]||(m[id]={id,name:r.operator_name||id,tot:0,et:0,a:0,b:0,c:0,tg:0,dates:new Set()});
-    o.tot+=n(r.total); if(n(r.target)>0)o.et+=n(r.total); o.a+=n(r.a_double)+n(r.a_single); o.b+=n(r.b); o.c+=n(r.c); o.tg+=n(r.target); o.dates.add(r.date_col);
+    const A=n(r.a_double)+n(r.a_single);
+    const o=m[id]||(m[id]={id,name:r.operator_name||id,a:0,at:0,tg:0,dates:new Set()});
+    o.a+=A; if(n(r.target)>0)o.at+=A; o.tg+=n(r.target); o.dates.add(r.date_col);
     if(!o.name||o.name===id)o.name=r.operator_name||id;
   });
-  return Object.values(m).map(o=>({id:o.id,name:o.name,days:o.dates.size,a:o.a,b:o.b,c:o.c,tot:o.tot,tg:o.tg,pA:o.tot?o.a/o.tot*100:0,eff:eff(o.et,o.tg)}));
+  return Object.values(m).map(o=>({id:o.id,name:o.name,days:o.dates.size,tot:o.a,tg:o.tg,eff:eff(o.at,o.tg)}));
 }
 /*==PURE-END==*/
 
@@ -586,7 +597,23 @@ function renderManagerKpis(rows,queryCount){
 }
 
 /* Incentive Output (management): shown only when an operator name or ID has been entered. */
-const INC_NOTE="Normal production only. B Grade, Cover Duty, Overtime, Extra Operators and Breakdown are not counted.";
+const INC_NOTE="Normal production only (B Grade, Cover Duty, Overtime, Extra Operators and Breakdown work is not counted). Total Mats counts the A grade mats.";
+function incentiveManagerTiles(rows){
+  const t=incentiveSummary(rows);
+  return [
+    {n:t.ops,l:"Active Operators"},
+    {n:fmt(t.a),l:"Total Mats",cls:"good",sub:`Dbl ${fmt(t.ad)} \u00B7 Sgl ${fmt(t.as)}`},
+    {n:fmt(t.tg),l:"Total Target"},
+    {n:t.eff.toFixed(1)+"%",l:"Overall Efficiency",cls:t.eff>=90?"good":t.eff>=75?"teal":"warn"}
+  ];
+}
+function incentivePersonalTiles(rows){
+  const t=incentiveSummary(rows);
+  return [
+    {n:fmt(t.a),l:"Total Mats",cls:"good",sub:`Dbl ${fmt(t.ad)} \u00B7 Sgl ${fmt(t.as)}`},
+    {n:fmt(t.tg),l:"Target"}
+  ];
+}
 let INC_LIST=[], INC_SORT={k:"tot",dir:-1};
 function renderManagerIncentive(rows,q,from,to){
   const note=$("m_incNote"), kp=$("m_incKpis"), card=$("m_incCard");
@@ -595,7 +622,7 @@ function renderManagerIncentive(rows,q,from,to){
   const nr=rows.filter(isNormalWork);
   note.textContent=INC_NOTE+" "+dmy(from)+" to "+dmy(to)+".";
   if(!nr.length){note.textContent+=" No Normal production was recorded for this operator in this period.";return;}
-  kp.innerHTML=tilesHtml(managerTiles(nr));
+  kp.innerHTML=tilesHtml(incentiveManagerTiles(nr));
   INC_LIST=incentiveByOperator(rows);
   card.style.display="block";
   renderIncentiveTable();
@@ -605,13 +632,13 @@ function sortInc(k){
   renderIncentiveTable();
 }
 function renderIncentiveTable(){
-  const cols=[["name","Operator"],["id","ID"],["days","Days"],["a","A Grade"],["b","B Grade"],["c","C Grade"],["tot","Total Mats"],["tg","Target"],["pA","%A"],["eff","Efficiency"]];
+  const cols=[["name","Operator"],["id","ID"],["days","Days"],["tot","Total Mats"],["tg","Target"],["eff","Efficiency"]];
   const k=INC_SORT.k, d=INC_SORT.dir;
   const list=INC_LIST.slice().sort((x,y)=>{const a=x[k],b=y[k];return (typeof a==="string"?a.localeCompare(b,undefined,{numeric:true}):(a-b))*d;});
   let h='<table class="dtable"><tr>'+cols.map(([key,lab])=>`<th class="sortable" onclick="sortInc('${key}')">${lab}${INC_SORT.k===key?(INC_SORT.dir>0?" \u25B2":" \u25BC"):""}</th>`).join("")+"</tr>";
   list.forEach(o=>{
-    h+=`<tr><td class="left">${esc(o.name)}</td><td>${esc(o.id)}</td><td>${o.days}</td><td>${fmt(o.a)}</td><td>${fmt(o.b)}</td><td>${fmt(o.c)}</td>`+
-       `<td>${fmt(o.tot)}</td><td>${fmt(o.tg)}</td><td>${Math.round(o.pA)}%</td><td>${o.tg>0?o.eff.toFixed(1)+"%":"--"}</td></tr>`;
+    h+=`<tr><td class="left">${esc(o.name)}</td><td>${esc(o.id)}</td><td>${o.days}</td>`+
+       `<td>${fmt(o.tot)}</td><td>${fmt(o.tg)}</td><td>${o.tg>0?o.eff.toFixed(1)+"%":"--"}</td></tr>`;
   });
   $("m_incTable").innerHTML=h+"</table>";
 }
@@ -917,7 +944,7 @@ function renderProdKpis(rows,queryCount){
 function renderPersonalIncentive(rows,from,to){
   const nr=rows.filter(isNormalWork);
   $("p_incNote").textContent=INC_NOTE+" "+dmy(from)+" to "+dmy(to)+"."+(nr.length?"":" No Normal production was recorded in this period.");
-  $("p_incKpis").innerHTML=tilesHtml(personalTiles(nr));
+  $("p_incKpis").innerHTML=tilesHtml(incentivePersonalTiles(nr));
 }
 
 function renderAttendance(from,to,myRows,allRows){
