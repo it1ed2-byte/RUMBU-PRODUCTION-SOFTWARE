@@ -10,7 +10,7 @@
 <script src="../../auth.js"></script>
 <script src="../../table-resolver.js"></script>
 <style>
-:root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--muted:#6b7280;--red:#c0392b;--green:#1d8a4e;--amber:#d97706;}
+:root{--navy:var(--heading);--blue:var(--accent);--blue-dark:var(--accent-2);--red:var(--bad);--green:var(--ok);--amber:var(--warn);}
 *{box-sizing:border-box;}
 body{font-family:var(--sans);background:var(--bg);margin:0;padding:18px;color:var(--text);}
 .wrap{max-width:1250px;margin:0 auto;}
@@ -152,29 +152,26 @@ function buildDowntimeMap(ctrlRows,from,to,excluded){
 }
 
 /* Same formulae as operator-report.html, applied to one operator's rows.
-   %A, %B, %C are shares of Total; %P is (mats on rows that carry a target) / ATG. */
-/* Work type names are compared without regard to capital letters or spaces: "Cover duty" = "Cover Duty" = "COVER DUTY". */
-function wtKey(v){ const k = String(v||"").trim().toLowerCase().replace(/\s+/g, ""); return k === "brokedown" ? "breakdown" : k; }
+   %A, %B, %C are shares of Total; %P is Total / ATG. */
 function computeOperatorMetrics(rows,downtimeMap,rules){
-  const o={dates:new Set(),mats:new Set(),mcWork:new Set(),mcCover:new Set(),A:0,B:0,C:0,total:0,target:0,downtime:0,Tt:0,At:0};   // Tt / At: total and A-grade mats on rows that carry a target
+  const o={dates:new Set(),mats:new Set(),mcWork:new Set(),mcCover:new Set(),A:0,B:0,C:0,total:0,target:0,downtime:0};
   rows.forEach(r=>{
     o.dates.add(r.date_col);
     if(r.mat_type)o.mats.add(r.mat_type);
     const wk=r.assets+"||"+r.date_col;
-    const cover=wtKey(r.work_type)==="coverduty";
+    const cover=(r.work_type||"")==="Cover duty";
     if(cover)o.mcCover.add(wk);else o.mcWork.add(wk);
     o.A+=n(r.a_double)+n(r.a_single);o.B+=n(r.b);o.C+=n(r.c);o.total+=n(r.total);o.target+=n(r.target);
-    if(n(r.target)>0){o.Tt+=n(r.total);o.At+=n(r.a_double)+n(r.a_single);}
     if(!cover)o.downtime+=downtimeMap[[r.assets,r.date_col,r.shift].join("||")]||0;
   });
   const workDays=o.dates.size, mcWork=o.mcWork.size;
   const MLD=o.target?Math.round((o.target*o.downtime)/(rules.workMinutes*(mcWork||1))):0;
   const ATG=Math.round(o.target-MLD);
-  const MLU=Math.round(o.At-ATG);
+  const MLU=Math.round(o.A-ATG);
   const pA=o.total?Math.round(o.A/o.total*100):0;
   const pB=o.total?Math.round(o.B/o.total*100):0;
   const pC=o.total?Math.round(o.C/o.total*100):0;
-  const pP=ATG?Math.round(o.Tt/ATG*100):0;
+  const pP=ATG?Math.round(o.total/ATG*100):0;
   const mats=[...o.mats];
   const onlyHigh=mats.length>0&&mats.every(m=>rules.highMats.includes(m));
   let reward=0;
@@ -211,13 +208,9 @@ function setRange(range,btn){
 
 async function fetchAll(table,clause,order){
   let all=[],offset=0;
-  // The id breaks ties, so rows are never repeated or skipped between pages; a table with no id falls back to the plain order.
-  const orders=[(order?order+",id.asc":"&order=id.asc"),(order||""),""]; let oi=0;
+  const base=SUPABASE_URL+"/rest/v1/"+table+"?select=*"+clause+(order||"");
   for(let g=0;g<500;g++){
-    const base=SUPABASE_URL+"/rest/v1/"+table+"?select=*"+clause+orders[oi];
     const res=await fetch(base,{headers:Object.assign({},authHeaders(),{"Range-Unit":"items","Range":offset+"-"+(offset+999)})});
-    if(res.status===416)break;
-    if(res.status===400&&oi<orders.length-1){oi++;g--;continue;}
     if(!res.ok)throw new Error(table+": HTTP "+res.status);
     const batch=await res.json();
     all=all.concat(batch);

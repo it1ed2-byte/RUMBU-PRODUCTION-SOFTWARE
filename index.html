@@ -21,37 +21,40 @@
   }
 </script>
 <script>
-  // Apply the user's saved theme as early as possible (per-device).
-  (function(){
-    try{ var t = localStorage.getItem("rumbu_theme") || "navy";
-      document.documentElement.setAttribute("data-theme", t); }
-    catch(e){ document.documentElement.setAttribute("data-theme","navy"); }
-  })();
-  function setTheme(t){
+  // ---- Theme: Light (the Navy and Gold look) or Dark, or follow the device ----
+  // The choice is kept per device in rumbu_theme_pref ("light", "dark" or "device").
+  // rumbu_theme keeps the theme actually shown ("navy" or "dark"), because every page reads it.
+  // Anyone who had picked one of the four retired themes is moved to the closest of the two.
+  var THEME_LIGHT = "navy", THEME_DARK = "dark";
+  function themePref(){
+    try{
+      var p = localStorage.getItem("rumbu_theme_pref");
+      if(p === "light" || p === "dark" || p === "device") return p;
+      var old = localStorage.getItem("rumbu_theme");
+      return (old === "dark" || old === "ocean" || old === "graphite") ? "dark" : "light";
+    }catch(e){ return "light"; }
+  }
+  function deviceIsDark(){ try{ return window.matchMedia("(prefers-color-scheme: dark)").matches; }catch(e){ return false; } }
+  function resolvedTheme(){ var p = themePref(); return p === "dark" || (p === "device" && deviceIsDark()) ? THEME_DARK : THEME_LIGHT; }
+  function applyTheme(){
+    var t = resolvedTheme();
     document.documentElement.setAttribute("data-theme", t);
     try{ localStorage.setItem("rumbu_theme", t); }catch(e){}
-    document.querySelectorAll(".theme-toggle button").forEach(function(b){
-      b.classList.toggle("on", b.getAttribute("data-theme-val") === t);
+    ["moduleFrame", "dashFrame"].forEach(function(id){
+      var f = document.getElementById(id);
+      if(f && f.contentWindow){ try{ f.contentWindow.postMessage({ rumbuTheme: t }, "*"); }catch(e){} }
     });
-    // tell any open module iframe to match
-    var f = document.getElementById("moduleFrame");
-    if(f && f.contentWindow){ try{ f.contentWindow.postMessage({rumbuTheme:t}, "*"); }catch(e){} }
-    var df = document.getElementById("dashFrame");
-    if(df && df.contentWindow){ try{ df.contentWindow.postMessage({rumbuTheme:t}, "*"); }catch(e){} }
-    closeThemePopover();
+    document.querySelectorAll("[data-theme-pref]").forEach(function(b){
+      var on = b.getAttribute("data-theme-pref") === themePref();
+      b.classList.toggle("on", on); b.setAttribute("aria-checked", on ? "true" : "false");
+    });
   }
-
-  // On mobile the 6 theme swatches collapse behind one icon button, so
-  // they don't crowd the header row — this opens/closes that popover.
-  function toggleThemePopover(){
-    document.getElementById("themePopover").classList.toggle("show");
-  }
-  function closeThemePopover(){
-    document.getElementById("themePopover").classList.remove("show");
-  }
-  document.addEventListener("click", function(e){
-    if(!e.target.closest("#themeToggle")) closeThemePopover();
-  });
+  function setThemePref(p){ try{ localStorage.setItem("rumbu_theme_pref", p); }catch(e){} applyTheme(); }
+  // Older calls (setTheme('navy') and so on) still work.
+  function setTheme(t){ setThemePref(t === "dark" || t === "ocean" || t === "graphite" ? "dark" : "light"); }
+  function toggleThemePopover(){} function closeThemePopover(){}
+  applyTheme();
+  try{ window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", function(){ if(themePref() === "device") applyTheme(); }); }catch(e){}
 </script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="auth.js"></script>
@@ -66,7 +69,57 @@
   }
   #authGate.err{ color:var(--bad); }
   #authGate .rs-card{ max-width:440px; }
-  .side-brand .logo.rs-tile{ background:var(--card); color:transparent; padding:4px; }
+  .side-brand .logo.rs-tile{ background:#fff; color:transparent; padding:4px; }   /* the logo always sits on white */
+  /* ---- Header: one bar ---- */
+  .app-header{ gap:10px; padding:0 14px; }
+  .hdr-brand{ display:flex; align-items:center; gap:10px; min-width:0; }
+  .hdr-logo{ width:34px; height:34px; flex:0 0 34px; padding:4px; border:1px solid var(--line); box-shadow:none; }
+  .hdr-logo svg{ width:100%; height:100%; }
+  .app-header .titles{ flex:0 1 auto; }
+  .app-header .titles p{ text-transform:none; letter-spacing:0; }
+  .hdr-crumb{ display:flex; align-items:center; gap:6px; min-width:0; flex:1 1 auto; }
+  .hdr-crumb[hidden]{ display:none; }
+  .crumb-mod{ font-size:13px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:30vw; }
+  .crumb-sep{ color:var(--muted); font-size:15px; }
+  .crumb-page{ margin:0; font-size:15px; font-weight:700; color:var(--heading); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+  .hdr-spacer{ flex:1 1 auto; }
+  #appShell.module-open .hdr-spacer{ flex:0 0 0; }
+  .hdr-icon{ display:inline-flex; align-items:center; justify-content:center; width:38px; height:38px; min-height:38px!important; padding:0!important; border:1px solid var(--line)!important; border-radius:10px!important; background:var(--card)!important; color:var(--heading)!important; cursor:pointer; flex:0 0 auto; }
+  .hdr-icon:hover{ background:var(--bg)!important; border-color:var(--accent)!important; }
+  .hdr-icon[hidden]{ display:none; }
+  #appShell.module-open .hdr-brand .titles{ display:none; }
+  #appShell.module-open .module-host .m-bar{ display:none; }   /* the old second bar: its back, title and refresh are now in the header */
+  .user-menu-wrap{ position:relative; flex:0 0 auto; }
+  .avatar-btn{ width:38px; height:38px; min-height:38px!important; padding:0!important; border-radius:50%!important; border:2px solid var(--line)!important; background:var(--heading)!important; color:var(--card)!important; font-size:13px!important; font-weight:800!important; letter-spacing:.5px; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; }
+  .avatar-btn:hover, .avatar-btn[aria-expanded="true"]{ border-color:var(--accent)!important; }
+  .user-menu{ position:absolute; right:0; top:calc(100% + 8px); z-index:80; width:280px; max-width:calc(100vw - 20px); background:var(--card); border:1px solid var(--line-2); border-radius:14px; box-shadow:0 14px 38px rgba(15,25,45,.22); padding:6px; }
+  .user-menu[hidden]{ display:none; }
+  .um-who{ display:flex; gap:12px; align-items:center; padding:10px 10px 12px; }
+  .um-avatar{ width:42px; height:42px; flex:0 0 42px; border-radius:50%; background:var(--heading); color:var(--card); display:inline-flex; align-items:center; justify-content:center; font-weight:800; font-size:14px; letter-spacing:.5px; }
+  .um-name{ font-size:14px; font-weight:700; color:var(--heading); line-height:1.25; word-break:break-word; }
+  .um-sub{ font-size:12px; color:var(--muted); line-height:1.4; }
+  .um-sep{ height:1px; background:var(--line); margin:4px 6px; }
+  .um-item{ display:flex!important; align-items:center; gap:10px; width:100%; min-height:40px!important; padding:9px 10px!important; border:0!important; border-radius:9px!important; background:transparent!important; color:var(--heading)!important; font-size:13.5px!important; font-weight:600!important; text-align:left; cursor:pointer; }
+  .um-item:hover, .um-item:focus-visible{ background:var(--bg)!important; outline:none; }
+  .um-item svg{ flex:0 0 18px; color:var(--muted); }
+  .um-item.um-out{ color:var(--bad)!important; }
+  .um-item.um-out svg{ color:var(--bad); }
+  .um-theme{ display:flex; align-items:center; gap:10px; padding:8px 10px; font-size:13.5px; font-weight:600; color:var(--heading); }
+  .um-theme svg{ flex:0 0 18px; color:var(--muted); }
+  .um-seg{ margin-left:auto; display:inline-flex; background:var(--bg); border:1px solid var(--line); border-radius:9px; padding:2px; gap:2px; }
+  .um-seg button{ min-height:28px!important; padding:3px 9px!important; border:0!important; border-radius:7px!important; background:transparent!important; color:var(--muted)!important; font-size:12px!important; font-weight:700!important; cursor:pointer; width:auto!important; }
+  .um-seg button.on{ background:var(--card)!important; color:var(--heading)!important; box-shadow:0 1px 2px rgba(0,0,0,.12); }
+  .side-user{ display:flex; align-items:center; gap:10px; padding:4px 4px 10px; color:var(--side-fg); min-width:0; }
+  .side-user:empty{ display:none; }
+  .side-user .su-av{ width:32px; height:32px; flex:0 0 32px; border-radius:50%; background:rgba(255,255,255,.14); color:#fff; display:inline-flex; align-items:center; justify-content:center; font-size:12px; font-weight:800; letter-spacing:.4px; }
+  .side-user .su-name{ font-size:13px; font-weight:700; color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .side-user .su-role{ font-size:11px; color:var(--side-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  @media (max-width:640px){
+    .hdr-logo{ width:30px; height:30px; flex-basis:30px; }
+    .app-header .titles p{ display:none; }
+    .crumb-mod, .crumb-sep{ display:none; }   /* phones: just the page name */
+    .crumb-page{ font-size:14px; }
+  }
   .side-brand .logo.rs-tile svg{ width:100%; height:100%; }
   .module-host .m-loading{ position:absolute; left:0; right:0; bottom:0; display:flex; align-items:center; justify-content:center; background:var(--bg); z-index:5; padding:20px; }
   .module-host .m-loading[hidden]{ display:none; }
@@ -101,6 +154,9 @@
 .ql-menu-item{text-align:left;background:none;border:0;border-radius:8px;padding:10px 12px;min-height:40px;font-size:13px;font-weight:600;color:var(--heading);cursor:pointer;font-family:inherit;}
 .ql-menu-item:hover{background:var(--bg);}
 .ql-menu-item.active{background:var(--accent);color:var(--logo-fg);}
+.quick-links .ql-count{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--bg);border:1px solid var(--line-2);font-size:10.5px;font-weight:800;color:var(--muted);}
+.quick-links .ql-item.active .ql-count{background:transparent;border-color:currentColor;color:inherit;}
+.quick-links .ql-group b{font-weight:800;}
 .side-flyout .fly-sec{font-size:10.5px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);padding:10px 11px 4px;}
 .fly-numlabel{display:inline-flex;align-items:center;gap:9px;}
 .fly-num{width:20px;height:20px;border-radius:50%;background:var(--accent);color:var(--logo-fg);font-size:11px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;flex:none;}
@@ -215,6 +271,7 @@
   <!-- Pinned at the bottom, outside the scrollable module list, so it's
        always reachable without scrolling past every module first. -->
   <div class="side-footer">
+    <div class="side-user" id="sideUser"></div>
     <!-- Install button — hidden by default; pwa-install.js shows it when
          the browser fires beforeinstallprompt (i.e. app is installable) -->
     <button id="pwa-install-btn" onclick="triggerPWAInstall()"
@@ -244,24 +301,25 @@
 <div class="main">
   <header class="app-header">
     <button class="hamburger" onclick="openDrawer()" aria-label="Open menu">&#9776;</button>
-    <div class="titles">
-      <h1>RumbuApp</h1>
-      <p>RUMBU INDUSTRIES GROUP</p>
+    <!-- On the dashboards: the logo and app name. With a page open: a back arrow and where you are. -->
+    <div class="hdr-brand" id="hdrBrand">
+      <span class="hdr-logo rs-tile" id="hdrLogo" aria-hidden="true"></span>
+      <div class="titles"><h1>RumbuApp</h1><p>Rumbu Industries Group</p></div>
     </div>
-    <div class="theme-toggle" id="themeToggle">
-      <button class="theme-toggle-trigger" id="themeToggleTrigger" onclick="toggleThemePopover()" aria-label="Change theme">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="13.5" cy="6.5" r=".5"/><circle cx="17.5" cy="10.5" r=".5"/><circle cx="8.5" cy="7.5" r=".5"/><circle cx="6.5" cy="12.5" r=".5"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>
+    <nav class="hdr-crumb" id="hdrCrumb" aria-label="You are here" hidden>
+      <button class="hdr-icon" onclick="closeModule()" aria-label="Back to dashboards" title="Back to dashboards">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
       </button>
-      <div class="theme-popover" id="themePopover">
-        <button class="theme-swatch" data-theme-val="navy" title="Navy &amp; Gold" style="background:linear-gradient(135deg,#12203c,#c8a34e);" onclick="setTheme('navy')"></button>
-        <button class="theme-swatch" data-theme-val="dark" title="Sleek Dark" style="background:linear-gradient(135deg,#0d1420,#38bdf8);" onclick="setTheme('dark')"></button>
-        <button class="theme-swatch" data-theme-val="emerald" title="Emerald &amp; Gold" style="background:linear-gradient(135deg,#0f3d2e,#c8a34e);" onclick="setTheme('emerald')"></button>
-        <button class="theme-swatch" data-theme-val="burgundy" title="Burgundy &amp; Gold" style="background:linear-gradient(135deg,#4a1220,#c8a34e);" onclick="setTheme('burgundy')"></button>
-        <button class="theme-swatch" data-theme-val="ocean" title="Ocean Blue" style="background:linear-gradient(135deg,#0c3548,#38bdf8);" onclick="setTheme('ocean')"></button>
-        <button class="theme-swatch" data-theme-val="graphite" title="Graphite" style="background:linear-gradient(135deg,#2a2e35,#c8a34e);" onclick="setTheme('graphite')"></button>
-      </div>
+      <span class="crumb-mod" id="crumbMod"></span><span class="crumb-sep" id="crumbSep" aria-hidden="true">&rsaquo;</span>
+      <h1 class="crumb-page" id="crumbPage"></h1>
+    </nav>
+    <span class="hdr-spacer"></span>
+    <!-- You: initials button and its menu (name, role, branch, password, theme, log out) -->
+    <div class="user-menu-wrap" id="userMenuWrap">
+      <button class="avatar-btn" id="avatarBtn" aria-haspopup="menu" aria-expanded="false" aria-controls="userMenu" onclick="toggleUserMenu()" title="Your account"><span id="avatarInitials">·</span></button>
+      <div class="user-menu" id="userMenu" role="menu" aria-label="Your account" hidden></div>
     </div>
-    <div class="user-box" id="userBox"></div>
+    <div class="user-box" id="userBox" hidden></div>
   </header>
 
   <div class="content" id="contentRegion">
@@ -339,17 +397,14 @@
 </nav>
 
 <script>
-  // Reflect the active theme in the toggle buttons on load.
-  (function(){
-    var t = document.documentElement.getAttribute("data-theme") || "navy";
-    document.querySelectorAll(".theme-toggle button").forEach(function(b){
-      b.classList.toggle("on", b.getAttribute("data-theme-val") === t);
-    });
-  })();
+  // (The theme is applied by applyTheme() at the top of the page.)
 </script>
 
 <script>
-  (function(){ try{ const l = document.getElementById("sideLogo"); if(l) l.innerHTML = RumbuUI.logoSvg(false); }catch(e){} })();
+  (function(){ try{
+    const l = document.getElementById("sideLogo"); if(l) l.innerHTML = RumbuUI.logoSvg(false);
+    const h = document.getElementById("hdrLogo"); if(h) h.innerHTML = RumbuUI.logoSvg(false);
+  }catch(e){} })();
 
   // ---- Loading a page into the frame -----------------------------------
   // The animated logo covers the page area until the page has loaded. If it takes longer than
@@ -374,6 +429,105 @@
     const ov = document.getElementById("moduleLoading"); if(ov){ ov.hidden = true; ov.innerHTML = ""; }
   }
   window.addEventListener("resize", function(){ const ov = document.getElementById("moduleLoading"), f = document.getElementById("moduleFrame"); if(ov && f && !ov.hidden) ov.style.top = f.offsetTop + "px"; });
+
+  // ---- Header: where you are -------------------------------------------
+  function updateHeaderCrumb(){
+    const open = document.getElementById("appShell").classList.contains("module-open");
+    const crumb = document.getElementById("hdrCrumb");
+    if(!crumb) return;
+    crumb.hidden = !open;
+    const mod = (open && CURRENT_PICKER) ? CURRENT_PICKER.name : "";
+    const page = open ? (document.getElementById("moduleName").textContent || "") : "";
+    document.getElementById("crumbMod").textContent = mod;
+    document.getElementById("crumbSep").style.display = mod ? "" : "none";
+    document.getElementById("crumbPage").textContent = page;
+    document.title = open && page ? page + " · RumbuApp" : "RumbuApp";
+  }
+
+  // ---- You: initials button and its menu -----------------------------------
+  let MY_FULL_NAME = null;
+  function myRoleLabel(){
+    if(!ME) return "";
+    if(ME.role === "super_admin"){
+      const t = ME.superAdminType ? String(ME.superAdminType).replace(/_/g, " ") : "";
+      return "Super Admin" + (t ? " · " + t.charAt(0).toUpperCase() + t.slice(1) : "");
+    }
+    return ({ admin: "Admin", user: "User", hr_console: "HR Console" })[ME.role] || String(ME.role || "");
+  }
+  function myBranchLabel(){
+    if(!ME) return "";
+    if(ME.role === "super_admin") return "All branches";
+    const b = ME.sectionNames || [];
+    return b.length ? b.join(", ") : "No branch assigned yet";
+  }
+  function myInitials(){
+    const src = (MY_FULL_NAME || (ME && ME.username) || "").trim();
+    const words = src.split(/[\s._-]+/).filter(w => /[A-Za-z]/.test(w));
+    if(MY_FULL_NAME && words.length >= 2) return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+    const letters = src.replace(/[^A-Za-z0-9]/g, "");
+    return (letters.slice(0, 2) || "?").toUpperCase();
+  }
+  const UM_ICONS = {
+    key: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3 21 2M17 6l3 3M15 8l2 2"/></svg>',
+    sun: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
+    out: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/></svg>',
+    back: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>'
+  };
+  function renderUserMenu(){
+    if(!ME) return;
+    const esc = navEsc, ini = myInitials(), name = MY_FULL_NAME || ME.username;
+    document.getElementById("avatarInitials").textContent = ini;
+    document.getElementById("avatarBtn").setAttribute("title", name + " — your account");
+    const pref = themePref();
+    const seg = (p, label) => `<button type="button" role="menuitemradio" data-theme-pref="${p}" aria-checked="${pref === p}" class="${pref === p ? "on" : ""}" onclick="setThemePref('${p}')">${label}</button>`;
+    document.getElementById("userMenu").innerHTML =
+      `<div class="um-who"><span class="um-avatar" aria-hidden="true">${esc(ini)}</span><div style="min-width:0;">` +
+        `<div class="um-name">${esc(name)}</div>` + (MY_FULL_NAME ? `<div class="um-sub">${esc(ME.username)}</div>` : "") +
+        `<div class="um-sub">${esc(myRoleLabel())}</div><div class="um-sub">${esc(myBranchLabel())}</div></div></div>` +
+      `<div class="um-sep"></div>` +
+      (ME.role === "hr_console" ? `<button class="um-item" role="menuitem" onclick="window.location.href='modules/hr/hr-special-console.html'">${UM_ICONS.back}Back to HR Console</button>` : "") +
+      `<button class="um-item" role="menuitem" onclick="closeUserMenu();openModule(null,'admin','manage-accounts','Change My Password','section=change-password')">${UM_ICONS.key}Change my password</button>` +
+      `<div class="um-theme" role="group" aria-label="Theme">${UM_ICONS.sun}Theme<span class="um-seg">${seg("light", "Light")}${seg("dark", "Dark")}${seg("device", "Device")}</span></div>` +
+      `<div class="um-sep"></div>` +
+      `<button class="um-item um-out" role="menuitem" onclick="closeUserMenu();logout('login.html')">${UM_ICONS.out}Log out</button>`;
+    const su = document.getElementById("sideUser");
+    if(su) su.innerHTML = `<span class="su-av" aria-hidden="true">${esc(ini)}</span><span style="min-width:0;"><span class="su-name" style="display:block;">${esc(name)}</span><span class="su-role" style="display:block;">${esc(myRoleLabel())}</span></span>`;
+  }
+  function toggleUserMenu(){
+    const m = document.getElementById("userMenu");
+    if(m.hidden) openUserMenu(); else closeUserMenu();
+  }
+  function openUserMenu(){
+    const m = document.getElementById("userMenu"), b = document.getElementById("avatarBtn");
+    renderUserMenu();
+    m.hidden = false; b.setAttribute("aria-expanded", "true");
+    const first = m.querySelector(".um-item"); if(first) first.focus();
+  }
+  function closeUserMenu(focusBack){
+    const m = document.getElementById("userMenu"), b = document.getElementById("avatarBtn");
+    if(!m || m.hidden) return;
+    m.hidden = true; b.setAttribute("aria-expanded", "false");
+    if(focusBack) b.focus();
+  }
+  document.addEventListener("click", function(e){ if(!(e.target.closest && e.target.closest("#userMenuWrap"))) closeUserMenu(); });
+  document.addEventListener("keydown", function(e){
+    const m = document.getElementById("userMenu"); if(!m || m.hidden) return;
+    if(e.key === "Escape"){ e.preventDefault(); closeUserMenu(true); return; }
+    if(e.key === "ArrowDown" || e.key === "ArrowUp"){
+      const items = [...m.querySelectorAll(".um-item, .um-seg button")]; if(!items.length) return;
+      e.preventDefault();
+      let i = items.indexOf(document.activeElement);
+      i = e.key === "ArrowDown" ? (i + 1) % items.length : (i - 1 + items.length) % items.length;
+      items[i].focus();
+    }
+  });
+  // The full name comes from the person's staff record, if their login is linked to one.
+  async function loadMyFullName(){
+    try{
+      const { data } = await sb.from("employees").select("full_name").eq("linked_profile_id", ME.id).maybeSingle();
+      if(data && data.full_name){ MY_FULL_NAME = String(data.full_name).trim(); renderUserMenu(); }
+    }catch(e){ /* the username is shown instead */ }
+  }
 
   function openDrawer(){
     document.getElementById("side").classList.add("open");
@@ -1146,6 +1300,46 @@
   // When a page is open, show every page in that same module as a pill
   // bar so the user can jump between sibling pages in place. The active
   // page's pill is highlighted. Hidden when a module has only one page.
+  // ---- Page bar for a long module: a button per part, each with its pages in a short list ----
+  const QL_MAX_TABS = 6;
+  let QL_SECTIONS = [];
+  function qlOpenCall(p){ const parts = p.module_path.split("/"); return "openModule(null,'" + parts[0] + "','" + parts[1] + "','" + navEsc(String(p.name).replace(/\\/g, "\\\\").replace(/'/g, "\\'")) + "')"; }
+  function renderSectionLinks(bar, pages){
+    QL_SECTIONS = navArrangePages(pages);
+    const cur = CURRENT_PAGE || "";
+    bar.innerHTML = QL_SECTIONS.map((g, i) => {
+      const here = g.pages.find(p => p.module_path === cur);
+      if(g.pages.length === 1){   // a part with one page is a plain tab with that page's name
+        const p = g.pages[0];
+        return `<button class="ql-item${here ? " active" : ""}" onclick="${qlOpenCall(p)}">${navEsc(p.name)}</button>`;
+      }
+      // the part you are in shows the page you are on, so the bar always says where you are
+      const label = here ? `${navEsc(g.label)}: <b>${navEsc(here.name)}</b>` : navEsc(g.label);
+      return `<button class="ql-item ql-group${here ? " active" : ""}" aria-haspopup="true" aria-expanded="false" data-sec="${i}" onclick="qlToggleSection(this, ${i})">${label} <span class="ql-count">${g.pages.length}</span> <span aria-hidden="true">&#9662;</span></button>`;
+    }).join("");
+    const act = bar.querySelector(".ql-item.active");
+    if(act && act.scrollIntoView) act.scrollIntoView({ inline:"nearest", block:"nearest" });
+  }
+  function qlToggleSection(btn, i){
+    const key = "sec" + i, existing = document.getElementById("qlMenu");
+    const same = existing && existing.getAttribute("data-key") === key;
+    petCloseGroupMenu();
+    document.querySelectorAll("#quickLinks .ql-group").forEach(b => b.setAttribute("aria-expanded", "false"));
+    if(same) return;
+    const g = QL_SECTIONS[i]; if(!g) return;
+    const m = document.createElement("div");
+    m.id = "qlMenu"; m.className = "ql-menu"; m.setAttribute("data-key", key); m.setAttribute("role", "menu");
+    m.innerHTML = '<div class="ql-menu-head">' + navEsc(g.label) + '</div>' + g.pages.map(p =>
+      '<button role="menuitem" class="ql-menu-item' + (p.module_path === CURRENT_PAGE ? " active" : "") + '" onclick="petCloseGroupMenu();' + qlOpenCall(p) + '">' + navEsc(p.name) + '</button>').join("");
+    document.body.appendChild(m);
+    const r = btn.getBoundingClientRect();
+    m.style.top = (r.bottom + 6) + "px";
+    m.style.left = Math.max(8, Math.min(r.left, window.innerWidth - m.offsetWidth - 8)) + "px";
+    btn.setAttribute("aria-expanded", "true");
+    const first = m.querySelector(".ql-menu-item"); if(first) first.focus();
+    setTimeout(function(){ document.addEventListener("click", petOutsideClose, true); }, 0);
+  }
+
   function renderQuickLinks(){
     const bar = document.getElementById("quickLinks");
     if(!bar) return;
@@ -1167,10 +1361,13 @@
       if(CURRENT_PICKER.name === PET_MODULE && pages.length > 1){ bar.style.display = ""; renderPetQuickLinks(bar, pages); return; }
       items = [];
       navArrangePages(pages).forEach(g => g.pages.forEach(p=>{ const parts = p.module_path.split("/"); items.push({ label: p.name, dept: parts[0], mod: parts[1], query: "" }); }));
+      // A long module (more than six pages): one button per part (Dashboards, Daily work, Reports...),
+      // each opening a short list, instead of a long row of tabs.
+      if(items.length > QL_MAX_TABS){ bar.style.display = ""; renderSectionLinks(bar, pages); return; }
     }
     if(items.length <= 1){ bar.innerHTML = ""; bar.style.display = "none"; return; }
     bar.style.display = "";
-    const head = CURRENT_PICKER ? `<span class="ql-label">${CURRENT_PICKER.name}</span>` : "";
+    const head = "";   // the header already says which module this is
     bar.innerHTML = head + items.map(it=>{
       const active = ((it.dept + "/" + it.mod) === CURRENT_PAGE) && ((it.query || "") === (CURRENT_QUERY || ""));
       const oc = `openModule(null,'${it.dept}','${it.mod}','${it.label.replace(/'/g,"\\'")}','${it.query || ""}')`;
@@ -1252,6 +1449,7 @@
     frame.onload = function(){ hideModuleLoading(); try{ frame.contentWindow.postMessage({rumbuTheme:t}, "*"); }catch(e){} };
     showModuleLoading(label);
     closeDrawer();
+    updateHeaderCrumb();
   }
 
   // The tab row above a page (renderQuickLinks) is built from CURRENT_PICKER,
@@ -1279,6 +1477,7 @@
 
   function closeModule(){
     hideModuleLoading();
+    setTimeout(updateHeaderCrumb, 0);
     document.getElementById("moduleView").classList.remove("show");
     document.getElementById("moduleFrame").style.maxWidth = ""; // restore CSS default
     document.getElementById("appShell").classList.remove("cnt-top-hidden"); // restore top bar
@@ -1385,21 +1584,10 @@
     }
   }
 
+  // Who is signed in: the initials button in the header, its menu, and the name line in the sidebar.
   function renderUserBox(){
-    const box = document.getElementById("userBox");
-    const roleLabel = ME.role === "super_admin"
-      ? "SUPER ADMIN" + (ME.superAdminType ? " (" + ME.superAdminType.toUpperCase() + ")" : "")
-      : ME.role.toUpperCase();
-
-    box.innerHTML = `<span class="u-name">${ME.username}</span><span class="u-role">${roleLabel}</span>` +
-      (ME.role === "hr_console"
-        ? `<button onclick="window.location.href='modules/hr/hr-special-console.html'" style="margin-left:8px;padding:4px 10px;font-size:11px;border-radius:6px;background:var(--accent);color:#fff;border:none;cursor:pointer;">&larr; Back to HR Console</button>`
-        : "");
-
-    // Manage Accounts role-gating (Create User / Manage User need
-    // admin+, Settings needs super_admin) now happens inside
-    // accountPageAllowed() when the picker card screen is rendered —
-    // nothing to toggle here anymore.
+    renderUserMenu();
+    loadMyFullName();
   }
 
   // ============================================================
