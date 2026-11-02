@@ -56,6 +56,17 @@
   .chk{display:flex;align-items:center;gap:6px;font-weight:normal;margin:8px 0 0;}
   .chk input{width:auto;}
   .ac input.unpicked{border-color:var(--red);background:rgba(192,57,43,.05);}
+
+  /* selected staff list (one memo is issued per person listed) */
+  #staffBox{margin-top:10px;}
+  .staff-head{display:flex;justify-content:space-between;align-items:center;font-size:13px;margin-bottom:6px;}
+  .staff-head button{margin:0;padding:4px 10px;font-size:12px;background:#6b7280;}
+  .staff-row{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;padding:8px 10px;margin-bottom:6px;border:1px solid var(--line);border-left:4px solid var(--green);border-radius:8px;font-size:12px;line-height:1.5;background:rgba(29,138,78,.06);}
+  .staff-row .meta{color:var(--muted);}
+  .staff-row .warn{color:#b45309;font-weight:bold;display:block;}
+  .staff-row .bad{color:var(--red);font-weight:bold;display:block;}
+  .staff-row button{margin:0;padding:4px 10px;font-size:12px;background:#6b7280;flex:0 0 auto;}
+  .staff-row button:hover,.staff-head button:hover{background:var(--red);}
 </style>
 </head>
 <body>
@@ -92,28 +103,33 @@
 
   <div class="row">
     <div>
-      <label>Employee Name</label>
+      <label>Add Employee (name)</label>
       <div class="ac">
         <input type="text" id="name" placeholder="Start typing a name or ID" autocomplete="off">
         <div class="ac-list hidden" id="nameList"></div>
       </div>
     </div>
     <div>
-      <label>Employee ID</label>
+      <label>or Employee ID</label>
       <div class="ac">
         <input type="text" id="empId" placeholder="Start typing an ID, e.g. RD402" autocomplete="off">
         <div class="ac-list hidden" id="idList"></div>
       </div>
     </div>
   </div>
-  <div class="hint" id="empMsg">Start typing (at least 2 letters). The list comes from the employee records. Pick the person and the ID and department fill in.</div>
+  <div class="hint" id="empMsg">Start typing (at least 2 letters). The list comes from the employee records. Pick a person to add them below. Repeat for everyone who is to receive the same letter.</div>
   <label class="chk hidden" id="allBranchesRow"><input type="checkbox" id="allBranches"> Search employees in all branches</label>
-  <div class="chip hidden" id="empChip"></div>
+
+  <div id="staffBox" class="hidden">
+    <div class="staff-head"><b id="staffCount"></b><button type="button" onclick="clearStaff()">Remove all</button></div>
+    <div id="staffList"></div>
+  </div>
 
   <div class="row">
     <div>
       <label>Department (of employee)</label>
-      <select id="department"></select>
+      <select id="department" onchange="onDeptChange()"></select>
+      <div class="hint" id="deptNote"></div>
     </div>
   </div>
 
@@ -197,7 +213,8 @@
 
 <script>
 let ME = null;
-let SEL_EMP = null;    // the employee row picked from the employees table
+let STAFF = [];        // employees picked from the employees table: [{ emp: row, dept: "..." }]. One memo is issued per entry.
+let PREV_BRANCH = "";  // the branch before the last change, so a change can be cancelled
 let SEL_FROM = null;   // the sender row picked from the employees table
 const DEFAULT_HOURS = "2";   // hours to respond, unless the sender changes it
 
@@ -228,13 +245,14 @@ async function init(){
 
     $("memoDate").value = todayISO();
     await populateBranches();
+    PREV_BRANCH = $("branch").value;
     $("branchNote").textContent = "Signed in as " + ME.username;
 
     // Only Admins and Super Admins may look beyond the selected branch for the employee.
     $("allBranchesRow").classList.toggle("hidden", !(ME.role === "super_admin" || ME.role === "admin"));
 
-    wireSearch($("name"),    $("nameList"), { all: () => allBranchesOn(), onPick: pickEmployee, onEdit: () => onEmployeeEdit("name"), onBlur: () => resolveTyped($("name"), "emp") });
-    wireSearch($("empId"),   $("idList"),   { all: () => allBranchesOn(), onPick: pickEmployee, onEdit: () => onEmployeeEdit("id"),   onBlur: () => resolveTyped($("empId"), "emp") });
+    wireSearch($("name"),    $("nameList"), { all: () => allBranchesOn(), onPick: pickEmployee, mark: e => inStaff(e) ? " · ADDED" : "", onBlur: () => resolveTyped($("name"), "emp") });
+    wireSearch($("empId"),   $("idList"),   { all: () => allBranchesOn(), onPick: pickEmployee, mark: e => inStaff(e) ? " · ADDED" : "", onBlur: () => resolveTyped($("empId"), "emp") });
     wireSearch($("memoFrom"),$("fromList"), { all: () => true,            onPick: pickFrom,     onEdit: onFromEdit,                   onBlur: () => resolveTyped($("memoFrom"), "from") });
 
     status.style.color = "#1d8a4e";
@@ -296,8 +314,15 @@ function allBranchesOn(){ return !$("allBranchesRow").classList.contains("hidden
 
 // ---- Branch and department -------------------------------------------------
 async function onBranchChange(){
+  // The staff list belongs to one branch, so changing branch clears it. Ask first when people were already added.
+  if(STAFF.length && !confirm("Changing the branch clears the " + STAFF.length + " employee(s) already added. Continue?")){
+    $("branch").value = PREV_BRANCH;
+    return;
+  }
+  PREV_BRANCH = $("branch").value;
   clearEmployee();
   await loadDepartments($("branch").value);
+  updateDeptUI();
 }
 
 async function loadDepartments(branch){
@@ -361,7 +386,7 @@ function wireSearch(input, list, cfg){
     list.innerHTML = items.map((e, i) =>
       '<div class="ac-item' + (i === active ? " on" : "") + '" data-i="' + i + '"><b>' + esc(e.full_name) + '</b><span>' +
       esc(e.employee_id) + " · " + esc(e.branch || "no branch") + " · " + esc(e.department || "no department") +
-      (e.rank ? " · " + esc(e.rank) : "") + (isInactive(e) ? " · INACTIVE" : "") + "</span></div>"
+      (e.rank ? " · " + esc(e.rank) : "") + (isInactive(e) ? " · INACTIVE" : "") + (cfg.mark ? cfg.mark(e) : "") + "</span></div>"
     ).join("");
     list.classList.remove("hidden");
   }
@@ -402,79 +427,115 @@ function wireSearch(input, list, cfg){
   });
 }
 
-// ---- Picked employee ---------------------------------------------------------
+// ---- Selected staff ------------------------------------------------------------
+function inStaff(e){ return STAFF.some(s => s.emp.id === e.id); }
+
+// Picking an employee ADDS them to the list. The search boxes are then emptied, ready for the next person.
 function pickEmployee(e){
-  SEL_EMP = e;
-  $("name").value = e.full_name || "";
-  $("empId").value = e.employee_id || "";
-  setDepartment(e.department);
-  $("empMsg").textContent = "";
-  renderEmpChip();
+  if(inStaff(e)){
+    clearSearchBoxes();
+    $("empMsg").textContent = e.full_name + " is already in the list.";
+    return;
+  }
+  STAFF.push({ emp: e, dept: e.department || "" });
+  clearSearchBoxes();
+  $("empMsg").textContent = "Added " + e.full_name + ". Search for the next person, or continue below.";
+  renderStaff();
+  updateDeptUI();
+}
+
+function removeStaff(i){
+  STAFF.splice(i, 1);
+  renderStaff();
+  updateDeptUI();
+}
+
+function clearStaff(){
+  STAFF = [];
+  renderStaff();
+  updateDeptUI();
+}
+
+function clearSearchBoxes(){
+  $("name").value = ""; $("empId").value = "";
   refreshPickState();
 }
 
 // Red outline on any box that holds typed text which is not (yet) a real employee from the list.
 function refreshPickState(){
-  $("name").classList.toggle("unpicked",     !!$("name").value.trim()     && !SEL_EMP);
-  $("empId").classList.toggle("unpicked",    !!$("empId").value.trim()    && !SEL_EMP);
+  $("name").classList.toggle("unpicked",     !!$("name").value.trim());
+  $("empId").classList.toggle("unpicked",    !!$("empId").value.trim());
   $("memoFrom").classList.toggle("unpicked", !!$("memoFrom").value.trim() && !SEL_FROM);
 }
 
-function renderEmpChip(){
-  const chip = $("empChip");
-  if(!SEL_EMP){ chip.classList.add("hidden"); chip.innerHTML = ""; return; }
-  const e = SEL_EMP;
-  const bits = [e.branch || "no branch", e.department || "no department", e.unit, e.rank].filter(Boolean);
-  let h = "<b>" + esc(e.full_name) + "</b> · " + esc(e.employee_id) + "<br>Registered: " + esc(bits.join(" · "));
-  if(isInactive(e)) h += '<span class="bad">INACTIVE: this employee is marked as deactivated.</span>';
+function renderStaff(){
+  const box = $("staffBox"), list = $("staffList");
+  if(!STAFF.length){ box.classList.add("hidden"); list.innerHTML = ""; $("staffCount").textContent = ""; return; }
   const memoBranch = $("branch").value;
-  if(e.branch && memoBranch && !same(e.branch, memoBranch)) h += '<span class="warn">This employee is registered under a different branch from the one selected above.</span>';
-  chip.innerHTML = h;
-  chip.classList.remove("hidden");
+  $("staffCount").textContent = STAFF.length + (STAFF.length === 1 ? " employee" : " employees") + " selected" +
+    (STAFF.length > 1 ? " (one memo each)" : "");
+  list.innerHTML = STAFF.map((s, i) => {
+    const e = s.emp;
+    const bits = [e.branch || "no branch", s.dept || "no department", e.unit, e.rank].filter(Boolean);
+    let extra = "";
+    if(isInactive(e)) extra += '<span class="bad">INACTIVE: this employee is marked as deactivated.</span>';
+    if(e.branch && memoBranch && !same(e.branch, memoBranch)) extra += '<span class="warn">This employee is registered under a different branch from the one selected above.</span>';
+    return '<div class="staff-row"><div><b>' + esc(e.full_name) + '</b> · ' + esc(e.employee_id) +
+      '<br><span class="meta">Registered: ' + esc(bits.join(" · ")) + '</span>' + extra + '</div>' +
+      '<button type="button" onclick="removeStaff(' + i + ')">Remove</button></div>';
+  }).join("");
+  box.classList.remove("hidden");
 }
 
+// Full reset of the employee part of the form (used after a save and on a branch change).
 function clearEmployee(){
-  SEL_EMP = null;
-  $("name").value = ""; $("empId").value = "";
-  $("empMsg").textContent = "Start typing (at least 2 letters). The list comes from the employee records. Pick the person and the ID and department fill in.";
-  if($("department").options.length) $("department").value = "";
-  renderEmpChip();
-  refreshPickState();
+  STAFF = [];
+  clearSearchBoxes();
+  $("empMsg").textContent = "Start typing (at least 2 letters). The list comes from the employee records. Pick a person to add them below. Repeat for everyone who is to receive the same letter.";
+  renderStaff();
+  updateDeptUI();
 }
 
-// Typing over a picked employee drops the pick, so a name and ID can never get out of step.
-function onEmployeeEdit(which){
-  if(!SEL_EMP) return;
-  const typed = which === "name" ? $("name").value : $("empId").value;
-  const ref   = which === "name" ? SEL_EMP.full_name : SEL_EMP.employee_id;
-  if(same(typed, ref)) return;
-  SEL_EMP = null;
-  if(which === "name") $("empId").value = ""; else $("name").value = "";
-  $("department").value = "";
-  renderEmpChip();
-  refreshPickState();
+// One person selected: the Department box works as before (filled from the employee record, can be changed).
+// Several people selected: each memo uses that person's own registered department, so the box is switched off.
+function updateDeptUI(){
+  const sel = $("department");
+  if(STAFF.length > 1){
+    sel.disabled = true;
+    sel.value = "";
+    $("deptNote").textContent = "Each memo uses that employee's own registered department (shown in the list above).";
+  }else{
+    sel.disabled = false;
+    $("deptNote").textContent = "";
+    if(STAFF.length === 1) setDepartment(STAFF[0].dept);
+    else if(sel.options.length) sel.value = "";
+  }
+}
+function onDeptChange(){
+  if(STAFF.length === 1){ STAFF[0].dept = $("department").value; renderStaff(); }
 }
 
 // When you leave a box that holds typed text that was not picked from the list:
-//   * exactly one employee matches (or the ID / full name matches exactly) -> that person is picked for you;
+//   * exactly one employee matches (or the ID / full name matches exactly) -> that person is added for you;
 //   * otherwise the box is cleared, so it can never keep an incomplete name.
 async function resolveTyped(input, kind){
-  const picked = kind === "emp" ? SEL_EMP : SEL_FROM;
   const text = input.value.trim();
-  if(!text || picked) return;
+  if(!text) return;
+  if(kind === "from" && SEL_FROM) return;
   const msg = kind === "emp" ? $("empMsg") : $("fromMsg");
   const all = kind === "emp" ? allBranchesOn() : true;
   let res;
   try{ res = await searchEmployees(text, all); }
   catch(e){ msg.textContent = "Lookup failed: " + e.message; return; }
   // the person may have picked someone, or typed something else, while the lookup ran
-  if((kind === "emp" ? SEL_EMP : SEL_FROM) || input.value.trim() !== text) return;
+  if(input.value.trim() !== text) return;
+  if(kind === "from" && SEL_FROM) return;
 
   const exact = res.filter(e => same(e.employee_id, text) || same(e.full_name, text));
   const choice = exact.length === 1 ? exact[0] : (res.length === 1 ? res[0] : null);
   if(choice){ if(kind === "emp") pickEmployee(choice); else pickFrom(choice); return; }
 
-  if(kind === "emp") clearEmployee(); else { input.value = ""; refreshPickState(); }
+  input.value = ""; refreshPickState();
   msg.textContent = res.length
     ? res.length + " people match \"" + text + "\". Type more of the name, or pick one from the list."
     : "No employee matches \"" + text + "\"" + (all ? "." : " in this branch.");
@@ -515,9 +576,6 @@ function collect(){
   return {
     type: t,
     branch: g("branch"),
-    name: SEL_EMP ? SEL_EMP.full_name : g("name"),
-    empId: SEL_EMP ? SEL_EMP.employee_id : g("empId"),
-    department: g("department"),
     fromId: SEL_FROM ? SEL_FROM.employee_id : "",
     fromName: fromName,
     fromRank: fromRank,
@@ -534,9 +592,10 @@ function collect(){
   };
 }
 
-// Year-wise sequential tracking number, read from Supabase.
-// "skip" moves the number on when a save collides with a number someone else just took.
-async function nextTracking(skip){
+// Year-wise sequential tracking numbers, read from Supabase.
+// Returns the first free sequence number. "skip" moves it on when a save collides with a number someone else just took.
+// A save of N memos uses N numbers in a row: first, first + 1, and so on.
+async function nextSeq(skip){
   const year = new Date().getFullYear().toString();
   const { data, error } = await sb
     .from("hr_queries")
@@ -550,19 +609,34 @@ async function nextTracking(skip){
     const last = data[0].tracking_number;
     seq = parseInt(last.slice(4), 10) + 1;
   }
-  return year + String(seq + (skip || 0)).padStart(4, "0");
+  return { year: year, seq: seq + (skip || 0) };
+}
+function trackingNo(year, seq){ return year + String(seq).padStart(4, "0"); }
+
+// The data object the memo design uses, for one person.
+function memoDataFor(d, s){
+  return Object.assign({}, d, { name: s.emp.full_name, empId: s.emp.employee_id, department: s.dept });
 }
 
 function doPreview(){
   const d = collect();
+  const data = STAFF.length
+    ? memoDataFor(d, STAFF[0])
+    : Object.assign({}, d, { name: $("name").value.trim(), empId: $("empId").value.trim(), department: $("department").value });
   const box = $("previewBox");
   box.classList.remove("hidden");
   box.innerHTML = '<iframe id="pv" title="Memo preview"></iframe>';
-  $("pv").srcdoc = MemoPrint.html(d, "(assigned on save)", { preview: true });
+  $("pv").srcdoc = MemoPrint.html(data, "(assigned on save)", { preview: true });
+  const status = $("status");
+  status.className = "status";
+  status.textContent = STAFF.length > 1
+    ? "Preview shows the memo for " + STAFF[0].emp.full_name + ". The other " + (STAFF.length - 1) + " memo(s) are the same apart from the name, ID and department."
+    : "";
 }
 
 function validate(d){
-  if(!SEL_EMP){ return "Pick the employee from the list, so the name and ID come from the employee records."; }
+  if(!STAFF.length){ return "Pick at least one employee from the list, so the name and ID come from the employee records."; }
+  if($("name").value.trim() || $("empId").value.trim()){ return "A name or ID is typed in the search box but not added. Pick the person from the list, or clear the box."; }
   if(!SEL_FROM){ return "Pick the sender (From) from the list."; }
   if(!d.memoDate){ return "Memo date is required."; }
   if(d.type === "QUERY" && (!d.title || !d.details)){ return "Query needs a title and details."; }
@@ -591,7 +665,9 @@ async function saveAndPrint(){
     status.textContent = "You are not assigned to that Branch.";
     return;
   }
-  if(isInactive(SEL_EMP) && !confirm(SEL_EMP.full_name + " is marked as deactivated. Issue the memo anyway?")) return;
+  const inactive = STAFF.filter(s => isInactive(s.emp));
+  if(inactive.length && !confirm(inactive.map(s => s.emp.full_name).join(", ") + (inactive.length === 1 ? " is" : " are") + " marked as deactivated. Issue the memo(s) anyway?")) return;
+  if(STAFF.length > 1 && !confirm("Create " + STAFF.length + " separate " + d.type + " memos, one for each employee in the list, each with its own tracking number?")) return;
 
   // Open the PDF window now, while the click is still fresh, so the browser does not block it.
   const w = window.open("", "_blank");
@@ -599,16 +675,18 @@ async function saveAndPrint(){
 
   status.className = "status"; status.textContent = "Saving...";
   try{
-    let tracking = null, lastErr = null;
-    for(let attempt = 0; attempt < 3 && !tracking; attempt++){
-      const candidate = await nextTracking(attempt);
-      const row = {
-        tracking_number: candidate,
+    // All memos go in with ONE insert, so either every memo is saved or none is.
+    let saved = null, lastErr = null;
+    for(let attempt = 0; attempt < 4 && !saved; attempt++){
+      const start = await nextSeq(attempt);
+      const built = STAFF.map((s, i) => ({ s: s, tracking: trackingNo(start.year, start.seq + i) }));
+      const rows = built.map(b => ({
+        tracking_number: b.tracking,
         branch: d.branch,
-        employee_name: d.name,
-        employee_id: d.empId || null,
+        employee_name: b.s.emp.full_name,
+        employee_id: b.s.emp.employee_id || null,
         letter_type: d.type,
-        department: d.department || null,
+        department: b.s.dept || null,
         memo_from: d.memoFrom || null,
         from_employee_id: d.fromId || null,
         from_name: d.fromName || null,
@@ -627,25 +705,28 @@ async function saveAndPrint(){
         para4: d.paras[3] || null,
         para5: d.paras[4] || null,
         created_by_username: ME.username
-      };
-      const { error } = await sb.from("hr_queries").insert(row);
-      if(!error){ tracking = candidate; break; }
-      if(error.code === "23505"){ lastErr = error; continue; }   // number already taken: try the next one
+      }));
+      const { error } = await sb.from("hr_queries").insert(rows);
+      if(!error){ saved = built; break; }
+      if(error.code === "23505"){ lastErr = error; continue; }   // a number is already taken: try the next free ones
       throw error;
     }
-    if(!tracking) throw lastErr || new Error("Could not get a free tracking number.");
+    if(!saved) throw lastErr || new Error("Could not get free tracking numbers.");
 
-    await logActivity("hr_query_created", ME.username + " created a " + d.type + " memo for " + d.name + " (" + tracking + ")");
+    const n = saved.length;
+    const range = n === 1 ? saved[0].tracking : saved[0].tracking + " to " + saved[n - 1].tracking;
+    const names = saved.slice(0, 5).map(b => b.s.emp.full_name).join(", ") + (n > 5 ? " and " + (n - 5) + " more" : "");
+    await logActivity("hr_query_created", ME.username + " created " + (n === 1 ? "a " + d.type + " memo" : n + " " + d.type + " memos") + " for " + names + " (" + range + ")");
 
     status.className = "status ok";
     if(w){
-      status.textContent = "✅ Saved as " + tracking + ". Opening PDF...";
-      MemoPrint.write(w, d, tracking);
+      status.textContent = "✅ Saved " + (n === 1 ? "as " : n + " memos: ") + range + ". Opening PDF...";
+      MemoPrint.writeMany(w, saved.map(b => ({ d: memoDataFor(d, b.s), tracking: b.tracking })));
     }else{
-      status.textContent = "✅ Saved as " + tracking + ", but your browser blocked the PDF window. Allow pop-ups for this site, then use Reprint in Manage Query/Memo.";
+      status.textContent = "✅ Saved " + (n === 1 ? "as " : n + " memos: ") + range + ", but your browser blocked the PDF window. Allow pop-ups for this site, then use Reprint in Manage Query/Memo.";
     }
 
-    // Clear the employee and the details; keep type, date, branch and sender for the next memo.
+    // Clear the employees and the details; keep type, date, branch and sender for the next memo.
     clearEmployee();
     ["title","details","serviceSection","queryDate","amount","customSubject","para1","para2","para3","para4","para5","warnDetails","surDetails"]
       .forEach(id => { const el = $(id); if(el) el.value = ""; });

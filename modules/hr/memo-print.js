@@ -67,7 +67,8 @@
 
   var CC = ["Chairman", "Vice Chairman", "Admin Directors", "Executive Directors", "Heads of Corporate", "Heads of Admin/Departments", "C.S.O."];
 
-  function html(d, tracking, opts) {
+  // Builds the pieces of one memo. html() wraps them as one document; htmlMany() joins several.
+  function build(d, tracking, opts) {
     opts = opts || {};
     // Memos saved before the sender came from the employee table keep their original signatory.
     var legacy = !d.fromName;
@@ -77,7 +78,8 @@
       "@page { size:A4; margin:36pt 50pt 56pt 50pt;",
       "  @bottom-left { content:'CONFIDENTIAL'; font:bold 8pt Arial,sans-serif; color:#555; }",
       "  @bottom-center { content:'" + COMPANY + " | Human Resources'; font:8pt Arial,sans-serif; color:#555; }",
-      "  @bottom-right { content:'Page ' counter(page) ' of ' counter(pages); font:8pt Arial,sans-serif; color:#555; } }",
+      // In a combined print (several memos in one PDF) a page counter would number across the memos, so it is left out.
+      (opts.many ? "  @bottom-right { content:''; } }" : "  @bottom-right { content:'Page ' counter(page) ' of ' counter(pages); font:8pt Arial,sans-serif; color:#555; } }"),
       "* { box-sizing:border-box; -webkit-print-color-adjust:exact; print-color-adjust:exact; }",
       "body { font-family:'Times New Roman',Times,serif; font-size:12pt; line-height:1.55; margin:0; padding:" + (opts.preview ? "34px 46px" : "0") + "; color:#000; background:#fff; }",
       ".wm { position:fixed; top:50%; left:50%; width:430px; height:430px; margin:-215px 0 0 -215px; opacity:0.12; z-index:0; }",
@@ -101,8 +103,9 @@
       ".sign .gap { display:table-cell; width:10%; }",
       ".sign .cap { font-size:9.5pt; color:#444; }",
       ".cc { margin-top:26px; font-size:10pt; line-height:1.5; }",
-      ".keep { page-break-inside:avoid; }"
-    ].join("\n");
+      ".keep { page-break-inside:avoid; }",
+      (opts.many ? ".memo { break-after:page; page-break-after:always; }\n.memo:last-child { break-after:auto; page-break-after:auto; }" : "")
+    ].filter(Boolean).join("\n");
 
     var rows = [
       ["Tracking No.", esc(tracking)],
@@ -113,9 +116,8 @@
       ["From", esc(fromLine(d))]
     ].map(function (r) { return "<tr><td class=\"k\">" + r[0] + "</td><td>" + r[1] + "</td></tr>"; }).join("");
 
-    return "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>Memo " + esc(tracking) + "</title><style>\n" + css + "\n</style></head><body>" +
-      "<img class=\"wm\" src=\"" + LOGO + "\" alt=\"\">" +
-      "<div class=\"page\">" +
+    var wm = "<img class=\"wm\" src=\"" + LOGO + "\" alt=\"\">";
+    var page = "<div class=\"page\">" +
       "<table class=\"hdr\"><tr><td class=\"lg\"><img src=\"" + LOGO + "\" alt=\"Rumbu\"></td>" +
       "<td class=\"co\"><div class=\"n\">" + esc(COMPANY) + "</div><div class=\"s\">Human Resources Department</div></td>" +
       "<td class=\"sp\"></td></tr></table><div class=\"rule2\"></div>" +
@@ -129,7 +131,31 @@
       "<div class=\"b\">Received by (Employee)<br><span class=\"cap\">Name: ................................................<br>Sign: ................................ Date: ................</span></div>" +
       "</div>" +
       "<div class=\"cc\"><b>Cc:</b> " + CC.map(esc).join(" &nbsp;|&nbsp; ") + "</div></div>" +
-      "</div></body></html>";
+      "</div>";
+    return { css: css, wm: wm, page: page, title: "Memo " + esc(tracking) };
+  }
+
+  function html(d, tracking, opts) {
+    var p = build(d, tracking, opts || {});
+    return "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>" + p.title + "</title><style>\n" + p.css + "\n</style></head><body>" +
+      p.wm + p.page + "</body></html>";
+  }
+
+  // Several memos in ONE document, one memo per page: items = [{ d: data, tracking: "20260012" }, ...]
+  function htmlMany(items) {
+    var parts = items.map(function (it) { return build(it.d, it.tracking, { many: true }); });
+    return "<!DOCTYPE html><html><head><meta charset=\"UTF-8\"><title>Memos (" + items.length + ")</title><style>\n" + parts[0].css + "\n</style></head><body>" +
+      parts[0].wm +
+      parts.map(function (p) { return "<div class=\"memo\">" + p.page + "</div>"; }).join("") +
+      "</body></html>";
+  }
+
+  // Open the print dialog (Save as PDF) once the window has loaded.
+  function printWhenReady(w) {
+    var done = false;
+    function go() { if (done) return; done = true; try { w.focus(); w.print(); } catch (e) {} }
+    w.onload = go;
+    setTimeout(go, 2000);
   }
 
   // Write the memo into an already opened window and open the print dialog (Save as PDF).
@@ -137,10 +163,16 @@
     w.document.open();
     w.document.write(html(d, tracking));
     w.document.close();
-    var done = false;
-    function go() { if (done) return; done = true; try { w.focus(); w.print(); } catch (e) {} }
-    w.onload = go;
-    setTimeout(go, 2000);
+    printWhenReady(w);
+  }
+
+  // Same, for several memos in one PDF (one memo per page). One memo is written exactly as write() does.
+  function writeMany(w, items) {
+    if (items.length === 1) { write(w, items[0].d, items[0].tracking); return; }
+    w.document.open();
+    w.document.write(htmlMany(items));
+    w.document.close();
+    printWhenReady(w);
   }
 
   // A saved hr_queries row -> the data object the design uses
@@ -156,5 +188,5 @@
     };
   }
 
-  global.MemoPrint = { html: html, write: write, fromRow: fromRow, fmtDate: fmtDate };
+  global.MemoPrint = { html: html, htmlMany: htmlMany, write: write, writeMany: writeMany, fromRow: fromRow, fmtDate: fmtDate };
 })(typeof window !== "undefined" ? window : globalThis);
