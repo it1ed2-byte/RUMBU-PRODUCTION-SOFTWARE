@@ -65,12 +65,18 @@ function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "
 
 
 // Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
+/* Work type names are compared without regard to capital letters or spaces: "Cover duty" = "Cover Duty" = "COVER DUTY". */
+function wtKey(v){ const k = String(v||"").trim().toLowerCase().replace(/\s+/g, ""); return k === "brokedown" ? "breakdown" : k; }
+
 async function fetchAllRows(table, select, query){
   let all = [], offset = 0; const pageSize = 1000;
   const q = query || "";
+  let ord = "&order=id.asc";     // the id is unique, so no row is repeated or skipped between pages; a table with no id is read without it
   for(let guard=0; guard<500; guard++){
     const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
-    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=" + (select||"*") + q, { headers });
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=" + (select||"*") + q + ord, { headers });
+    if(res.status === 416) break;
+    if(res.status === 400 && ord){ ord = ""; guard--; continue; }
     if(!res.ok) throw new Error(table + ": HTTP " + res.status);
     const batch = await res.json();
     all = all.concat(batch);
@@ -225,9 +231,11 @@ async function viewReport(){
     };
   }
 
-  const normalRows = prod.filter(r => r.work_type !== "B grade" && r.work_type !== "Overtime");
-  const bgradeRows = prod.filter(r => r.work_type === "B grade");
-  const overtimeRows = prod.filter(r => r.work_type === "Overtime");
+  // "Normal" means Normal only (a blank work type has always counted as Normal). Cover Duty, Extra Operators, Breakdown and Mixed
+  // are not Normal production, and "B Grade" is matched whatever its capital letters.
+  const normalRows = prod.filter(r => wtKey(r.work_type || "Normal") === "normal");
+  const bgradeRows = prod.filter(r => wtKey(r.work_type) === "bgrade");
+  const overtimeRows = prod.filter(r => wtKey(r.work_type) === "overtime");
 
   const sNormal = computeSummary(normalRows);
   const sBGrade = computeSummary(bgradeRows);
@@ -264,6 +272,7 @@ async function viewReport(){
   document.getElementById("reportArea").innerHTML =
     `<h3>📊 Production per Day</h3><canvas id="prodChart" height="150"></canvas>` +
     summaryTable("Normal", sNormal) + summaryTable("B Grade", sBGrade) + summaryTable("Overtime", sOvertime) +
+    `<p style="font-size:11px;opacity:.8;">Cover Duty, Extra Operators and Breakdown rows are not part of these three summaries; they appear in Production Details below.</p>` +
     `<h3>Production Details</h3><table><tr><th>Date</th><th>Asset</th><th>Shift</th><th>Work Type</th><th>Mat Type</th>` +
     `<th>A</th><th>B</th><th>C</th><th>Total</th><th>Target</th><th>Downtime</th><th>ATG</th><th>MLU</th>` +
     `<th>%A</th><th>%B</th><th>%C</th><th>%P</th></tr>${detailRows}</table>`;

@@ -67,7 +67,7 @@ svg{width:100%;height:auto;display:block;}
 .dtable th{background:var(--navy);color:#fff;font-size:11px;position:sticky;top:0;z-index:1;}
 .dtable td.left{text-align:left;}
 .dtable td.grp{text-align:left;font-weight:800;background:var(--bg);color:var(--navy);}
-.colorHigh{background:#d9ead3;color:#1a4731;}.colorMedium{background:#fce5cd;color:#1f2937;}\1
+.colorHigh{background:#d9ead3;color:#1a4731;}.colorMedium{background:#fce5cd;color:#1f2937;}.colorLow{background:#f4cccc;color:#1f2937;}
 .dtable tr.optot td{font-weight:800;background:#eef2f7;border-top:2px solid #94a3b8;}
 .dtable th.sortable{cursor:pointer;user-select:none;}
 .dtable th.sortable:hover{filter:brightness(1.25);}
@@ -142,7 +142,7 @@ svg{width:100%;height:auto;display:block;}
     <div class="card">
       <h3>🏆 Best Performers (by Efficiency)</h3>
       <div class="bests" id="m_bests"></div>
-      <p style="font-size:11px;color:var(--muted);margin:10px 0 0;">Efficiency = Total ÷ Target × 100. Minimum 10% of the top group's output required to qualify.</p>
+      <p style="font-size:11px;color:var(--muted);margin:10px 0 0;">Efficiency = mats on rows that carry a target / Target x 100. Cover Duty, B Grade, Extra Operators and Breakdown carry no target, so they are not part of efficiency. Minimum 10% of the top group's output required to qualify.</p>
     </div>
     <div class="grid2">
       <div class="card"><h3>Morning vs Night: Production</h3><div id="m_chartShift"></div></div>
@@ -218,9 +218,12 @@ svg{width:100%;height:auto;display:block;}
 /*==PURE-START==*/
 /* Everything between these markers is DOM-free so it can be unit-tested. */
 const WORK_MINUTES = 660;
-const OT_TYPES      = new Set(["Overtime","overtime","OVERTIME"]);
-const COVER_TYPES   = new Set(["Cover duty","cover duty","COVER DUTY"]);
-const HOLIDAY_TYPES = new Set(["Overtime","overtime","OVERTIME","Cover duty","cover duty","COVER DUTY","Mixed","mixed","MIXED"]);
+/* Work type names are compared without regard to capital letters or spaces: "Cover duty" = "Cover Duty" = "COVER DUTY". */
+function wtKey(v){const k=String(v||"").trim().toLowerCase().replace(/\s+/g,"");return k==="brokedown"?"breakdown":k;}
+function wtSet(...names){const k=new Set(names.map(wtKey));return{has:v=>k.has(wtKey(v))};}
+const OT_TYPES      = wtSet("Overtime");
+const COVER_TYPES   = wtSet("Cover duty");
+const HOLIDAY_TYPES = wtSet("Overtime","Cover duty","Mixed");
 
 function n(v){const x=parseFloat(v);return isNaN(x)?0:x;}
 function fmt(v){return Math.round(v).toLocaleString();}
@@ -281,11 +284,12 @@ function computeMetrics(myRows,ctrlRows,excludedCodes){
     const k=[r.assets,r.date_col,r.shift].join("||");
     dt[k]=(dt[k]||0)+minutesBetween(s,f);
   });
-  let A=0,B=0,C=0,total=0,target=0,downtime=0;
+  let A=0,B=0,C=0,total=0,target=0,downtime=0,Tt=0,At=0;   // Tt / At: total and A-grade mats on rows that carry a target
   const mcWork=new Set();
   myRows.forEach(r=>{
     A+=n(r.a_double)+n(r.a_single); B+=n(r.b); C+=n(r.c);
     total+=n(r.total); target+=n(r.target);
+    if(n(r.target)>0){Tt+=n(r.total);At+=n(r.a_double)+n(r.a_single);}
     if(!COVER_TYPES.has(r.work_type||"")){
       mcWork.add(r.assets+"||"+r.date_col);
       downtime+=(dt[[r.assets,r.date_col,r.shift].join("||")]||0);
@@ -294,15 +298,15 @@ function computeMetrics(myRows,ctrlRows,excludedCodes){
   const mc=mcWork.size||1;
   const MLD=target?Math.round((target*downtime)/(WORK_MINUTES*mc)):0;
   const ATG=Math.round(target-MLD);
-  const MLU=Math.round(A-ATG);
-  return {A,B,C,total,target,downtime,MLD,ATG,MLU,efficiency:ATG?(total/ATG*100):0};
+  const MLU=Math.round(At-ATG);
+  return {A,B,C,total,target,Tt,At,downtime,MLD,ATG,MLU,efficiency:ATG?(Tt/ATG*100):0};
 }
 /* ---------- Incentive: Normal production only, over a two-week window ---------- */
 /* A blank work type has always been shown as "Normal" on this page, so it counts as Normal here too.
    B Grade, Cover Duty, Overtime, Extra Operators, Breakdown and the old "Mixed" are all out. */
 function isNormalWork(r){
   const w=(r.work_type==null||r.work_type==="")?"Normal":r.work_type;
-  return String(w).trim().toLowerCase()==="normal";
+  return wtKey(w)==="normal";
 }
 /* The last two COMPLETED Monday to Saturday weeks: the latest Saturday before today, and the Monday 12 days earlier. */
 function incentivePeriod(today){
@@ -317,11 +321,11 @@ function incentiveByOperator(rows){
   const m={};
   rows.filter(isNormalWork).forEach(r=>{
     const id=r.operator_id==null?"":String(r.operator_id); if(!id)return;
-    const o=m[id]||(m[id]={id,name:r.operator_name||id,tot:0,a:0,b:0,c:0,tg:0,dates:new Set()});
-    o.tot+=n(r.total); o.a+=n(r.a_double)+n(r.a_single); o.b+=n(r.b); o.c+=n(r.c); o.tg+=n(r.target); o.dates.add(r.date_col);
+    const o=m[id]||(m[id]={id,name:r.operator_name||id,tot:0,et:0,a:0,b:0,c:0,tg:0,dates:new Set()});
+    o.tot+=n(r.total); if(n(r.target)>0)o.et+=n(r.total); o.a+=n(r.a_double)+n(r.a_single); o.b+=n(r.b); o.c+=n(r.c); o.tg+=n(r.target); o.dates.add(r.date_col);
     if(!o.name||o.name===id)o.name=r.operator_name||id;
   });
-  return Object.values(m).map(o=>({id:o.id,name:o.name,days:o.dates.size,a:o.a,b:o.b,c:o.c,tot:o.tot,tg:o.tg,pA:o.tot?o.a/o.tot*100:0,eff:eff(o.tot,o.tg)}));
+  return Object.values(m).map(o=>({id:o.id,name:o.name,days:o.dates.size,a:o.a,b:o.b,c:o.c,tot:o.tot,tg:o.tg,pA:o.tot?o.a/o.tot*100:0,eff:eff(o.et,o.tg)}));
 }
 /*==PURE-END==*/
 
@@ -337,9 +341,13 @@ function sumBy(rows,kFn,vFn){const m={};rows.forEach(r=>{const k=kFn(r);if(k==nu
 
 async function fetchPaged(table,select,clause,order){
   let all=[],offset=0;
-  const base=SUPABASE_URL+"/rest/v1/"+table+"?select="+select+clause+(order||"");
+  // The id breaks ties, so rows are never repeated or skipped between pages. If a table has no id, fall back to the plain order.
+  const orders=[(order?order+",id.asc":"&order=id.asc"),(order||""),""]; let oi=0;
   for(let g=0;g<500;g++){
+    const base=SUPABASE_URL+"/rest/v1/"+table+"?select="+select+clause+orders[oi];
     const res=await fetch(base,{headers:Object.assign({},authHeaders(),{"Range-Unit":"items","Range":offset+"-"+(offset+999)})});
+    if(res.status===416)break;
+    if(res.status===400&&oi<orders.length-1){oi++;g--;continue;}
     if(!res.ok)throw new Error(table+": HTTP "+res.status);
     const batch=await res.json();
     all=all.concat(batch);
@@ -401,10 +409,11 @@ function lineChart(id,series,stroke,dot,legend){
   <div class="legend"><span><span class="dot" style="background:${stroke}"></span>${legend}</span></div>`;
 }
 
+/* et = mats on rows that carry a target. Efficiency is et / target, never all mats / target. */
 function totals(rows){
-  let tot=0,ad=0,as=0,b=0,c=0,tg=0;
-  rows.forEach(r=>{tot+=n(r.total);ad+=n(r.a_double);as+=n(r.a_single);b+=n(r.b);c+=n(r.c);tg+=n(r.target);});
-  return{tot,ad,as,b,c,tg,a:ad+as};
+  let tot=0,ad=0,as=0,b=0,c=0,tg=0,et=0;
+  rows.forEach(r=>{tot+=n(r.total);ad+=n(r.a_double);as+=n(r.a_single);b+=n(r.b);c+=n(r.c);tg+=n(r.target);if(n(r.target)>0)et+=n(r.total);});
+  return{tot,ad,as,b,c,tg,et,a:ad+as};
 }
 
 function tilesHtml(tiles){
@@ -556,7 +565,7 @@ async function countQueries(ids){
 }
 
 function managerTiles(rows){
-  const t=totals(rows);const e=eff(t.tot,t.tg);
+  const t=totals(rows);const e=eff(t.et,t.tg);
   const ops=new Set(rows.map(r=>r.operator_id).filter(Boolean)).size;
   const pA=t.tot?Math.round(t.a/t.tot*100):0, pB=t.tot?Math.round(t.b/t.tot*100):0;
   return [
@@ -642,7 +651,7 @@ function renderManagerMetrics(rows,ctrlRows){
   let down=0,MLD=0,ATG=0,MLU=0,tot=0;
   Object.values(byOp).forEach(rs=>{
     const m=computeMetrics(rs,ctrlRows,MGR.excluded);
-    down+=m.downtime;MLD+=m.MLD;ATG+=m.ATG;MLU+=m.MLU;tot+=m.total;
+    down+=m.downtime;MLD+=m.MLD;ATG+=m.ATG;MLU+=m.MLU;tot+=m.Tt;
   });
   const effA=ATG?tot/ATG*100:0;
   $("m_metNote").textContent=`Summed across ${Object.keys(byOp).length} operator${Object.keys(byOp).length===1?"":"s"}: downtime is counted for each operator on the machines they ran.`;
@@ -657,8 +666,8 @@ function renderManagerMetrics(rows,ctrlRows){
 
 function bestByEff(rows,keyFn){
   const grp={};
-  rows.forEach(r=>{const k=keyFn(r);if(!k)return;if(!grp[k])grp[k]={tot:0,tg:0};grp[k].tot+=n(r.total);grp[k].tg+=n(r.target);});
-  const arr=Object.entries(grp).map(([k,v])=>({k,tot:v.tot,tg:v.tg,e:eff(v.tot,v.tg)}));
+  rows.forEach(r=>{const k=keyFn(r);if(!k)return;if(!grp[k])grp[k]={tot:0,tg:0,et:0};grp[k].tot+=n(r.total);grp[k].tg+=n(r.target);if(n(r.target)>0)grp[k].et+=n(r.total);});
+  const arr=Object.entries(grp).map(([k,v])=>({k,tot:v.tot,tg:v.tg,e:eff(v.et,v.tg)}));
   if(!arr.length)return null;
   const threshold=Math.max(...arr.map(x=>x.tot))*0.10;
   const pool=arr.filter(x=>x.tg>0&&x.tot>=threshold);
@@ -690,9 +699,9 @@ function renderManagerCharts(rows){
   hbars("m_chartGroup",top(r=>r.group_name),"teal");
   hbars("m_chartOps",top(r=>r.operator_name));
   const g={};
-  rows.forEach(r=>{const k=r.operator_name;if(!k)return;(g[k]=g[k]||{tot:0,tg:0});g[k].tot+=n(r.total);g[k].tg+=n(r.target);});
+  rows.forEach(r=>{const k=r.operator_name;if(!k)return;(g[k]=g[k]||{tot:0,tg:0,et:0});g[k].tot+=n(r.total);g[k].tg+=n(r.target);if(n(r.target)>0)g[k].et+=n(r.total);});
   hbars("m_chartOpsEff",Object.entries(g).filter(([,v])=>v.tg>0)
-    .map(([k,v])=>[k,eff(v.tot,v.tg),eff(v.tot,v.tg).toFixed(1)+"%"]).sort((a,b)=>b[1]-a[1]).slice(0,10),"teal");
+    .map(([k,v])=>[k,eff(v.et,v.tg),eff(v.et,v.tg).toFixed(1)+"%"]).sort((a,b)=>b[1]-a[1]).slice(0,10),"teal");
   hbars("m_chartAssets",top(r=>r.assets));
   hbars("m_chartSheds",top(r=>r.shed));
   lineChart("m_chartTrend",Object.entries(sumBy(rows,r=>r.date_col,r=>n(r.total))).sort((a,b)=>a[0]<b[0]?-1:1),
@@ -736,7 +745,7 @@ function renderYesterday(boxId,day,rows,ctrlRows,excluded){
   const flushTot=()=>{
     if(!acc)return;
     const pAt=acc.T?Math.round(acc.A/acc.T*100):0, pBt=acc.T?Math.round(acc.B/acc.T*100):0, pCt=acc.T?Math.round(acc.C/acc.T*100):0;
-    const pPt=acc.atg?Math.round(acc.T/acc.atg*100):0;
+    const pPt=acc.atg?Math.round(acc.Tt/acc.atg*100):0;
     html+=`<tr class="optot"><td class="left" colspan="2">TOTAL${opVaries?": "+esc(acc.name):""}</td><td>${acc.A}</td><td>${acc.B}</td><td>${acc.C}</td><td>${acc.T}</td><td>${acc.tg}</td><td>${acc.dn}</td><td>${acc.atg}</td><td>${acc.mlu}</td>`+
       `<td class="${clr(pAt)}">${pAt}%</td><td>${pBt}%</td><td>${pCt}%</td><td class="${clr(pPt)}">${pPt}%</td></tr>`;
     acc=null;
@@ -748,13 +757,13 @@ function renderYesterday(boxId,day,rows,ctrlRows,excluded){
     if(shiftVaries)parts.push("Shift: "+(f.shift||"—"));
     const label=parts.join("  ·  ");
     const opK=String(f.operator_id)+"||"+opName(f);
-    if(opK!==curOp){flushTot();curOp=opK;acc={name:opName(f),A:0,B:0,C:0,T:0,tg:0,dn:0,atg:0,mlu:0};}
+    if(opK!==curOp){flushTot();curOp=opK;acc={name:opName(f),A:0,B:0,C:0,T:0,Tt:0,tg:0,dn:0,atg:0,mlu:0};}
     if(label&&label!==lastLabel)html+=`<tr><td class="grp" colspan="${COLS}">${esc(label)}</td></tr>`;
     lastLabel=label;
     const A=Math.round(m.A), B=Math.round(m.B), C=Math.round(m.C), T=Math.round(m.total);
     const pA=T?Math.round(A/T*100):0, pB=T?Math.round(B/T*100):0, pC=T?Math.round(C/T*100):0;
-    const pP=m.ATG?Math.round(T/m.ATG*100):0;
-    acc.A+=A;acc.B+=B;acc.C+=C;acc.T+=T;acc.tg+=Math.round(m.target);acc.dn+=Math.round(m.downtime);acc.atg+=m.ATG;acc.mlu+=m.MLU;
+    const pP=m.ATG?Math.round(m.Tt/m.ATG*100):0;
+    acc.A+=A;acc.B+=B;acc.C+=C;acc.T+=T;acc.Tt+=m.Tt;acc.tg+=Math.round(m.target);acc.dn+=Math.round(m.downtime);acc.atg+=m.ATG;acc.mlu+=m.MLU;
     html+=`<tr><td class="left">${esc(f.assets||"—")}</td><td>${esc(f.work_type||"Normal")}</td>`+
       `<td>${A}</td><td>${B}</td><td>${C}</td><td>${T}</td><td>${Math.round(m.target)}</td><td>${Math.round(m.downtime)}</td><td>${m.ATG}</td><td>${m.MLU}</td>`+
       `<td class="${clr(pA)}">${pA}%</td><td>${pB}%</td><td>${pC}%</td><td class="${clr(pP)}">${pP}%</td></tr>`;
@@ -875,12 +884,12 @@ function renderPeerRank(peers){
   peers.forEach(r=>{
     if(r.operator_id==null)return;
     const k=String(r.operator_id);
-    (m[k]=m[k]||{tot:0,tg:0});m[k].tot+=n(r.total);m[k].tg+=n(r.target);
+    (m[k]=m[k]||{tot:0,tg:0,et:0});m[k].tot+=n(r.total);m[k].tg+=n(r.target);if(n(r.target)>0)m[k].et+=n(r.total);
   });
-  const ranked=Object.entries(m).filter(([,v])=>v.tg>0).map(([k,v])=>({id:k,e:v.tot/v.tg*100})).sort((a,b)=>b.e-a.e);
+  const ranked=Object.entries(m).filter(([,v])=>v.tg>0).map(([k,v])=>({id:k,e:v.et/v.tg*100})).sort((a,b)=>b.e-a.e);
   const pos=ranked.findIndex(o=>o.id===PER.empId)+1;
   const mine=m[PER.empId];
-  const myEff=mine&&mine.tg?(mine.tot/mine.tg*100).toFixed(1):null;
+  const myEff=mine&&mine.tg?(mine.et/mine.tg*100).toFixed(1):null;
   const medal=pos===1?"🥇":pos===2?"🥈":pos===3?"🥉":"";
   $("p_peerRank").innerHTML=(pos>0&&ranked.length>1)
     ?`<div class="rank-badge">${medal} <span class="rank-num">${pos}</span> of ${ranked.length} operators &nbsp;·&nbsp; Efficiency (Total ÷ Target): <span style="color:var(--teal);">${myEff}%</span></div>`:"";

@@ -83,6 +83,23 @@ function normalizeControlRow(r){
   return r;
 }
 
+// Reads EVERY row (the database returns at most 1,000 per request), in a stable order.
+async function fetchAllRows(table){
+  let all = [], offset = 0; const pageSize = 1000;
+  let ord = "&order=id.asc";
+  for(let guard=0; guard<500; guard++){
+    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=*" + ord, { headers: Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) }) });
+    if(res.status === 416) break;
+    if(res.status === 400 && ord){ ord = ""; guard--; continue; }
+    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
+    const batch = await res.json();
+    all = all.concat(batch);
+    if(batch.length < pageSize) break;
+    offset += pageSize;
+  }
+  return all;
+}
+
 async function init(){
   const status = document.getElementById("status");
   try{
@@ -99,14 +116,8 @@ async function init(){
       document.getElementById("section").disabled = true;
     }
 
-    const [mwRes, ctrlRes] = await Promise.all([
-      fetch(SUPABASE_URL + "/rest/v1/" + MW_TABLE + "?select=*", { headers: authHeaders() }),
-      fetch(SUPABASE_URL + "/rest/v1/control?select=*", { headers: authHeaders() })
-    ]);
-    if(!mwRes.ok) throw new Error(MW_TABLE + ": HTTP " + mwRes.status);
-    if(!ctrlRes.ok) throw new Error("control: HTTP " + ctrlRes.status);
-    MW_ROWS = await mwRes.json();
-    CTRL_ROWS = await ctrlRes.json(); CTRL_ROWS.forEach(normalizeControlRow);
+    [MW_ROWS, CTRL_ROWS] = await Promise.all([ fetchAllRows(MW_TABLE), fetchAllRows("control") ]);
+    CTRL_ROWS.forEach(normalizeControlRow);
     status.style.color="#1d8a4e";
     status.textContent = "Connected. matweaving: " + MW_ROWS.length + " rows, control: " + CTRL_ROWS.length + " rows.";
   }catch(e){

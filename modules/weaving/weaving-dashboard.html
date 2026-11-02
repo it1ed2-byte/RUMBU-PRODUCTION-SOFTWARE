@@ -151,7 +151,8 @@ async function init(){
 }
 
 // ---------- date range ----------
-function iso(d){ return d.toISOString().slice(0,10); }
+function localISO(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+function iso(d){ return localISO(d); }
 function setRange(range, btn){
   document.querySelectorAll(".qbtn").forEach(b=>b.classList.remove("active"));
   if(btn) btn.classList.add("active");
@@ -181,10 +182,13 @@ async function fetchRows(fromDate, toDate, sectionFilter){
     sectionClause = "&section=in.(" + encodeURIComponent(list) + ")";
   }
   const base = SUPABASE_URL + "/rest/v1/" + MW_TABLE + "?select=date_col,shift,mat_type,group_name,assets,a_double,a_single,b,c,total,target,shed,units,section,operator_name,operator_id,rank"
-    + "&date_col=gte." + fromDate + "&date_col=lte." + toDate + sectionClause + "&order=date_col.asc";
+    + "&date_col=gte." + fromDate + "&date_col=lte." + toDate + sectionClause;
+  let ord = "&order=date_col.asc,id.asc";   // the id breaks ties, so no row is repeated or skipped between pages
   for(let guard=0; guard<400; guard++){
     const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
-    const res = await fetch(base, { headers });
+    const res = await fetch(base + ord, { headers });
+    if(res.status === 416) break;
+    if(res.status === 400 && ord){ ord = ord === "&order=date_col.asc,id.asc" ? "&order=date_col.asc" : ""; guard--; continue; }
     if(!res.ok) throw new Error(MW_TABLE + ": HTTP " + res.status);
     const batch = await res.json();
     all = all.concat(batch);
@@ -200,18 +204,20 @@ function sumBy(rows, keyFn, valFn){
   rows.forEach(r=>{ const k=keyFn(r); if(k==null||k==="") return; m[k]=(m[k]||0)+valFn(r); });
   return m;
 }
+/* et = mats on rows that carry a target. Efficiency is et / target, never all mats / target:
+   Cover Duty, B Grade, Extra Operators and Breakdown carry no target, so their mats must not lift efficiency. */
 function totals(rows){
-  let tot=0,ad=0,as=0,b=0,c=0,tg=0;
-  rows.forEach(r=>{ tot+=n(r.total); ad+=n(r.a_double); as+=n(r.a_single); b+=n(r.b); c+=n(r.c); tg+=n(r.target); });
-  return {tot,ad,as,b,c,tg, a:ad+as};
+  let tot=0,ad=0,as=0,b=0,c=0,tg=0,et=0;
+  rows.forEach(r=>{ tot+=n(r.total); ad+=n(r.a_double); as+=n(r.a_single); b+=n(r.b); c+=n(r.c); tg+=n(r.target); if(n(r.target)>0) et+=n(r.total); });
+  return {tot,ad,as,b,c,tg,et, a:ad+as};
 }
 function eff(tot,tg){ return tg>0 ? (tot/tg*100) : 0; }
 
 // Best-by-efficiency with a minimum-output threshold (10% of the max group's output)
 function bestByEfficiency(rows, keyFn){
   const grp = {};
-  rows.forEach(r=>{ const k=keyFn(r); if(k==null||k==="") return; if(!grp[k]) grp[k]={tot:0,tg:0}; grp[k].tot+=n(r.total); grp[k].tg+=n(r.target); });
-  const arr = Object.entries(grp).map(([k,v])=>({k, tot:v.tot, tg:v.tg, e:eff(v.tot,v.tg)}));
+  rows.forEach(r=>{ const k=keyFn(r); if(k==null||k==="") return; if(!grp[k]) grp[k]={tot:0,tg:0,et:0}; grp[k].tot+=n(r.total); grp[k].tg+=n(r.target); if(n(r.target)>0) grp[k].et+=n(r.total); });
+  const arr = Object.entries(grp).map(([k,v])=>({k, tot:v.tot, tg:v.tg, e:eff(v.et,v.tg)}));
   if(!arr.length) return null;
   const maxTot = Math.max.apply(null, arr.map(x=>x.tot));
   const threshold = maxTot * 0.10;
@@ -249,7 +255,7 @@ async function runDashboard(){
 
 function renderKPIs(rows){
   const t = totals(rows);
-  const e = eff(t.tot, t.tg);
+  const e = eff(t.et, t.tg);
   const cards = [
     {n: fmt(t.tot), l:"Total Mat"},
     {n: fmt(t.a), l:"Total A Grade", cls:"good", sub:`Dbl ${fmt(t.ad)} · Sgl ${fmt(t.as)}`},
@@ -311,8 +317,8 @@ function renderCharts(rows, section){
   if(section === "All" && MY_SECTIONS.length > 1){
     cmpCard.style.display = "block";
     const secGrp = {};
-    rows.forEach(r=>{ const k=r.section; if(!secGrp[k]) secGrp[k]={tot:0,tg:0}; secGrp[k].tot+=n(r.total); secGrp[k].tg+=n(r.target); });
-    const entries = Object.entries(secGrp).map(([k,v])=>[SECTION_LABEL[k]||k, eff(v.tot,v.tg), eff(v.tot,v.tg).toFixed(1)+"%"]);
+    rows.forEach(r=>{ const k=r.section; if(!secGrp[k]) secGrp[k]={tot:0,tg:0,et:0}; secGrp[k].tot+=n(r.total); secGrp[k].tg+=n(r.target); if(n(r.target)>0) secGrp[k].et+=n(r.total); });
+    const entries = Object.entries(secGrp).map(([k,v])=>[SECTION_LABEL[k]||k, eff(v.et,v.tg), eff(v.et,v.tg).toFixed(1)+"%"]);
     hbars("chartCompare", entries.sort((a,b)=>b[1]-a[1]), "teal");
   } else {
     cmpCard.style.display = "none";

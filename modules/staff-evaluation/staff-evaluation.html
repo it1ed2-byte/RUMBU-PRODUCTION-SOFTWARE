@@ -93,7 +93,7 @@
     <div class="card">
       <h3>🏆 Best Performers (by Efficiency)</h3>
       <div class="bests" id="bests"></div>
-      <p style="font-size:11px;color:var(--muted);margin:10px 0 0;">Efficiency = Total ÷ Target × 100. Minimum 10% of top group's output required to qualify.</p>
+      <p style="font-size:11px;color:var(--muted);margin:10px 0 0;">Efficiency = mats on rows that carry a target / Target x 100. Cover Duty, B Grade, Extra Operators and Breakdown carry no target, so they are not part of efficiency. Minimum 10% of top group's output required to qualify.</p>
     </div>
     <div class="grid2">
       <div class="card"><h3>Morning vs Night — Production</h3><div id="chartShift"></div></div>
@@ -116,7 +116,8 @@ let ME = null, ROWS = [], WEAVING_IDS = [], MW_TABLE = "mat_weaving";
 function n(v){ const x=parseFloat(v); return isNaN(x)?0:x; }
 function fmt(v){ return Math.round(v).toLocaleString(); }
 function authHeaders(){ return {"apikey":SUPABASE_ANON_KEY,"Authorization":"Bearer "+SUPABASE_ANON_KEY}; }
-function iso(d){ return d.toISOString().slice(0,10); }
+function localISO(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+function iso(d){ return localISO(d); }
 
 async function init(){
   const cs = document.getElementById("connStatus");
@@ -160,9 +161,12 @@ async function fetchRows(from, to){
     "?select=date_col,shift,mat_type,group_name,assets,a_double,a_single,b,c,total,target,shed,units,section,operator_name,operator_id,rank"+
     "&date_col=gte."+from+"&date_col=lte."+to+
     "&operator_id=in.("+encodeURIComponent(idList)+")"+
-    "&order=date_col.asc";
+    "";
+  let ord="&order=date_col.asc,id.asc";   // the id breaks ties, so no row is repeated or skipped between pages
   for(let g=0;g<400;g++){
-    const res=await fetch(base,{headers:Object.assign({},authHeaders(),{"Range-Unit":"items","Range":offset+"-"+(offset+pageSize-1)})});
+    const res=await fetch(base+ord,{headers:Object.assign({},authHeaders(),{"Range-Unit":"items","Range":offset+"-"+(offset+pageSize-1)})});
+    if(res.status===416) break;
+    if(res.status===400&&ord){ord=ord==="&order=date_col.asc,id.asc"?"&order=date_col.asc":"";g--;continue;}
     if(!res.ok) throw new Error("HTTP "+res.status);
     const batch=await res.json();
     all=all.concat(batch);
@@ -204,16 +208,17 @@ async function runDashboard(){
   }catch(e){status.className="status err";status.textContent="❌ "+e.message;}
 }
 
+/* et = mats on rows that carry a target. Efficiency is et / target, never all mats / target. */
 function totals(rows){
-  let tot=0,ad=0,as=0,b=0,c=0,tg=0;
-  rows.forEach(r=>{tot+=n(r.total);ad+=n(r.a_double);as+=n(r.a_single);b+=n(r.b);c+=n(r.c);tg+=n(r.target);});
-  return{tot,ad,as,b,c,tg,a:ad+as};
+  let tot=0,ad=0,as=0,b=0,c=0,tg=0,et=0;
+  rows.forEach(r=>{tot+=n(r.total);ad+=n(r.a_double);as+=n(r.a_single);b+=n(r.b);c+=n(r.c);tg+=n(r.target);if(n(r.target)>0)et+=n(r.total);});
+  return{tot,ad,as,b,c,tg,et,a:ad+as};
 }
 function eff(tot,tg){return tg>0?(tot/tg*100):0;}
 function sumBy(rows,keyFn,valFn){const m={};rows.forEach(r=>{const k=keyFn(r);if(k==null||k==="")return;m[k]=(m[k]||0)+valFn(r);});return m;}
 
 function renderKPIs(rows){
-  const t=totals(rows); const e=eff(t.tot,t.tg);
+  const t=totals(rows); const e=eff(t.et,t.tg);
   const ops=new Set(rows.map(r=>r.operator_id).filter(Boolean)).size;
   document.getElementById("kpis").innerHTML=[
     {n:ops,l:"Active Operators"},
@@ -228,8 +233,8 @@ function renderKPIs(rows){
 
 function bestByEff(rows,keyFn){
   const grp={};
-  rows.forEach(r=>{const k=keyFn(r);if(!k)return;if(!grp[k])grp[k]={tot:0,tg:0};grp[k].tot+=n(r.total);grp[k].tg+=n(r.target);});
-  const arr=Object.entries(grp).map(([k,v])=>({k,tot:v.tot,tg:v.tg,e:eff(v.tot,v.tg)}));
+  rows.forEach(r=>{const k=keyFn(r);if(!k)return;if(!grp[k])grp[k]={tot:0,tg:0,et:0};grp[k].tot+=n(r.total);grp[k].tg+=n(r.target);if(n(r.target)>0)grp[k].et+=n(r.total);});
+  const arr=Object.entries(grp).map(([k,v])=>({k,tot:v.tot,tg:v.tg,e:eff(v.et,v.tg)}));
   if(!arr.length)return null;
   const maxTot=Math.max(...arr.map(x=>x.tot));
   const threshold=maxTot*0.10;
@@ -278,8 +283,8 @@ function renderCharts(rows){
   hbars("chartOps",Object.entries(sumBy(rows,r=>r.operator_name,r=>n(r.total))).sort((a,b)=>b[1]-a[1]).slice(0,10));
   // Top 10 Operators by efficiency
   const opGrp={};
-  rows.forEach(r=>{const k=r.operator_name;if(!k)return;if(!opGrp[k])opGrp[k]={tot:0,tg:0};opGrp[k].tot+=n(r.total);opGrp[k].tg+=n(r.target);});
-  const opEff=Object.entries(opGrp).filter(([,v])=>v.tg>0).map(([k,v])=>[k,eff(v.tot,v.tg),eff(v.tot,v.tg).toFixed(1)+"%"]).sort((a,b)=>b[1]-a[1]).slice(0,10);
+  rows.forEach(r=>{const k=r.operator_name;if(!k)return;if(!opGrp[k])opGrp[k]={tot:0,tg:0,et:0};opGrp[k].tot+=n(r.total);opGrp[k].tg+=n(r.target);if(n(r.target)>0)opGrp[k].et+=n(r.total);});
+  const opEff=Object.entries(opGrp).filter(([,v])=>v.tg>0).map(([k,v])=>[k,eff(v.et,v.tg),eff(v.et,v.tg).toFixed(1)+"%"]).sort((a,b)=>b[1]-a[1]).slice(0,10);
   hbars("chartOpsEff",opEff,"teal");
   hbars("chartAssets",Object.entries(sumBy(rows,r=>r.assets,r=>n(r.total))).sort((a,b)=>b[1]-a[1]).slice(0,10));
   hbars("chartSheds",Object.entries(sumBy(rows,r=>r.shed,r=>n(r.total))).sort((a,b)=>b[1]-a[1]).slice(0,10));
