@@ -129,9 +129,14 @@ async function requireAuth(loginPath) {
   }
 
   // itops3 is the system IT administrator with full elevated access.
-  // All other super_admin accounts are Viewer-only (read-only across the system).
+  // A "Super Admin (full access)" is a super_admin whose type is exactly "full". Only itops3 can assign
+  // it (enforced by the swift-handler edge function and a database guard), and it can change data across
+  // the system but cannot manage other Super Admin accounts: that stays itops3-only.
+  // Every other super_admin account is Viewer-only (read-only across the system). Any other type value,
+  // including "management" and "technical", stays read-only, so existing accounts are unchanged.
   const isItops = profile.username === "itops3";
-  const readOnly = profile.role === "super_admin" && !isItops;
+  const isFullSuperAdmin = profile.role === "super_admin" && profile.super_admin_type === "full";
+  const readOnly = profile.role === "super_admin" && !isItops && !isFullSuperAdmin;
 
   if(readOnly) _scheduleReadOnly();
 
@@ -149,6 +154,7 @@ async function requireAuth(loginPath) {
     canSelfManageTodos: !!profile.can_self_manage_todos,
     lastOpenModule: profile.last_open_module || null,
     isItops: isItops,
+    isFullSuperAdmin: isFullSuperAdmin,
     readOnly: readOnly
   };
 }

@@ -1820,16 +1820,17 @@ async function ensureEmployeesForSearch(){
         fetchAllRows(sb.from("employees")
           .select("id,employee_id,full_name,branch,department,has_system_access,linked_profile_id")
           .order("full_name").order("id")),
-        fetchAllRows(sb.from("profiles").select("id,role").order("id"))
+        fetchAllRows(sb.from("profiles").select("id,role,super_admin_type").order("id"))
       ]);
-      const roleMap = {};
-      profs.forEach(p=>{ roleMap[p.id] = p.role; });
+      const roleMap = {}, typeMap = {};
+      profs.forEach(p=>{ roleMap[p.id] = p.role; typeMap[p.id] = p.super_admin_type; });
       // Never overwrite the full data with this lighter copy.
       if(!EMPLOYEES_LOADED){
         EMPLOYEES = emps.map(e=>({
           ...e,
           salary: null,
-          linked_role: e.linked_profile_id ? (roleMap[e.linked_profile_id]||null) : null
+          linked_role: e.linked_profile_id ? (roleMap[e.linked_profile_id]||null) : null,
+          linked_super_admin_type: e.linked_profile_id ? (typeMap[e.linked_profile_id]||null) : null
         }));
       }
       EMPLOYEES_LITE_LOADED = true;   // only after success, so a failed load is retried next time
@@ -1898,14 +1899,14 @@ async function loadEmployeesData(){
     fetchAllRows(sb.from("employee_salaries").select("*").order("employee_id")),
     fetchAllRows(sb.from("departments").select("id,name,section").order("name").order("id")),
     fetchAllRows(sb.from("units").select("id,name,department_id").order("name").order("id")),
-    fetchAllRows(sb.from("profiles").select("id,role").order("id")),
+    fetchAllRows(sb.from("profiles").select("id,role,super_admin_type").order("id")),
     !BRANCH_OPTIONS.length ? fetchAllRows(sb.from("app_sections").select("name").order("name")) : Promise.resolve(null)
   ]);
 
   const salaryMap = {};
   (sals||[]).forEach(s=>{ salaryMap[s.employee_id] = s.salary; });
-  const roleMap = {};
-  (profs||[]).forEach(p=>{ roleMap[p.id] = p.role; });
+  const roleMap = {}, typeMap = {};
+  (profs||[]).forEach(p=>{ roleMap[p.id] = p.role; typeMap[p.id] = p.super_admin_type; });
   if(secData) BRANCH_OPTIONS = secData.map(s=>s.name);
   ALL_DEPARTMENTS = deptRows;
   ALL_UNITS = unitRows;
@@ -1913,7 +1914,8 @@ async function loadEmployeesData(){
   EMPLOYEES = emps.map(e=>({
     ...e,
     salary: salaryMap[e.id],
-    linked_role: e.linked_profile_id ? (roleMap[e.linked_profile_id]||null) : null
+    linked_role: e.linked_profile_id ? (roleMap[e.linked_profile_id]||null) : null,
+    linked_super_admin_type: e.linked_profile_id ? (typeMap[e.linked_profile_id]||null) : null
   }));
 
   const branchFilter = document.getElementById("emp_branch_filter");
@@ -2174,7 +2176,7 @@ async function renderEmployeeDirectory(){
   html += "<table><tr><th>ID</th><th>Name</th><th>Email</th><th>Access</th></tr>";
   rows.forEach(e=>{
     const accessCell = e.has_system_access
-      ? "<span class=\"badge\">" + esc(e.linked_role || "access") + "</span>"
+      ? "<span class=\"badge\">" + esc(roleBadgeText(e.linked_role, e.linked_super_admin_type)) + "</span>"
       : "<span style=\"color:var(--muted);\">No access</span>";
     html += "<tr style=\"cursor:pointer;\" onclick=\"openEmployeeDetail(" + e.id + ")\">" +
       "<td>" + esc(e.employee_id) + "</td>" +
@@ -2204,7 +2206,7 @@ async function renderAdminEmployeeDirectory(){
   html += "<table><tr><th>ID</th><th>Name</th><th>Email</th><th>Access</th></tr>";
   rows.forEach(e=>{
     const accessCell = e.has_system_access
-      ? "<span class=\"badge\">" + esc(e.linked_role || "access") + "</span>"
+      ? "<span class=\"badge\">" + esc(roleBadgeText(e.linked_role, e.linked_super_admin_type)) + "</span>"
       : "<span style=\"color:var(--muted);\">No access</span>";
     html += "<tr style=\"cursor:pointer;\" onclick=\"openEmployeeDetail(" + e.id + ")\">" +
       "<td>" + esc(e.employee_id) + "</td>" +
@@ -2336,7 +2338,7 @@ function openEmployeeDetail(empId){
     html += detailRow("Salary", salaryText);
   }
   const accessBadge = e.has_system_access
-    ? "<span class=\"badge\">" + esc(e.linked_role || "access") + "</span>"
+    ? "<span class=\"badge\">" + esc(roleBadgeText(e.linked_role, e.linked_super_admin_type)) + "</span>"
     : "<span style=\"color:var(--muted);\">No system access</span>";
   html += detailRow("System Access", accessBadge);
 
@@ -2350,14 +2352,14 @@ function openEmployeeDetail(empId){
       // that doesn't use that structure at all, so it's never even offered
       // as an option for someone whose Branch is AgriWatt, rather than
       // relying on someone remembering not to pick it.
-      const otherRoles = ["user","admin","super_admin","hr_console"]
-        .filter(r=>r !== e.linked_role)
-        .filter(r=>r !== "hr_console" || !isAgriwattBranch(e.branch));
+      // Only itops3 is ever offered a Super Admin choice, because only itops3 may assign it
+      // (the swift-handler edge function and a database guard enforce that too).
+      const choices = roleChoices(ME.username, e.linked_role, e.linked_super_admin_type, isAgriwattBranch(e.branch));
       html += "<label>Change role</label>" +
         "<select id=\"chg_role_" + e.id + "\" style=\"width:auto;display:inline-block;margin:0 8px 0 0;\">" +
-        otherRoles.map(r=>"<option value=\"" + r + "\">" + (r==="super_admin"?"super_admin (Viewer — read-only)":r) + "</option>").join("") +
+        choices.map(c=>"<option value=\"" + c.value + "\">" + esc(c.label) + "</option>").join("") +
         "</select>" +
-        "<button style=\"margin:0;padding:8px 12px;\" onclick=\"changeEmployeeRole(" + e.id + ",'" + e.linked_profile_id + "','" + e.linked_role + "')\">Change Role</button>";
+        "<button style=\"margin:0;padding:8px 12px;\" onclick=\"changeEmployeeRole(" + e.id + ",'" + e.linked_profile_id + "','" + roleKeyOf(e.linked_role, e.linked_super_admin_type) + "')\">Change Role</button>";
     } else {
       html += "<p class=\"sub\" style=\"margin:0;\">This account already has access" + (isAdmin ? " (role changes are a Super Admin action)." : ".") + "</p>";
     }
@@ -3600,28 +3602,78 @@ async function linkPendingEmployeeIfAny(newProfileId){
   renderAdminEmployeeDirectory();
 }
 
-// Changes an already-linked account's role directly from the Employee
-// Directory (e.g. User -> Admin, Admin -> Super Admin). Super Admin
-// accounts can never be the target — same protection the system already
-// applies to delete_account and admin_reset_password.
-async function changeEmployeeRole(empId, profileId, currentRole){
+/*==SA-PURE-START==*/
+// Super Admin comes in two kinds: "super_admin" = Viewer (read-only), "super_admin:full" = Super Admin (full access).
+// Every other role is just its own name.
+function roleKeyOf(role, type){ return role === "super_admin" ? (type === "full" ? "super_admin:full" : "super_admin") : (role || ""); }
+function roleLabelOf(key){
+  if(key === "super_admin") return "super_admin (Viewer — read-only)";
+  if(key === "super_admin:full") return "super_admin (Full access)";
+  return key;
+}
+function roleBadgeText(role, type){ return (role === "super_admin" && type === "full") ? "super_admin (full)" : (role || "access"); }
+// Options for the Change role dropdown. Only itops3 is offered a Super Admin choice.
+function roleChoices(meUsername, currentRole, currentType, hideHrConsole){
+  const isItops = meUsername === "itops3";
+  const current = roleKeyOf(currentRole, currentType);
+  return ["user","admin","super_admin","super_admin:full","hr_console"]
+    .filter(k => k !== current)
+    .filter(k => isItops || (k !== "super_admin" && k !== "super_admin:full"))
+    .filter(k => k !== "hr_console" || !hideHrConsole)
+    .map(k => ({ value:k, label:roleLabelOf(k) }));
+}
+// Options for the itops3-only panel of an existing Super Admin account (the original wording is kept).
+function panelRoleChoices(currentKey){
+  const all = [
+    { value:"super_admin",      label:"super_admin (Viewer — read-only)" },
+    { value:"super_admin:full", label:"super_admin (Full access)" },
+    { value:"admin",            label:"admin (Write access — Section-scoped)" },
+    { value:"user",             label:"user (Limited access)" }
+  ];
+  return all.filter(c => c.value !== currentKey);
+}
+// What to send to the server for a chosen option.
+function parseRoleChoice(value){
+  if(value === "super_admin:full") return { new_role:"super_admin", super_admin_type:"full" };
+  if(value === "super_admin")      return { new_role:"super_admin", super_admin_type:"viewer" };
+  return { new_role:value };
+}
+/*==SA-PURE-END==*/
+
+// Reads back the account's Super Admin kind. An edge function that has not been redeployed would quietly
+// make a "full" request a "viewer", so we never report success without checking.
+async function confirmSuperAdminKind(profileId, wantedType, wantedLabel){
+  const { data: chk } = await sb.from("profiles").select("super_admin_type").eq("id", profileId).single();
+  if(!chk || chk.super_admin_type !== wantedType){
+    throw new Error("The server did not apply \"" + wantedLabel + "\". Redeploy the swift-handler edge function (and run super-admin-full-role.sql), then try again.");
+  }
+}
+
+// Changes an already-linked account's role directly from the Employee Directory
+// (e.g. User -> Admin). Changing a Super Admin account is itops3-only, and only itops3 can assign the Super Admin
+// role, either kind. The server enforces this; the checks here just give a clear message first.
+async function changeEmployeeRole(empId, profileId, currentKey){
   if(adminBlocked("Changing a role")) return;
   const sel = document.getElementById("chg_role_" + empId);
-  const newRole = sel ? sel.value : null;
-  if(!newRole || newRole === currentRole) return;
-  if(!confirm("Change this account's role from \"" + currentRole + "\" to \"" + newRole + "\"?")) return;
+  const choice = sel ? sel.value : null;
+  if(!choice || choice === currentKey) return;
+  const pick = parseRoleChoice(choice);
+  if(pick.new_role === "super_admin" && ME.username !== "itops3"){ alert("Only itops3 can assign the Super Admin role."); return; }
+  const warn = choice === "super_admin:full"
+    ? "\n\nA Super Admin (full access) can change data across the whole system. Only itops3 can assign this."
+    : "";
+  if(!confirm("Change this account's role from \"" + roleLabelOf(currentKey) + "\" to \"" + roleLabelOf(choice) + "\"?" + warn)) return;
 
   const status = document.getElementById("emp_dir_status");
   if(status) status.textContent = "Updating role…";
   try{
-    const payload = { action:"change_role", target_id: profileId, new_role: newRole };
-    if(newRole === "super_admin") payload.super_admin_type = "viewer"; // read-only by default
-    const res = await callEdgeFunction(payload);
-    await logActivity("role_changed", ME.username + " changed role for \"" + res.username + "\" to " + newRole);
+    const res = await callEdgeFunction(Object.assign({ action:"change_role", target_id: profileId }, pick));
+    if(pick.super_admin_type) await confirmSuperAdminKind(profileId, pick.super_admin_type, roleLabelOf(choice));
+    await logActivity("role_changed", ME.username + " changed role for \"" + res.username + "\" to " + roleLabelOf(choice));
     if(status) status.textContent = "\u2705 " + res.message;
-    // Patch in-memory — only the linked_role changed, no need to re-fetch everything.
+    // Patch in-memory — only the role (and Super Admin kind) changed, no need to re-fetch everything.
     const changedEmp = EMPLOYEES.find(e=>e.id === empId);
-    if(changedEmp) changedEmp.linked_role = newRole;
+    if(changedEmp){ changedEmp.linked_role = pick.new_role; changedEmp.linked_super_admin_type = pick.super_admin_type || null; }
     await loadRoleDropdown();
     openEmployeeDetail(empId);
   }catch(e){
@@ -3807,7 +3859,7 @@ function proceedRoleForEmployee(emp){
   if(emp.linked_role === "super_admin" && ME.username !== "itops3"){
     noacc.className = "status err"; noacc.style.cssText = "";
     noacc.classList.remove("hidden");
-    noacc.textContent = esc(emp.full_name) + " is a Super Admin (viewer) account. Only itops3 can manage Super Admin accounts.";
+    noacc.textContent = esc(emp.full_name) + " is a Super Admin (" + (emp.linked_super_admin_type === "full" ? "full access" : "viewer") + ") account. Only itops3 can manage Super Admin accounts.";
     return;
   }
 
@@ -3839,7 +3891,7 @@ async function openRolePanelForProfile(id){
   const panel = document.getElementById("roleDetailsPanel");
   if(!id){ panel.classList.add("hidden"); return; }
 
-  const { data: profile, error } = await sb.from("profiles").select("id, username, role").eq("id", id).single();
+  const { data: profile, error } = await sb.from("profiles").select("id, username, role, super_admin_type").eq("id", id).single();
   if(error || !profile){ panel.innerHTML = "Error loading account."; panel.classList.remove("hidden"); return; }
 
   // Which Branch(es) this account is already assigned to (profile_sections)
@@ -3859,12 +3911,16 @@ async function openRolePanelForProfile(id){
 
   // ── Super Admin management panel (itops3 only) ─────────────────────────────
   if(profile.role === "super_admin"){
+    const saKey = roleKeyOf(profile.role, profile.super_admin_type);
+    const saFull = saKey === "super_admin:full";
     panel.innerHTML = `
       <div style="background:rgba(31,56,100,.08);border:1px solid #93c5fd;border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:13px;">
-        ℹ️ <b>Super Admin — Viewer role.</b> This account can see everything in the system but cannot make any changes.
-        Only <b>itops3</b> can manage Super Admin accounts.
+        ${saFull
+          ? "ℹ️ <b>Super Admin — Full access.</b> This account can change data across the whole system, but it cannot manage other Super Admin accounts."
+          : "ℹ️ <b>Super Admin — Viewer role.</b> This account can see everything in the system but cannot make any changes."}
+        Only <b>itops3</b> can assign or manage Super Admin accounts.
       </div>
-      <p class="sub" style="margin-top:0;">Managing <b>${esc(profile.username)}</b> — current role: <b>super_admin (Viewer)</b></p>
+      <p class="sub" style="margin-top:0;">Managing <b>${esc(profile.username)}</b> — current role: <b>${esc(roleLabelOf(saKey))}</b></p>
 
       <label>Username</label>
       <input id="role_username" value="${esc(profile.username)}">
@@ -3872,11 +3928,9 @@ async function openRolePanelForProfile(id){
       <label style="margin-top:16px;">Change Role</label>
       <div style="display:flex;gap:8px;align-items:center;margin-top:6px;">
         <select id="sa_new_role" style="flex:1;margin:0;">
-          <option value="super_admin">super_admin (Viewer — read-only)</option>
-          <option value="admin">admin (Write access — Section-scoped)</option>
-          <option value="user">user (Limited access)</option>
+          ${panelRoleChoices(saKey).map(c=>`<option value="${c.value}">${esc(c.label)}</option>`).join("")}
         </select>
-        <button style="margin:0;padding:8px 14px;" onclick="changeRoleFromPanel('${id}','${esc(profile.username)}')">Change Role</button>
+        <button style="margin:0;padding:8px 14px;" onclick="changeRoleFromPanel('${id}','${esc(profile.username)}','${saKey}')">Change Role</button>
       </div>
 
       <button style="margin-top:14px;" onclick="saveRoleUsername('${id}')">Save Username</button>
@@ -4044,21 +4098,29 @@ async function saveRoleUsername(id){
 }
 window.saveRoleUsername = saveRoleUsername;
 
-async function changeRoleFromPanel(id, currentUsername){
+async function changeRoleFromPanel(id, currentUsername, currentKey){
   const sel = document.getElementById("sa_new_role");
-  const newRole = sel ? sel.value : null;
-  if(!newRole) return;
-  if(newRole === "super_admin"){
-    alert("This account is already a Super Admin (Viewer).");
+  const choice = sel ? sel.value : null;
+  if(!choice) return;
+  if(choice === currentKey){
+    alert("This account is already " + roleLabelOf(currentKey) + ".");
     return;
   }
-  if(!confirm("Change " + currentUsername + " from super_admin to " + newRole + "?\n\nNote: assigning admin or user roles will give this account write access within their assigned sections and pages.")) return;
+  if(ME.username !== "itops3"){ alert("Only itops3 can manage Super Admin accounts."); return; }
+  const pick = parseRoleChoice(choice);
+  const isSuper = pick.new_role === "super_admin";
+  const msg = isSuper
+    ? "Change " + currentUsername + " from " + roleLabelOf(currentKey) + " to " + roleLabelOf(choice) + "?" +
+      (choice === "super_admin:full" ? "\n\nA Super Admin (full access) can change data across the whole system." : "\n\nThey will become read-only.")
+    : "Change " + currentUsername + " from " + roleLabelOf(currentKey) + " to " + pick.new_role + "?\n\nNote: assigning admin or user roles will give this account write access within their assigned sections and pages.";
+  if(!confirm(msg)) return;
   const status = document.getElementById("role_status");
   status.className="status"; status.textContent="Changing role...";
   try{
-    const res = await callEdgeFunction({ action:"change_role", target_id:id, new_role:newRole });
+    const res = await callEdgeFunction(Object.assign({ action:"change_role", target_id:id }, pick));
+    if(pick.super_admin_type) await confirmSuperAdminKind(id, pick.super_admin_type, roleLabelOf(choice));
     status.className="status ok"; status.textContent="✅ " + res.message;
-    await logActivity("role_changed", ME.username + " changed role for \"" + currentUsername + "\" from super_admin to " + newRole);
+    await logActivity("role_changed", ME.username + " changed role for \"" + currentUsername + "\" from " + roleLabelOf(currentKey) + " to " + roleLabelOf(choice));
     await loadRoleDropdown();
     await openRolePanelForProfile(id);
   }catch(e){ status.className="status err"; status.textContent="❌ " + e.message; }
