@@ -67,7 +67,11 @@ svg{width:100%;height:auto;display:block;}
 .dtable th{background:var(--navy);color:#fff;font-size:11px;position:sticky;top:0;z-index:1;}
 .dtable td.left{text-align:left;}
 .dtable td.grp{text-align:left;font-weight:800;background:var(--bg);color:var(--navy);}
-.colorHigh{background:#d9ead3;color:#1a4731;}.colorMedium{background:#fce5cd;color:#1f2937;}.colorLow{background:#f4cccc;color:#1f2937;}
+.colorHigh{background:#d9ead3;color:#1a4731;}.colorMedium{background:#fce5cd;color:#1f2937;}\1
+.dtable tr.optot td{font-weight:800;background:#eef2f7;border-top:2px solid #94a3b8;}
+.dtable th.sortable{cursor:pointer;user-select:none;}
+.dtable th.sortable:hover{filter:brightness(1.25);}
+.incnote{font-size:12px;color:var(--muted);margin:-4px 0 12px;}
 </style>
 </head>
 <body>
@@ -88,6 +92,7 @@ svg{width:100%;height:auto;display:block;}
       <button class="qbtn active" onclick="setRange('m','month',this)">This Month</button>
       <button class="qbtn" onclick="setRange('m','quarter',this)">Last 3 Months</button>
       <button class="qbtn" onclick="setRange('m','year',this)">This Year</button>
+      <button class="qbtn" onclick="setRange('m','incentive',this)">Incentive</button>
       <button class="qbtn" onclick="setRange('m','custom',this)">Custom</button>
     </div>
     <div class="row">
@@ -106,6 +111,16 @@ svg{width:100%;height:auto;display:block;}
   <div id="m_dash" style="display:none;">
     <div class="section-label">📦 Production Output</div>
     <div class="kpis" id="m_kpis" style="margin-bottom:16px;"></div>
+
+    <div id="m_incSection">
+      <div class="section-label">🏅 Incentive Output</div>
+      <p class="incnote" id="m_incNote"></p>
+      <div class="kpis" id="m_incKpis" style="margin-bottom:16px;"></div>
+      <div class="card" id="m_incCard" style="display:none;">
+        <h3>Incentive by Operator</h3>
+        <div class="table-scroll"><div id="m_incTable"></div></div>
+      </div>
+    </div>
 
     <div class="card">
       <h3>📅 Attendance (Monday to Saturday)</h3>
@@ -151,6 +166,7 @@ svg{width:100%;height:auto;display:block;}
       <button class="qbtn active" onclick="setRange('p','month',this)">This Month</button>
       <button class="qbtn" onclick="setRange('p','quarter',this)">Last 3 Months</button>
       <button class="qbtn" onclick="setRange('p','year',this)">This Year</button>
+      <button class="qbtn" onclick="setRange('p','incentive',this)">Incentive</button>
     </div>
     <div class="row">
       <div><label>From</label><input type="date" id="p_fromDate" name="date_from"></div>
@@ -166,6 +182,10 @@ svg{width:100%;height:auto;display:block;}
 
     <div class="section-label">📦 Production Output</div>
     <div class="kpis" id="p_prodKpis" style="margin-bottom:16px;"></div>
+
+    <div class="section-label">🏅 Incentive Output</div>
+    <p class="incnote" id="p_incNote"></p>
+    <div class="kpis" id="p_incKpis" style="margin-bottom:16px;"></div>
 
     <div class="card">
       <h3>📅 Attendance (Monday to Saturday)</h3>
@@ -277,6 +297,32 @@ function computeMetrics(myRows,ctrlRows,excludedCodes){
   const MLU=Math.round(A-ATG);
   return {A,B,C,total,target,downtime,MLD,ATG,MLU,efficiency:ATG?(total/ATG*100):0};
 }
+/* ---------- Incentive: Normal production only, over a two-week window ---------- */
+/* A blank work type has always been shown as "Normal" on this page, so it counts as Normal here too.
+   B Grade, Cover Duty, Overtime, Extra Operators, Breakdown and the old "Mixed" are all out. */
+function isNormalWork(r){
+  const w=(r.work_type==null||r.work_type==="")?"Normal":r.work_type;
+  return String(w).trim().toLowerCase()==="normal";
+}
+/* The last two COMPLETED Monday to Saturday weeks: the latest Saturday before today, and the Monday 12 days earlier. */
+function incentivePeriod(today){
+  const t=new Date(today.getFullYear(),today.getMonth(),today.getDate());
+  const back=((t.getDay()+1)%7)||7;                 // days since that Saturday: Sun 1, Mon 2 ... Fri 6, Sat 7
+  const sat=new Date(t.getFullYear(),t.getMonth(),t.getDate()-back);
+  const mon=new Date(sat.getFullYear(),sat.getMonth(),sat.getDate()-12);
+  return {from:iso(mon),to:iso(sat)};
+}
+/* One line per operator, from Normal rows only. */
+function incentiveByOperator(rows){
+  const m={};
+  rows.filter(isNormalWork).forEach(r=>{
+    const id=r.operator_id==null?"":String(r.operator_id); if(!id)return;
+    const o=m[id]||(m[id]={id,name:r.operator_name||id,tot:0,a:0,b:0,c:0,tg:0,dates:new Set()});
+    o.tot+=n(r.total); o.a+=n(r.a_double)+n(r.a_single); o.b+=n(r.b); o.c+=n(r.c); o.tg+=n(r.target); o.dates.add(r.date_col);
+    if(!o.name||o.name===id)o.name=r.operator_name||id;
+  });
+  return Object.values(m).map(o=>({id:o.id,name:o.name,days:o.dates.size,a:o.a,b:o.b,c:o.c,tot:o.tot,tg:o.tg,pA:o.tot?o.a/o.tot*100:0,eff:eff(o.tot,o.tg)}));
+}
 /*==PURE-END==*/
 
 /* ───────────── shared helpers ───────────── */
@@ -306,6 +352,7 @@ async function fetchPaged(table,select,clause,order){
 function setRange(prefix,range,btn){
   document.querySelectorAll("#"+prefix+"_quickbar .qbtn").forEach(b=>b.classList.remove("active"));
   if(btn)btn.classList.add("active");
+  if(range==="incentive"){const p=incentivePeriod(new Date());$(prefix+"_fromDate").value=p.from;$(prefix+"_toDate").value=p.to;return;}
   const t=new Date(); let from;
   if(range==="week")      from=new Date(t.getFullYear(),t.getMonth(),t.getDate()-((t.getDay()+6)%7));
   else if(range==="month")  from=new Date(t.getFullYear(),t.getMonth(),1);
@@ -477,6 +524,7 @@ async function runManager(){
 
     $("m_dash").style.display="block";
     renderManagerKpis(rows,queryCount);
+    renderManagerIncentive(rows,q,from,to);
     renderManagerAttendance(from,to,pool,attPool);
     renderManagerMetrics(rows,ctrlRows);
     if(ydRes.status==="fulfilled")showYesterday("m",ydRes.value);else showYesterdayError("m",ydRes.reason);
@@ -507,11 +555,11 @@ async function countQueries(ids){
   return total;
 }
 
-function renderManagerKpis(rows,queryCount){
+function managerTiles(rows){
   const t=totals(rows);const e=eff(t.tot,t.tg);
   const ops=new Set(rows.map(r=>r.operator_id).filter(Boolean)).size;
   const pA=t.tot?Math.round(t.a/t.tot*100):0, pB=t.tot?Math.round(t.b/t.tot*100):0;
-  $("m_kpis").innerHTML=tilesHtml([
+  return [
     {n:ops,l:"Active Operators"},
     {n:fmt(t.tot),l:"Total Mats"},
     {n:fmt(t.a),l:"A Grade",cls:"good",sub:`Dbl ${fmt(t.ad)} · Sgl ${fmt(t.as)}`},
@@ -521,8 +569,42 @@ function renderManagerKpis(rows,queryCount){
     {n:fmt(t.c),l:"C Grade"},
     {n:fmt(t.tg),l:"Total Target"},
     {n:e.toFixed(1)+"%",l:"Overall Efficiency",cls:e>=90?"good":e>=75?"teal":"warn"},
-    {n:queryCount==null?"—":fmt(queryCount),l:"Total Queries",cls:queryCount==null?"":(queryCount>0?"bad":"good"),sub:"All time, operators in view"}
-  ]);
+  ];
+}
+function renderManagerKpis(rows,queryCount){
+  const qTile={n:queryCount==null?"—":fmt(queryCount),l:"Total Queries",cls:queryCount==null?"":(queryCount>0?"bad":"good"),sub:"All time, operators in view"};
+  $("m_kpis").innerHTML=tilesHtml(managerTiles(rows).concat([qTile]));
+}
+
+/* Incentive Output (management): shown only when an operator name or ID has been entered. */
+const INC_NOTE="Normal production only. B Grade, Cover Duty, Overtime, Extra Operators and Breakdown are not counted.";
+let INC_LIST=[], INC_SORT={k:"tot",dir:-1};
+function renderManagerIncentive(rows,q,from,to){
+  const note=$("m_incNote"), kp=$("m_incKpis"), card=$("m_incCard");
+  INC_LIST=[]; kp.innerHTML=""; card.style.display="none";
+  if(!q){note.textContent="Enter an operator name or ID in the Operator field and press Run to see the Incentive Output.";return;}
+  const nr=rows.filter(isNormalWork);
+  note.textContent=INC_NOTE+" "+dmy(from)+" to "+dmy(to)+".";
+  if(!nr.length){note.textContent+=" No Normal production was recorded for this operator in this period.";return;}
+  kp.innerHTML=tilesHtml(managerTiles(nr));
+  INC_LIST=incentiveByOperator(rows);
+  card.style.display="block";
+  renderIncentiveTable();
+}
+function sortInc(k){
+  INC_SORT={k,dir:INC_SORT.k===k?-INC_SORT.dir:((k==="name"||k==="id")?1:-1)};
+  renderIncentiveTable();
+}
+function renderIncentiveTable(){
+  const cols=[["name","Operator"],["id","ID"],["days","Days"],["a","A Grade"],["b","B Grade"],["c","C Grade"],["tot","Total Mats"],["tg","Target"],["pA","%A"],["eff","Efficiency"]];
+  const k=INC_SORT.k, d=INC_SORT.dir;
+  const list=INC_LIST.slice().sort((x,y)=>{const a=x[k],b=y[k];return (typeof a==="string"?a.localeCompare(b,undefined,{numeric:true}):(a-b))*d;});
+  let h='<table class="dtable"><tr>'+cols.map(([key,lab])=>`<th class="sortable" onclick="sortInc('${key}')">${lab}${INC_SORT.k===key?(INC_SORT.dir>0?" \u25B2":" \u25BC"):""}</th>`).join("")+"</tr>";
+  list.forEach(o=>{
+    h+=`<tr><td class="left">${esc(o.name)}</td><td>${esc(o.id)}</td><td>${o.days}</td><td>${fmt(o.a)}</td><td>${fmt(o.b)}</td><td>${fmt(o.c)}</td>`+
+       `<td>${fmt(o.tot)}</td><td>${fmt(o.tg)}</td><td>${Math.round(o.pA)}%</td><td>${o.tg>0?o.eff.toFixed(1)+"%":"--"}</td></tr>`;
+  });
+  $("m_incTable").innerHTML=h+"</table>";
 }
 
 /* Attendance: the personal rule applied to each operator, then summed (operator-days). */
@@ -650,21 +732,34 @@ function renderYesterday(boxId,day,rows,ctrlRows,excluded){
   const COLS=14;
   let html=info(head)+`<div class="table-scroll"><table class="dtable"><tr><th>Asset</th><th>Work Type</th><th>A</th><th>B</th><th>C</th><th>Total</th><th>Target</th><th>Down (min)</th><th>ATG</th><th>MLU</th><th>%A</th><th>%B</th><th>%C</th><th>%P</th></tr>`;
   let lastLabel=null;
+  let curOp=null, acc=null;       // running total of the operator being listed
+  const flushTot=()=>{
+    if(!acc)return;
+    const pAt=acc.T?Math.round(acc.A/acc.T*100):0, pBt=acc.T?Math.round(acc.B/acc.T*100):0, pCt=acc.T?Math.round(acc.C/acc.T*100):0;
+    const pPt=acc.atg?Math.round(acc.T/acc.atg*100):0;
+    html+=`<tr class="optot"><td class="left" colspan="2">TOTAL${opVaries?": "+esc(acc.name):""}</td><td>${acc.A}</td><td>${acc.B}</td><td>${acc.C}</td><td>${acc.T}</td><td>${acc.tg}</td><td>${acc.dn}</td><td>${acc.atg}</td><td>${acc.mlu}</td>`+
+      `<td class="${clr(pAt)}">${pAt}%</td><td>${pBt}%</td><td>${pCt}%</td><td class="${clr(pPt)}">${pPt}%</td></tr>`;
+    acc=null;
+  };
   Object.keys(g).sort().forEach(k=>{
     const rs=g[k], f=rs[0], m=computeMetrics(rs,ctrlRows,excluded);
     const parts=[];
     if(opVaries)parts.push("Operator: "+opName(f));
     if(shiftVaries)parts.push("Shift: "+(f.shift||"—"));
     const label=parts.join("  ·  ");
+    const opK=String(f.operator_id)+"||"+opName(f);
+    if(opK!==curOp){flushTot();curOp=opK;acc={name:opName(f),A:0,B:0,C:0,T:0,tg:0,dn:0,atg:0,mlu:0};}
     if(label&&label!==lastLabel)html+=`<tr><td class="grp" colspan="${COLS}">${esc(label)}</td></tr>`;
     lastLabel=label;
     const A=Math.round(m.A), B=Math.round(m.B), C=Math.round(m.C), T=Math.round(m.total);
     const pA=T?Math.round(A/T*100):0, pB=T?Math.round(B/T*100):0, pC=T?Math.round(C/T*100):0;
     const pP=m.ATG?Math.round(T/m.ATG*100):0;
+    acc.A+=A;acc.B+=B;acc.C+=C;acc.T+=T;acc.tg+=Math.round(m.target);acc.dn+=Math.round(m.downtime);acc.atg+=m.ATG;acc.mlu+=m.MLU;
     html+=`<tr><td class="left">${esc(f.assets||"—")}</td><td>${esc(f.work_type||"Normal")}</td>`+
       `<td>${A}</td><td>${B}</td><td>${C}</td><td>${T}</td><td>${Math.round(m.target)}</td><td>${Math.round(m.downtime)}</td><td>${m.ATG}</td><td>${m.MLU}</td>`+
       `<td class="${clr(pA)}">${pA}%</td><td>${pB}%</td><td>${pC}%</td><td class="${clr(pP)}">${pP}%</td></tr>`;
   });
+  flushTot();
   $(boxId).innerHTML=html+`</table></div>`;
 }
 function showYesterday(prefix,yd){
@@ -757,6 +852,7 @@ async function runPersonal(){
 
     renderPeerRank(peers);
     renderProdKpis(mine,queryCount);
+    renderPersonalIncentive(mine,from,to);
     // Attendance uses ALL shifts so choosing a shift cannot turn worked days into absences.
     renderAttendance(from,to,myRows,allRows);
     renderMetrics(mine,ctrlRows);
@@ -790,10 +886,10 @@ function renderPeerRank(peers){
     ?`<div class="rank-badge">${medal} <span class="rank-num">${pos}</span> of ${ranked.length} operators &nbsp;·&nbsp; Efficiency (Total ÷ Target): <span style="color:var(--teal);">${myEff}%</span></div>`:"";
 }
 
-function renderProdKpis(rows,queryCount){
+function personalTiles(rows){
   const t=totals(rows);
   const pA=t.tot?Math.round(t.a/t.tot*100):0, pB=t.tot?Math.round(t.b/t.tot*100):0;
-  $("p_prodKpis").innerHTML=tilesHtml([
+  return [
     {n:fmt(t.tot),l:"Total Mats"},
     {n:fmt(t.a),l:"A Grade",cls:"good",sub:`Dbl ${fmt(t.ad)} · Sgl ${fmt(t.as)}`},
     {n:pA+"%",l:"%A (A/Total)",cls:"good"},
@@ -801,8 +897,18 @@ function renderProdKpis(rows,queryCount){
     {n:pB+"%",l:"%B (B/Total)",cls:"warn"},
     {n:fmt(t.c),l:"C Grade"},
     {n:fmt(t.tg),l:"Target"},
-    {n:queryCount==null?"—":queryCount,l:"Total Queries",cls:queryCount==null?"":(queryCount>0?"bad":"good")}
-  ]);
+  ];
+}
+function renderProdKpis(rows,queryCount){
+  const qTile={n:queryCount==null?"—":queryCount,l:"Total Queries",cls:queryCount==null?"":(queryCount>0?"bad":"good")};
+  $("p_prodKpis").innerHTML=tilesHtml(personalTiles(rows).concat([qTile]));
+}
+
+/* Incentive Output (personal view): always shown, Normal production only. */
+function renderPersonalIncentive(rows,from,to){
+  const nr=rows.filter(isNormalWork);
+  $("p_incNote").textContent=INC_NOTE+" "+dmy(from)+" to "+dmy(to)+"."+(nr.length?"":" No Normal production was recorded in this period.");
+  $("p_incKpis").innerHTML=tilesHtml(personalTiles(nr));
 }
 
 function renderAttendance(from,to,myRows,allRows){
