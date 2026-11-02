@@ -298,7 +298,19 @@ var RumbuUI = (function(){
     var r = e && e.reason, m = r && (r.message || String(r));
     if(m && NET_RE.test(m)) networkProblem();
   });
-  function boot(){ addCss(); document.querySelectorAll("#connStatus").forEach(watchStatus); }
+  // Inside the app the header already has the back arrow, so a page's own "← Back" button
+  // (the ones that call closeModule) is hidden there. Opened on its own, the page keeps it.
+  function hideOwnBackButtons(){
+    var inApp = false;
+    try{ inApp = window.top !== window && typeof window.top.closeModule === "function"; }catch(e){}
+    if(!inApp) return;
+    document.querySelectorAll('[onclick*="closeModule"]').forEach(function(el){
+      if(el.getAttribute("data-keep") === "1") return;
+      el.style.display = "none"; el.setAttribute("aria-hidden", "true");
+    });
+  }
+  function boot(){ addCss(); document.querySelectorAll("#connStatus").forEach(watchStatus); hideOwnBackButtons(); }
+  window.addEventListener("load", hideOwnBackButtons);
   if(document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot, { once:true }); else boot();
   return api;
 })();
