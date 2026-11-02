@@ -70,10 +70,11 @@
   // Builds the pieces of one memo. html() wraps them as one document; htmlMany() joins several.
   function build(d, tracking, opts) {
     opts = opts || {};
-    // Memos saved before the sender came from the employee table keep their original signatory.
-    var legacy = !d.fromName;
-    var signName = legacy ? "Kingsley Onulaka" : d.fromName;
-    var signRank = legacy ? "Head, H.R." : (d.fromRank || "");
+    // Every memo is signed by Human Resources, old and new. The head of unit who raised it
+    // still appears on the "From" line above; only the signature block is HR.
+    // Change these two lines if the HR signatory changes; every reprint follows.
+    var signName = "Kingsley Onulaka";
+    var signRank = "Head, H.R.";
     var css = [
       "@page { size:A4; margin:36pt 50pt 56pt 50pt;",
       "  @bottom-left { content:'CONFIDENTIAL'; font:bold 8pt Arial,sans-serif; color:#555; }",
