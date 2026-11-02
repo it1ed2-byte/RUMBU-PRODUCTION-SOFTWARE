@@ -29,6 +29,12 @@
   .act-btn{padding:5px 12px;border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;}
   .act-btn.edit{background:#dbeafe;color:#1e40af;}
   .act-btn.toggle{background:#fef3c7;color:#92400e;}
+  .linkbtn{background:none;border:0;padding:0;margin-top:6px;width:auto;color:var(--accent);font-size:12px;font-weight:700;cursor:pointer;text-decoration:underline;font-family:inherit;}
+  .caution{background:#fff7e0;border:1px solid #f1d28a;color:#6b4a00;border-radius:8px;padding:10px 12px;font-size:12.5px;line-height:1.6;margin-top:10px;}
+  .caution button{width:auto;margin:6px 6px 0 0;padding:5px 12px;font-size:12px;}
+  .brtable{width:100%;border-collapse:collapse;margin-top:14px;font-size:13px;}
+  .brtable th{text-align:left;font-size:11px;color:var(--muted);padding:6px 8px;border-bottom:1px solid var(--line);}
+  .brtable td{padding:8px;border-bottom:1px solid var(--line);vertical-align:middle;}
 </style>
 </head>
 <body>
@@ -41,6 +47,7 @@
       <h3 style="margin:0;color:var(--heading);">PET Agents</h3>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <input type="text" id="searchInput" placeholder="Search name or code..." style="width:220px;" oninput="filterTable()">
+        <button class="btn-ghost" onclick="openBranches(false)">Manage branches</button>
         <button onclick="openAdd()">+ Add Agent</button>
       </div>
     </div>
@@ -64,8 +71,9 @@
     <h3 id="modalTitle">Add Agent</h3>
     <div class="grid2">
       <div>
-        <label>Agent Code <span style="color:var(--muted);font-weight:400;">(auto-generated)</span></label>
-        <input type="text" id="fCode" readonly style="background:var(--bg);">
+        <label>Agent Code * <span style="color:var(--muted);font-weight:400;">(from Kissflow)</span></label>
+        <input type="text" id="fCode" maxlength="20" placeholder="e.g. KN-01" autocomplete="off" autocapitalize="characters" spellcheck="false" style="text-transform:uppercase;" oninput="this.value=this.value.toUpperCase().replace(/[^A-Z0-9-]/g,'')">
+        <div id="codeNote" style="font-size:12px;color:var(--muted);margin-top:4px;min-height:16px;"></div>
       </div>
       <div>
         <label>Category</label>
@@ -87,6 +95,7 @@
         <select id="fSection">
           <option value="">Loading branches...</option>
         </select>
+        <button type="button" class="linkbtn" onclick="openBranches(true)">+ New branch</button>
       </div>
     </div>
     <label>Address</label>
@@ -113,20 +122,168 @@
   </div>
 </div>
 
+<!-- Agent branches -->
+<div class="modal-overlay" id="brModal">
+  <div class="modal">
+    <h3>Agent branches</h3>
+    <p style="font-size:12px;color:var(--muted);margin:-8px 0 12px;line-height:1.6;">Where the agents are based. This is its own list and is not the plant branches used elsewhere in the software. Branches are never deleted: one that is no longer needed is switched off, so agents already on it keep it.</p>
+    <label for="brNew">Add a branch</label>
+    <div style="display:flex;gap:8px;">
+      <input type="text" id="brNew" maxlength="40" placeholder="e.g. Jos" autocomplete="off" onkeydown="if(event.key==='Enter'){addBranch(false);}" oninput="document.getElementById('brCaution').style.display='none';">
+      <button onclick="addBranch(false)" style="width:auto;white-space:nowrap;">Add branch</button>
+    </div>
+    <div id="brCaution" class="caution" style="display:none;"></div>
+    <div id="brStatus" style="margin-top:10px;font-size:13px;font-weight:700;min-height:16px;"></div>
+    <table class="brtable"><thead><tr><th>Branch</th><th>Agents</th><th>Status</th><th></th></tr></thead><tbody id="brBody"></tbody></table>
+    <div class="btn-row"><button class="btn-ghost" onclick="closeBranches()">Close</button></div>
+  </div>
+</div>
+
 <script>
-let ME = null, AGENTS = [], BRANCHES = [], EDITING_ID = null;
+let ME = null, AGENTS = [], EDITING_ID = null;
+
+// The branch list is its own managed list (pet_agent_branches), not the software's plant branches. Branches are added, renamed
+// and switched off only through database functions, which refuse duplicates and log every change.
+let BRANCH_ROWS = [];          // [{id, name, is_active}]
+let BR_FROM_FORM = false;      // the panel was opened from the agent form, so a branch added or picked there is selected in the form
+function normB(s){ return String(s||"").toLowerCase().replace(/\s+/g," ").trim(); }
+function cleanB(s){ return String(s||"").replace(/\s+/g," ").trim(); }
+const BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9 .&'()\/-]{1,39}$/;
 
 async function loadBranches(){
-  // PET collection currently only happens at these two sites — matches the
-  // same restriction applied at Initiation.
-  const ACTIVE_PET_BRANCHES = ["LagosAgbara", "KanoWash"];
-  const { data, error } = await sb.from("app_sections").select("name").in("name", ACTIVE_PET_BRANCHES).order("name");
+  const { data, error } = await sb.from("pet_agent_branches").select("id,name,is_active").order("name");
   if(error) throw new Error("Could not load branches: "+error.message);
-  BRANCHES = (data||[]).map(s=>s.name);
+  BRANCH_ROWS = data || [];
+  renderBranchOptions("");
+}
+
+// The Branch box lists the branches that are switched on. An agent already on a branch that is switched off, or not in the list yet,
+// still sees it (marked), so opening and saving that agent never silently drops its branch.
+function renderBranchOptions(keep){
   const sel = document.getElementById("fSection");
-  sel.innerHTML = BRANCHES.length
-    ? `<option value="">-- Select --</option>` + BRANCHES.map(b=>`<option value="${b}">${b}</option>`).join("")
-    : `<option value="">No branches configured</option>`;
+  const current = keep !== undefined ? keep : sel.value;
+  const on = BRANCH_ROWS.filter(b => b.is_active);
+  let extra = "";
+  if(current && !on.some(b => normB(b.name) === normB(current))){
+    const off = BRANCH_ROWS.find(b => normB(b.name) === normB(current));
+    extra = `<option value="${esc(current)}">${esc(current)} (${off ? "switched off" : "not in the list"})</option>`;
+  }
+  sel.innerHTML = on.length || extra
+    ? `<option value="">-- Select --</option>` + on.map(b=>`<option value="${esc(b.name)}">${esc(b.name)}</option>`).join("") + extra
+    : `<option value="">No branches yet</option>`;
+  const pick = [...sel.options].find(o => normB(o.value) === normB(current));
+  if(current && pick) sel.value = pick.value;
+}
+
+function lev(a, b){
+  const m = a.length, n = b.length; if(!m) return n; if(!n) return m;
+  let prev = Array.from({length:n+1}, (_, j) => j);
+  for(let i=1;i<=m;i++){ const cur = [i]; for(let j=1;j<=n;j++) cur[j] = Math.min(prev[j]+1, cur[j-1]+1, prev[j-1] + (a[i-1]===b[j-1]?0:1)); prev = cur; }
+  return prev[n];
+}
+// Names that look like an existing branch (a typo, or one name inside the other), so a near-duplicate is questioned before it is added
+function similarBranches(name){
+  const n = normB(name);
+  return BRANCH_ROWS.filter(b => {
+    const m = normB(b.name); if(m === n) return false;
+    const shortest = Math.min(m.length, n.length); if(shortest < 4) return false;
+    return m.includes(n) || n.includes(m) || lev(m, n) <= 2;
+  });
+}
+
+function brStatus(msg, kind){ const el = document.getElementById("brStatus"); el.style.color = kind==="bad" ? "var(--bad)" : kind==="ok" ? "var(--ok)" : "var(--muted)"; el.textContent = msg || ""; }
+
+function openBranches(fromForm){
+  BR_FROM_FORM = !!fromForm;
+  document.getElementById("brNew").value = "";
+  document.getElementById("brCaution").style.display = "none";
+  brStatus("");
+  renderBranchTable();
+  document.getElementById("brModal").classList.add("open");
+  document.getElementById("brNew").focus();
+}
+function closeBranches(){ document.getElementById("brModal").classList.remove("open"); }
+
+function renderBranchTable(){
+  const body = document.getElementById("brBody");
+  if(!BRANCH_ROWS.length){ body.innerHTML = `<tr><td colspan="4" style="color:var(--muted);">No branches yet.</td></tr>`; return; }
+  const count = b => AGENTS.filter(a => normB(a.section) === normB(b.name)).length;
+  body.innerHTML = BRANCH_ROWS.map(b => `<tr>
+    <td><b>${esc(b.name)}</b></td>
+    <td>${count(b)}</td>
+    <td><span class="badge ${b.is_active?'active':'inactive'}">${b.is_active?'On':'Off'}</span></td>
+    <td style="white-space:nowrap;">
+      <button class="act-btn edit" onclick="renameBranch(${b.id})">Rename</button>
+      <button class="act-btn toggle" onclick="toggleBranch(${b.id})">${b.is_active?'Switch off':'Switch on'}</button>
+    </td></tr>`).join("");
+}
+
+function useBranch(name){
+  if(BR_FROM_FORM) renderBranchOptions(name);
+  closeBranches();
+}
+
+async function addBranch(force){
+  const name = cleanB(document.getElementById("brNew").value);
+  const caution = document.getElementById("brCaution"); caution.style.display = "none";
+  if(!name) return brStatus("Type the branch name.", "bad");
+  if(!BRANCH_RE.test(name)) return brStatus("The branch name can use 2 to 40 letters, numbers or spaces (a few symbols such as - . & are allowed).", "bad");
+  const same = BRANCH_ROWS.find(b => normB(b.name) === normB(name));
+  if(same){
+    return brStatus(same.is_active
+      ? `"${same.name}" already exists. Pick it from the Branch list instead of adding it again.`
+      : `"${same.name}" already exists but is switched off. Switch it on below instead of adding it again.`, "bad");
+  }
+  const sim = similarBranches(name);
+  if(sim.length && !force){
+    brStatus("");
+    caution.innerHTML = `<b>Check before adding.</b> "${esc(name)}" looks like ${sim.length===1?"a branch that already exists":"branches that already exist"}: ${sim.map(b=>`<b>${esc(b.name)}</b>${b.is_active?"":" (switched off)"}`).join(", ")}.<br>Use ${sim.length===1?"it":"one of them"} unless this is really a different place.<br>`
+      + sim.filter(b=>b.is_active).map(b=>`<button class="btn-ghost" onclick="useBranch('${esc(b.name).replace(/'/g,"\\'")}')">Use ${esc(b.name)}</button>`).join("")
+      + `<button onclick="addBranch(true)">Add "${esc(name)}" anyway</button>`;
+    caution.style.display = "block";
+    return;
+  }
+  brStatus("Adding...");
+  const { data, error } = await sb.rpc("pet_add_agent_branch", { p_name: name });
+  if(error) return brStatus(rpcMessage(error, "add the branch"), "bad");
+  document.getElementById("brNew").value = "";
+  await loadBranches(); renderBranchTable();
+  if(BR_FROM_FORM) renderBranchOptions((data && data.name) || name);
+  brStatus(`Added "${(data && data.name) || name}".`, "ok");
+}
+
+function rpcMessage(error, what){
+  const missing = error.code === "PGRST202" || /could not find the function/i.test(error.message||"");
+  return missing ? "This needs a database update that has not been applied yet. Ask IT to run pet_agent_branches.sql." : "Could not " + what + ": " + error.message;
+}
+
+async function renameBranch(id){
+  const b = BRANCH_ROWS.find(x => x.id === id); if(!b) return;
+  const input = prompt("New name for the branch \"" + b.name + "\":", b.name);
+  if(input === null) return;
+  const name = cleanB(input);
+  if(!name || name === b.name) return;
+  if(!BRANCH_RE.test(name)) return brStatus("The branch name can use 2 to 40 letters, numbers or spaces (a few symbols such as - . & are allowed).", "bad");
+  const clash = BRANCH_ROWS.find(x => x.id !== id && normB(x.name) === normB(name));
+  if(clash) return brStatus(`Another branch is already called "${clash.name}".`, "bad");
+  const n = AGENTS.filter(a => normB(a.section) === normB(b.name)).length;
+  if(!confirm("Rename \"" + b.name + "\" to \"" + name + "\"?" + (n ? "\n\nThe " + n + " agent" + (n===1?"":"s") + " on it will move to the new name." : ""))) return;
+  brStatus("Saving...");
+  const { data, error } = await sb.rpc("pet_rename_agent_branch", { p_id: id, p_new: name });
+  if(error) return brStatus(rpcMessage(error, "rename the branch"), "bad");
+  await loadBranches(); await loadAgents(); renderBranchTable();
+  brStatus(`Renamed to "${(data && data.new) || name}".`, "ok");
+}
+
+async function toggleBranch(id){
+  const b = BRANCH_ROWS.find(x => x.id === id); if(!b) return;
+  const n = AGENTS.filter(a => normB(a.section) === normB(b.name)).length;
+  if(b.is_active && !confirm("Switch off \"" + b.name + "\"?" + (n ? "\n\n" + n + " agent" + (n===1?"":"s") + " are on it. They keep it, but it will not be offered for new agents or when changing an agent's branch." : ""))) return;
+  brStatus("Saving...");
+  const { error } = await sb.rpc("pet_set_agent_branch_active", { p_id: id, p_active: !b.is_active });
+  if(error) return brStatus(rpcMessage(error, "change the branch"), "bad");
+  await loadBranches(); renderBranchTable();
+  brStatus(`"${b.name}" is now ${b.is_active ? "off" : "on"}.`, "ok");
 }
 
 async function init(){
@@ -134,9 +291,11 @@ async function init(){
   try{
     ME = await requireAuth("../../login.html");
     if(!ME) return;
-    await loadBranches();
-    await loadAgents();
-    cs.style.color="var(--ok)"; cs.textContent="Connected.";
+    let branchNote = "";
+    try{ await loadBranches(); }
+    catch(e){ branchNote = " The agent branch list could not be loaded (" + e.message + "). Ask IT to run pet_agent_branches.sql."; renderBranchOptions(""); }
+    await loadAgents();   // the agents always load, even if the branch list is not set up yet
+    cs.style.color = branchNote ? "var(--bad)" : "var(--ok)"; cs.textContent = "Connected." + branchNote;
   }catch(e){
     cs.style.color="var(--bad)"; cs.textContent="Error: "+e.message;
   }
@@ -153,13 +312,13 @@ function renderTable(list){
   const body = document.getElementById("agentBody");
   if(!list.length){ body.innerHTML=`<tr><td colspan="9" style="text-align:center;color:var(--muted);">No agents found.</td></tr>`; return; }
   body.innerHTML = list.map(a=>`<tr>
-    <td><b>${a.agent_code}</b></td>
-    <td>${a.agent_name}</td>
-    <td>${a.section||"—"}</td>
-    <td>${a.phone||"—"}</td>
-    <td>${a.category||"—"}</td>
-    <td>${a.bank_name||"—"}</td>
-    <td>${a.bank_account_number||"—"}</td>
+    <td><b>${esc(a.agent_code)}</b></td>
+    <td>${esc(a.agent_name)}</td>
+    <td>${esc(a.section||"—")}</td>
+    <td>${esc(a.phone||"—")}</td>
+    <td>${esc(a.category||"—")}</td>
+    <td>${esc(a.bank_name||"—")}</td>
+    <td>${esc(a.bank_account_number||"—")}</td>
     <td><span class="badge ${a.is_active?'active':'inactive'}">${a.is_active?'Active':'Inactive'}</span></td>
     <td>
       <button class="act-btn edit" onclick="openEdit(${a.id})">Edit</button>
@@ -173,19 +332,28 @@ function filterTable(){
   renderTable(AGENTS.filter(a=> (a.agent_name+a.agent_code).toLowerCase().includes(q)));
 }
 
-async function generateCode(){
-  const { data } = await sb.from("pet_agents").select("agent_code").order("id",{ascending:false}).limit(1);
-  if(!data||!data.length) return "AGT-001";
-  const num = parseInt((data[0].agent_code||"AGT-000").split("-")[1]||"0") + 1;
-  return "AGT-" + String(num).padStart(3,"0");
+// Agent codes are the Kissflow codes, typed in (for example KN-01). Letters, numbers and dashes only, 2 to 20 characters.
+const CODE_RE = /^[A-Z0-9][A-Z0-9-]{1,19}$/;
+function normCode(v){ return String(v||"").trim().toUpperCase(); }
+function esc(t){ return String(t==null?"":t).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+
+// How many collections already carry this agent (so the confirmation can say how many will follow a code change)
+async function countCollections(agentId){
+  try{
+    const { count, error } = await sb.from("pet_collections").select("id",{count:"exact",head:true}).eq("agent_id", agentId);
+    return error ? null : count;
+  }catch(e){ return null; }
 }
 
 async function openAdd(){
   EDITING_ID = null;
   document.getElementById("modalTitle").textContent = "Add Agent";
   clearForm();
-  document.getElementById("fCode").value = await generateCode();
+  renderBranchOptions("");
+  document.getElementById("fCode").value = "";
+  document.getElementById("codeNote").textContent = "Type the agent's code exactly as it is in Kissflow, for example KN-01.";
   document.getElementById("modal").classList.add("open");
+  document.getElementById("fCode").focus();
 }
 
 function openEdit(id){
@@ -193,7 +361,9 @@ function openEdit(id){
   const a = AGENTS.find(x=>x.id===id);
   if(!a) return;
   document.getElementById("modalTitle").textContent = "Edit Agent";
+  renderBranchOptions(a.section || "");
   document.getElementById("fCode").value = a.agent_code;
+  document.getElementById("codeNote").textContent = "Changing the code also changes it on every collection already recorded for this agent.";
   document.getElementById("fName").value = a.agent_name;
   document.getElementById("fPhone").value = a.phone||"";
   document.getElementById("fSection").value = a.section||"";
@@ -217,13 +387,27 @@ function closeModal(){ document.getElementById("modal").classList.remove("open")
 
 async function saveAgent(){
   const st = document.getElementById("modalStatus");
+  const fail = m => { st.style.color="var(--bad)"; st.textContent=m; };
   const name = document.getElementById("fName").value.trim();
   const section = document.getElementById("fSection").value;
-  if(!name){ st.style.color="var(--bad)"; st.textContent="Agent name is required."; return; }
-  if(!section){ st.style.color="var(--bad)"; st.textContent="Select a branch."; return; }
+  const code = normCode(document.getElementById("fCode").value);
+  const current = EDITING_ID ? AGENTS.find(a=>a.id===EDITING_ID) : null;
+  const codeChanged = !!current && normCode(current.agent_code) !== code;   // compared the way it is typed, so an untouched old code never counts as a change
 
-  const payload = {
-    agent_code:         document.getElementById("fCode").value,
+  // The code is checked when adding, or when an edit actually changes it (an unchanged old code is never blocked).
+  if(!EDITING_ID || codeChanged){
+    if(!code) return fail("Enter the agent code from Kissflow, for example KN-01.");
+    if(!CODE_RE.test(code)) return fail("The code can only use letters, numbers and dashes, 2 to 20 characters, for example KN-01.");
+    const clash = AGENTS.find(a => a.id !== EDITING_ID && normCode(a.agent_code) === code);
+    if(clash) return fail("The code " + code + " is already used by " + clash.agent_name + ".");
+  }
+  if(!name) return fail("Agent name is required.");
+  if(!section) return fail("Select a branch.");
+  const knownBranch = BRANCH_ROWS.some(b => b.is_active && normB(b.name) === normB(section));
+  const sameBranch = !!current && normB(current.section) === normB(section);
+  if(!knownBranch && !sameBranch) return fail("Choose a branch from the list, or add it with + New branch.");
+
+  const fields = {
     agent_name:         name,
     phone:              document.getElementById("fPhone").value.trim()||null,
     section:            section,
@@ -234,12 +418,33 @@ async function saveAgent(){
     bank_account_name:  document.getElementById("fBankAccName").value.trim()||null,
   };
 
-  st.style.color="var(--muted)"; st.textContent="Saving...";
-  const { error } = EDITING_ID
-    ? await sb.from("pet_agents").update(payload).eq("id", EDITING_ID)
-    : await sb.from("pet_agents").insert(payload);
+  // A changed code is applied by the database in one step: the agent AND every collection that carries a copy of the code.
+  if(codeChanged){
+    const n = await countCollections(EDITING_ID);
+    const msg = "Change the code from " + current.agent_code + " to " + code + "?"
+      + (n ? "\n\nIt will also be changed on the " + n + " collection" + (n===1?"":"s") + " already recorded for this agent." : "");
+    if(!confirm(msg)) return;
+    st.style.color="var(--muted)"; st.textContent="Saving...";
+    const { error: rpcErr } = await sb.rpc("pet_change_agent_code", { p_agent_id: EDITING_ID, p_new_code: code });
+    if(rpcErr){
+      const missing = rpcErr.code === "PGRST202" || /could not find the function/i.test(rpcErr.message||"");
+      return fail(missing
+        ? "Changing a code needs a database update that has not been applied yet. Ask IT to run pet_agent_codes.sql."
+        : "Could not change the code: " + rpcErr.message);
+    }
+  } else {
+    st.style.color="var(--muted)"; st.textContent="Saving...";
+  }
 
-  if(error){ st.style.color="var(--bad)"; st.textContent="Error: "+error.message; return; }
+  const { error } = EDITING_ID
+    ? await sb.from("pet_agents").update(fields).eq("id", EDITING_ID)
+    : await sb.from("pet_agents").insert(Object.assign({ agent_code: code }, fields));
+
+  if(error){
+    if(codeChanged){ await loadAgents(); return fail("The code was changed to " + code + ", but the other changes were not saved: " + error.message); }
+    const dup = error.code === "23505" || /duplicate key|unique/i.test(error.message||"");
+    return fail(dup ? "The code " + code + " is already used by another agent." : "Error: " + error.message);
+  }
   st.style.color="var(--ok)"; st.textContent="Saved.";
   await loadAgents();
   setTimeout(closeModal, 800);

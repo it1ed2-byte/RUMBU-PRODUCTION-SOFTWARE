@@ -42,7 +42,7 @@
 
   <div id="fillSection" style="display:none;">
     <div class="panel">
-      <div class="panel-title" id="fillQueueTitle">Your Queue — Stage 5: Rumbu Weight Details</div>
+      <div class="panel-title" id="fillQueueTitle">Your Queue — Stage 3: Rumbu Weight Details</div>
       <p style="font-size:12px;color:var(--muted);margin:0 0 12px;">Everything waiting for you at this stage — items to fill and items to review and approve — in one list.</p>
       <div id="fillQueue"></div>
     </div>
@@ -86,10 +86,23 @@
 <script>
 let ME=null, ALL_SECTIONS=[], IS_FILLER=false, IS_APPROVER=false, CURRENT_COLLECTION=null, RW_QUEUE_DATA=[];
 
-// Approving advances to Stage 4c (Quality Control). Rejecting sends back
-// to Stage 4a (Bottle Offloading) — the stage immediately before this one.
-const NEXT_STATUS   = { stage4b:'stage4c_qc_filling' };
-const REJECT_STATUS = { stage4b:'rejected_to_stage4a' };
+// Stage 3. Approving advances to Stage 4 (Bottle Offloading). Rejecting sends back to Stage 2 (Bottle Inspection),
+// the stage immediately before this one. (Collections on the old order go on to Quality Control and back to Offloading.)
+// ---- Stage order: Rumbu Weight Details is Stage 3, Payment is Stage 5 ----
+// flow_version 2 (every new collection): Inspection > Rumbu Weight (3) > Offloading (4) > Payment (5) > Quality Control (6).
+// flow_version 1 (collections already past Inspection when the change went live): the old order, Payment > Offloading > Rumbu Weight > Quality Control.
+// A collection with no flow_version (column not added yet) is treated as 1, so nothing changes until pet_flow_swap.sql has been run.
+const FLOW_NEXT = {
+  1:{ stage2:'stage3p1_filling', stage3p1:'stage4a_offloading_filling', stage4a:'stage4b_weight_filling', stage4b:'stage4c_qc_filling', stage4c:'stage4d_production_approval', stage3p2:'completed' },
+  2:{ stage2:'stage4b_weight_filling', stage4b:'stage4a_offloading_filling', stage4a:'stage3p1_filling', stage3p1:'stage4c_qc_filling', stage4c:'stage4d_production_approval', stage3p2:'completed' }
+};
+const FLOW_REJECT = {
+  1:{ stage2:'rejected_to_stage1', stage3p1:'rejected_to_stage2', stage4a:'rejected_to_stage3p1', stage4b:'rejected_to_stage4a', stage4c:'rejected_to_stage4b', stage3p2:'rejected_to_stage4' },
+  2:{ stage2:'rejected_to_stage1', stage4b:'rejected_to_stage2', stage4a:'rejected_to_stage4b', stage3p1:'rejected_to_stage4a', stage4c:'rejected_to_stage3p1', stage3p2:'rejected_to_stage4' }
+};
+const flowOf = c => (c && Number(c.flow_version)===2) ? 2 : 1;
+const nextStatusFor   = (stage, c) => FLOW_NEXT[flowOf(c)][stage];
+const rejectStatusFor = (stage, c) => FLOW_REJECT[flowOf(c)][stage];
 
 async function init(){
   const cs = document.getElementById("connStatus");
@@ -132,7 +145,7 @@ function renderQueue(rows){
   document.getElementById("fillQueue").innerHTML = rows.length
     ? rows.join("")
     : `<p style="font-size:13px;color:var(--muted);">Nothing is waiting for you at this stage.</p>`;
-  setupCollapsibleQueue("fillQueueTitle", "fillQueue", rows.length, "Your Queue — Stage 5: Rumbu Weight Details");
+  setupCollapsibleQueue("fillQueueTitle", "fillQueue", rows.length, "Your Queue — Stage 3: Rumbu Weight Details");
 }
 
 async function loadFillQueue(sections){
@@ -282,7 +295,7 @@ async function proceedWithRumbuWeightSubmit(){
 
     const oldStatus = CURRENT_COLLECTION.status;
     const needsApproval = await stageHasApprovers("stage4b", CURRENT_COLLECTION.section);
-    const nextStatus = needsApproval ? "stage4b_weight_approval" : NEXT_STATUS.stage4b;
+    const nextStatus = needsApproval ? "stage4b_weight_approval" : nextStatusFor('stage4b', CURRENT_COLLECTION);
     const { error: updErr } = await sb.from("pet_collections").update({
       rumbu_weighbridge_weight: rumbuW,
       rumbu_weighbridge_attachment: attachmentUrl,
@@ -317,7 +330,7 @@ function closeRwForm(){
 async function decide(collectionId, stage, decision, note){
   if(decision==="rejected" && !note){ alert("Rejection reason is required."); return; }
   try{
-    const { data: c, error: cErr } = await sb.from("pet_collections").select("section,cycle,status").eq("id",collectionId).single();
+    const { data: c, error: cErr } = await sb.from("pet_collections").select("*").eq("id",collectionId).single();
     if(cErr) throw new Error("Could not load collection: "+cErr.message);
 
     const { error: apprErr } = await sb.from("pet_approvals").insert({
@@ -333,7 +346,7 @@ async function decide(collectionId, stage, decision, note){
     if(apprErr) throw new Error("Could not record your decision: "+apprErr.message);
 
     if(decision==="rejected"){
-      const newStatus = REJECT_STATUS[stage];
+      const newStatus = rejectStatusFor(stage, c);
       const newCycle  = (c.cycle||1) + 1;
       const { error: updErr } = await sb.from("pet_collections").update({ status: newStatus, cycle: newCycle, updated_at: new Date().toISOString() }).eq("id",collectionId);
       if(updErr) throw new Error("Could not update status: "+updErr.message);
@@ -346,7 +359,7 @@ async function decide(collectionId, stage, decision, note){
     } else {
       const allApproved = (ME.role==="super_admin") ? true : await checkAllApproved(collectionId, stage, c.cycle, c.section);
       if(allApproved){
-        const newStatus = NEXT_STATUS[stage];
+        const newStatus = nextStatusFor(stage, c);
         const { error: updErr } = await sb.from("pet_collections").update({ status: newStatus, updated_at: new Date().toISOString() }).eq("id",collectionId);
         if(updErr) throw new Error("Could not advance status: "+updErr.message);
         const { error: logErr } = await sb.from("pet_activity_log").insert({

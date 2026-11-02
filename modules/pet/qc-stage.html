@@ -119,10 +119,23 @@
 <script>
 let ME=null, ALL_SECTIONS=[], IS_FILLER=false, IS_APPROVER=false, CURRENT_COLLECTION=null, QC_QUEUE_DATA=[];
 
-// Stage 6 sits after Rumbu Weight Details (Stage 5) and right before
-// the plant manager's Stage 7 (Production Approval). Rejecting sends it back to Stage 5.
-const NEXT_STATUS   = { stage4c:'stage4d_production_approval' };
-const REJECT_STATUS = { stage4c:'rejected_to_stage4b' };
+// Stage 6 sits after Payment (Stage 5) and right before the plant manager's Stage 7 (Production Approval).
+// Rejecting sends it back to Stage 5. (Collections on the old order go back to Rumbu Weight Details.)
+// ---- Stage order: Rumbu Weight Details is Stage 3, Payment is Stage 5 ----
+// flow_version 2 (every new collection): Inspection > Rumbu Weight (3) > Offloading (4) > Payment (5) > Quality Control (6).
+// flow_version 1 (collections already past Inspection when the change went live): the old order, Payment > Offloading > Rumbu Weight > Quality Control.
+// A collection with no flow_version (column not added yet) is treated as 1, so nothing changes until pet_flow_swap.sql has been run.
+const FLOW_NEXT = {
+  1:{ stage2:'stage3p1_filling', stage3p1:'stage4a_offloading_filling', stage4a:'stage4b_weight_filling', stage4b:'stage4c_qc_filling', stage4c:'stage4d_production_approval', stage3p2:'completed' },
+  2:{ stage2:'stage4b_weight_filling', stage4b:'stage4a_offloading_filling', stage4a:'stage3p1_filling', stage3p1:'stage4c_qc_filling', stage4c:'stage4d_production_approval', stage3p2:'completed' }
+};
+const FLOW_REJECT = {
+  1:{ stage2:'rejected_to_stage1', stage3p1:'rejected_to_stage2', stage4a:'rejected_to_stage3p1', stage4b:'rejected_to_stage4a', stage4c:'rejected_to_stage4b', stage3p2:'rejected_to_stage4' },
+  2:{ stage2:'rejected_to_stage1', stage4b:'rejected_to_stage2', stage4a:'rejected_to_stage4b', stage3p1:'rejected_to_stage4a', stage4c:'rejected_to_stage3p1', stage3p2:'rejected_to_stage4' }
+};
+const flowOf = c => (c && Number(c.flow_version)===2) ? 2 : 1;
+const nextStatusFor   = (stage, c) => FLOW_NEXT[flowOf(c)][stage];
+const rejectStatusFor = (stage, c) => FLOW_REJECT[flowOf(c)][stage];
 
 // The percentage dropdown list — 5 ranges: 0-1%, 1-5%, 6-20%, 21-50%, 51-100%.
 // original list uses different values, change ONLY this line.
@@ -392,7 +405,7 @@ async function proceedWithQCSubmit(){
 
     const oldStatus = CURRENT_COLLECTION.status;
     const needsApproval = await stageHasApprovers("stage4c", CURRENT_COLLECTION.section);
-    const nextStatus = needsApproval ? "stage4c_qc_approval" : NEXT_STATUS.stage4c;
+    const nextStatus = needsApproval ? "stage4c_qc_approval" : nextStatusFor('stage4c', CURRENT_COLLECTION);
     const { error: stErr } = await sb.from("pet_collections").update({ status: nextStatus, updated_at: new Date().toISOString() }).eq("id",CURRENT_COLLECTION.id);
     if(stErr) throw new Error("QC data was saved, but could not advance status: "+stErr.message);
 
@@ -422,7 +435,7 @@ function closeQCForm(){
 async function decide(collectionId, stage, decision, note){
   if(decision==="rejected" && !note){ alert("Rejection reason is required."); return; }
   try{
-    const { data: c, error: cErr } = await sb.from("pet_collections").select("section,cycle,status").eq("id",collectionId).single();
+    const { data: c, error: cErr } = await sb.from("pet_collections").select("*").eq("id",collectionId).single();
     if(cErr) throw new Error("Could not load collection: "+cErr.message);
 
     const { error: apprErr } = await sb.from("pet_approvals").insert({
@@ -438,7 +451,7 @@ async function decide(collectionId, stage, decision, note){
     if(apprErr) throw new Error("Could not record your decision: "+apprErr.message);
 
     if(decision==="rejected"){
-      const newStatus = REJECT_STATUS[stage];
+      const newStatus = rejectStatusFor(stage, c);
       const newCycle  = (c.cycle||1) + 1;
       const { error: updErr } = await sb.from("pet_collections").update({ status: newStatus, cycle: newCycle, updated_at: new Date().toISOString() }).eq("id",collectionId);
       if(updErr) throw new Error("Could not update status: "+updErr.message);
@@ -453,7 +466,7 @@ async function decide(collectionId, stage, decision, note){
       // pipeline can be solo-tested before real approvers are assigned.
       const allApproved = (ME.role==="super_admin") ? true : await checkAllApproved(collectionId, stage, c.cycle, c.section);
       if(allApproved){
-        const newStatus = NEXT_STATUS[stage];
+        const newStatus = nextStatusFor(stage, c);
         const { error: updErr } = await sb.from("pet_collections").update({ status: newStatus, updated_at: new Date().toISOString() }).eq("id",collectionId);
         if(updErr) throw new Error("Could not advance status: "+updErr.message);
         const { error: logErr } = await sb.from("pet_activity_log").insert({

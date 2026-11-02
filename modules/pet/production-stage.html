@@ -557,6 +557,7 @@ function computeProductionPlusWaste(){
 
 // Loads this run's batches, each batch's Flake Scan result and the bags (fresh from the database).
 async function loadRunData(collectionId){
+  await refreshLabelContacts();      // so the label previews show the current footer numbers
   const { data:bs } = await sb.from("pet_lab_batches").select("*").eq("collection_id",collectionId);
   RUN_BATCHES=(bs||[]).slice().sort((a,b)=>a.batch_no-b.batch_no);
   RUN_RESULTS={}; RUN_BAGS={}; RUN_ATTEMPTS={};
@@ -641,7 +642,7 @@ function batchCard(b){
     if(!CAN.labels) actions = gen ? quiet("Labels are ready. The labels person prints and downloads them.") : quiet("Approved. Waiting for the labels person to generate the labels.");
     else actions = gen ? `<button class="btn-sm" onclick="toggleLabels(${b.id})">${OPEN_LABELS.has(b.id)?"Hide labels":"Show / print labels"}</button>
       ${OPEN_LABELS.has(b.id)?`<button class="btn-sm" onclick="printLabels(${b.id})">🖨️ Print labels</button>`:""}
-      ${b.labels_pdf_url?`<a href="${esc(b.labels_pdf_url)}" target="_blank" style="font-size:12.5px;align-self:center;">Download labels PDF</a>`:`<button class="btn-ghost btn-sm" onclick="rebuildPdf(${b.id})">Create labels PDF</button>`}`
+      ${b.labels_pdf_url?`<a href="${esc(b.labels_pdf_url)}" target="_blank" style="font-size:12.5px;align-self:center;">Download labels PDF</a><button class="btn-ghost btn-sm" title="Replace the saved PDF with one drawn in the current label design" onclick="rebuildPdf(${b.id},true)">Rebuild PDF (current design)</button>`:`<button class="btn-ghost btn-sm" onclick="rebuildPdf(${b.id})">Create labels PDF</button>`}`
       : `<button class="btn-sm" onclick="generateLabels(${b.id})">Generate labels</button>`;
   }
   const note = ((st==="retest_requested"||st==="rerun_requested") && b.decision_note) ? `<div class="note-box"><b>${st==="retest_requested"?"Retest":"Rerun"} reason:</b> ${esc(b.decision_note)}</div>` : "";
@@ -1176,9 +1177,11 @@ async function generateLabels(id){
     updateBagPreviews(); // refresh predicted numbers — this batch is now labeled so count advances
   }catch(e){ flash(id,"❌ "+esc(e.message),"var(--bad)"); }
 }
-async function rebuildPdf(id){
+async function rebuildPdf(id, replacing){
   if(!needDuty("labels")) return;
   const b=RUN_BATCHES.find(x=>x.id===id); if(!b) return;
+  if(replacing && !confirm("Replace the saved labels PDF for batch "+b.batch_no+" with one drawn in the current label design?\n\nLabels already printed and stuck on bags are not affected. Reports will link to the new PDF. The old PDF file is kept in storage but no longer linked."))
+    return;
   try{ OPEN_LABELS.add(id); renderBatchList(); await archiveLabelsPdf(b); await loadRunData(CURRENT_PROD.id); renderRunOverview(); }
   catch(e){ flash(id,"❌ "+esc(e.message),"var(--bad)"); }
 }
@@ -1201,6 +1204,10 @@ var LABEL_GUIDE = [
 // To print a second language, add its two lines to each entry above (for example  ha:["...","..."]) and add its code to LABEL_LANGS.
 // Do that only after a native speaker has checked the wording.
 var LB_NAVY = "#1F3864", LB_BLUE = "#2E75B6", LB_RED = "#C00000";
+var LABEL_WEB = "rumbuindustries.com", LABEL_MAIL = "info@rumbuindustries.com";   // printed under the address in the header
+var LABEL_ABOUT_URL = "https://rumbu.vercel.app/about";                            // the "About Rumbu" QR opens this page
+var LABEL_ABOUT_QR_MM = 26;                                                        // size aimed for; drawn as whole pixels per module, so a little smaller
+var LABEL_CONTACTS = [];                                                           // footer numbers: { office, phone }, up to 5, loaded from About Rumbu
 
 function lbFont(size, weight){ return (weight || "normal") + " " + size + "px Arial, Helvetica, sans-serif"; }
 function lbText(ctx, s, x, y, o){
@@ -1282,39 +1289,44 @@ function drawBagLabel(canvas, d, k){
 
   ctx.strokeStyle = "#94a3b8"; ctx.lineWidth = 0.3; ctx.setLineDash([2, 1.5]); ctx.strokeRect(0.5, 0.5, W - 1, H - 1); ctx.setLineDash([]);
 
-  // header
-  lbRR(ctx, 3, 3, 194, 21, 2.2); ctx.fillStyle = LB_NAVY; ctx.fill();
-  lbText(ctx, "RUMBU INDUSTRIES GROUP", 8, 12.4, { size: 6.4, weight: "bold", color: "#fff" });
-  lbText(ctx, "KM4, Hadejia Road, Kano State, Nigeria", 8, 19.4, { size: 3.5, color: "#dbe4f3" });
-  lbText(ctx, "PET FLAKES", 192, 13.4, { size: 8.6, weight: "bold", color: "#fff", align: "right" });
-  lbText(ctx, "Recycled bottle flakes", 192, 19.4, { size: 3.5, color: "#dbe4f3", align: "right" });
+  // header: company, address, website and email
+  lbRR(ctx, 3, 3, 194, 22.5, 2.2); ctx.fillStyle = LB_NAVY; ctx.fill();
+  lbText(ctx, "RUMBU INDUSTRIES GROUP", 8, 11, { size: 6.4, weight: "bold", color: "#fff" });
+  lbText(ctx, "KM4, Hadejia Road, Kano State, Nigeria", 8, 16.3, { size: 3.5, color: "#dbe4f3" });
+  lbText(ctx, LABEL_WEB + "   |   " + LABEL_MAIL, 8, 21, { size: 3.4, weight: "bold", color: "#fff", maxW: 120 });
+  lbText(ctx, "PET FLAKES", 192, 13.6, { size: 8.6, weight: "bold", color: "#fff", align: "right" });
+  lbText(ctx, "Recycled bottle flakes", 192, 19.6, { size: 3.5, color: "#dbe4f3", align: "right" });
 
-  // grade and weight (largest text on the label, readable from a distance)
+  // the three cards sit 1.5 mm lower than they used to, because the header is 1.5 mm taller
+  ctx.save(); ctx.translate(0, 1.5);
+
+  // grade, net weight and pack reference (the grade is still the largest text on the label)
   lbRR(ctx, 3, 27, 61, 64, 2.2); ctx.fillStyle = "#EAF0F9"; ctx.fill();
-  lbText(ctx, "GRADE", 8, 34.6, { size: 3, weight: "bold", color: LB_BLUE });
-  lbText(ctx, d.grade || "-", 33.5, 60, { size: 30, weight: "bold", color: LB_NAVY, align: "center", maxW: 52 });
-  lbText(ctx, "NET WEIGHT", 8, 69.4, { size: 3, weight: "bold", color: LB_BLUE });
-  lbText(ctx, (d.kg != null ? Number(d.kg).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "--") + " KG", 8, 81.6, { size: 9.6, weight: "bold", color: LB_NAVY, maxW: 52 });
+  lbText(ctx, "GRADE", 8, 33.6, { size: 3, weight: "bold", color: LB_BLUE });
+  lbText(ctx, d.grade || "-", 33.5, 55.6, { size: 27, weight: "bold", color: LB_NAVY, align: "center", maxW: 52 });
+  lbText(ctx, "NET WEIGHT", 8, 63.4, { size: 3, weight: "bold", color: LB_BLUE });
+  lbText(ctx, (d.kg != null ? Number(d.kg).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "--") + " KG", 8, 73.4, { size: 9.6, weight: "bold", color: LB_NAVY, maxW: 52 });
+  ctx.strokeStyle = "#c9d6ea"; ctx.lineWidth = 0.3; ctx.beginPath(); ctx.moveTo(8, 77.4); ctx.lineTo(59, 77.4); ctx.stroke();
+  lbText(ctx, "PACK REFERENCE", 8, 81.6, { size: 2.7, weight: "bold", color: "#64748b" });
+  lbText(ctx, d.ref || "", 8, 87.2, { size: 5.4, weight: "bold", color: LB_NAVY, maxW: 51 });
 
-  // QR block
+  // verify QR block (the QR itself is drawn last)
   lbRR(ctx, 68, 27, 60, 64, 2.2); ctx.fillStyle = "#fff"; ctx.fill(); ctx.strokeStyle = "#cbd5e1"; ctx.lineWidth = 0.3; ctx.stroke();
   lbText(ctx, "SCAN TO VERIFY", 98, 33.4, { size: 3.3, weight: "bold", color: LB_NAVY, align: "center" });
   lbText(ctx, "Scan for the bag record", 98, 82.6, { size: 2.9, color: "#334155", align: "center" });
   lbText(ctx, "Password needed for details", 98, 87.2, { size: 2.9, color: "#64748b", align: "center" });
 
-  // product details
+  // About Rumbu block: the second QR, and the origin
   lbRR(ctx, 132, 27, 65, 64, 2.2); ctx.fillStyle = "#fff"; ctx.fill(); ctx.strokeStyle = "#cbd5e1"; ctx.lineWidth = 0.3; ctx.stroke();
-  var rows = [["PACK REFERENCE", d.ref || ""], ["PRODUCTION DATE", lbDate(d.date)], ["BATCH NUMBER", d.batchNo != null ? String(d.batchNo) : ""], ["BAG", d.index + " of " + d.count], ["ORIGIN", "Made in Nigeria"]];
-  rows.forEach(function(rw, i){
-    var y = 33.6 + i * 12.3;
-    if(i > 0){ ctx.strokeStyle = "#e2e8f0"; ctx.lineWidth = 0.25; ctx.beginPath(); ctx.moveTo(136, y - 4.6); ctx.lineTo(193, y - 4.6); ctx.stroke(); }
-    lbText(ctx, rw[0], 136, y, { size: 2.7, weight: "bold", color: "#64748b" });
-    lbText(ctx, rw[1], 136, y + 5.7, { size: 5.2, weight: "bold", color: LB_NAVY, maxW: 57 });
-  });
+  lbText(ctx, "ABOUT RUMBU", 164.5, 33.4, { size: 3.3, weight: "bold", color: LB_NAVY, align: "center" });
+  lbText(ctx, "Scan for website and contacts", 164.5, 66.8, { size: 2.9, color: "#334155", align: "center" });
+  ctx.strokeStyle = "#e2e8f0"; ctx.lineWidth = 0.25; ctx.beginPath(); ctx.moveTo(136, 74.6); ctx.lineTo(193, 74.6); ctx.stroke();
+  lbText(ctx, "Made in Nigeria", 164.5, 85.4, { size: 6.8, weight: "bold", color: LB_NAVY, align: "center", maxW: 57 });
+  ctx.restore();   // end of the 1.5 mm shift
 
-  // handling and storage guide
-  lbRR(ctx, 3, 94, 194, 31, 2.2); ctx.fillStyle = "#F3F6FA"; ctx.fill();
-  lbText(ctx, "HANDLING AND STORAGE", 8, 99.2, { size: 3.1, weight: "bold", color: LB_BLUE });
+  // handling and storage guide (a little shorter than before, so the contact numbers fit underneath)
+  lbRR(ctx, 3, 95.5, 194, 29.5, 2.2); ctx.fillStyle = "#F3F6FA"; ctx.fill();
+  lbText(ctx, "HANDLING AND STORAGE", 8, 99.8, { size: 3.1, weight: "bold", color: LB_BLUE });
   LABEL_GUIDE.forEach(function(g, i){
     var cx = 26.4 + i * 36.8;
     lbIcon(ctx, g.icon, cx, 108.4);
@@ -1330,17 +1342,39 @@ function drawBagLabel(canvas, d, k){
     }
   });
 
-  // footer
-  lbText(ctx, "Follow the bag maker's label for the safe working load.", 8, 131.2, { size: 2.7, color: "#64748b" });
-  lbText(ctx, "Scan the QR code to verify authenticity.", 192, 131.2, { size: 2.7, color: "#64748b", align: "right" });
+  // footer: the phone numbers set in About Rumbu (the contacts ticked Show), numbers only, spread evenly across the label
+  var cs = (LABEL_CONTACTS || []).slice(0, 5);
+  if(cs.length){
+    var cw = 194 / cs.length, ns = 4.4, pad = cs.length >= 5 ? 8 : 4;   // with five numbers, more air between them
+    cs.forEach(function(c){ var sz = 4.4; ctx.font = lbFont(sz, "bold"); while(sz > 2 && ctx.measureText(c.phone).width > cw - pad){ sz -= 0.1; ctx.font = lbFont(sz, "bold"); } ns = Math.min(ns, sz); });   // one size for all, so a long number never makes the others look uneven
+    cs.forEach(function(c, i){
+      var cx = 3 + cw * (i + 0.5);
+      if(i > 0){ ctx.strokeStyle = "#dbe3ee"; ctx.lineWidth = 0.25; ctx.beginPath(); ctx.moveTo(3 + cw * i, 128.3); ctx.lineTo(3 + cw * i, 133.8); ctx.stroke(); }
+      lbText(ctx, c.phone, cx, 132.5, { size: ns, weight: "bold", color: LB_NAVY, align: "center" });
+    });
+  }
   ctx.restore();
 
-  // QR last, in whole device pixels. Margin: 4 modules of white on every side (the white block behind it is larger than that)
+  // QR codes last, in whole device pixels. Margin: 4 modules of white on every side (the white block behind each is larger than that)
   var model = lbQrModel(d.url || "");
-  if(model){ lbDrawQr(ctx, model, 98 * k, 40.2 * k, LABEL_QR_MM * k); }
-  else { ctx.save(); ctx.scale(k, k); lbText(ctx, "QR library not loaded", 98, 58, { size: 3, color: LB_RED, align: "center" }); ctx.restore(); }
+  if(model){ lbDrawQr(ctx, model, 98 * k, 41.7 * k, LABEL_QR_MM * k); }
+  else { ctx.save(); ctx.scale(k, k); lbText(ctx, "QR library not loaded", 98, 59.5, { size: 3, color: LB_RED, align: "center" }); ctx.restore(); }
+  var aboutModel = lbQrModel(LABEL_ABOUT_URL);
+  if(aboutModel){ lbDrawQr(ctx, aboutModel, 164.5 * k, 40 * k, LABEL_ABOUT_QR_MM * k); }
 }
 /*LABEL-KIT-END*/
+
+// The numbers printed in the label footer come from About Rumbu (Manage QR Password): the contacts ticked Show, with a phone number.
+// Read fresh each time labels are made. If it cannot be read, the labels still print, just without the footer numbers.
+async function refreshLabelContacts(){
+  try{
+    const r = await sb.rpc("get_about_rumbu");
+    if(!r.error && r.data && Array.isArray(r.data.contacts)){
+      LABEL_CONTACTS = r.data.contacts.filter(c=>c && String(c.phone||"").trim()).slice(0,5)
+        .map(c=>({ office:String(c.office||"").trim(), phone:String(c.phone).trim() }));
+    }
+  }catch(e){ /* keep what was loaded before */ }
+}
 
 function labelData(b){
   const bags=RUN_BAGS[b.id]||[];
@@ -1370,6 +1404,7 @@ async function printLabels(id){
   const b=RUN_BATCHES.find(x=>x.id===id); if(!b) return;
   try{
     flash(id,"Preparing the print sheet...");
+    await refreshLabelContacts();
     const sheet=document.createElement("div"); sheet.id="printSheet";
     const cv=document.createElement("canvas"); const imgs=[];
     for(const l of labelData(b)){
@@ -1393,6 +1428,7 @@ async function printLabels(id){
 async function archiveLabelsPdf(b){
   if(!window.jspdf) throw new Error("PDF library not loaded");
   if(!OPEN_LABELS.has(b.id)){ OPEN_LABELS.add(b.id); }
+  await refreshLabelContacts();
   const labels=labelData(b);
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ unit:"mm", format:"a4", orientation:"portrait" });
@@ -1417,7 +1453,11 @@ async function archiveLabelsPdf(b){
   const { data: urlData } = sb.storage.from("pet-attachments").getPublicUrl(path);
   const { error: e1 } = await sb.from("pet_lab_batches").update({ labels_pdf_url: urlData.publicUrl }).eq("id", b.id);
   if(e1) throw new Error(e1.message);
-  await sb.from("pet_stage4_production").update({ labels_pdf_url: urlData.publicUrl }).eq("id", CURRENT_PROD_ID);   // latest batch's PDF, for the reports page
+  // the run-level link (used by the reports list) always points at the LATEST batch's PDF, so rebuilding an older batch must not take it over
+  const lastNo = Math.max.apply(null, (RUN_BATCHES||[]).map(x=>x.batch_no||0));
+  if(!RUN_BATCHES || !RUN_BATCHES.length || (b.batch_no||0) >= lastNo){
+    await sb.from("pet_stage4_production").update({ labels_pdf_url: urlData.publicUrl }).eq("id", CURRENT_PROD_ID);
+  }
 }
 
 // ---------------------------- open / complete a run ----------------------------

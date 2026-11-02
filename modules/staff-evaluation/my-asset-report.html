@@ -40,9 +40,6 @@ th{background:var(--navy);color:#fff;font-size:11px;}
 td.left{text-align:left;white-space:normal;}
 .colorHigh{background:#d9ead3;color:#1a4731;}.colorMedium{background:#fce5cd;}.colorLow{background:#f4cccc;}
 .note{font-size:12px;color:var(--muted);margin-top:10px;line-height:1.6;}
-.shed-box{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:6px;border:1px solid var(--line);border-radius:8px;padding:10px;background:var(--bg);}
-.shed-box label{display:flex;align-items:center;gap:5px;font-weight:500;font-size:13px;margin:0;cursor:pointer;}
-.shed-box input[type="checkbox"]{width:auto;padding:0;}
 .op-card{background:var(--bg);border:1.5px solid var(--blue);border-radius:10px;padding:12px 16px;margin-bottom:14px;}
 .op-card .name{font-size:16px;font-weight:800;color:var(--navy);}
 .op-card .meta{font-size:12px;color:var(--muted);margin-top:2px;}
@@ -110,11 +107,6 @@ td.left{text-align:left;white-space:normal;}
       <div><label>From Date</label><input type="date" id="fromDate" name="date_from"></div>
       <div><label>To Date</label><input type="date" id="toDate" name="date_to"></div>
       <div><label>Shift</label><select id="shiftFilter"><option value="All">All Shifts</option><option>Morning</option><option>Night</option></select></div>
-    </div>
-    <div style="margin-top:12px;">
-      <label>Shed <span style="font-weight:400;color:var(--muted);">(leave all unticked for every shed)</span>
-        <a href="#" onclick="clearSheds();return false;" style="margin-left:8px;font-weight:400;">Clear</a></label>
-      <div id="shedContainer" class="shed-box"><span class="note">Loading sheds…</span></div>
     </div>
     <div class="btn-row">
       <button id="genBtn" onclick="generate()">▶ Generate Report</button>
@@ -192,10 +184,6 @@ function computeOperatorMetrics(rows,downtimeMap,rules){
 const $=id=>document.getElementById(id);
 const esc=v=>String(v==null?"":v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
 function authHeaders(){return{"apikey":SUPABASE_ANON_KEY,"Authorization":"Bearer "+SUPABASE_ANON_KEY};}
-function shedLabel(v){return /^\d+$/.test(v)?"Shed "+v:v;}
-function shedSort(a,b){const x=Number(a),y=Number(b),ix=!isNaN(x),iy=!isNaN(y);return ix&&iy?x-y:(ix?-1:(iy?1:a.localeCompare(b)));}
-function checkedSheds(){return Array.from(document.querySelectorAll("#shedContainer input:checked")).map(cb=>cb.value);}
-function clearSheds(){document.querySelectorAll("#shedContainer input").forEach(cb=>{cb.checked=false;});}
 function setStatus(msg,cls){const s=$("status");s.className=cls||"";s.textContent=msg;}
 /* printed-on stamp in WAT (UTC+1) regardless of the device's own timezone */
 function nowWAT(){const d=new Date(Date.now()+3600000);
@@ -203,7 +191,7 @@ function nowWAT(){const d=new Date(Date.now()+3600000);
          String(d.getUTCHours()).padStart(2,"0")+":"+String(d.getUTCMinutes()).padStart(2,"0")+" WAT";}
 
 let ME=null, MY={id:null,name:"",dept:"",unit:"",rank:""}, MW_TABLE="mat_weaving";
-let UNIT_SHEDS=[], EXCLUDED=new Set(), BUSY=false;
+let EXCLUDED=new Set(), BUSY=false;
 
 function setRange(range,btn){
   document.querySelectorAll("#quickbar .qbtn").forEach(b=>b.classList.remove("active"));
@@ -216,14 +204,6 @@ function setRange(range,btn){
   else if(range==="year")from=new Date(t.getFullYear(),0,1);
   else return;
   $("fromDate").value=iso(from);$("toDate").value=iso(to);
-}
-
-function refreshShedOptions(){
-  const keep=new Set(checkedSheds());
-  const list=(UNIT_SHEDS.length?[...new Set(UNIT_SHEDS.map(u=>String(u.shed)))]:["1","2","3","4","5","6"]).sort(shedSort);
-  $("shedContainer").innerHTML=list.length
-    ?list.map(v=>`<label><input type="checkbox" value="${esc(v)}"${keep.has(v)?" checked":""}> ${esc(shedLabel(v))}</label>`).join("")
-    :'<span class="note">No sheds found.</span>';
 }
 
 async function fetchAll(table,clause,order){
@@ -262,9 +242,6 @@ async function init(){
       `<div class="meta">ID: ${esc(MY.id)} &nbsp;·&nbsp; ${esc(MY.dept)}${MY.unit?" / "+esc(MY.unit):""}${MY.rank?" · "+esc(MY.rank):""}</div>`;
     $("ph_name").textContent=MY.name;
 
-    try{const {data}=await sb.from("weaving_units").select("shed");
-        UNIT_SHEDS=(data||[]).filter(u=>u.shed!=null&&String(u.shed).trim()!=="");}catch(e){UNIT_SHEDS=[];}
-    refreshShedOptions();
     try{const r=await fetch(SUPABASE_URL+"/rest/v1/job_table?select=job_code",{headers:authHeaders()});
         if(r.ok){const j=await r.json();EXCLUDED=new Set(j.map(x=>x.job_code));}}catch(e){}
 
@@ -288,14 +265,11 @@ async function generate(){
     setStatus("Loading your production records...");
     const mine=await fetchAll(MW_TABLE,"&operator_id=eq."+encodeURIComponent(MY.id)+"&date_col=gte."+from+"&date_col=lte."+to,"&order=date_col.asc");
 
-    const sheds=checkedSheds();
-    let prod=shift==="All"?mine:mine.filter(r=>r.shift===shift);
-    if(sheds.length)prod=prod.filter(r=>sheds.includes(String(r.shed)));
-    const shedText=sheds.length?sheds.map(shedLabel).join(", "):"All";
+    const prod=shift==="All"?mine:mine.filter(r=>r.shift===shift);
 
     // Header block used when printing
     $("ph_line1").textContent="Employee ID: "+MY.id+"   |   "+[MY.dept,MY.unit,MY.rank].filter(Boolean).join(" / ");
-    $("ph_line2").textContent="Period: "+dmy(from)+" to "+dmy(to)+"   |   Shift: "+shift+"   |   Shed: "+shedText+"   |   Printed: "+nowWAT();
+    $("ph_line2").textContent="Period: "+dmy(from)+" to "+dmy(to)+"   |   Shift: "+shift+"   |   Printed: "+nowWAT();
 
     if(!prod.length){
       $("reportArea").innerHTML="<div class='card'><p style='color:var(--red);font-weight:700;margin:0;'>No records found for the selected filters.</p></div>";
@@ -313,7 +287,7 @@ async function generate(){
     }
     const dt=buildDowntimeMap(ctrl,from,to,EXCLUDED);
 
-    render(prod,dt,from,to,shift,shedText);
+    render(prod,dt,from,to,shift);
     setStatus("");
   }catch(e){
     setStatus("❌ "+e.message,"err");console.error("my-asset-report generate:",e);
@@ -322,12 +296,12 @@ async function generate(){
   }
 }
 
-function render(prod,dt,from,to,shift,shedText){
+function render(prod,dt,from,to,shift){
   const R=RULES, S=computeOperatorMetrics(prod,dt,R);
   const clr=v=>v>=R.minPercentA?"colorHigh":v>=85?"colorMedium":"colorLow";   // colour %A and %P only
 
   let html=`<div class="card"><h3>My Production Summary</h3>
-  <p class="note" style="margin-top:0;">${dmy(from)} to ${dmy(to)} &middot; Shift: ${esc(shift)} &middot; Shed: ${esc(shedText)}</p>
+  <p class="note" style="margin-top:0;">${dmy(from)} to ${dmy(to)} &middot; Shift: ${esc(shift)}</p>
   <div class="table-scroll"><table>
   <tr><th>Days</th><th>Work</th><th>Cover</th><th>A</th><th>B</th><th>C</th><th>Total</th><th>Target</th><th>Down (min)</th><th>MLD</th><th>ATG</th><th>MLU</th><th>%A</th><th>%B</th><th>%C</th><th>%P</th><th>Reward (₦)</th></tr>
   <tr><td>${S.workDays}</td><td>${S.mcWork}</td><td>${S.mcCover}</td><td>${S.A}</td><td>${S.B}</td><td>${S.C}</td>
@@ -347,6 +321,22 @@ function render(prod,dt,from,to,shift,shedText){
     const rows=byDay[d], m=computeOperatorMetrics(rows,dt,R);
     const uniq=f=>[...new Set(rows.map(f).filter(Boolean))].join(", ");
     html+=`<tr><td>${dmy(d)}</td><td>${esc(uniq(r=>r.shift))}</td><td class="left">${esc(uniq(r=>r.assets))}</td><td>${esc(uniq(r=>r.work_type)||"Normal")}</td>
+    <td>${m.A}</td><td>${m.B}</td><td>${m.C}</td><td>${m.total}</td><td>${m.target}</td><td>${m.down}</td><td>${m.ATG}</td><td>${m.MLU}</td>
+    <td class="${clr(m.pA)}">${m.pA}%</td><td>${m.pB}%</td><td>${m.pC}%</td><td class="${clr(m.pP)}">${m.pP}%</td></tr>`;
+  });
+  html+=`</table></div></div>`;
+
+  // Daily Breakdown: same columns as Day by Day, but one row per machine (date + shift + asset + work type).
+  const byMc={};
+  prod.forEach(r=>{
+    const k=[r.date_col,r.shift||"",r.assets||"—",r.work_type||""].join("||");
+    (byMc[k]=byMc[k]||[]).push(r);
+  });
+  html+=`<div class="card"><h3>Daily Breakdown</h3><div class="table-scroll"><table>
+  <tr><th>Date</th><th>Shift</th><th>Asset</th><th>Work Type</th><th>A</th><th>B</th><th>C</th><th>Total</th><th>Target</th><th>Down (min)</th><th>ATG</th><th>MLU</th><th>%A</th><th>%B</th><th>%C</th><th>%P</th></tr>`;
+  Object.keys(byMc).sort().forEach(k=>{
+    const rows=byMc[k], f=rows[0], m=computeOperatorMetrics(rows,dt,R);
+    html+=`<tr><td>${dmy(f.date_col)}</td><td>${esc(f.shift||"")}</td><td class="left">${esc(f.assets||"—")}</td><td>${esc(f.work_type||"Normal")}</td>
     <td>${m.A}</td><td>${m.B}</td><td>${m.C}</td><td>${m.total}</td><td>${m.target}</td><td>${m.down}</td><td>${m.ATG}</td><td>${m.MLU}</td>
     <td class="${clr(m.pA)}">${m.pA}%</td><td>${m.pB}%</td><td>${m.pC}%</td><td class="${clr(m.pP)}">${m.pP}%</td></tr>`;
   });
