@@ -18,6 +18,8 @@
   }
 </script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<!-- auth.js gives this page the same connection (sb), the Rumbu logo and the no-network banner as the rest of the app. -->
+<script src="auth.js"></script>
 <style>
   html, body{touch-action:manipulation;-webkit-tap-highlight-color:transparent;overscroll-behavior-y:contain;}
   button, a, img{-webkit-touch-callout:none;}
@@ -45,15 +47,28 @@
   .pw-wrap input{padding-right:58px;}
   .pw-toggle{position:absolute;right:5px;top:50%;transform:translateY(-50%);width:auto;margin:0;padding:6px 8px;background:none;color:var(--blue);border:none;border-radius:6px;font-size:12px;font-weight:bold;cursor:pointer;}
   .pw-toggle:hover{background:#eef2f7;color:var(--blue-dark);}
+  .brand-watermark.rs-wm{height:auto;aspect-ratio:974/1028;filter:brightness(0) invert(1);}
+  .card-logo{display:flex;justify-content:center;margin:0 0 10px;}
+  .card-logo .rs-tile{width:60px;height:60px;}
+  .notice{display:none;margin:0 0 14px;padding:10px 12px;border-radius:8px;font-size:12.5px;line-height:1.5;text-align:left;}
+  .notice.show{display:block;}
+  .notice.info{background:#eef4fc;color:#1d3a7a;border:1px solid #c9d6f2;}
+  .notice.warn{background:#fff8e6;color:#6b4a00;border:1px solid #f5d48a;}
+  #goingIn{position:fixed;inset:0;z-index:50;display:none;align-items:center;justify-content:center;background:linear-gradient(135deg,var(--navy) 0%,#142a4d 100%);}
+  #goingIn.show{display:flex;}
+  #goingIn .rs-loader{color:#dbe6f7;}
+  #goingIn .rs-loader .rs-tile{width:96px;height:96px;}
 </style>
 </head>
 <body>
 
 <div class="login-wrap">
-  <img class="brand-watermark" src="login-logo-watermark-white.png" alt="" aria-hidden="true">
+  <div class="brand-watermark rs-wm" id="watermark" aria-hidden="true"></div>
   <div class="card">
+  <div class="card-logo" id="cardLogo" aria-hidden="true"></div>
   <h1>RumbuApp</h1>
   <p class="sub">RUMBU INDUSTRIES GROUP &bull; Sign in</p>
+  <div class="notice" id="notice" role="status"></div>
 
   <label>Username or Email</label>
   <input type="text" id="username" autocomplete="username" placeholder="Employee ID or email" onkeydown="if(event.key==='Enter'){document.getElementById('password').focus();}">
@@ -65,14 +80,37 @@
   </div>
 
   <button id="loginBtn" onclick="login()">LOG IN</button>
-  <div class="status" id="status"></div>
+  <div class="status" id="status" role="alert" aria-live="assertive"></div>
   </div>
 </div>
+<div id="goingIn" role="status" aria-live="polite"></div>
 
 <script>
-const SUPABASE_URL = "https://betfhunzmhtdzgvufmfk.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp";
-const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// sb (the connection) comes from auth.js.
+document.getElementById("watermark").innerHTML = RumbuUI.logoSvg(false);
+document.getElementById("cardLogo").innerHTML = '<span class="rs-tile">' + RumbuUI.logoSvg(false) + '</span>';
+(function(){
+  const q = new URLSearchParams(location.search), n = document.getElementById("notice");
+  if(q.get("expired") === "1"){ n.className = "notice info show"; n.textContent = "Your session ended, so you were signed out for your security. Sign in again to carry on."; }
+  else if(q.get("blocked") === "inactive"){ n.className = "notice warn show"; n.textContent = "Your account is not active at the moment. Contact HR or IT if you think this is wrong."; }
+})();
+// Is this error a connection problem rather than a wrong password?
+function isNetworkError(err){
+  if(!navigator.onLine) return true;
+  if(!err) return false;
+  if(err.status === 0 || err.name === "AuthRetryableFetchError" || err.name === "TypeError") return true;
+  return RumbuUI.explain(err).kind === "network";
+}
+function setBusy(on){
+  const btn = document.getElementById("loginBtn"), wm = document.getElementById("watermark");
+  btn.disabled = on;
+  btn.innerHTML = on ? '<span class="rs-dots">Signing in</span>' : "LOG IN";
+  wm.innerHTML = RumbuUI.logoSvg(on);   // the big logo behind the card animates while signing in
+}
+function showNetError(status){
+  status.className = "status err";
+  status.textContent = navigator.onLine ? "Can't reach the server. Check the network, then try again." : "No internet connection. Reconnect, then try again.";
+}
 
 // Shared show/hide toggle for any password-type field: swaps the input's
 // type between password and text and updates the button's own label.
@@ -95,7 +133,9 @@ async function login(){
     return;
   }
 
-  btn.disabled = true; btn.innerText = "Signing in...";
+  if(!navigator.onLine){ showNetError(status); return; }
+  if(!sb){ showNetError(status); return; }
+  setBusy(true);
   status.className = "status"; status.textContent = "";
 
   try{
@@ -109,9 +149,10 @@ async function login(){
     let identifier = username;
     if(username.indexOf("@") !== -1){
       try{
-        const { data: empId } = await sb.rpc("resolve_email_to_username", { p_email: username });
+        const { data: empId, error: e1 } = await sb.rpc("resolve_email_to_username", { p_email: username });
+        if(e1 && isNetworkError(e1)){ showNetError(status); return; }
         if(empId) identifier = empId;
-      }catch(e){ /* not a recognized employee email — fall through below */ }
+      }catch(e){ if(isNetworkError(e)){ showNetError(status); return; } /* not a recognized employee email — fall through below */ }
     }
 
     // Resolve what the person typed (or the Employee ID we just resolved
@@ -120,9 +161,10 @@ async function login(){
     // their username. The RPC maps either to the login email.
     let email = null;
     try{
-      const { data } = await sb.rpc("resolve_username_to_email", { p_username: identifier });
+      const { data, error: e2 } = await sb.rpc("resolve_username_to_email", { p_username: identifier });
+      if(e2 && isNetworkError(e2)){ showNetError(status); return; }
       if(data) email = data;
-    }catch(e){ /* fall through to the email fallback below */ }
+    }catch(e){ if(isNetworkError(e)){ showNetError(status); return; } /* fall through to the email fallback below */ }
 
     // If it still wasn't resolved but looks like an email, try it
     // directly — covers a Super Admin whose Auth email itself was typed.
@@ -135,16 +177,21 @@ async function login(){
 
     const { error: signInErr } = await sb.auth.signInWithPassword({ email, password });
     if(signInErr){
+      if(isNetworkError(signInErr)){ showNetError(status); return; }
       status.className = "status err"; status.textContent = "Invalid username or password.";
       return;
     }
-
-    status.className = "status ok"; status.textContent = "Signed in. Loading...";
+    RumbuUI.markSession();
+    const go = document.getElementById("goingIn");
+    go.innerHTML = RumbuUI.loaderHtml("Opening RumbuApp");
+    go.classList.add("show");
     window.location.href = "index.html";
+    return;
   }catch(e){
-    status.className = "status err"; status.textContent = "Error: " + (e.message||e);
+    if(isNetworkError(e)){ showNetError(status); }
+    else { status.className = "status err"; status.textContent = "Sign in did not work: " + (e.message || e) + ". Try again."; }
   }finally{
-    btn.disabled = false; btn.innerText = "LOG IN";
+    if(!document.getElementById("goingIn").classList.contains("show")) setBusy(false);
   }
 }
 </script>
