@@ -65,6 +65,12 @@
     font-size:14px; font-weight:600; text-align:center; padding:20px;
   }
   #authGate.err{ color:var(--bad); }
+  #authGate .rs-card{ max-width:440px; }
+  .side-brand .logo.rs-tile{ background:#fff; color:transparent; padding:4px; }
+  .side-brand .logo.rs-tile svg{ width:100%; height:100%; }
+  .module-host .m-loading{ position:absolute; left:0; right:0; bottom:0; display:flex; align-items:center; justify-content:center; background:var(--bg); z-index:5; padding:20px; }
+  .module-host .m-loading[hidden]{ display:none; }
+  .module-host .m-loading .rs-card{ max-width:440px; }
   body.ready #authGate{ display:none; }
   body:not(.ready) > *:not(#authGate){ visibility:hidden !important; }
 
@@ -155,7 +161,11 @@
 </head>
 <body>
 
-<div id="authGate">Checking your session...</div>
+<div id="authGate" role="status" aria-live="polite">Signing you in...</div>
+<script>
+  // The animated Rumbu logo while the app signs you in (auth.js is already loaded above).
+  try{ document.getElementById("authGate").innerHTML = RumbuUI.loaderHtml("Signing you in"); }catch(e){}
+</script>
 
 <div class="modal-overlay" id="emailPromptModal">
   <div class="modal-box">
@@ -181,7 +191,7 @@
 <!-- SIDEBAR -->
 <nav class="sidebar" id="side" onmouseleave="scheduleHoverClose()">
   <div class="side-brand">
-    <div class="logo">R</div>
+    <div class="logo rs-tile" id="sideLogo" aria-hidden="true">R</div>
     <div class="b-text"><b>RumbuApp</b><span>RUMBU INDUSTRIES GROUP</span></div>
     <button class="side-close" onclick="closeDrawer()" aria-label="Close menu">&times;</button>
   </div>
@@ -303,6 +313,8 @@
            between sibling pages without returning to the sidebar. -->
       <div class="quick-links" id="quickLinks" style="display:none;"></div>
       <iframe id="moduleFrame" title="Module"></iframe>
+      <!-- Shown over the page while it opens (animated logo), or with a plain message if it is slow. -->
+      <div class="m-loading" id="moduleLoading" hidden></div>
     </div>
   </div>
 </div><!-- /main -->
@@ -337,6 +349,32 @@
 </script>
 
 <script>
+  (function(){ try{ const l = document.getElementById("sideLogo"); if(l) l.innerHTML = RumbuUI.logoSvg(false); }catch(e){} })();
+
+  // ---- Loading a page into the frame -----------------------------------
+  // The animated logo covers the page area until the page has loaded. If it takes longer than
+  // 15 seconds a plain message offers Try again; a lost connection gets its own message.
+  let MODULE_LOAD_TIMER = null;
+  function showModuleLoading(label){
+    const ov = document.getElementById("moduleLoading"), frame = document.getElementById("moduleFrame");
+    if(!ov || !frame || typeof RumbuUI === "undefined") return;
+    ov.style.top = frame.offsetTop + "px";
+    ov.innerHTML = RumbuUI.loaderHtml("Opening " + (label || "page"));
+    ov.hidden = false;
+    clearTimeout(MODULE_LOAD_TIMER);
+    MODULE_LOAD_TIMER = setTimeout(function(){
+      if(ov.hidden) return;
+      ov.innerHTML = navigator.onLine
+        ? RumbuUI.errorCardHtml({ kind:"network", title:"This is taking longer than usual", msg:"The connection may be slow. Wait a little longer, or try again.", raw:"" })
+        : RumbuUI.errorCardHtml("offline");
+    }, 15000);
+  }
+  function hideModuleLoading(){
+    clearTimeout(MODULE_LOAD_TIMER);
+    const ov = document.getElementById("moduleLoading"); if(ov){ ov.hidden = true; ov.innerHTML = ""; }
+  }
+  window.addEventListener("resize", function(){ const ov = document.getElementById("moduleLoading"), f = document.getElementById("moduleFrame"); if(ov && f && !ov.hidden) ov.style.top = f.offsetTop + "px"; });
+
   function openDrawer(){
     document.getElementById("side").classList.add("open");
     document.getElementById("overlay").classList.add("show");
@@ -1179,7 +1217,8 @@
     document.getElementById("appShell").classList.add("module-open");
     // push current theme into the module once it loads
     var t = document.documentElement.getAttribute("data-theme") || "navy";
-    frame.onload = function(){ try{ frame.contentWindow.postMessage({rumbuTheme:t}, "*"); }catch(e){} };
+    frame.onload = function(){ hideModuleLoading(); try{ frame.contentWindow.postMessage({rumbuTheme:t}, "*"); }catch(e){} };
+    showModuleLoading(label);
     closeDrawer();
   }
 
@@ -1207,6 +1246,7 @@
   }
 
   function closeModule(){
+    hideModuleLoading();
     document.getElementById("moduleView").classList.remove("show");
     document.getElementById("moduleFrame").style.maxWidth = ""; // restore CSS default
     document.getElementById("appShell").classList.remove("cnt-top-hidden"); // restore top bar
@@ -1227,6 +1267,7 @@
   // every module page with zero per-page changes needed.
   function refreshModule(){
     const frame = document.getElementById("moduleFrame");
+    showModuleLoading(document.getElementById("moduleName").textContent || "page");
     try{ frame.contentWindow.location.reload(); }
     catch(e){ frame.src = frame.src; }
   }
@@ -1305,7 +1346,9 @@
       checkOwnEmailPrompt(); // fire-and-forget — never blocks the app loading
     }catch(e){
       gate.classList.add("err");
-      gate.textContent = "❌ " + e.message;
+      // A plain explanation (no connection, session ended, no access, or other) with Try again.
+      try{ gate.innerHTML = RumbuUI.errorCardHtml(e, { title: navigator.onLine ? null : "No internet connection" }); }
+      catch(_){ gate.textContent = "❌ " + e.message; }
       console.error(e);
     }
   }
