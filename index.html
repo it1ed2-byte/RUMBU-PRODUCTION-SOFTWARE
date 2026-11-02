@@ -154,6 +154,9 @@
 .ql-menu-item{text-align:left;background:none;border:0;border-radius:8px;padding:10px 12px;min-height:40px;font-size:13px;font-weight:600;color:var(--heading);cursor:pointer;font-family:inherit;}
 .ql-menu-item:hover{background:var(--bg);}
 .ql-menu-item.active{background:var(--accent);color:var(--logo-fg);}
+.quick-links .ql-count{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--bg);border:1px solid var(--line-2);font-size:10.5px;font-weight:800;color:var(--muted);}
+.quick-links .ql-item.active .ql-count{background:transparent;border-color:currentColor;color:inherit;}
+.quick-links .ql-group b{font-weight:800;}
 .side-flyout .fly-sec{font-size:10.5px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);padding:10px 11px 4px;}
 .fly-numlabel{display:inline-flex;align-items:center;gap:9px;}
 .fly-num{width:20px;height:20px;border-radius:50%;background:var(--accent);color:var(--logo-fg);font-size:11px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;flex:none;}
@@ -311,9 +314,6 @@
       <h1 class="crumb-page" id="crumbPage"></h1>
     </nav>
     <span class="hdr-spacer"></span>
-    <button class="hdr-icon" id="hdrRefresh" onclick="refreshModule()" aria-label="Reload this page" title="Reload this page" hidden>
-      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>
-    </button>
     <!-- You: initials button and its menu (name, role, branch, password, theme, log out) -->
     <div class="user-menu-wrap" id="userMenuWrap">
       <button class="avatar-btn" id="avatarBtn" aria-haspopup="menu" aria-expanded="false" aria-controls="userMenu" onclick="toggleUserMenu()" title="Your account"><span id="avatarInitials">·</span></button>
@@ -433,9 +433,9 @@
   // ---- Header: where you are -------------------------------------------
   function updateHeaderCrumb(){
     const open = document.getElementById("appShell").classList.contains("module-open");
-    const crumb = document.getElementById("hdrCrumb"), refresh = document.getElementById("hdrRefresh");
+    const crumb = document.getElementById("hdrCrumb");
     if(!crumb) return;
-    crumb.hidden = !open; refresh.hidden = !open;
+    crumb.hidden = !open;
     const mod = (open && CURRENT_PICKER) ? CURRENT_PICKER.name : "";
     const page = open ? (document.getElementById("moduleName").textContent || "") : "";
     document.getElementById("crumbMod").textContent = mod;
@@ -1300,6 +1300,46 @@
   // When a page is open, show every page in that same module as a pill
   // bar so the user can jump between sibling pages in place. The active
   // page's pill is highlighted. Hidden when a module has only one page.
+  // ---- Page bar for a long module: a button per part, each with its pages in a short list ----
+  const QL_MAX_TABS = 6;
+  let QL_SECTIONS = [];
+  function qlOpenCall(p){ const parts = p.module_path.split("/"); return "openModule(null,'" + parts[0] + "','" + parts[1] + "','" + navEsc(String(p.name).replace(/\\/g, "\\\\").replace(/'/g, "\\'")) + "')"; }
+  function renderSectionLinks(bar, pages){
+    QL_SECTIONS = navArrangePages(pages);
+    const cur = CURRENT_PAGE || "";
+    bar.innerHTML = QL_SECTIONS.map((g, i) => {
+      const here = g.pages.find(p => p.module_path === cur);
+      if(g.pages.length === 1){   // a part with one page is a plain tab with that page's name
+        const p = g.pages[0];
+        return `<button class="ql-item${here ? " active" : ""}" onclick="${qlOpenCall(p)}">${navEsc(p.name)}</button>`;
+      }
+      // the part you are in shows the page you are on, so the bar always says where you are
+      const label = here ? `${navEsc(g.label)}: <b>${navEsc(here.name)}</b>` : navEsc(g.label);
+      return `<button class="ql-item ql-group${here ? " active" : ""}" aria-haspopup="true" aria-expanded="false" data-sec="${i}" onclick="qlToggleSection(this, ${i})">${label} <span class="ql-count">${g.pages.length}</span> <span aria-hidden="true">&#9662;</span></button>`;
+    }).join("");
+    const act = bar.querySelector(".ql-item.active");
+    if(act && act.scrollIntoView) act.scrollIntoView({ inline:"nearest", block:"nearest" });
+  }
+  function qlToggleSection(btn, i){
+    const key = "sec" + i, existing = document.getElementById("qlMenu");
+    const same = existing && existing.getAttribute("data-key") === key;
+    petCloseGroupMenu();
+    document.querySelectorAll("#quickLinks .ql-group").forEach(b => b.setAttribute("aria-expanded", "false"));
+    if(same) return;
+    const g = QL_SECTIONS[i]; if(!g) return;
+    const m = document.createElement("div");
+    m.id = "qlMenu"; m.className = "ql-menu"; m.setAttribute("data-key", key); m.setAttribute("role", "menu");
+    m.innerHTML = '<div class="ql-menu-head">' + navEsc(g.label) + '</div>' + g.pages.map(p =>
+      '<button role="menuitem" class="ql-menu-item' + (p.module_path === CURRENT_PAGE ? " active" : "") + '" onclick="petCloseGroupMenu();' + qlOpenCall(p) + '">' + navEsc(p.name) + '</button>').join("");
+    document.body.appendChild(m);
+    const r = btn.getBoundingClientRect();
+    m.style.top = (r.bottom + 6) + "px";
+    m.style.left = Math.max(8, Math.min(r.left, window.innerWidth - m.offsetWidth - 8)) + "px";
+    btn.setAttribute("aria-expanded", "true");
+    const first = m.querySelector(".ql-menu-item"); if(first) first.focus();
+    setTimeout(function(){ document.addEventListener("click", petOutsideClose, true); }, 0);
+  }
+
   function renderQuickLinks(){
     const bar = document.getElementById("quickLinks");
     if(!bar) return;
@@ -1321,10 +1361,13 @@
       if(CURRENT_PICKER.name === PET_MODULE && pages.length > 1){ bar.style.display = ""; renderPetQuickLinks(bar, pages); return; }
       items = [];
       navArrangePages(pages).forEach(g => g.pages.forEach(p=>{ const parts = p.module_path.split("/"); items.push({ label: p.name, dept: parts[0], mod: parts[1], query: "" }); }));
+      // A long module (more than six pages): one button per part (Dashboards, Daily work, Reports...),
+      // each opening a short list, instead of a long row of tabs.
+      if(items.length > QL_MAX_TABS){ bar.style.display = ""; renderSectionLinks(bar, pages); return; }
     }
     if(items.length <= 1){ bar.innerHTML = ""; bar.style.display = "none"; return; }
     bar.style.display = "";
-    const head = CURRENT_PICKER ? `<span class="ql-label">${CURRENT_PICKER.name}</span>` : "";
+    const head = "";   // the header already says which module this is
     bar.innerHTML = head + items.map(it=>{
       const active = ((it.dept + "/" + it.mod) === CURRENT_PAGE) && ((it.query || "") === (CURRENT_QUERY || ""));
       const oc = `openModule(null,'${it.dept}','${it.mod}','${it.label.replace(/'/g,"\\'")}','${it.query || ""}')`;
