@@ -148,6 +148,9 @@
 .fly-pin{flex:0 0 auto;width:30px;height:30px;border:0;border-radius:6px;background:transparent;color:var(--muted);font-size:15px;cursor:pointer;padding:0;}
 .fly-pin:hover{background:var(--bg);color:var(--heading);}
 .fly-pin.on{color:var(--accent);}
+.fly-two{display:flex;flex-direction:column;gap:2px;min-width:0;}
+.fly-two .fly-desc{font-size:11.5px;font-weight:500;color:var(--muted);line-height:1.35;white-space:normal;}
+.side-flyout:has(.fly-desc){width:290px;}
 </style>
 </head>
 <body>
@@ -620,8 +623,9 @@
     const input = document.getElementById("navSearch");
     if(input && input.value.trim()) return navRenderSearch();
     NAV_ROWS = []; NAV_KB = -1;
-    const pins = navLoad("pins").filter(navAllowed);
-    const recent = navLoad("recent").filter(e => navAllowed(e) && !pins.some(p => navSame(p, e))).slice(0, NAV_RECENT_MAX);
+    const fresh = e => { const a = ACCOUNT_PAGES.find(p => p.dept === e.dept && p.mod === e.module && (p.query || "") === (e.query || "")); return a ? Object.assign({}, e, { label: a.name }) : e; };
+    const pins = navLoad("pins").filter(navAllowed).map(fresh);
+    const recent = navLoad("recent").filter(e => navAllowed(e) && !pins.some(p => navSame(p, e))).map(fresh).slice(0, NAV_RECENT_MAX);
     let h = "";
     const add = (title, list) => {
       if(!list.length) return;
@@ -638,7 +642,7 @@
   // Matches the words typed against page names and module names, ignoring case and order of words.
   function navAllEntries(){
     const out = [];
-    ACCOUNT_PAGES.filter(accountPageAllowed).forEach(p => out.push({ dept: p.dept, module: p.mod, query: p.query || "", label: (ME && ME.role === "admin" && p.adminName) ? p.adminName : p.name, mod: "Manage Accounts" }));
+    ACCOUNT_PAGES.filter(accountPageAllowed).forEach(p => out.push({ dept: p.dept, module: p.mod, query: p.query || "", label: p.name, mod: "Manage Accounts", extra: (p.desc || "") + " " + (p.sec || "") }));
     Object.keys(MODULE_PAGES_BY_MODULE).forEach(name => {
       (MODULE_PAGES_BY_MODULE[name] || []).forEach(p => {
         if(!MY_ALLOWED_PATHS.has(p.module_path)) return;
@@ -658,7 +662,7 @@
     const q = (input ? input.value : "").trim().toLowerCase();
     const words = q.split(/\s+/).filter(Boolean);
     NAV_ROWS = []; NAV_KB = -1;
-    const hits = navAllEntries().filter(e => { const hay = (e.label + " " + e.mod).toLowerCase(); return words.every(w => hay.indexOf(w) >= 0); });
+    const hits = navAllEntries().filter(e => { const hay = (e.label + " " + e.mod + " " + (e.extra || "")).toLowerCase(); return words.every(w => hay.indexOf(w) >= 0); });
     hits.sort((a, b) => { const sa = a.label.toLowerCase().indexOf(words[0]) === 0 ? 0 : 1, sb2 = b.label.toLowerCase().indexOf(words[0]) === 0 ? 0 : 1; return sa - sb2 || a.label.localeCompare(b.label); });
     const shown = hits.slice(0, 40);
     let h = `<div class="nav-sec">${hits.length} page${hits.length === 1 ? "" : "s"} found<span class="ns-line"></span></div>`;
@@ -717,12 +721,19 @@
   // instead of its own separate inline dropdown. Role-gating for
   // Create User / Manage User / Settings happens at render time below,
   // same restrictions as before. ----
+  // The Manage Accounts screens, in the order and under the headings the sidebar flyout shows.
+  // "query" opens the matching section of modules/admin/manage-accounts.html. The older
+  // section names (create-user, manage-user, settings ...) still work there, so saved links,
+  // pins and recent pages keep opening the right screen.
   const ACCOUNT_PAGES = [
-    { name: "Create User",     dept: "admin", mod: "manage-accounts", query: "section=create-user",   roleGate: "adminPlus", adminName: "Employee Directory" },
-    { name: "Change Password", dept: "admin", mod: "manage-accounts", query: "section=change-password" },
-    { name: "Manage User",     dept: "admin", mod: "manage-accounts", query: "section=manage-user",    roleGate: "superAdmin" },
-    { name: "Activity Log",    dept: "admin", mod: "manage-accounts", query: "section=activity-log" },
-    { name: "Settings",        dept: "admin", mod: "manage-accounts", query: "section=settings",       roleGate: "superAdmin" }
+    { name: "Staff Records",           sec: "People and access",   desc: "Find, add or upload staff, update salary and export the list", dept: "admin", mod: "manage-accounts", query: "section=create-user",     roleGate: "adminPlus" },
+    { name: "User Access",             sec: "People and access",   desc: "Give or remove a login, set role, branch and pages, reset passwords", dept: "admin", mod: "manage-accounts", query: "section=manage-user", roleGate: "superAdmin" },
+    { name: "Branches",                sec: "Organisation set-up", desc: "Add, rename or remove a branch",                       dept: "admin", mod: "manage-accounts", query: "section=branches",        roleGate: "superAdmin" },
+    { name: "Departments and Units",   sec: "Organisation set-up", desc: "The real work structure of each branch",               dept: "admin", mod: "manage-accounts", query: "section=departments",     roleGate: "superAdmin" },
+    { name: "Modules and Menu Groups", sec: "Organisation set-up", desc: "Add, rename or remove a module and choose its sidebar group", dept: "admin", mod: "manage-accounts", query: "section=modules",  roleGate: "superAdmin" },
+    { name: "Account Activity Log",    sec: "Records",             desc: "Who changed which account or setting, and when",       dept: "admin", mod: "manage-accounts", query: "section=activity-log" },
+    { name: "Change My Password",      sec: "My account",          desc: "Set a new password for your own login",                dept: "admin", mod: "manage-accounts", query: "section=change-password" },
+    { name: "Choose My Menus",         sec: "My account",          desc: "Hide modules you do not use from your own sidebar",    dept: "admin", mod: "manage-accounts", query: "section=settings",        roleGate: "superAdmin" }
   ];
   function accountPageAllowed(p){
     if(!p.roleGate) return true;
@@ -794,7 +805,7 @@
     let items = [];
     if(CURRENT_PICKER.kind === "account"){
       items = ACCOUNT_PAGES.filter(accountPageAllowed).map(p=>({
-        label: (ME.role === "admin" && p.adminName) ? p.adminName : p.name,
+        label: navEsc(p.name), desc: p.desc || "", sec: p.sec || "",
         onclick: `openModule(null,'${p.dept}','${p.mod}','${p.name.replace(/'/g,"\\'")}','${p.query||""}')`,
         entry: { dept: p.dept, module: p.mod, query: p.query || "", label: p.name }
       }));
@@ -812,9 +823,13 @@
       return;
     }
     FLY_ENTRIES = items.map(it => it.entry);
+    let lastSec = null;
     fly.innerHTML = head + items.map((it, i)=>{
       const pinned = it.entry && navIsPinned(it.entry);
-      return `<div class="fly-row"><button class="flyout-item" onclick="${it.onclick}"><span>${it.label}</span><span class="fi-arrow">&rarr;</span></button>` +
+      let secHead = "";
+      if(it.sec && it.sec !== lastSec){ secHead = `<div class="fly-sec">${navEsc(it.sec)}</div>`; lastSec = it.sec; }
+      const text = it.desc ? `<span class="fly-two"><span>${it.label}</span><span class="fly-desc">${navEsc(it.desc)}</span></span>` : `<span>${it.label}</span>`;
+      return secHead + `<div class="fly-row"><button class="flyout-item" onclick="${it.onclick}">${text}<span class="fi-arrow">&rarr;</span></button>` +
         (it.entry ? `<button class="fly-pin${pinned ? " on" : ""}" title="${pinned ? "Unpin" : "Pin to the top of the menu"}" aria-label="${pinned ? "Unpin" : "Pin"}" onclick="event.stopPropagation();navTogglePin(FLY_ENTRIES[${i}])">${pinned ? "&#9733;" : "&#9734;"}</button>` : "") + `</div>`;
     }).join("");
   }
@@ -1067,7 +1082,7 @@
     if(!bar) return;
 
     // Contracts module uses its own sidebar — suppress the quickLinks tab bar
-    if((CURRENT_PAGE || "").startsWith("contracts/")){
+    if((CURRENT_PAGE || "").startsWith("contracts/") || CURRENT_PAGE === "admin/manage-accounts"){
       bar.innerHTML = "";
       bar.style.display = "none";
       return;
@@ -1076,7 +1091,7 @@
     let items = [];
     if(CURRENT_PICKER && CURRENT_PICKER.kind === "account"){
       items = ACCOUNT_PAGES.filter(accountPageAllowed).map(p=>({
-        label: (ME.role === "admin" && p.adminName) ? p.adminName : p.name, dept: p.dept, mod: p.mod, query: p.query || ""
+        label: p.name, dept: p.dept, mod: p.mod, query: p.query || ""
       }));
     } else if(CURRENT_PICKER){
       const pages = (MODULE_PAGES_BY_MODULE[CURRENT_PICKER.name] || []).filter(p => MY_ALLOWED_PATHS.has(p.module_path));
