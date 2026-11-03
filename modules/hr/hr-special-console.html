@@ -208,6 +208,7 @@
     <button class="tab-btn" data-tab="directory" onclick="setTab('directory',this)">Employee Directory</button>
     <button class="tab-btn" data-tab="log" onclick="setTab('log',this)">Activity Log</button>
     <button class="tab-btn" data-tab="refdata" onclick="setTab('refdata',this)">Branches / Departments / Units</button>
+    <button class="tab-btn" data-tab="pwreset" onclick="setTab('pwreset',this)">Password Reset</button>
   </div>
 
   <div class="wrap">
@@ -448,6 +449,20 @@
         </div>
       </div>
 
+    </div>
+
+    <!-- PASSWORD RESET -->
+    <div class="panel" id="panel-pwreset">
+      <div class="card-panel">
+        <h3 style="margin-top:0;">Password Reset</h3>
+        <p style="font-size:12.5px;color:var(--hr-muted);margin:0 0 12px;">Enter a staff member's Employee ID to see their details and reset their login password. A one-time temporary password is generated for you to give to the staff member, and they must change it the next time they log in.</p>
+        <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+          <div style="flex:1;min-width:220px;max-width:360px;"><label>Employee ID *</label><input id="pw_emp_id" placeholder="e.g. H275" autocomplete="off"></div>
+          <button onclick="pwLookup()">Look up</button>
+        </div>
+        <div class="status" id="pwStatus"></div>
+        <div id="pwResult" style="margin-top:14px;"></div>
+      </div>
     </div>
 
   </div>
@@ -2037,6 +2052,160 @@ function initHrTheme(){
   try{ saved = localStorage.getItem('hr_console_theme') || 'navy'; }catch(e){}
   applyHrTheme(saved, false);
 }
+
+// ---------------- PASSWORD RESET ----------------
+// Same mechanism as Reset Password in the admin area (User Access): the swift-handler edge function sets the new
+// password, and the kwp_mark_password_reset RPC makes the account change it at next login. Both are enforced on
+// the server, so this tab can only do what the database and the edge function allow for the signed-in user.
+const PW_BLOCKED_ROLES = ["super_admin","admin","hr_console"];   // privileged accounts are never reset from here
+let PW_TARGET = null;   // { emp, profile, profileErr } for the person currently shown
+let PW_BUSY = false;
+
+// 10 characters from an unambiguous set (no 0/O, 1/l/I), with at least one capital, one lower-case and one digit.
+function pwGenerateTemp(){
+  const U="ABCDEFGHJKLMNPQRSTUVWXYZ", L="abcdefghijkmnopqrstuvwxyz", D="23456789", ALL=U+L+D;
+  const rnd = n => { const a = new Uint32Array(1); crypto.getRandomValues(a); return a[0] % n; };
+  const chars = [U[rnd(U.length)], L[rnd(L.length)], D[rnd(D.length)]];
+  while(chars.length < 10) chars.push(ALL[rnd(ALL.length)]);
+  for(let i = chars.length - 1; i > 0; i--){ const j = rnd(i + 1); [chars[i], chars[j]] = [chars[j], chars[i]]; }
+  return chars.join("");
+}
+
+// Returns null when a reset is allowed, otherwise the reason it is not.
+function pwEligibility(emp, profile, profileErr){
+  if(!emp.linked_profile_id) return "This staff member has no login yet, so there is no password to reset. Access is granted by a Super Admin.";
+  if(profileErr || !profile) return "The login account could not be checked, so a reset is not allowed from here." + (profileErr ? " (" + profileErr.message + ")" : "");
+  if(emp.deactivated_by) return "This employee is deactivated. Reactivate them first if they should have access.";
+  if(profile.id === ME.id) return "This is your own account. You cannot reset your own password from here.";
+  if(PW_BLOCKED_ROLES.indexOf(profile.role) !== -1) return "Admin, HR Console and Super Admin accounts cannot be reset from this tab. Please contact the Super Admin.";
+  return null;
+}
+
+async function pwLookup(){
+  const status = document.getElementById("pwStatus");
+  const box = document.getElementById("pwResult");
+  const raw = document.getElementById("pw_emp_id").value.trim();
+  PW_TARGET = null; box.innerHTML = "";
+  if(!raw){ status.className = "status err"; status.textContent = "Enter an Employee ID."; return; }
+  status.className = "status"; status.textContent = "Looking up...";
+  try{
+    let r = await sb.from("employees").select("*").eq("employee_id", raw).maybeSingle();
+    if(r.error) throw r.error;
+    if(!r.data && raw.toUpperCase() !== raw){
+      r = await sb.from("employees").select("*").eq("employee_id", raw.toUpperCase()).maybeSingle();
+      if(r.error) throw r.error;
+    }
+    const emp = r.data;
+    if(!emp){ status.className = "status err"; status.textContent = "No employee found with ID \"" + raw + "\"."; return; }
+
+    let profile = null, profileErr = null;
+    if(emp.linked_profile_id){
+      const pr = await sb.from("profiles").select("id, username, role, super_admin_type, must_change_password").eq("id", emp.linked_profile_id).maybeSingle();
+      profile = pr.data; profileErr = pr.error;
+    }
+    status.textContent = "";
+    PW_TARGET = { emp, profile, profileErr };
+    renderPwResult();
+  }catch(e){ status.className = "status err"; status.textContent = "❌ " + (e.message || e); }
+}
+window.pwLookup = pwLookup;
+
+function renderPwResult(){
+  const { emp, profile, profileErr } = PW_TARGET;
+  const active = !emp.deactivated_by;
+  const roleText = !profile ? "No login" : (profile.role === "user" ? "Staff" : profile.role);
+  const f = (label, valueHtml) => `<div><label>${label}</label><div style="font-size:14px;">${valueHtml}</div></div>`;
+  const reason = pwEligibility(emp, profile, profileErr);
+  let html = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:4px 18px;">` +
+    f("Employee ID", "<b>" + mvEsc(emp.employee_id) + "</b>") +
+    f("Full Name", mvEsc(emp.full_name)) +
+    f("Branch", mvEsc(emp.branch || "—")) +
+    f("Department", mvEsc(emp.department || "—")) +
+    f("Unit", mvEsc(emp.unit || "—")) +
+    f("Designation", mvEsc(emp.rank || "—")) +
+    f("Employee Type", mvEsc(emp.employee_type || "—")) +
+    f("Status", `<span class="badge ${active ? "b-active" : "b-inactive"}">${active ? "Active" : "Deactivated"}</span>`) +
+    f("Login Username", mvEsc(profile ? profile.username : "—")) +
+    f("Account Type", mvEsc(roleText)) +
+    (profile ? f("Must Change Password At Next Login", profile.must_change_password ? "Yes (a previous reset has not been used yet)" : "No") : "") +
+    `</div><div id="pwAction" style="margin-top:16px;">` +
+    (reason
+      ? `<div class="status err" style="display:block;">${mvEsc(reason)}</div>`
+      : `<button id="pwResetBtn" onclick="pwReset()">Reset Password</button>`) +
+    `</div><div id="pwTemp" style="margin-top:14px;"></div>`;
+  document.getElementById("pwResult").innerHTML = html;
+}
+
+async function pwReset(){
+  if(PW_BUSY || !PW_TARGET) return;
+  const { emp, profile } = PW_TARGET;
+  const reason = pwEligibility(emp, profile, null);
+  if(reason){ alert(reason); return; }
+  if(!confirm("Reset the password for " + emp.full_name + " (" + emp.employee_id + ")?\n\n" +
+    "A new temporary password will be generated. Their current password will stop working straight away, " +
+    "and they must change the temporary one at their next login.")) return;
+
+  const status = document.getElementById("pwStatus");
+  const btn = document.getElementById("pwResetBtn");
+  PW_BUSY = true; if(btn) btn.disabled = true;
+  status.className = "status"; status.textContent = "Resetting password...";
+  const temp = pwGenerateTemp();
+  try{
+    const sess = await sb.auth.getSession();
+    const token = sess && sess.data && sess.data.session ? sess.data.session.access_token : null;
+    if(!token) throw new Error("Your session has expired. Please log in again.");
+    const res = await fetch(SUPABASE_URL + "/functions/v1/swift-handler", {
+      method: "POST",
+      headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "admin_reset_password", target_id: profile.id, new_password: temp })
+    });
+    let data = {}; try{ data = await res.json(); }catch(_){}
+    if(!res.ok){
+      const err = new Error(data.error || ("HTTP " + res.status)); err.httpStatus = res.status; throw err;
+    }
+
+    let forced = true;
+    try{
+      const { error: rpcErr } = await sb.rpc("kwp_mark_password_reset", { target_profile_id: profile.id });
+      if(rpcErr){ forced = false; console.warn("Could not set must-change-password:", rpcErr.message); }
+    }catch(rpcE){ forced = false; console.warn("must-change-password RPC failed:", rpcE.message || rpcE); }
+
+    // The password itself is never written to the log.
+    await logActivity("hr_console_password_reset", ME.username + " reset the password for \"" + emp.full_name + "\" (" + emp.employee_id + ")" + (forced ? "" : " - could not force a change at next login"));
+    loadActivityLog();
+
+    status.className = "status ok"; status.textContent = "✅ Password reset for " + emp.full_name + " (" + emp.employee_id + ").";
+    document.getElementById("pwAction").innerHTML = "";
+    document.getElementById("pwTemp").innerHTML =
+      `<div style="border:1px solid var(--line);border-radius:10px;padding:14px;max-width:560px;">
+        <label style="margin-top:0;">Temporary password (shown once)</label>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:6px 0 10px;">
+          <code id="pwTempVal" style="font-size:20px;font-weight:800;letter-spacing:1.5px;">${mvEsc(temp)}</code>
+          <button class="btn-ghost" onclick="pwCopy()">Copy</button>
+        </div>
+        <div style="font-size:12.5px;color:var(--hr-muted);">Give this to ${mvEsc(emp.full_name)} in person or by phone. It will not be shown again, and they must change it at their next login.</div>
+        ${forced ? "" : `<div class="status err" style="display:block;margin-top:10px;">The password was reset, but the account could not be flagged to change it at next login. Please tell IT so they can set that flag.</div>`}
+      </div>`;
+  }catch(e){
+    status.className = "status err";
+    status.textContent = "❌ Could not reset password: " + (e.message || e) +
+      ((e.httpStatus === 401 || e.httpStatus === 403) ? " Your account is not yet permitted to reset passwords on the server. Please ask IT to allow the HR Console role." : "");
+    if(btn) btn.disabled = false;
+  }finally{
+    PW_BUSY = false;
+  }
+}
+window.pwReset = pwReset;
+
+async function pwCopy(){
+  const el = document.getElementById("pwTempVal"); if(!el) return;
+  try{ await navigator.clipboard.writeText(el.textContent); }
+  catch(_){ const r = document.createRange(); r.selectNodeContents(el); const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r); document.execCommand("copy"); }
+  const st = document.getElementById("pwStatus"); st.className = "status ok"; st.textContent = "Copied.";
+}
+window.pwCopy = pwCopy;
+
+document.getElementById("pw_emp_id").addEventListener("keydown", e => { if(e.key === "Enter") pwLookup(); });
 
 // Make tab active color follow theme
 const _origSetTab = window.setTab;
