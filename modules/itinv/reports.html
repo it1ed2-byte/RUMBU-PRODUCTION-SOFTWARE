@@ -71,6 +71,10 @@
         <label>Branch</label>
         <select id="branchFilter" onchange="onBranchChange()"><option value="">All (my scope)</option></select>
       </div>
+      <div id="categoryFilterWrap">
+        <label>Category</label>
+        <select id="categoryFilter" onchange="onCategoryChange()"><option value="">All categories</option></select>
+      </div>
       <div id="typeFilterWrap">
         <label>Device type</label>
         <select id="typeFilter"><option value="">All types</option></select>
@@ -250,50 +254,72 @@ function scope(q){
   return q;
 }
 
-// ---- Device type filter ----
-// The Type list shows only the device types that really exist in the branch chosen above (or in your whole scope when
-// no branch is chosen), so every choice gives a report with something in it. It is read again whenever the branch changes.
+// ---- Category and device type filters ----
+// The Category and Type lists show only what really exists in the branch chosen above (or in your whole scope when no
+// branch is chosen), so every choice gives a report with something in it. They are read again whenever the branch changes.
+// Choosing a Category narrows the Type list to the types of that category, as on the Devices page.
 let typeLoadToken = 0;
+let PAIRS = {};          // category -> { type: true } for the devices in scope
+let ALL_TYPES = {};      // every device type in scope
 function onBranchChange(){ loadTypes(); }
+function onCategoryChange(){ document.getElementById("typeHint").textContent = renderTypeOptions(gv("typeFilter")); }
 async function loadTypes(){
   const my = ++typeLoadToken;
-  const sel = document.getElementById("typeFilter"), hint = document.getElementById("typeHint");
-  const prev = sel.value;
-  const seen = {};
+  const hint = document.getElementById("typeHint");
+  const prevCat = gv("categoryFilter"), prevType = gv("typeFilter");
+  const pairs = {}, allTypes = {};
   try{
     for(let from = 0; ; from += 1000){      // Supabase returns at most 1000 rows per request, so read page by page
-      const { data, error } = await scope(sb.from("it_devices").select("type")).order("id").range(from, from + 999);
+      const { data, error } = await scope(sb.from("it_devices").select("category,type")).order("id").range(from, from + 999);
       if(error) throw error;
-      (data||[]).forEach(d => { if(d.type && String(d.type).trim()) seen[d.type] = true; });
+      (data||[]).forEach(d => {
+        const c = d.category && String(d.category).trim() ? d.category : null, t = d.type && String(d.type).trim() ? d.type : null;
+        if(t) allTypes[t] = true;
+        if(c){ pairs[c] = pairs[c] || {}; if(t) pairs[c][t] = true; }
+      });
       if(!data || data.length < 1000) break;
     }
   }catch(e){
-    if(my === typeLoadToken) hint.textContent = "Could not load the device types (" + e.message + "). Reports still run for all types.";
+    if(my === typeLoadToken) hint.textContent = "Could not load the categories and device types (" + e.message + "). Reports still run for all of them.";
     return;
   }
   if(my !== typeLoadToken) return;           // a newer branch choice has taken over
+  PAIRS = pairs; ALL_TYPES = allTypes;
+  const cats = Object.keys(PAIRS).sort((a,b)=>a.localeCompare(b));
+  const csel = document.getElementById("categoryFilter");
+  csel.innerHTML = '<option value="">All categories</option>' + cats.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join("");
+  let msg = "";
+  if(prevCat && PAIRS[prevCat]) csel.value = prevCat;
+  else{ csel.value = ""; if(prevCat) msg = "There is no \"" + prevCat + "\" category in this selection, so the category was reset to All categories."; }
+  hint.textContent = [msg, renderTypeOptions(prevType)].filter(Boolean).join(" ");
+}
+// Fills the Type list for the chosen category (all types when no category is chosen). Returns a message when the type had to be reset.
+function renderTypeOptions(prevType){
+  const cat = gv("categoryFilter"), sel = document.getElementById("typeFilter");
+  const seen = cat ? (PAIRS[cat] || {}) : ALL_TYPES;
   const types = Object.keys(seen).sort((a,b)=>a.localeCompare(b));
   sel.innerHTML = '<option value="">All types</option>' + types.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join("");
-  if(prev && seen[prev]){ sel.value = prev; hint.textContent = ""; }
-  else{
-    sel.value = "";
-    hint.textContent = prev ? ("There is no \"" + prev + "\" device in this selection, so the type was reset to All types.") : "";
-  }
+  if(prevType && seen[prevType]){ sel.value = prevType; return ""; }
+  sel.value = "";
+  return prevType ? ("There is no \"" + prevType + "\" device in this selection, so the type was reset to All types.") : "";
 }
 // The records behind the other reports (assignments, repairs, maintenance, movement, disposals) store the device they
-// belong to but not its type, so a device type is applied through the devices of that type.
-async function deviceIdsOfType(typ){
+// belong to but not its category or type, so a category and/or device type is applied through the devices that match.
+async function deviceIdsFor(cat, typ){
   let ids = [];
   for(let from = 0; ; from += 1000){
-    const { data, error } = await sb.from("it_devices").select("id").eq("type", typ).order("id").range(from, from + 999);
+    let q = sb.from("it_devices").select("id");
+    if(cat) q = q.eq("category", cat);
+    if(typ) q = q.eq("type", typ);
+    const { data, error } = await q.order("id").range(from, from + 999);
     if(error) throw error;
     ids = ids.concat((data||[]).map(d => d.id));
     if(!data || data.length < 1000) break;
   }
   return ids;
 }
-// Runs one report query. With no device type chosen (typeIds is null) it is exactly the single query it always was.
-// With a type, the records are read for those devices 100 at a time, so the web address never gets too long.
+// Runs one report query. With no category or device type chosen (typeIds is null) it is exactly the single query it always was.
+// With one, the records are read for those devices 100 at a time, so the web address never gets too long.
 // build() must return a fresh query each time it is called.
 async function fetchRecords(build, typeIds, newestFirstBy){
   if(typeIds === null) return await build();
@@ -314,15 +340,16 @@ async function run(){
   const from = gv("dateFrom"), to = gv("dateTo"), hasRange = !!(from || to);
   if(from && to && from > to){ status.className="status err"; status.textContent="❌ The From date is after the To date."; return; }
   const basis = gv("dateBasis"), basisLabel = ((DATE_BASES[r]||[]).find(o => o[0] === basis) || [])[1] || "";
-  const typ = gv("typeFilter");
+  const typ = gv("typeFilter"), cat = gv("categoryFilter");
   const isDeviceReport = (r==="full_register" || r==="by_status" || r==="by_branch" || r==="by_department");
   try{
     let headers=[], rows=[], title="", recs=[], addBasisCol=false, statusText="";
-    const typeIds = (typ && !isDeviceReport) ? await deviceIdsOfType(typ) : null;   // null = no device type chosen
+    const typeIds = ((cat || typ) && !isDeviceReport) ? await deviceIdsFor(cat, typ) : null;   // null = no category or device type chosen
     if(r==="full_register" || r==="by_status" || r==="by_branch" || r==="by_department"){
       let q = scope(sb.from("it_devices").select("*"));
       const stF = gv("statusFilter");
       if(r==="by_status" && stF){ q = q.eq("status", stF); statusText = stF; }
+      if(cat) q = q.eq("category", cat);
       if(typ) q = q.eq("type", typ);
       q = applyDateRange(q, basis);
       const { data, error } = await q; if(error) throw error;
@@ -386,9 +413,9 @@ async function run(){
     const bf = document.getElementById("branchFilter").value;
     const branchText = bf || (itSeesAllBranches(ME) ? "All branches" : "All my branches");
     lastTitle=title; lastRows=rows; lastHeaders=headers;
-    lastMeta = { title, periodText, branchText, typeText: typ, from, to, hasRange };
+    lastMeta = { title, periodText, branchText, categoryText: cat, typeText: typ, from, to, hasRange };
     renderTable(headers, rows);
-    document.getElementById("count").textContent = rows.length + " row(s). " + periodText + "." + (typ ? " Device type: " + typ + "." : "");
+    document.getElementById("count").textContent = rows.length + " row(s). " + periodText + "." + (cat ? " Category: " + cat + "." : "") + (typ ? " Device type: " + typ + "." : "");
     status.textContent="";
   }catch(e){
     status.className="status err"; status.textContent="❌ "+e.message;
@@ -428,9 +455,10 @@ function pdfFileName(){
   const titleCase = t => t.replace(/[^A-Za-z0-9]+/g, " ").trim().split(" ").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join("_");
   const dm = ymd => fmtYmd(ymd).replace(/ /g, "_");
   const m = lastMeta;
+  const catPart = m.categoryText ? "_" + titleCase(m.categoryText) : "";
   const typePart = m.typeText ? "_" + titleCase(m.typeText) : "";
   const period = m.from && m.to ? dm(m.from) + "_to_" + dm(m.to) : (m.from ? "From_" + dm(m.from) : (m.to ? "Up_To_" + dm(m.to) : "As_At_" + dm(todayWAT())));
-  return "IT_Inventory_" + titleCase(m.title) + typePart + "_" + period + ".pdf";
+  return "IT_Inventory_" + titleCase(m.title) + catPart + typePart + "_" + period + ".pdf";
 }
 function downloadPdf(){
   if(!lastMeta){ alert("Run a report first."); return; }
@@ -448,7 +476,7 @@ function downloadPdf(){
   y += 19; doc.setFontSize(11); doc.setTextColor(...BLUE);
   doc.text(pdfSafe(lastMeta.periodText), MX, y);
   y += 15; doc.setFont("helvetica","normal"); doc.setFontSize(9); doc.setTextColor(80,80,80);
-  doc.text(pdfSafe("Branch: " + lastMeta.branchText + (lastMeta.typeText ? "   |   Device type: " + lastMeta.typeText : "")), MX, y);
+  doc.text(pdfSafe("Branch: " + lastMeta.branchText + (lastMeta.categoryText ? "   |   Category: " + lastMeta.categoryText : "") + (lastMeta.typeText ? "   |   Device type: " + lastMeta.typeText : "")), MX, y);
   y += 12; doc.text(pdfSafe("Generated " + stampWAT() + (ME && ME.username ? " by " + ME.username : "") + "   |   " + n + " record(s)"), MX, y);
 
   if(n){
