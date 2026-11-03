@@ -683,13 +683,19 @@
 
 <section class="panel" id="sec-settings">
 <h2 class="panel-head">Choose My Menus</h2>
-<div class="details-body">
-  <p class="sub">Choose which modules and pages appear in your own sidebar. This only changes what you see. Your access stays the same.</p>
+<p class="panel-sub">Hide the modules and pages you never use, so your sidebar and search show only what you work with. This changes only what you see: you can still open everything, and you can bring it all back at any time.</p>
+<div class="details-body" style="padding-bottom:0;">
+  <div class="ua-tools">
+    <input type="search" id="cmSearch" placeholder="Find a page" oninput="CM.q=this.value;cmRender(true)" aria-label="Find a page">
+    <button class="ua-btn" onclick="cmAll(true)">Show everything</button>
+    <button class="ua-btn" onclick="cmAll(false)">Hide everything</button>
+    <button class="ua-btn" id="cmOpenAll" onclick="cmOpenAll()">Open all</button>
+  </div>
+  <p class="os-sum" id="cmSum"></p>
   <div id="settings_pages_picker"></div>
-  <button onclick="saveMySidebarSettings()">SAVE</button>
-  <button class="btn-danger" onclick="resetMySidebarSettings()">SHOW EVERYTHING (RESET)</button>
   <div class="status" id="settings_status"></div>
 </div>
+<div class="ua-savebar" id="cmSaveBar" hidden><span class="ua-dirty" id="cmDirty"></span><button class="ua-btn" onclick="cmDiscard()">Discard</button><button class="ua-btn solid" onclick="cmSave()">Save</button></div>
 </section>
   </div><!-- .admin-main -->
 </div><!-- .admin-shell -->
@@ -1702,50 +1708,102 @@ async function renderAllPagesPicker(containerId, checkedPageIds){
   container.innerHTML = html;
 }
 
+// Choose My Menus (Super Admins): tick what your own sidebar shows. Stored as before, in your own
+// assigned_pages rows: none at all means "show everything". It never limits what you may open.
+var CM = { orig: null, cur: null, q: "", open: new Set(), all: false };
 async function loadMySidebarSettings(){
-  const { data } = await sb.from("assigned_pages").select("page_id").eq("profile_id", ME.id);
-  const checkedPageIds = (data||[]).map(r=>r.page_id);
-  await renderAllPagesPicker("settings_pages_picker", checkedPageIds);
+  const box = document.getElementById("settings_pages_picker"); if(!box) return;
+  box.innerHTML = "<p class='os-sum'>Loading…</p>";
+  try{
+    await uaLoadPages();
+    const { data } = await sb.from("assigned_pages").select("page_id").eq("profile_id", ME.id);
+    const mine = (data || []).map(r => r.page_id);
+    const all = UA.pages.map(p => p.id);
+    CM.all = mine.length === 0;                               // not customised yet: everything is shown
+    CM.orig = new Set(CM.all ? all : mine.filter(id => all.indexOf(id) !== -1));
+    CM.cur = new Set(CM.orig);
+    cmRender();
+  }catch(e){ box.innerHTML = "<p class='os-sum'>Could not load the pages: " + esc(e.message || e) + "</p>"; }
 }
-
-async function saveMySidebarSettings(){
+function cmDirty(){
+  if(!CM.orig) return 0;
+  let n = 0; CM.cur.forEach(id => { if(!CM.orig.has(id)) n++; }); CM.orig.forEach(id => { if(!CM.cur.has(id)) n++; });
+  return n;
+}
+function cmBar(){
+  const bar = document.getElementById("cmSaveBar"), n = cmDirty(); if(!bar) return;
+  bar.hidden = n === 0;
+  if(n) document.getElementById("cmDirty").textContent = n + (n === 1 ? " change not saved" : " changes not saved");
+  const total = UA.pages.length, shown = CM.cur.size;
+  const S = uaStructure(); let mods = 0; S.forEach(g => g.mods.forEach(m => { if(m.pages.some(p => CM.cur.has(p.id))) mods++; }));
+  document.getElementById("cmSum").textContent = shown === total
+    ? "Your sidebar shows everything: all " + total + " pages."
+    : "Your sidebar shows " + shown + " of " + total + " pages, in " + mods + " module" + (mods === 1 ? "" : "s") + ".";
+}
+function cmRender(keepFocus){
+  const box = document.getElementById("settings_pages_picker"); if(!box || !CM.cur) return;
+  const pos = keepFocus ? document.getElementById("cmSearch").selectionStart : null;
+  const S = uaStructure(), q = CM.q.trim().toLowerCase();
+  CM.mods = [];
+  let h = "", any = false;
+  S.forEach(g => {
+    let gh = "";
+    g.mods.forEach(m => {
+      const hits = q ? m.pages.filter(p => p.name.toLowerCase().indexOf(q) >= 0 || m.name.toLowerCase().indexOf(q) >= 0) : m.pages;
+      if(q && !hits.length) return;
+      any = true;
+      const mi = CM.mods.push(m) - 1, n = m.pages.filter(p => CM.cur.has(p.id)).length, all = n === m.pages.length, open = q ? true : CM.open.has(m.name);
+      gh += `<div class="ua-mod${open ? " open" : ""}" data-mod="${esc(m.name)}"><div class="ua-mod-row" onclick="cmToggleOpen(${mi}, this)">` +
+        `<input type="checkbox" aria-label="Show all of ${esc(m.name)}" ${all && n ? "checked" : ""} data-ind="${n > 0 && !all ? 1 : 0}" onclick="event.stopPropagation()" onchange="cmMod(${mi}, this.checked)">` +
+        `<span class="ua-mod-name">${esc(m.name)}</span><span class="ua-mod-count${all && n ? " all" : ""}">${n === 0 ? "hidden" : n + " of " + m.pages.length + " shown"}</span><span class="ua-chev" aria-hidden="true">&#9662;</span></div>` +
+        `<div class="ua-pages">${m.parts.map(part => (m.parts.length > 1 && part.label ? `<div class="ua-sub">${esc(part.label)}</div>` : "") + part.pages.map(p => {
+          const hit = q && p.name.toLowerCase().indexOf(q) >= 0;
+          if(q && !hit && m.name.toLowerCase().indexOf(q) < 0) return "";
+          return `<label class="ua-page${hit ? " hit" : ""}"><input type="checkbox" ${CM.cur.has(p.id) ? "checked" : ""} onchange="cmPage(${p.id}, this.checked)"> ${esc(p.name)}</label>`;
+        }).join("")).join("")}</div></div>`;
+    });
+    if(gh) h += `<div class="ua-grp">${esc(g.name)}</div>` + gh;
+  });
+  if(!any) h += `<p class="ua-note">${q ? "No page matches." : "No pages."}</p>`;
+  box.innerHTML = h;
+  box.querySelectorAll('input[data-ind="1"]').forEach(i => { i.indeterminate = true; });
+  document.getElementById("cmOpenAll").textContent = CM.open.size ? "Close all" : "Open all";
+  cmBar();
+  if(keepFocus){ const i = document.getElementById("cmSearch"); i.focus(); if(pos != null) i.setSelectionRange(pos, pos); }
+}
+function cmToggleOpen(i, row){ const m = CM.mods[i]; if(!m) return; const box = row.parentNode; box.classList.toggle("open"); if(box.classList.contains("open")) CM.open.add(m.name); else CM.open.delete(m.name); }
+function cmOpenAll(){ if(CM.open.size) CM.open.clear(); else uaStructure().forEach(g => g.mods.forEach(m => CM.open.add(m.name))); cmRender(); }
+function cmMod(i, on){ const m = CM.mods[i]; if(!m) return; m.pages.forEach(p => { if(on) CM.cur.add(p.id); else CM.cur.delete(p.id); }); cmRender(); }
+function cmPage(id, on){ if(on) CM.cur.add(id); else CM.cur.delete(id); cmRender(); }
+function cmAll(on){ if(on) UA.pages.forEach(p => CM.cur.add(p.id)); else CM.cur.clear(); cmRender(); }
+function cmDiscard(){ CM.cur = new Set(CM.orig); cmRender(); }
+async function saveMySidebarSettings(){ return cmSave(); }
+async function cmSave(){
   const status = document.getElementById("settings_status");
-  const pageIds = Array.from(document.querySelectorAll("#settings_pages_picker .page-check:checked")).map(el=>Number(el.value));
-
-  status.className = "status"; status.textContent = "Saving...";
+  const everything = CM.cur.size === UA.pages.length;
+  if(CM.cur.size === 0){ status.className = "status err"; status.textContent = "Tick at least one page, or press Show everything. A sidebar with nothing in it cannot be saved."; return; }
+  status.className = "status"; status.textContent = "Saving…";
   try{
     const { error: delErr } = await sb.from("assigned_pages").delete().eq("profile_id", ME.id);
     if(delErr) throw delErr;
-    if(pageIds.length){
-      const rows = pageIds.map(p=>({ profile_id: ME.id, page_id: p }));
-      const { error: insErr } = await sb.from("assigned_pages").insert(rows);
+    if(!everything){
+      const { error: insErr } = await sb.from("assigned_pages").insert([...CM.cur].map(p => ({ profile_id: ME.id, page_id: p })));
       if(insErr) throw insErr;
     }
+    await logActivity(everything ? "sidebar_settings_reset" : "sidebar_settings_saved",
+      ME.username + (everything ? " set their sidebar to show everything" : " customised their own sidebar (" + CM.cur.size + " pages shown)"));
+    CM.orig = new Set(CM.cur); CM.all = everything;
+    cmRender();
     status.className = "status ok";
-    status.textContent = pageIds.length
-      ? "✅ Saved. Your sidebar will now show only the " + pageIds.length + " page(s) you ticked."
-      : "✅ Saved with nothing ticked — your sidebar will show everything, same as Reset.";
-    await logActivity("sidebar_settings_saved", ME.username + " customized their own sidebar (" + pageIds.length + " page(s) shown)");
+    status.innerHTML = "✅ Saved. " + (everything ? "Your sidebar shows everything." : "Your sidebar now shows " + CM.cur.size + " pages.") +
+      ' <button class="ua-btn" style="margin-left:8px!important;" onclick="(window.top||window).location.reload()">Reload the app to see it</button>';
   }catch(e){
     status.className = "status err"; status.textContent = "❌ " + e.message;
   }
 }
-
-async function resetMySidebarSettings(){
-  const status = document.getElementById("settings_status");
-  if(!confirm("Show everything on your sidebar again? This clears your current customization.")) return;
-
-  status.className = "status"; status.textContent = "Resetting...";
-  try{
-    const { error } = await sb.from("assigned_pages").delete().eq("profile_id", ME.id);
-    if(error) throw error;
-    status.className = "status ok"; status.textContent = "✅ Reset. Your sidebar will show everything again.";
-    await logActivity("sidebar_settings_reset", ME.username + " reset their sidebar to show everything");
-    await loadMySidebarSettings();
-  }catch(e){
-    status.className = "status err"; status.textContent = "❌ " + e.message;
-  }
-}
+async function resetMySidebarSettings(){ cmAll(true); return cmSave(); }
+window.addEventListener("beforeunload", function(e){ if(cmDirty()){ e.preventDefault(); e.returnValue = ""; } });
+Object.assign(window, { cmRender, cmToggleOpen, cmOpenAll, cmMod, cmPage, cmAll, cmDiscard, cmSave, saveMySidebarSettings, resetMySidebarSettings });
 
 // Cache of the managing Admin's own granted page IDs. An Admin can only
 // pass on pages they themselves were granted. null = Super Admin (no limit).
