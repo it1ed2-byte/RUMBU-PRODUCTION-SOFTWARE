@@ -7,7 +7,7 @@
 // the cache only helps when there's no connection at all.
 //
 // Bump CACHE_NAME whenever this file changes, so old caches get cleared.
-const CACHE_NAME = "rumbu-shell-v2";
+const CACHE_NAME = "rumbu-shell-v3";   // v3: new navy and white app icons
 
 // Only truly static, rarely-changing assets get cache-first treatment.
 // styles.css was removed from this list — in practice it changes just as
@@ -20,7 +20,8 @@ const STATIC_ASSETS = [
   "icon-192.png",
   "icon-512.png",
   "apple-touch-icon.png",
-  "favicon-32.png"
+  "favicon-32.png",
+  "favicon.ico"
 ];
 
 self.addEventListener("install", (event) => {
