@@ -178,6 +178,11 @@
 .mod-nav .mn-item[aria-current="page"] .mn-num{background:var(--side-active-bg);color:var(--side-active-fg);}
 .mod-nav .mn-badge{flex:0 0 auto;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--side-active-bg);color:var(--side-active-fg);font-size:10.5px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;}
 .mod-nav .mn-badge[hidden]{display:none;}
+.mod-nav .mn-pin{flex:0 0 auto;width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;border-radius:5px;color:var(--side-muted);font-size:13px;opacity:0;cursor:pointer;}
+.mod-nav .mn-item:hover .mn-pin,.mod-nav .mn-pin.on,.mod-nav .mn-item:focus-visible .mn-pin{opacity:1;}
+.mod-nav .mn-pin.on{color:var(--side-active-bg);}
+.mod-nav .mn-pin:hover{background:rgba(255,255,255,.12);color:#fff;}
+@media (hover:none){ .mod-nav .mn-pin{opacity:.6;} }
 /* folded: a strip of part icons; hovering opens it over the page without moving the page */
 .mod-folded .mod-body{padding-left:52px;}
 .mod-folded .mod-nav{position:absolute;left:0;top:0;bottom:0;width:52px;}
@@ -790,10 +795,10 @@
         const safeName = m.name.replace(/\\/g,"\\\\").replace(/'/g,"\\'");
         const badge = m.name === PET_MODULE ? '<span class="nav-badge" id="navBadgePet" hidden></span>' : "";
         return `<button class="menu-flat" data-group-name="${navEsc(m.name)}" onclick="openPagePicker('${navEsc(safeName)}', event)" onmouseenter="hoverOpenModule('${navEsc(safeName)}', event)">` +
-          `<span class="m-label"><span class="m-icon">${iconSvgFor(m.name)}</span><span>${navEsc(m.name)}</span></span>${badge}<span class="chev">&rsaquo;</span></button>`;
+          `<span class="m-label"><span class="m-icon">${iconSvgFor(m.name)}</span><span>${navEsc(m.name)}</span></span>${badge}</button>`;
       };
       const accountBtn = `<button class="menu-flat" data-group-name="Manage Accounts" onclick="openAccountPicker(event)" onmouseenter="hoverOpenAccountPicker(event)">` +
-        `<span class="m-label"><span class="m-icon">${iconSvgFor("Manage Accounts")}</span><span>Manage Accounts</span></span><span class="chev">&rsaquo;</span></button>`;
+        `<span class="m-label"><span class="m-icon">${iconSvgFor("Manage Accounts")}</span><span>Manage Accounts</span></span></button>`;
 
       NAV_GROUP_LIST = [];
       let html = '<div class="nav-tools" id="navTools"><button onclick="navSetAll(true)">Open all</button><button onclick="navSetAll(false)">Close all</button></div>';
@@ -1004,8 +1009,33 @@
   // Selecting a module no longer opens a full-screen card screen; it
   // slides that module's pages out in a panel BESIDE the sidebar. A
   // second click on the same module (or clicking away) closes it.
-  function openPagePicker(moduleName, ev){ openSideMenu("module", moduleName, ev); }
-  function openAccountPicker(ev){ openSideMenu("account", "Manage Accounts", ev); }
+  // ---- Clicking a module opens its landing page ---------------------------------
+  // The module's dashboard (or PET Home); if it has none, its first page in working order.
+  // From there the module sidebar beside the page lists every other page.
+  function moduleLandingPage(moduleName){
+    const pages = (MODULE_PAGES_BY_MODULE[moduleName] || []).filter(p => MY_ALLOWED_PATHS.has(p.module_path));
+    if(!pages.length) return null;
+    if(moduleName === PET_MODULE){ const S = petStructure(pages); if(S.home) return S.home; }
+    const parts = navArrangePages(pages), dash = parts.find(g => g.sec === "dash");
+    if(dash){
+      const exact = dash.pages.find(p => /^dashboard$/i.test(String(p.name).trim())) || dash.pages.find(p => /dashboard/i.test(p.name));
+      return exact || dash.pages[0];
+    }
+    return parts[0].pages[0];
+  }
+  function openPagePicker(moduleName, ev){
+    hideFlyout();
+    const p = moduleLandingPage(moduleName);
+    if(!p){ openSideMenu("module", moduleName, ev); return; }   // nothing this person may open: the list explains
+    const parts = p.module_path.split("/");
+    openModule(null, parts[0], parts[1], p.name, "");
+  }
+  function openAccountPicker(ev){
+    hideFlyout();
+    const p = ACCOUNT_PAGES.filter(accountPageAllowed)[0];
+    if(!p){ openSideMenu("account", "Manage Accounts", ev); return; }
+    openModule(null, p.dept, p.mod, p.name, p.query || "");
+  }
 
   // ---- Hover-to-reveal: placing the cursor on a module opens its page
   // list immediately, no click needed. Click still works exactly as
@@ -1017,8 +1047,8 @@
   function cancelHoverClose(){ if(hoverCloseTimer){ clearTimeout(hoverCloseTimer); hoverCloseTimer = null; } }
   function scheduleHoverClose(){ cancelHoverClose(); hoverCloseTimer = setTimeout(hideFlyout, 250); }
 
-  function hoverOpenModule(moduleName, ev){ hoverOpenSideMenu("module", moduleName, ev); }
-  function hoverOpenAccountPicker(ev){ hoverOpenSideMenu("account", "Manage Accounts", ev); }
+  function hoverOpenModule(moduleName, ev){}
+  function hoverOpenAccountPicker(ev){}
 
   function hoverOpenSideMenu(kind, name, ev){
     cancelHoverClose();
@@ -1431,6 +1461,7 @@
     if(btn) btn.setAttribute("aria-expanded", open ? "true" : "false");
     if(open){ const cur = nav.querySelector('[aria-current="page"]') || nav.querySelector(".mn-item"); if(cur) cur.focus(); }
   }
+  function mnPin(i){ const it = MN_ITEMS[i]; if(!it) return; navTogglePin({ dept: it.dept, module: it.mod, query: "", label: it.label }); renderModNav(); }
   function mnOpen(i){ const it = MN_ITEMS[i]; if(!it) return; modNavMobile(false); openModule(null, it.dept, it.mod, it.label, it.query || ""); }
   // Works out the parts and their pages for the module that is open. Returns [{ key, label, icon, items:[{label, path, num, stage}] }].
   function modNavParts(){
@@ -1466,9 +1497,11 @@
       g.items.forEach(it => {
         const parts2 = it.path.split("/"), i = MN_ITEMS.push({ dept: parts2[0], mod: parts2[1], label: it.pageName || it.label }) - 1;
         const here = it.path === cur;
+        const pinE = { dept: parts2[0], module: parts2[1], query: "", label: it.pageName || it.label }, pinned = navIsPinned(pinE);
         h += '<button class="mn-item" onclick="mnOpen(' + i + ')"' + (here ? ' aria-current="page"' : '') + ' title="' + navEsc(it.label) + '">' +
           (it.num ? '<span class="mn-num">' + it.num + '</span>' : '') + '<span class="mn-name">' + navEsc(it.label) + '</span>' +
-          (it.stage ? '<span class="mn-badge" id="mnb' + it.stage + '" hidden></span>' : '') + '</button>';
+          (it.stage ? '<span class="mn-badge" id="mnb' + it.stage + '" hidden></span>' : '') +
+          '<span class="mn-pin' + (pinned ? ' on' : '') + '" role="button" tabindex="-1" title="' + (pinned ? 'Unpin' : 'Pin to the top of the main menu') + '" aria-label="' + (pinned ? 'Unpin ' : 'Pin ') + navEsc(it.label) + '" onclick="event.stopPropagation();mnPin(' + i + ')">' + (pinned ? '&#9733;' : '&#9734;') + '</span></button>';
       });
     });
     nav.innerHTML = h + '</div>';
