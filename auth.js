@@ -72,7 +72,8 @@ var RumbuUI = (function(){
   // ---- styles (added once) -------------------------------------------------
   var CSS = [
     ".rs-logo{display:block;width:100%;height:100%;}",
-    ".rs-tile{display:inline-flex;align-items:center;justify-content:center;background:#fff;border-radius:22%;box-shadow:0 1px 2px rgba(0,0,0,.08);padding:9%;box-sizing:border-box;}",
+    ".rs-tile{display:inline-flex;align-items:center;justify-content:center;background:#fff;border-radius:22%;box-shadow:0 1px 2px rgba(0,0,0,.08);padding:0;box-sizing:border-box;overflow:hidden;}",
+    ".rs-tile > .rs-logo{width:82%;height:82%;}",
     ".rs-anim .rs-ch{animation:rsCh 1.6s ease-in-out infinite;}",
     ".rs-anim .rs-ch4{animation-delay:0s}.rs-anim .rs-ch3{animation-delay:.15s}.rs-anim .rs-ch2{animation-delay:.3s}.rs-anim .rs-ch1{animation-delay:.45s}",
     "@keyframes rsCh{0%,100%{opacity:.25}35%{opacity:1}}",
