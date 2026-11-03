@@ -144,6 +144,7 @@
       <div id="unitInfo"></div>
       <div class="btnbar" style="margin-top:0;">
         <button onclick="downloadUnitExcel()">⬇ Download as Excel</button>
+        <button onclick="downloadBreakdownExcel()" title="Download the totals by unit and by department for the whole form, to help with allocation">📊 Breakdown</button>
       </div>
       <div style="overflow-x:auto;"><div id="unitTableWrap"></div></div>
     </div>
@@ -506,6 +507,60 @@ function downloadUnitExcel(){
   const safe = (CURRENT_FORM.form_number + "_" + CURRENT_UNIT.department + "_" + CURRENT_UNIT.unit).replace(/[^A-Za-z0-9._-]+/g, "_");
   XLSX.writeFile(wb, "Overtime_Payment_" + safe + ".xlsx");
   logActivity("overtime_payment_downloaded", ME.username + " downloaded the payment sheet for " + CURRENT_FORM.form_number + " — " + CURRENT_UNIT.department + " / " + CURRENT_UNIT.unit + " (" + CURRENT_UNIT.staff.length + " staff)");
+}
+
+// ===== Breakdown for allocation: the whole form, totalled by unit and then by department =====
+// Amounts are added in kobo (whole hundredths), so the unit totals, the department totals and the grand total always agree exactly.
+function buildBreakdown(staff){
+  const byUnit = {}, byDept = {};
+  let total = 0, count = 0;
+  (staff || []).forEach(s => {
+    const c = Math.round((Number(s.amount) || 0) * 100);
+    const uk = s.department + "||" + s.unit;
+    const u = byUnit[uk] || (byUnit[uk] = { unit: s.unit, department: s.department, staff: 0, cents: 0 });
+    u.staff++; u.cents += c;
+    const d = byDept[s.department] || (byDept[s.department] = { department: s.department, unitNames: {}, staff: 0, cents: 0 });
+    d.unitNames[s.unit] = true; d.staff++; d.cents += c;
+    total += c; count++;
+  });
+  const cmp = (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
+  return {
+    units: Object.values(byUnit).sort((a, b) => cmp(a.unit, b.unit) || cmp(a.department, b.department)).map(u => ({ unit: u.unit, department: u.department, staff: u.staff, total: u.cents / 100 })),
+    depts: Object.values(byDept).sort((a, b) => cmp(a.department, b.department)).map(d => ({ department: d.department, units: Object.keys(d.unitNames).length, staff: d.staff, total: d.cents / 100 })),
+    staff: count, total: total / 100
+  };
+}
+
+function downloadBreakdownExcel(){
+  if(typeof XLSX === "undefined"){ alert("The spreadsheet library did not load -- check your connection and reopen this page."); return; }
+  if(!CURRENT_FORM || !CURRENT_FORM.staff || !CURRENT_FORM.staff.length){ alert("There is no staff or pay on this form to break down."); return; }
+  const B = buildBreakdown(CURRENT_FORM.staff);
+  const money = [];                       // rows whose last column is an amount
+  const aoa = [
+    [COMPANY],
+    ["Overtime Breakdown for Allocation"],
+    ["Form No.", CURRENT_FORM.form_number],
+    ["Branch", CURRENT_FORM.section],
+    ["Overtime Date", fmtDate(CURRENT_FORM.overtime_date)],
+    [],
+    ["BY UNIT"],
+    ["UNIT", "DEPARTMENT", "STAFF", "TOTAL AMOUNT"]
+  ];
+  B.units.forEach(u => { money.push(aoa.length); aoa.push([u.unit, u.department, u.staff, u.total]); });
+  money.push(aoa.length); aoa.push(["TOTAL", "", B.staff, B.total]);
+  aoa.push([]);
+  aoa.push(["BY DEPARTMENT"]);
+  aoa.push(["DEPARTMENT", "UNITS", "STAFF", "TOTAL AMOUNT"]);
+  B.depts.forEach(d => { money.push(aoa.length); aoa.push([d.department, d.units, d.staff, d.total]); });
+  money.push(aoa.length); aoa.push(["TOTAL", B.units.length, B.staff, B.total]);
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  money.forEach(r => { const cell = ws[XLSX.utils.encode_cell({ r: r, c: 3 })]; if(cell) cell.z = "#,##0.00"; });
+  ws["!cols"] = [{ wch: 30 }, { wch: 30 }, { wch: 10 }, { wch: 18 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Breakdown");
+  const safe = String(CURRENT_FORM.form_number || "form").replace(/[^A-Za-z0-9._-]+/g, "_");
+  XLSX.writeFile(wb, "Overtime_Breakdown_" + safe + ".xlsx");
+  logActivity("overtime_breakdown_downloaded", ME.username + " downloaded the allocation breakdown for " + CURRENT_FORM.form_number + " (" + B.units.length + " unit line" + (B.units.length === 1 ? "" : "s") + ", " + B.depts.length + " department" + (B.depts.length === 1 ? "" : "s") + ", total " + fmtNaira(B.total) + ")");
 }
 
 // ===== Mark the whole form as Paid (completes its entries) =====
