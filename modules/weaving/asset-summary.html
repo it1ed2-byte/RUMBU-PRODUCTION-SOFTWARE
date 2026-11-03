@@ -32,6 +32,11 @@
   tr:nth-child(even){background:#f9f9f9;}
   .total{font-weight:bold;background:#e2efda;}
   .grandtotal{font-weight:bold;background:#f4cccc;}
+  .dtcheck{margin:10px 0;border:1px solid var(--line);border-radius:8px;padding:8px 12px;text-align:left;font-size:13px;}
+  .dtcheck summary{cursor:pointer;font-weight:700;color:var(--navy);}
+  .dtcheck table{max-width:560px;}
+  .dtcheck td:first-child{text-align:left;}
+  .dt-bad{color:#b3261e;font-weight:600;} .dt-warn{color:#9a6700;font-weight:600;} .dt-ok{color:#1d8a4e;font-weight:600;}
   @media (max-width:700px){ .grid{grid-template-columns:1fr 1fr;} }
   @media print{ .no-print{display:none !important;} .shed-break{break-before:page;page-break-before:always;} }
 </style>
@@ -228,21 +233,91 @@ function groupMixHtml(rows){
   return parts.length ? `<p style="text-align:center;font-size:12px;margin:4px 0;opacity:.85;">Groups in these rows &mdash; ${parts.join(" &middot; ")}</p>` : "";
 }
 
+// Why a downtime record is, or is not, counted. The checks run in this order and the first one that fails is the reason.
+// A counted record adds the minutes from its stop time to its finish time (a finish before the stop gives a negative number, as before).
+// A record with no stop time or no finish time is a job still open: it is skipped. (new Date(null) is 1 Jan 1970, so an empty time
+// used to be read as 1970 and gave millions of negative minutes.)
+function classifyControlRow(r, f){
+  if(r.date_col < f.fromDate || r.date_col > f.toDate) return { reason: "range" };
+  if(f.shift !== "All" && r.shift !== f.shift) return { reason: "shift" };
+  if(f.section !== "All" && r.section !== f.section) return { reason: "section" };
+  if(EXCLUDED_JOB_CODES.has(r.job_code)) return { reason: "excluded" };          // j.Job_Code IS NULL in GAS
+  if(!WEAVING_ASSETS.has(r.assets)) return { reason: "asset" };                  // m.Assets IN (...) whitelist
+  if(r.stop_time == null || r.stop_time === "" || r.finish_time == null || r.finish_time === "") return { reason: "open" };
+  const stop = parseDT(r.stop_time), finish = parseDT(r.finish_time);
+  if(!stop || !finish) return { reason: "unreadable" };
+  return { reason: "counted", minutes: minutesBetween(stop, finish) };
+}
+
 // downtime by Assets only (whole range), job_table excluded, WEAVING_ASSETS whitelist applied
 // mirrors GAS whereMaint: m.Assets IN (WA-01,...,WZ-18) AND j.Job_Code IS NULL
 function downtimeByAsset(f){
   const map = {};
   CTRL_ROWS.forEach(r=>{
-    if(r.date_col < f.fromDate || r.date_col > f.toDate) return;
-    if(f.shift !== "All" && r.shift !== f.shift) return;
-    if(f.section !== "All" && r.section !== f.section) return;
-    if(EXCLUDED_JOB_CODES.has(r.job_code)) return;          // j.Job_Code IS NULL in GAS
-    if(!WEAVING_ASSETS.has(r.assets)) return;               // m.Assets IN (...) whitelist
-    const stop = parseDT(r.stop_time), finish = parseDT(r.finish_time);
-    if(!stop || !finish) return;
-    map[r.assets] = (map[r.assets] || 0) + minutesBetween(stop, finish);
+    const c = classifyControlRow(r, f);
+    if(c.reason === "counted") map[r.assets] = (map[r.assets] || 0) + c.minutes;
   });
   return map;
+}
+
+// The same checks, record by record, so a low or zero downtime can be explained.
+function downtimeDiagnosis(f){
+  const D = { loaded: CTRL_ROWS.length, range: 0, shift: 0, section: 0, excluded: 0, asset: 0, open: 0, unreadable: 0, counted: 0,
+              minutes: 0, negative: 0, negativeMinutes: 0, shifts: {}, otherShifts: {}, otherSections: {}, excludedCodes: {}, otherAssets: {}, dates: {},
+              rangeExample: "", unreadableExample: "" };
+  const bump = (o, k) => { k = (k == null || k === "") ? "(blank)" : String(k); o[k] = (o[k] || 0) + 1; };
+  CTRL_ROWS.forEach(r=>{
+    const c = classifyControlRow(r, f); D[c.reason]++;
+    if(c.reason === "range"){ if(!D.rangeExample) D.rangeExample = String(r.date_col); return; }
+    bump(D.shifts, r.shift); bump(D.dates, r.date_col);                          // what is on file for the chosen dates
+    if(c.reason === "shift") bump(D.otherShifts, r.shift);
+    else if(c.reason === "section") bump(D.otherSections, r.section);
+    else if(c.reason === "excluded") bump(D.excludedCodes, r.job_code);
+    else if(c.reason === "asset") bump(D.otherAssets, r.assets);
+    else if(c.reason === "unreadable" && !D.unreadableExample) D.unreadableExample = String(r.stop_time) + " to " + String(r.finish_time);
+    else if(c.reason === "counted"){ D.minutes += c.minutes; if(c.minutes < 0){ D.negative++; D.negativeMinutes += c.minutes; } }
+  });
+  return D;
+}
+
+function dtPlural(n, w){ return n + " " + w + (n === 1 ? "" : "s"); }
+function dtList(o, n){ return Object.entries(o).sort((a,b)=>b[1]-a[1]).slice(0, n || 4).map(([k,v]) => '"' + k + '" (' + v + ')').join(", "); }
+// The explanation, as a list of { tone: "ok" | "warn" | "bad", text }.
+function downtimeVerdict(D, f){
+  const range = f.fromDate + " to " + f.toDate, out = [];
+  if(D.loaded === 0) return [{ tone: "bad", text: "No downtime records exist for " + range + ". Nothing has been entered for those dates, or the downtime feed has not reached the database yet." }];
+  if(D.range === D.loaded) return [{ tone: "bad", text: dtPlural(D.loaded, "record") + " came back, but none count as inside " + range + ". Their date is written as \"" + D.rangeExample + "\", which does not compare with the dates chosen." }];
+  if(D.counted === 0){
+    const why = [
+      [D.range, n => n + " fall outside the dates chosen."],
+      [D.shift, n => dtPlural(n, "record") + " for these dates " + (n === 1 ? "is" : "are") + " labelled " + dtList(D.otherShifts) + " and not \"" + f.shift + "\", so " + f.shift + " shows none."],
+      [D.section, n => dtPlural(n, "record") + " " + (n === 1 ? "belongs" : "belong") + " to section " + dtList(D.otherSections) + " and not \"" + f.section + "\"."],
+      [D.excluded, n => dtPlural(n, "record") + " " + (n === 1 ? "uses" : "use") + " a job code that is left out of downtime: " + dtList(D.excludedCodes) + "."],
+      [D.asset, n => dtPlural(n, "record") + " " + (n === 1 ? "is" : "are") + " for machines that are not in this page's weaving machine list: " + dtList(D.otherAssets) + "."],
+      [D.open, n => dtPlural(n, "record") + " " + (n === 1 ? "has" : "have") + " no finish time yet (the job is still open), so no downtime can be counted for " + (n === 1 ? "it" : "them") + "."],
+      [D.unreadable, n => dtPlural(n, "record") + " " + (n === 1 ? "has" : "have") + " a stop or finish time this page cannot read, for example \"" + D.unreadableExample + "\"."]
+    ].filter(w => w[0] > 0).sort((a,b) => b[0] - a[0]).map(w => w[1](w[0]));
+    return [{ tone: "bad", text: "None of the " + dtPlural(D.loaded, "record") + " loaded could be counted. " + why.join(" ") }];
+  }
+  if(D.minutes === 0) out.push({ tone: "warn", text: dtPlural(D.counted, "record") + " counted, but each has the same stop and finish time, so the downtime is 0." });
+  if(D.negative > 0) out.push({ tone: "warn", text: dtPlural(D.negative, "record") + " " + (D.negative === 1 ? "has" : "have") + " a finish time earlier than the stop time (" + D.negativeMinutes + " minutes in total). " + (D.negative === 1 ? "It lowers" : "They lower") + " the total, so check " + (D.negative === 1 ? "that time" : "those times") + "." });
+  if(!out.length) out.push({ tone: "ok", text: D.minutes + " minutes from " + dtPlural(D.counted, "record") + "." });
+  return out;
+}
+function dtEsc(v){ return String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+// The panel under the Downtime Report. It opens by itself when the downtime is zero or something looks wrong.
+function dtCheckHtml(f){
+  const D = downtimeDiagnosis(f), V = downtimeVerdict(D, f);
+  const open = D.minutes === 0 || V.some(v => v.tone !== "ok");
+  const row = (label, n) => n > 0 ? `<tr><td>${label}</td><td>${n}</td></tr>` : "";
+  const on = Object.keys(D.shifts).length ? `<p style="margin:6px 0 0;font-size:12px;">On file for these dates: ${Object.entries(D.shifts).sort((a,b)=>b[1]-a[1]).map(([k,v]) => dtEsc(k) + " " + v).join(" &middot; ")}</p>` : "";
+  return `<details class="dtcheck no-print"${open ? " open" : ""}><summary>Downtime check: how this number was reached</summary>
+    ${V.map(v => `<p class="dt-${v.tone}" style="margin:8px 0;">${dtEsc(v.text)}</p>`).join("")}
+    <table><tr><th style="text-align:left">Step</th><th>Records</th></tr>
+      <tr><td>Downtime records loaded for ${dtEsc(f.fromDate)} to ${dtEsc(f.toDate)}</td><td>${D.loaded}</td></tr>
+      ${row("Outside the dates chosen", D.range)}${row("Different shift (not " + dtEsc(f.shift) + ")", D.shift)}${row("Different section (not " + dtEsc(f.section) + ")", D.section)}
+      ${row("Job code left out of downtime", D.excluded)}${row("Machine not in the weaving list", D.asset)}${row("No stop or finish time yet (job open)", D.open)}${row("Time that cannot be read", D.unreadable)}
+      <tr class="total"><td>Counted</td><td>${D.counted} (${D.minutes} min)</td></tr></table>${on}</details>`;
 }
 
 // repairs by Assets+Shift, job_table excluded — matches getAdvancedReportHTML / advanced shift analysis
@@ -472,6 +547,7 @@ async function generateDetailed(){
     <h4>Downtime Report</h4>
     <p>Total Downtime: <b>${Math.round(totalDowntime)} minutes</b></p>
     <p>Mat Loss by Downtime (MLD): <b>${Math.round(totalMLD)}</b></p>
+    ${dtCheckHtml(f)}
     <hr>`;
 
   html += `<h3>📈 Grand Summary (All Sheds)</h3><table><tr><th>Metric</th><th>Count</th></tr>
