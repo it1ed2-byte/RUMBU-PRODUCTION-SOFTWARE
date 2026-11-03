@@ -22,10 +22,25 @@
 <style>
   /* Page-specific styles; base look + theme come from shared styles.css */
   body{padding:20px;}
-  .wrap{max-width:1120px;margin:0 auto;}
+  .wrap{max-width:none;margin:0;}   /* full width: the screens use all the room there is */
 
   /* Two-column admin shell: left nav + right panel */
-  .admin-shell{display:grid;grid-template-columns:230px 1fr;gap:18px;align-items:start;}
+  .admin-shell{display:grid;grid-template-columns:220px minmax(0,1fr);gap:16px;align-items:start;transition:grid-template-columns .18s ease;}
+  /* The menu sits on the left edge. Fold it to icons for more room (remembered); hovering the icons opens it over the page. */
+  .acct-folded .admin-shell{grid-template-columns:56px minmax(0,1fr);}
+  .admin-nav .nav-fold{display:flex;align-items:center;justify-content:flex-end;gap:6px;width:100%!important;margin:0 0 4px!important;min-height:30px!important;padding:4px 8px!important;border:0!important;border-radius:8px!important;background:transparent!important;color:var(--muted)!important;font-size:12px!important;font-weight:700!important;cursor:pointer;}
+  .admin-nav .nav-fold:hover{background:var(--bg)!important;color:var(--heading)!important;}
+  .acct-folded .admin-nav{width:56px;padding:8px 6px;transition:width .18s ease;z-index:20;}
+  .acct-folded .admin-nav .nav-title{font-size:0;padding:6px 0 2px;border-top:1px solid var(--line);margin-top:4px;}
+  .acct-folded .admin-nav .nav-title:first-of-type{border-top:0;margin-top:0;}
+  .acct-folded .admin-nav .nav-item{font-size:0;justify-content:center;padding:10px 0;gap:0;}
+  .acct-folded .admin-nav .nav-item .ico{font-size:16px;}
+  .acct-folded .admin-nav .nav-fold{justify-content:center;font-size:0!important;}
+  .acct-folded .admin-nav .nav-fold svg{width:16px;height:16px;}
+  .acct-folded .admin-nav.peek{width:220px;padding:8px;box-shadow:0 10px 30px rgba(0,0,0,.18);}
+  .acct-folded .admin-nav.peek .nav-title{font-size:11px;padding:8px 10px 4px;border-top:0;}
+  .acct-folded .admin-nav.peek .nav-item{font-size:13.5px;justify-content:flex-start;padding:10px 12px;gap:10px;}
+  .acct-folded .admin-nav.peek .nav-fold{justify-content:flex-end;font-size:12px!important;}
   .admin-nav{position:sticky;top:12px;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:8px;display:flex;flex-direction:column;gap:2px;}
   .admin-nav .nav-title{font-size:11px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);padding:8px 10px 4px;}
   .nav-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;cursor:pointer;font-weight:600;font-size:13.5px;color:var(--text);border:none;background:none;width:100%;text-align:left;margin:0;transition:background .12s;}
@@ -43,6 +58,10 @@
     .admin-nav{position:static;flex-direction:row;flex-wrap:wrap;overflow-x:auto;}
     .nav-item{width:auto;}
     .admin-nav .nav-title{display:none;}
+    .admin-nav .nav-fold{display:none!important;}
+    .acct-folded .admin-shell{grid-template-columns:1fr;}
+    .acct-folded .admin-nav{width:auto;}
+    .acct-folded .admin-nav .nav-item{font-size:13.5px;padding:10px 12px;gap:10px;}
   }
 
   .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:20px;margin-bottom:16px;box-shadow:var(--shadow);}
@@ -208,7 +227,11 @@
 <div id="connStatus">Loading...</div>
 
 <div class="admin-shell">
-  <nav class="admin-nav" id="adminNav">
+  <nav class="admin-nav" id="adminNav" aria-label="Manage Accounts">
+    <button class="nav-fold" id="navFold" onclick="toggleAcctNav()" aria-label="Fold the menu" title="Fold the menu">
+      <span id="navFoldText">Fold menu</span>
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+    </button>
     <div class="nav-title">People and access</div>
     <button class="nav-item" data-sec="sec-create-user"    id="nav-create-user"    onclick="showSection('sec-create-user')"><span class="ico">👤</span> Staff Records</button>
     <button class="nav-item" data-sec="sec-manage-user"    id="nav-manage-user"    onclick="showSection('sec-manage-user')"><span class="ico">🔐</span> User Access</button>
@@ -707,6 +730,34 @@ async function logActivity(actionType, description){
 }
 
 // Tab switcher: show one panel, highlight its nav item.
+// ---- The menu on the left: fold to icons for a wider work area ----
+// Remembered per browser. Narrower screens (under 1400 px) start folded so the
+// work area gets the room; hovering the folded icons opens the menu over the page.
+function acctNavFolded(){
+  try{ const v = localStorage.getItem("rumbu_acctnav_folded"); if(v === "1" || v === "0") return v === "1"; }catch(e){}
+  return window.innerWidth < 1400;
+}
+function applyAcctNav(folded){
+  document.body.classList.toggle("acct-folded", !!folded);
+  const b = document.getElementById("navFold"), t = document.getElementById("navFoldText");
+  if(b){ b.setAttribute("aria-label", folded ? "Open the menu" : "Fold the menu"); b.title = b.getAttribute("aria-label"); b.querySelector("svg").style.transform = folded ? "rotate(180deg)" : ""; }
+  if(t) t.textContent = folded ? "Open menu" : "Fold menu";
+  const n = document.getElementById("adminNav"); if(n) n.classList.remove("peek");
+}
+function toggleAcctNav(){
+  const folded = !document.body.classList.contains("acct-folded");
+  try{ localStorage.setItem("rumbu_acctnav_folded", folded ? "1" : "0"); }catch(e){}
+  applyAcctNav(folded);
+}
+window.toggleAcctNav = toggleAcctNav;
+(function(){
+  applyAcctNav(acctNavFolded());
+  const n = document.getElementById("adminNav"); if(!n) return;
+  n.addEventListener("mouseenter", function(){ if(document.body.classList.contains("acct-folded")) n.classList.add("peek"); });
+  n.addEventListener("mouseleave", function(){ n.classList.remove("peek"); });
+  n.addEventListener("click", function(e){ if(e.target.closest && e.target.closest(".nav-item")) n.classList.remove("peek"); });
+})();
+
 function showSection(secId){
   document.querySelectorAll(".panel").forEach(p=>p.classList.toggle("active", p.id === secId));
   document.querySelectorAll(".nav-item").forEach(b=>b.classList.toggle("active", b.getAttribute("data-sec") === secId));
@@ -716,6 +767,14 @@ function showSection(secId){
   // so the employee list is ready before the user starts typing.
   // Fire-and-forget — never awaited here, never blocks the UI.
   if(secId === "sec-manage-user"){ ensureEmployeesForSearch(); uaEnter(); }
+  // The app header says which screen is open ("Manage Accounts › User Access").
+  try{
+    const btn = document.querySelector('.nav-item[data-sec="' + secId + '"]');
+    const name = btn ? btn.textContent.replace(/^\s*\S+\s+/, "").trim() : "";
+    const top = window.parent && window.parent !== window ? window.parent.document : null;
+    const cp = top && top.getElementById("crumbPage");
+    if(name && cp){ cp.textContent = name; top.title = name + " · RumbuApp"; }
+  }catch(e){}
   if(secId === "sec-branches") loadBranchesFlat();
   if(secId === "sec-modules") loadModulesFlat();
 }
