@@ -389,11 +389,18 @@ async function requireAuth(loginPath) {
     return null;
   }
 
-  const { data: profile, error: profErr } = await sb
+  const PROFILE_COLS = "id, username, role, super_admin_type, section_id, can_self_manage_todos, must_change_password, last_open_module";
+  let { data: profile, error: profErr } = await sb
     .from("profiles")
-    .select("id, username, role, super_admin_type, section_id, can_self_manage_todos, must_change_password, last_open_module")
+    .select(PROFILE_COLS + ", is_head_of_it")
     .eq("id", session.user.id)
     .single();
+  // Before head_of_it_marker.sql has been run the column does not exist yet: load without it.
+  let headMarkerMissing = false;
+  if (profErr && /is_head_of_it/i.test(profErr.message || "")) {
+    headMarkerMissing = true;
+    ({ data: profile, error: profErr } = await sb.from("profiles").select(PROFILE_COLS).eq("id", session.user.id).single());
+  }
 
   if (profErr || !profile) {
     if (profErr && /jwt|session/i.test(profErr.message || "")) RumbuUI.sessionExpired();
@@ -457,13 +464,17 @@ async function requireAuth(loginPath) {
     }
   }
 
-  // itops3 is the system IT administrator with full elevated access.
-  // A "Super Admin (full access)" is a super_admin whose type is exactly "full". Only itops3 can assign
+  // The Head of IT is the system IT administrator with full elevated access. It is the one account
+  // marked profiles.is_head_of_it (set only in the database, see head_of_it_marker.sql), so it no
+  // longer depends on the login name; the old name check is used only until that SQL has been run.
+  // A "Super Admin (full access)" is a super_admin whose type is exactly "full". Only the Head of IT can assign
   // it (enforced by the swift-handler edge function and a database guard), and it can change data across
-  // the system but cannot manage other Super Admin accounts: that stays itops3-only.
+  // the system but cannot manage other Super Admin accounts: that stays with the Head of IT.
   // Every other super_admin account is Viewer-only (read-only across the system). Any other type value,
   // including "management" and "technical", stays read-only, so existing accounts are unchanged.
-  const isItops = profile.username === "itops3";
+  const isHeadOfIt = profile.role === "super_admin" &&
+    (profile.is_head_of_it === true || (headMarkerMissing && profile.username === "itops3"));
+  const isItops = isHeadOfIt;   // older pages ask for isItops
   const isFullSuperAdmin = profile.role === "super_admin" && profile.super_admin_type === "full";
   const readOnly = profile.role === "super_admin" && !isItops && !isFullSuperAdmin;
 
@@ -482,6 +493,7 @@ async function requireAuth(loginPath) {
     departmentNames: departmentNames,
     canSelfManageTodos: !!profile.can_self_manage_todos,
     lastOpenModule: profile.last_open_module || null,
+    isHeadOfIt: isHeadOfIt,
     isItops: isItops,
     isFullSuperAdmin: isFullSuperAdmin,
     readOnly: readOnly
