@@ -111,6 +111,7 @@ svg{width:100%;height:auto;display:block;}
   <div id="m_dash" style="display:none;">
     <div class="section-label">📦 Production Output</div>
     <div class="kpis" id="m_kpis" style="margin-bottom:16px;"></div>
+    <p class="incnote" id="m_metNote" style="display:none;"></p>
 
     <div id="m_incSection">
       <div class="section-label">🏅 Incentive Output</div>
@@ -126,12 +127,6 @@ svg{width:100%;height:auto;display:block;}
       <h3>📅 Attendance (Monday to Saturday)</h3>
       <p id="m_attNote" style="font-size:11px;color:var(--muted);margin:-6px 0 12px;"></p>
       <div class="kpis" id="m_attKpis"></div>
-    </div>
-
-    <div class="card">
-      <h3>⚙ Machine and Efficiency Metrics</h3>
-      <p id="m_metNote" style="font-size:11px;color:var(--muted);margin:-6px 0 12px;"></p>
-      <div class="kpis" id="m_metricsKpis"></div>
     </div>
 
     <div class="card">
@@ -190,11 +185,6 @@ svg{width:100%;height:auto;display:block;}
     <div class="card">
       <h3>📅 Attendance (Monday to Saturday)</h3>
       <div class="kpis" id="p_attKpis"></div>
-    </div>
-
-    <div class="card">
-      <h3>⚙ Machine and Efficiency Metrics</h3>
-      <div class="kpis" id="p_metricsKpis"></div>
     </div>
 
     <div class="card">
@@ -301,6 +291,43 @@ function computeMetrics(myRows,ctrlRows,excludedCodes){
   const MLU=Math.round(At-ATG);
   return {A,B,C,total,target,Tt,At,downtime,MLD,ATG,MLU,efficiency:ATG?(Tt/ATG*100):0};
 }
+/* Machine figures for a set of rows: the personal formulae applied to each operator, then summed, so the totals
+   reconcile with what each operator sees on their own dashboard. ctrlRows must already be passed through normalizeCtrl.
+   ATG is the actual target: the target less the mats lost to downtime (MLD). effTotal is all mats on rows that carry a target
+   divided by ATG; effA is the same with the A grade mats only. */
+function machineTotals(rows,ctrlRows,excluded){
+  const byOp={};
+  rows.forEach(r=>{const k=String(r.operator_id);(byOp[k]=byOp[k]||[]).push(r);});
+  let down=0,MLD=0,ATG=0,MLU=0,Tt=0,At=0;
+  Object.values(byOp).forEach(rs=>{
+    const m=computeMetrics(rs,ctrlRows,excluded);
+    down+=m.downtime;MLD+=m.MLD;ATG+=m.ATG;MLU+=m.MLU;Tt+=m.Tt;At+=m.At;
+  });
+  return {ops:Object.keys(byOp).length,down,MLD,ATG,MLU,Tt,At,effTotal:ATG?Tt/ATG*100:0,effA:ATG>0?At/ATG*100:0};
+}
+/* The grade tiles, in this order: Total Mats; A, B, C counts; %A, %B, %C. t comes from totals(). */
+function gradeTiles(t){
+  const pc=v=>t.tot?Math.round(v/t.tot*100):0;
+  return [
+    {n:fmt(t.tot),l:"Total Mats"},
+    {n:fmt(t.a),l:"A Grade",cls:"good",sub:`Dbl ${fmt(t.ad)} \u00B7 Sgl ${fmt(t.as)}`},
+    {n:fmt(t.b),l:"B Grade",cls:"warn"},
+    {n:fmt(t.c),l:"C Grade"},
+    {n:pc(t.a)+"%",l:"%A (A/Total)",cls:"good"},
+    {n:pc(t.b)+"%",l:"%B (B/Total)",cls:"warn"},
+    {n:pc(t.c)+"%",l:"%C (C/Total)"}
+  ];
+}
+/* The five machine tiles that follow Target in Production Output. */
+function machineTiles(mt){
+  return [
+    {n:fmt(mt.down)+" min",l:"Total Downtime"},
+    {n:fmt(mt.MLD),l:"MLD"},
+    {n:fmt(mt.ATG),l:"ATG (Adj. Target)",cls:"teal"},
+    {n:fmt(mt.MLU),l:"MLU",cls:mt.MLU>=0?"warn":"good"},
+    {n:mt.effTotal.toFixed(1)+"%",l:"Efficiency (Total \u00F7 ATG)",cls:mt.effTotal>=90?"good":mt.effTotal>=75?"teal":"warn"}
+  ];
+}
 /* ---------- Incentive: Normal production only, over a two-week window ---------- */
 /* A blank work type has always been shown as "Normal" on this page, so it counts as Normal here too.
    B Grade, Cover Duty, Overtime, Extra Operators, Breakdown and the old "Mixed" are all out. */
@@ -316,27 +343,64 @@ function incentivePeriod(today){
   const mon=new Date(sat.getFullYear(),sat.getMonth(),sat.getDate()-12);
   return {from:iso(mon),to:iso(sat)};
 }
-/* Incentive counts the A grade mats made in Normal production. B and C grade mats are not part of it. */
-function incentiveSummary(rows){
-  let a=0,ad=0,as=0,tg=0,at=0; const ops=new Set();
-  rows.filter(isNormalWork).forEach(r=>{
-    const A=n(r.a_double)+n(r.a_single);
-    a+=A; ad+=n(r.a_double); as+=n(r.a_single); tg+=n(r.target); if(n(r.target)>0)at+=A;
+/* Incentive counts the A grade mats made in Normal production. B and C grade mats are shown for information but are not part of it.
+   The target is the actual target (ATG): the target less the mats lost to machine downtime, worked out operator by operator and then summed.
+   Efficiency is the A grade mats (on rows that carry a target) divided by that actual target.
+   ctrlRows is null when the downtime records could not be loaded: there is then no actual target and no efficiency. */
+function incentiveSummary(rows,ctrlRows,excluded){
+  const nr=rows.filter(isNormalWork);
+  let ad=0,as=0,b=0,c=0,tot=0; const ops=new Set();
+  nr.forEach(r=>{
+    ad+=n(r.a_double); as+=n(r.a_single); b+=n(r.b); c+=n(r.c); tot+=n(r.total);
     if(r.operator_id!=null&&r.operator_id!=="")ops.add(String(r.operator_id));
   });
-  return {a,ad,as,tg,ops:ops.size,eff:eff(at,tg)};
+  const mt=ctrlRows?machineTotals(nr,ctrlRows,excluded):null;
+  const hasTarget=!!(mt&&mt.ATG>0);
+  return {a:ad+as,ad,as,b,c,tot,ops:ops.size,mt,atg:mt?mt.ATG:null,hasTarget,eff:hasTarget?mt.At/mt.ATG*100:0};
 }
-/* One line per operator, from Normal rows only. tot = A grade mats. */
-function incentiveByOperator(rows){
+/* One line per operator, from Normal rows only. tot = A grade mats, tg = the operator's actual target (null when downtime is unknown). */
+function incentiveByOperator(rows,ctrlRows,excluded){
   const m={};
   rows.filter(isNormalWork).forEach(r=>{
     const id=r.operator_id==null?"":String(r.operator_id); if(!id)return;
-    const A=n(r.a_double)+n(r.a_single);
-    const o=m[id]||(m[id]={id,name:r.operator_name||id,a:0,at:0,tg:0,dates:new Set()});
-    o.a+=A; if(n(r.target)>0)o.at+=A; o.tg+=n(r.target); o.dates.add(r.date_col);
+    const o=m[id]||(m[id]={id,name:r.operator_name||id,rs:[],dates:new Set()});
+    o.rs.push(r); o.dates.add(r.date_col);
     if(!o.name||o.name===id)o.name=r.operator_name||id;
   });
-  return Object.values(m).map(o=>({id:o.id,name:o.name,days:o.dates.size,tot:o.a,tg:o.tg,eff:eff(o.at,o.tg)}));
+  return Object.values(m).map(o=>{
+    const mt=ctrlRows?computeMetrics(o.rs,ctrlRows,excluded):null;
+    const tot=o.rs.reduce((x,r)=>x+n(r.a_double)+n(r.a_single),0);
+    const atg=mt?mt.ATG:null;
+    return {id:o.id,name:o.name,days:o.dates.size,tot,tg:atg,eff:(mt&&atg>0)?mt.At/atg*100:0};
+  });
+}
+/* The Incentive Output tiles: the same cards as Production Output, for Normal production. Total Mats is the A grade mats and
+   the Target is the actual target (ATG), so there is no separate ATG tile. mgr adds Active Operators and uses the management labels. */
+function incentiveTiles(s,mgr){
+  const pc=v=>s.tot?Math.round(v/s.tot*100):0, mt=s.mt;
+  const tiles=[];
+  if(mgr)tiles.push({n:s.ops,l:"Active Operators"});
+  tiles.push(
+    {n:fmt(s.a),l:"Total Mats",cls:"good",sub:`Dbl ${fmt(s.ad)} \u00B7 Sgl ${fmt(s.as)}`},
+    {n:fmt(s.a),l:"A Grade",cls:"good"},
+    {n:fmt(s.b),l:"B Grade",cls:"warn"},
+    {n:fmt(s.c),l:"C Grade"},
+    {n:pc(s.a)+"%",l:"%A (A/Total)",cls:"good"},
+    {n:pc(s.b)+"%",l:"%B (B/Total)",cls:"warn"},
+    {n:pc(s.c)+"%",l:"%C (C/Total)"});
+  const tl=mgr?"Total Target":"Target", el=mgr?"Overall Efficiency":"Incentive Efficiency";
+  if(!mt){
+    tiles.push({n:"--",l:tl,sub:"Downtime records not loaded"},{n:"--",l:el,sub:"Downtime records not loaded"});
+  }else{
+    tiles.push(
+      {n:fmt(s.atg),l:tl,sub:"Actual target (ATG)"},
+      {n:fmt(mt.down)+" min",l:"Total Downtime"},
+      {n:fmt(mt.MLD),l:"MLD"},
+      {n:fmt(mt.MLU),l:"MLU",cls:mt.MLU>=0?"warn":"good"},
+      s.hasTarget?{n:s.eff.toFixed(1)+"%",l:el,cls:s.eff>=90?"good":s.eff>=75?"teal":"warn",sub:"A grade / ATG"}
+                 :{n:"--",l:el,sub:"No actual target"});
+  }
+  return tiles;
 }
 /*==PURE-END==*/
 
@@ -543,10 +607,9 @@ async function runManager(){
     status.className="status ok";status.textContent="";
 
     $("m_dash").style.display="block";
-    renderManagerKpis(rows,queryCount);
-    renderManagerIncentive(rows,q,from,to);
+    renderManagerKpis(rows,queryCount,ctrlRows);
+    renderManagerIncentive(rows,q,from,to,ctrlRows);
     renderManagerAttendance(from,to,pool,attPool);
-    renderManagerMetrics(rows,ctrlRows);
     if(ydRes.status==="fulfilled")showYesterday("m",ydRes.value);else showYesterdayError("m",ydRes.reason);
     renderManagerBests(rows);renderManagerCharts(rows);
   }catch(e){status.className="status err";status.textContent="❌ "+e.message;console.error(e);}
@@ -575,57 +638,42 @@ async function countQueries(ids){
   return total;
 }
 
-function managerTiles(rows){
+function managerTiles(rows,mt){
   const t=totals(rows);const e=eff(t.et,t.tg);
   const ops=new Set(rows.map(r=>r.operator_id).filter(Boolean)).size;
-  const pA=t.tot?Math.round(t.a/t.tot*100):0, pB=t.tot?Math.round(t.b/t.tot*100):0;
-  return [
-    {n:ops,l:"Active Operators"},
-    {n:fmt(t.tot),l:"Total Mats"},
-    {n:fmt(t.a),l:"A Grade",cls:"good",sub:`Dbl ${fmt(t.ad)} · Sgl ${fmt(t.as)}`},
-    {n:pA+"%",l:"%A (A/Total)",cls:"good"},
-    {n:fmt(t.b),l:"B Grade",cls:"warn"},
-    {n:pB+"%",l:"%B (B/Total)",cls:"warn"},
-    {n:fmt(t.c),l:"C Grade"},
+  return [{n:ops,l:"Active Operators"}].concat(gradeTiles(t),[
     {n:fmt(t.tg),l:"Total Target"},
-    {n:e.toFixed(1)+"%",l:"Overall Efficiency",cls:e>=90?"good":e>=75?"teal":"warn"},
-  ];
+    {n:e.toFixed(1)+"%",l:"Overall Efficiency",cls:e>=90?"good":e>=75?"teal":"warn"}
+  ],mt?machineTiles(mt):[]);
 }
-function renderManagerKpis(rows,queryCount){
-  const qTile={n:queryCount==null?"—":fmt(queryCount),l:"Total Queries",cls:queryCount==null?"":(queryCount>0?"bad":"good"),sub:"All time, operators in view"};
-  $("m_kpis").innerHTML=tilesHtml(managerTiles(rows).concat([qTile]));
+function renderManagerKpis(rows,queryCount,ctrlRows){
+  const mt=ctrlRows?machineTotals(rows,ctrlRows,MGR.excluded):null;
+  const qTile={n:queryCount==null?"--":fmt(queryCount),l:"Total Queries",cls:queryCount==null?"":(queryCount>0?"bad":"good"),sub:"All time, operators in view"};
+  $("m_kpis").innerHTML=tilesHtml(managerTiles(rows,mt).concat([qTile]));
+  const note=$("m_metNote"); note.style.display="block";
+  if(mt){
+    note.style.color="";
+    note.textContent=`The machine tiles (Total Downtime to Efficiency) are summed across ${mt.ops} operator${mt.ops===1?"":"s"}: downtime is counted for each operator on the machines they ran.`;
+  }else{
+    note.style.color="var(--red)";
+    note.textContent="Downtime records could not be loaded, so the machine tiles are not shown. Click Run to try again.";
+  }
 }
 
 /* Incentive Output (management): shown only when an operator name or ID has been entered. */
-const INC_NOTE="Normal production only (B Grade, Cover Duty, Overtime, Extra Operators and Breakdown work is not counted). Total Mats counts the A grade mats, and Efficiency is Total Mats divided by Target.";
-function incentiveManagerTiles(rows){
-  const t=incentiveSummary(rows);
-  return [
-    {n:t.ops,l:"Active Operators"},
-    {n:fmt(t.a),l:"Total Mats",cls:"good",sub:`Dbl ${fmt(t.ad)} \u00B7 Sgl ${fmt(t.as)}`},
-    {n:fmt(t.tg),l:"Total Target"},
-    {n:t.eff.toFixed(1)+"%",l:"Overall Efficiency",cls:t.eff>=90?"good":t.eff>=75?"teal":"warn"}
-  ];
-}
-function incentivePersonalTiles(rows){
-  const t=incentiveSummary(rows);
-  return [
-    {n:fmt(t.a),l:"Total Mats",cls:"good",sub:`Dbl ${fmt(t.ad)} \u00B7 Sgl ${fmt(t.as)}`},
-    {n:fmt(t.tg),l:"Target"},
-    t.tg>0?{n:t.eff.toFixed(1)+"%",l:"Incentive Efficiency",cls:t.eff>=90?"good":t.eff>=75?"teal":"warn",sub:"Total Mats / Target"}
-          :{n:"--",l:"Incentive Efficiency",sub:"No target set"}
-  ];
-}
+const INC_NOTE="Normal production only (B Grade, Cover Duty, Overtime, Extra Operators and Breakdown work is not counted). Total Mats counts the A grade mats. The Target is the actual target (ATG: the target less the mats lost to machine downtime), and Efficiency is the A grade mats divided by the actual target. Percentages are shares of all mats made in Normal production.";
+const INC_NO_CTRL=" Downtime records could not be loaded, so the actual target and efficiency are not shown. Click Run to try again.";
 let INC_LIST=[], INC_SORT={k:"tot",dir:-1};
-function renderManagerIncentive(rows,q,from,to){
+function renderManagerIncentive(rows,q,from,to,ctrlRows){
   const note=$("m_incNote"), kp=$("m_incKpis"), card=$("m_incCard");
   INC_LIST=[]; kp.innerHTML=""; card.style.display="none";
   if(!q){note.textContent="Enter an operator name or ID in the Operator field and press Run to see the Incentive Output.";return;}
   const nr=rows.filter(isNormalWork);
   note.textContent=INC_NOTE+" "+dmy(from)+" to "+dmy(to)+".";
   if(!nr.length){note.textContent+=" No Normal production was recorded for this operator in this period.";return;}
-  kp.innerHTML=tilesHtml(incentiveManagerTiles(nr));
-  INC_LIST=incentiveByOperator(rows);
+  if(!ctrlRows)note.textContent+=INC_NO_CTRL;
+  kp.innerHTML=tilesHtml(incentiveTiles(incentiveSummary(nr,ctrlRows,MGR.excluded),true));
+  INC_LIST=incentiveByOperator(rows,ctrlRows,MGR.excluded);
   card.style.display="block";
   renderIncentiveTable();
 }
@@ -634,13 +682,13 @@ function sortInc(k){
   renderIncentiveTable();
 }
 function renderIncentiveTable(){
-  const cols=[["name","Operator"],["id","ID"],["days","Days"],["tot","Total Mats"],["tg","Target"],["eff","Efficiency"]];
+  const cols=[["name","Operator"],["id","ID"],["days","Days"],["tot","Total Mats"],["tg","Target (ATG)"],["eff","Efficiency"]];
   const k=INC_SORT.k, d=INC_SORT.dir;
   const list=INC_LIST.slice().sort((x,y)=>{const a=x[k],b=y[k];return (typeof a==="string"?a.localeCompare(b,undefined,{numeric:true}):(a-b))*d;});
   let h='<table class="dtable"><tr>'+cols.map(([key,lab])=>`<th class="sortable" onclick="sortInc('${key}')">${lab}${INC_SORT.k===key?(INC_SORT.dir>0?" \u25B2":" \u25BC"):""}</th>`).join("")+"</tr>";
   list.forEach(o=>{
     h+=`<tr><td class="left">${esc(o.name)}</td><td>${esc(o.id)}</td><td>${o.days}</td>`+
-       `<td>${fmt(o.tot)}</td><td>${fmt(o.tg)}</td><td>${o.tg>0?o.eff.toFixed(1)+"%":"--"}</td></tr>`;
+       `<td>${fmt(o.tot)}</td><td>${o.tg==null?"--":fmt(o.tg)}</td><td>${o.tg>0?o.eff.toFixed(1)+"%":"--"}</td></tr>`;
   });
   $("m_incTable").innerHTML=h+"</table>";
 }
@@ -664,32 +712,6 @@ function renderManagerAttendance(from,to,pool,attPool){
     {n:fmt(T.holiday),l:"Holidays / Off Days",cls:"teal"},
     {n:fmt(T.otDays),l:"Overtime Days",cls:"warn"},
     {n:fmt(T.coverDays),l:"Cover Duty Days",cls:"purple"}
-  ]);
-}
-
-/* Machine metrics: the personal formulae applied to each operator, then summed, so the totals
-   reconcile with what each operator sees on their own dashboard. */
-function renderManagerMetrics(rows,ctrlRows){
-  if(!ctrlRows){
-    $("m_metNote").textContent="";
-    $("m_metricsKpis").innerHTML="<p style='color:var(--red);font-size:13px;margin:0;'>Downtime records could not be loaded. Click Run to try again.</p>";
-    return;
-  }
-  const byOp={};
-  rows.forEach(r=>{const k=String(r.operator_id);(byOp[k]=byOp[k]||[]).push(r);});
-  let down=0,MLD=0,ATG=0,MLU=0,tot=0;
-  Object.values(byOp).forEach(rs=>{
-    const m=computeMetrics(rs,ctrlRows,MGR.excluded);
-    down+=m.downtime;MLD+=m.MLD;ATG+=m.ATG;MLU+=m.MLU;tot+=m.Tt;
-  });
-  const effA=ATG?tot/ATG*100:0;
-  $("m_metNote").textContent=`Summed across ${Object.keys(byOp).length} operator${Object.keys(byOp).length===1?"":"s"}: downtime is counted for each operator on the machines they ran.`;
-  $("m_metricsKpis").innerHTML=tilesHtml([
-    {n:fmt(down)+" min",l:"Total Downtime"},
-    {n:fmt(MLD),l:"MLD"},
-    {n:fmt(ATG),l:"ATG (Adj. Target)",cls:"teal"},
-    {n:fmt(MLU),l:"MLU",cls:MLU>=0?"warn":"good"},
-    {n:effA.toFixed(1)+"%",l:"Efficiency (Total ÷ ATG)",cls:effA>=90?"good":effA>=75?"teal":"warn"}
   ]);
 }
 
@@ -889,11 +911,10 @@ async function runPersonal(){
     $("p_dash").style.display="block";
 
     renderPeerRank(peers);
-    renderProdKpis(mine,queryCount);
-    renderPersonalIncentive(mine,from,to);
+    renderProdKpis(mine,queryCount,ctrlRows);
+    renderPersonalIncentive(mine,from,to,ctrlRows);
     // Attendance uses ALL shifts so choosing a shift cannot turn worked days into absences.
     renderAttendance(from,to,myRows,allRows);
-    renderMetrics(mine,ctrlRows);
     renderPersonalCharts(mine);
     try{showYesterday("p",await ydP);}catch(e){showYesterdayError("p",e);}
   }catch(e){status.className="status err";status.textContent="❌ "+e.message;console.error(e);}
@@ -924,29 +945,21 @@ function renderPeerRank(peers){
     ?`<div class="rank-badge">${medal} <span class="rank-num">${pos}</span> of ${ranked.length} operators &nbsp;·&nbsp; Efficiency (Total ÷ Target): <span style="color:var(--teal);">${myEff}%</span></div>`:"";
 }
 
-function personalTiles(rows){
+function personalTiles(rows,mt){
   const t=totals(rows);
-  const pA=t.tot?Math.round(t.a/t.tot*100):0, pB=t.tot?Math.round(t.b/t.tot*100):0;
-  return [
-    {n:fmt(t.tot),l:"Total Mats"},
-    {n:fmt(t.a),l:"A Grade",cls:"good",sub:`Dbl ${fmt(t.ad)} · Sgl ${fmt(t.as)}`},
-    {n:pA+"%",l:"%A (A/Total)",cls:"good"},
-    {n:fmt(t.b),l:"B Grade",cls:"warn"},
-    {n:pB+"%",l:"%B (B/Total)",cls:"warn"},
-    {n:fmt(t.c),l:"C Grade"},
-    {n:fmt(t.tg),l:"Target"},
-  ];
+  return gradeTiles(t).concat([{n:fmt(t.tg),l:"Target"}],mt?machineTiles(mt):[]);
 }
-function renderProdKpis(rows,queryCount){
-  const qTile={n:queryCount==null?"—":queryCount,l:"Total Queries",cls:queryCount==null?"":(queryCount>0?"bad":"good")};
-  $("p_prodKpis").innerHTML=tilesHtml(personalTiles(rows).concat([qTile]));
+function renderProdKpis(rows,queryCount,ctrlRows){
+  const mt=ctrlRows?machineTotals(rows,ctrlRows,PER.excluded):null;
+  const qTile={n:queryCount==null?"--":queryCount,l:"Total Queries",cls:queryCount==null?"":(queryCount>0?"bad":"good")};
+  $("p_prodKpis").innerHTML=tilesHtml(personalTiles(rows,mt).concat([qTile]));
 }
 
 /* Incentive Output (personal view): always shown, Normal production only. */
-function renderPersonalIncentive(rows,from,to){
+function renderPersonalIncentive(rows,from,to,ctrlRows){
   const nr=rows.filter(isNormalWork);
-  $("p_incNote").textContent=INC_NOTE+" "+dmy(from)+" to "+dmy(to)+"."+(nr.length?"":" No Normal production was recorded in this period.");
-  $("p_incKpis").innerHTML=tilesHtml(incentivePersonalTiles(nr));
+  $("p_incNote").textContent=INC_NOTE+" "+dmy(from)+" to "+dmy(to)+"."+(nr.length?"":" No Normal production was recorded in this period.")+(ctrlRows?"":INC_NO_CTRL);
+  $("p_incKpis").innerHTML=tilesHtml(incentiveTiles(incentiveSummary(nr,ctrlRows,PER.excluded),false));
 }
 
 function renderAttendance(from,to,myRows,allRows){
@@ -958,17 +971,6 @@ function renderAttendance(from,to,myRows,allRows){
     {n:a.holiday,l:"Holidays / Off Days",cls:"teal"},
     {n:a.otDays,l:"Overtime Days",cls:"warn"},
     {n:a.coverDays,l:"Cover Duty Days",cls:"purple"}
-  ]);
-}
-
-function renderMetrics(rows,ctrlRows){
-  const m=computeMetrics(rows,ctrlRows,PER.excluded);
-  $("p_metricsKpis").innerHTML=tilesHtml([
-    {n:Math.round(m.downtime)+" min",l:"Total Downtime"},
-    {n:fmt(m.MLD),l:"MLD"},
-    {n:fmt(m.ATG),l:"ATG (Adj. Target)",cls:"teal"},
-    {n:fmt(m.MLU),l:"MLU",cls:m.MLU>=0?"warn":"good"},
-    {n:m.efficiency.toFixed(1)+"%",l:"Efficiency (Total ÷ ATG)",cls:m.efficiency>=90?"good":m.efficiency>=75?"teal":"warn"}
   ]);
 }
 
