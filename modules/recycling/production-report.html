@@ -117,6 +117,7 @@
     /* Show both views stacked when printing */
     #viewShift{display:block !important;}
     #viewAsset{display:block !important;}
+    #viewOperator{display:block !important;}
   }
 </style>
 </head>
@@ -189,6 +190,7 @@
         <div class="tabs no-print">
           <div class="tab active" onclick="showView('shift',this)">By Shift</div>
           <div class="tab"        onclick="showView('asset',this)">By Asset</div>
+        <div class="tab"        onclick="showView('operator',this)">By Operator</div>
         </div>
 
         <!-- Print view labels -->
@@ -201,6 +203,11 @@
           Production by Asset
         </div>
         <div class="tbl-wrap" id="viewAsset" style="display:none;"></div>
+
+        <div class="print-only" style="font-weight:bold;color:#1F3864;margin:16px 0 4px;font-size:11pt;">
+          Production by Operator
+        </div>
+        <div class="tbl-wrap" id="viewOperator" style="display:none;"></div>
       </div>
 
     </div><!-- #reportArea -->
@@ -297,7 +304,7 @@ async function runReport(){
 
   try{
     let url=SUPABASE_URL+"/rest/v1/recycling_production"+
-      "?select=production_date,shift,asset_code,branch,kg_produced,operator_name"+
+      "?select=production_date,shift,asset_code,branch,kg_produced,operator_id,operator_name"+
       "&production_date=gte."+from+"&production_date=lte."+to+
       "&order=production_date.asc";
 
@@ -335,24 +342,42 @@ async function runReport(){
   }
 }
 
-// ── Populate operator dropdown from loaded records ─────────
-function populateOperatorFilter(rows){
-  const ops=[...new Set(rows.map(r=>r.operator_name).filter(Boolean))].sort();
-  const sel=document.getElementById("operatorFilter");
-  sel.innerHTML='<option value="">All Operators</option>'+
-    ops.map(o=>`<option value="${o}">${o}</option>`).join("");
-  sel.disabled = ops.length===0;
+// ── Operators ──────────────────────────────────────────────
+// An entry can have several operators; they are saved joined with " | " in operator_id and operator_name.
+// Older entries have a single operator, which reads the same way.
+function esc(t){ return String(t==null?"":t).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+function opsOf(r){
+  const names=String(r.operator_name||"").split("|").map(x=>x.trim()).filter(Boolean);
+  const ids  =String(r.operator_id  ||"").split("|").map(x=>x.trim()).filter(Boolean);
+  const out=[];
+  for(let i=0;i<Math.max(names.length,ids.length);i++){
+    const id=ids[i]||"", name=names[i]||id;
+    out.push({ key:id||name, id, name });
+  }
+  return out;
 }
 
-// ── Operator client-side filter ────────────────────────────
+// ── Populate operator dropdown from loaded records ─────────
+function populateOperatorFilter(rows){
+  const m=new Map();
+  rows.forEach(r=>opsOf(r).forEach(o=>{ if(!m.has(o.key)) m.set(o.key,o.name); }));
+  const list=[...m.entries()].sort((a,b)=>String(a[1]).localeCompare(String(b[1])));
+  const sel=document.getElementById("operatorFilter");
+  sel.innerHTML='<option value="">All Operators</option>'+
+    list.map(([k,n])=>`<option value="${esc(k)}">${esc(n)}</option>`).join("");
+  sel.disabled = list.length===0;
+}
+
+// ── Operator client-side filter (entries the operator took part in) ──
 function applyOperatorFilter(){
-  const op=document.getElementById("operatorFilter").value;
-  FILTERED=op?ROWS.filter(r=>r.operator_name===op):ROWS;
+  const sel=document.getElementById("operatorFilter");
+  const key=sel.value;
+  FILTERED=key?ROWS.filter(r=>opsOf(r).some(o=>o.key===key)):ROWS;
   renderAll(FILTERED);
   const status=document.getElementById("status");
   status.className="status ok";
-  status.textContent=op
-    ?"Showing "+FILTERED.length+" record(s) for "+op+"."
+  status.textContent=key
+    ?"Showing "+FILTERED.length+" record(s) for "+(sel.options[sel.selectedIndex]?sel.options[sel.selectedIndex].text:key)+"."
     :ROWS.length.toLocaleString()+" record(s) loaded.";
 }
 
@@ -361,6 +386,7 @@ function renderAll(rows){
   renderKPIs(rows);
   renderByShift(rows);
   renderByAsset(rows);
+  renderByOperator(rows);
   updatePrintHeader();
 }
 
@@ -492,12 +518,56 @@ function renderByAsset(rows){
   document.getElementById("viewAsset").innerHTML=html;
 }
 
+// ── By Operator view ───────────────────────────────────────
+// Each entry's KG and target are shared equally between the operators on it, so the table adds up to the
+// same total as the KPI cards. Entries saved without an operator are listed on their own line.
+function renderByOperator(rows){
+  const blank=()=>({entries:0,kg:0,tgt:0,sh:{Morning:0,Afternoon:0,Night:0},assets:new Set()});
+  const map={}, none=blank();
+  rows.forEach(r=>{
+    const kg=parseFloat(r.kg_produced||0), tgt=getTarget(r.asset_code);
+    const ops=opsOf(r);
+    const add=(d,share)=>{ d.entries++; d.kg+=kg*share; d.tgt+=tgt*share; if(d.sh[r.shift]!=null) d.sh[r.shift]+=kg*share; d.assets.add(r.asset_code); };
+    if(!ops.length){ add(none,1); return; }
+    ops.forEach(o=>{
+      if(!map[o.key]){ map[o.key]=blank(); map[o.key].id=o.id; map[o.key].name=o.name; }
+      add(map[o.key],1/ops.length);
+    });
+  });
+  const list=Object.values(map).sort((a,b)=>b.kg-a.kg);
+  const machineNames=set=>[...set].map(c=>{ const a=ASSETS.find(x=>x.asset_code===c); return a?a.asset_name:c; }).join(", ");
+
+  let html='<table><thead><tr>'+
+    '<th style="text-align:left;min-width:140px;">Operator</th><th>Employee ID</th><th>Entries</th><th>Machines</th>'+
+    '<th class="grp-m">Morning KG</th><th class="grp-a">Afternoon KG</th><th class="grp-n">Night KG</th>'+
+    '<th class="grp-t">Total KG</th><th class="grp-t">Target KG</th><th class="grp-t">Eff%</th>'+
+    '</tr></thead><tbody>';
+  let tKg=0,tTgt=0,tM=0,tA=0,tN=0;
+  const line=(label,idTxt,d,cls)=>{
+    tKg+=d.kg; tTgt+=d.tgt; tM+=d.sh.Morning; tA+=d.sh.Afternoon; tN+=d.sh.Night;
+    return `<tr><td class="asset-cell">${label}</td><td>${idTxt}</td><td>${d.entries}</td>`+
+      `<td title="${esc(machineNames(d.assets))}">${d.assets.size}</td>`+
+      `<td>${fmt(d.sh.Morning)}</td><td>${fmt(d.sh.Afternoon)}</td><td>${fmt(d.sh.Night)}</td>`+
+      `<td><b>${fmt(d.kg)}</b></td><td>${fmt(d.tgt)}</td><td>${effStr(d.kg,d.tgt)}</td></tr>`;
+  };
+  list.forEach(d=>{ html+=line(esc(d.name), esc(d.id||"—"), d); });
+  if(none.entries) html+=line('<span class="dash">No operator recorded</span>','<span class="dash">—</span>',none);
+  html+=`<tr class="total-row"><td class="asset-cell">TOTAL</td><td></td><td></td><td></td>`+
+    `<td>${fmt(tM)}</td><td>${fmt(tA)}</td><td>${fmt(tN)}</td><td>${fmt(tKg)}</td><td>${fmt(tTgt)}</td><td>${effStr(tKg,tTgt)}</td></tr>`;
+  html+='</tbody></table>'+
+    '<div style="font-size:11px;color:var(--muted);margin-top:6px;text-align:left;">'+
+    'When a machine had more than one operator, its KG and target are shared equally between them. '+
+    'Entries = machine shifts the operator took part in. Hover over Machines to see which.</div>';
+  document.getElementById("viewOperator").innerHTML=list.length||none.entries?html:"<p style='color:var(--muted);'>No data.</p>";
+}
+
 // ── Tab switching (screen only) ────────────────────────────
 function showView(view,tabEl){
   document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));
   tabEl.classList.add("active");
   document.getElementById("viewShift").style.display=view==="shift"?"block":"none";
   document.getElementById("viewAsset").style.display=view==="asset"?"block":"none";
+  document.getElementById("viewOperator").style.display=view==="operator"?"block":"none";
 }
 
 init();

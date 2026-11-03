@@ -40,6 +40,16 @@
   .op-lookup-note.ok  {color:var(--green);}
   .op-lookup-note.err {color:var(--red);}
   .op-lookup-note.wait{color:var(--warn);}
+  /* several operators per machine */
+  .op-add{display:flex;gap:8px;align-items:stretch;}
+  .op-add input{margin-bottom:0;flex:1;min-width:0;}
+  .op-add button{width:auto;padding:0 18px;border:none;border-radius:8px;font-weight:bold;font-size:13px;cursor:pointer;background:var(--blue);color:#fff;}
+  .op-add button:hover{background:var(--blue-dark);}
+  .op-add + .op-lookup-note{margin-top:6px;margin-bottom:8px;}
+  .op-chips{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 14px;}
+  .op-chip{display:inline-flex;align-items:center;gap:6px;background:var(--bg);border:1px solid var(--line);border-radius:999px;padding:5px 6px 5px 12px;font-size:12.5px;font-weight:600;}
+  .op-chip button{border:none;background:var(--line);color:var(--text);width:20px;height:20px;border-radius:50%;cursor:pointer;font-size:11px;line-height:1;padding:0;}
+  .op-count{font-size:11px;color:var(--muted);margin:-6px 0 14px;}
   button.main{
     width:100%;padding:12px;border:none;border-radius:8px;
     font-weight:bold;font-size:14px;cursor:pointer;
@@ -93,12 +103,15 @@
       <label>KG Produced</label>
       <input type="number" id="kgProduced" min="0" step="0.1" placeholder="0.0">
 
-      <!-- Operator: dropdown of all Recycling employees -->
-      <label>Operator</label>
-      <select id="operatorSel">
-        <option value="">Loading operators...</option>
-      </select>
+      <!-- Operators: one or more Recycling employees per machine -->
+      <label>Operators <span style="font-weight:400;color:var(--muted);">(add everyone who ran this machine)</span></label>
+      <div class="op-add">
+        <input type="text" id="opInput" list="opList" placeholder="Type a name or employee ID, then press Add" autocomplete="off">
+        <datalist id="opList"></datalist>
+        <button type="button" onclick="addOperator()">Add</button>
+      </div>
       <div class="op-lookup-note" id="opNote"></div>
+      <div class="op-chips" id="opChips"></div>
 
       <button class="main" id="submitBtn" onclick="submitEntry()">
         Save Production Entry
@@ -111,6 +124,11 @@
 <script>
 let ME = null, MY_SECTIONS = [], ASSETS = [];
 let OP_MAP = {}; // kept for compatibility
+const OP_SEP = " | ";   // several operators are stored in the same two columns, separated by " | "
+const MAX_OPERATORS = 10;
+let OPERATORS = [];     // every Recycling employee: { employee_id, full_name }
+let CHOSEN = [];        // operators added to the entry being filled in
+function esc(t){ return String(t==null?"":t).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 
 function authHeaders(){
   return {
@@ -183,12 +201,15 @@ function onAssetChange(){
     : "";
 }
 
-// ── Load all Recycling employees into dropdown ────────────
+// ── Load all Recycling employees (used by the operator search box) ──
 // Uses sb (Supabase client from auth.js) so the authenticated
 // session token is sent — required for RLS to allow the read.
-async function loadOperators(){
-  const sel  = document.getElementById("operatorSel");
+function opLabel(o){ return o.full_name + " (" + o.employee_id + ")"; }
+function setOpNote(text, cls){
   const note = document.getElementById("opNote");
+  note.textContent = text || ""; note.className = "op-lookup-note" + (cls ? " " + cls : "");
+}
+async function loadOperators(){
   try{
     // OR filter — any employee where department OR unit contains RECYCLING
     const { data: rows, error } = await sb
@@ -199,24 +220,61 @@ async function loadOperators(){
 
     if(error) throw new Error(error.message);
 
-    if(!rows || !rows.length){
-      sel.innerHTML    = "<option value=''>— No Recycling staff found —</option>";
-      note.textContent = "No employees found with department = RECYCLING.";
-      note.className   = "op-lookup-note err";
+    OPERATORS = rows || [];
+    if(!OPERATORS.length){
+      setOpNote("No employees found with department = RECYCLING.", "err");
       return;
     }
-    sel.innerHTML = "<option value=''>— Select Operator —</option>" +
-      rows.map(r =>
-        `<option value="${r.employee_id}" data-name="${r.full_name}">${r.full_name} (${r.employee_id})</option>`
-      ).join("");
-    note.textContent = rows.length + " Recycling staff loaded.";
-    note.className   = "op-lookup-note ok";
+    document.getElementById("opList").innerHTML =
+      OPERATORS.map(o => `<option value="${esc(opLabel(o))}"></option>`).join("");
+    setOpNote(OPERATORS.length + " Recycling staff loaded.", "ok");
   }catch(e){
-    sel.innerHTML    = "<option value=''>— Error loading staff —</option>";
-    note.textContent = "⚠️ Could not load staff: " + e.message;
-    note.className   = "op-lookup-note err";
+    setOpNote("⚠️ Could not load staff: " + e.message, "err");
   }
 }
+
+// ── Operators on this entry ────────────────────────────────
+function renderChips(){
+  const box = document.getElementById("opChips");
+  box.innerHTML = CHOSEN.map(o =>
+    `<span class="op-chip">${esc(opLabel(o))}<button type="button" data-rm="${esc(o.employee_id)}" title="Remove">✕</button></span>`
+  ).join("") + (CHOSEN.length ? `<div class="op-count" style="width:100%;margin:2px 0 0;">${CHOSEN.length} operator${CHOSEN.length===1?"":"s"} on this machine</div>` : "");
+}
+function addOperator(){
+  const inp = document.getElementById("opInput");
+  const v = inp.value.trim();
+  if(!v) return;
+  const low = v.toLowerCase();
+  let match = OPERATORS.find(o => opLabel(o).toLowerCase() === low)
+           || OPERATORS.find(o => String(o.employee_id).toLowerCase() === low);
+  if(!match){
+    const part = OPERATORS.filter(o => opLabel(o).toLowerCase().includes(low));
+    if(part.length === 1) match = part[0];
+    else { setOpNote(part.length ? part.length + " staff match \"" + v + "\". Pick one from the list." : "No Recycling staff match \"" + v + "\".", "err"); return; }
+  }
+  if(CHOSEN.some(c => c.employee_id === match.employee_id)){ setOpNote(match.full_name + " is already added.", "wait"); inp.value = ""; return; }
+  if(CHOSEN.length >= MAX_OPERATORS){ setOpNote("At most " + MAX_OPERATORS + " operators per machine.", "err"); return; }
+  CHOSEN.push(match);
+  inp.value = "";
+  setOpNote("Added " + match.full_name + ".", "ok");
+  renderChips();
+  inp.focus();
+}
+function removeOperator(id){
+  CHOSEN = CHOSEN.filter(c => c.employee_id !== id);
+  setOpNote("", "");
+  renderChips();
+}
+document.getElementById("opChips").addEventListener("click", e => {
+  const b = e.target.closest && e.target.closest("[data-rm]");
+  if(b) removeOperator(b.getAttribute("data-rm"));
+});
+document.getElementById("opInput").addEventListener("keydown", e => { if(e.key === "Enter"){ e.preventDefault(); addOperator(); } });
+// choosing a name from the list adds it straight away
+document.getElementById("opInput").addEventListener("input", e => {
+  const v = e.target.value.trim().toLowerCase();
+  if(v && OPERATORS.some(o => opLabel(o).toLowerCase() === v)) addOperator();
+});
 
 // ── Submit ─────────────────────────────────────────────────
 async function submitEntry(){
@@ -227,17 +285,17 @@ async function submitEntry(){
   const assetSel  = document.getElementById("asset");
   const assetCode = assetSel.value;
   const kg        = parseFloat(document.getElementById("kgProduced").value);
-  const opSel      = document.getElementById("operatorSel");
-  const operatorId   = opSel.value || null;
-  const operatorName = opSel.value
-    ? (opSel.options[opSel.selectedIndex].dataset.name || null)
-    : null;
+  const typedOp    = document.getElementById("opInput").value.trim();
+  // several operators are saved in the same two columns, joined with " | " (an entry with none saves null, as before)
+  const operatorId   = CHOSEN.length ? CHOSEN.map(o => o.employee_id).join(OP_SEP) : null;
+  const operatorName = CHOSEN.length ? CHOSEN.map(o => o.full_name).join(OP_SEP) : null;
 
   if(!date)                { showStatus("err","Select a production date."); return; }
   if(!shift)               { showStatus("err","Select a shift."); return; }
   if(!branch)              { showStatus("err","Select a branch."); return; }
   if(!assetCode)           { showStatus("err","Select a machine."); return; }
   if(isNaN(kg) || kg < 0) { showStatus("err","Enter a valid KG produced value."); return; }
+  if(typedOp)              { showStatus("err","You typed an operator but did not add them. Press Add, or clear the box."); return; }
 
   btn.disabled = true;
   showStatus("info","Saving...");
@@ -270,13 +328,14 @@ async function submitEntry(){
     }
 
     const machineName = assetSel.options[assetSel.selectedIndex].text;
-    showStatus("ok","✅ Saved — " + machineName + " · " + shift + " · " + date);
+    showStatus("ok","✅ Saved — " + machineName + " · " + shift + " · " + date +
+      (CHOSEN.length ? " · " + CHOSEN.length + " operator" + (CHOSEN.length===1?"":"s") : ""));
 
     // Reset form — keep date, shift, branch for fast back-to-back entry
     document.getElementById("asset").value        = "";
     document.getElementById("targetKg").value     = "";
     document.getElementById("kgProduced").value   = "";
-    document.getElementById("operatorSel").value = "";
+    CHOSEN = []; renderChips(); setOpNote("", "");
 
   }catch(e){
     showStatus("err","❌ " + e.message);
