@@ -777,6 +777,17 @@ function buildSectionDisplayNames(){
   ALL_SECTIONS.forEach((s, i)=>{ SECTION_DISPLAY_NAME[s.id] = "Category " + (i+1); });
 }
 let DASHBOARD_PATHS = new Set();   // module_paths that are dashboards (from the dashboards registry)
+let DASHBOARD_NAMES = {};          // module_path -> the dashboard's own name from the registry (e.g. "Weaving Dashboard")
+// Inside a module a dashboard page is simply called "Dashboard". In lists that gather every
+// dashboard together, that would leave ten rows all saying "Dashboard", so they show the
+// registry name, or the module's name with "Dashboard" after it.
+function dashLabel(p, moduleName){
+  const reg = DASHBOARD_NAMES[p.module_path];
+  if(reg) return reg;
+  const n = String(p.name || "").trim();
+  if(/^dashboard$/i.test(n) && moduleName) return moduleName + " Dashboard";
+  return n;
+}
 
 async function callEdgeFunction(payload){
   const res = await fetch(EDGE_FUNCTION_URL, {
@@ -862,13 +873,14 @@ async function init(){
       sb.auth.getSession(),
       sb.from("app_sections").select("id,name").order("name"),
       loadManagerAllowedPages(),   // which pages this manager is allowed to grant onward
-      sb.from("dashboards").select("module_path").then(r=>r, ()=>({ data: null }))   // which module_paths are dashboards
+      sb.from("dashboards").select("module_path, display_name").then(r=>r, ()=>({ data: null }))   // which module_paths are dashboards, and their names
     ]);
     if(sessRes.error) throw new Error("Could not get session: " + sessRes.error.message);
     ACCESS_TOKEN = sessRes.data.session.access_token;
     ALL_SECTIONS = (secRes && secRes.data) || [];
     buildSectionDisplayNames();
     DASHBOARD_PATHS = new Set(((dashRes && dashRes.data) || []).map(d=>d.module_path));
+    DASHBOARD_NAMES = {}; ((dashRes && dashRes.data) || []).forEach(d => { if(d.display_name) DASHBOARD_NAMES[d.module_path] = String(d.display_name).trim(); });
 
     status.style.color = "#1d8a4e";
     status.textContent = "Connected.";
@@ -1284,7 +1296,7 @@ async function loadBranchModules(){
     // all registered pages
     const { data: pages, error: pErr } = await sb.from("pages").select("id, name, module_path, modules(name)").order("name");
     if(pErr) throw pErr;
-    BM_ALL_PAGES = (pages||[]).map(p=>({ id:p.id, name:p.name, module_path:p.module_path, dept: p.modules? p.modules.name : "(Unassigned)" }));
+    BM_ALL_PAGES = (pages||[]).map(p=>({ id:p.id, name: DASHBOARD_PATHS.has(p.module_path) ? dashLabel(p, p.modules ? p.modules.name : "") : p.name, module_path:p.module_path, dept: p.modules? p.modules.name : "(Unassigned)" }));
 
     // currently mapped for this branch
     const { data: mapped } = await sb.from("page_sections").select("page_id").eq("section_id", sectionId);
@@ -1706,7 +1718,7 @@ async function renderAllPagesPicker(containerId, checkedPageIds){
   const dashItems = [];
   const byDept = {};
   data.forEach(p=>{
-    if(DASHBOARD_PATHS.has(p.module_path)){ dashItems.push(p); return; }
+    if(DASHBOARD_PATHS.has(p.module_path)){ dashItems.push(Object.assign({}, p, { name: dashLabel(p, p.modules ? p.modules.name : "") })); return; }
     const deptName = p.modules ? p.modules.name : "(Unassigned)";
     if(!byDept[deptName]) byDept[deptName] = [];
     byDept[deptName].push(p);
@@ -4686,7 +4698,7 @@ async function uaLoadPages(){
 function uaStructure(){
   const dash = [], mods = {};
   UA.pages.forEach(p => {
-    if(DASHBOARD_PATHS.has(p.module_path)){ dash.push(p); return; }
+    if(DASHBOARD_PATHS.has(p.module_path)){ dash.push(Object.assign({}, p, { name: dashLabel(p, p.modules ? p.modules.name : "") })); return; }
     const m = p.modules ? p.modules.name : "Other pages";
     (mods[m] = mods[m] || { name: m, groupId: p.modules ? p.modules.nav_group_id : null, pages: [] }).pages.push(p);
   });
