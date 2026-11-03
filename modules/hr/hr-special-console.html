@@ -2157,11 +2157,16 @@ async function pwReset(){
       const err = new Error(data.error || ("HTTP " + res.status)); err.httpStatus = res.status; throw err;
     }
 
-    let forced = true;
-    try{
-      const { error: rpcErr } = await sb.rpc("kwp_mark_password_reset", { target_profile_id: profile.id });
-      if(rpcErr){ forced = false; console.warn("Could not set must-change-password:", rpcErr.message); }
-    }catch(rpcE){ forced = false; console.warn("must-change-password RPC failed:", rpcE.message || rpcE); }
+    // The server function sets the must-change-password flag itself for HR Console resets. If it did not
+    // report that, fall back to the same RPC the admin area uses.
+    let forced = !!(data && data.must_change_password_set);
+    if(!forced){
+      try{
+        const { error: rpcErr } = await sb.rpc("kwp_mark_password_reset", { target_profile_id: profile.id });
+        if(rpcErr){ console.warn("Could not set must-change-password:", rpcErr.message); }
+        else forced = true;
+      }catch(rpcE){ console.warn("must-change-password RPC failed:", rpcE.message || rpcE); }
+    }
 
     // The password itself is never written to the log.
     await logActivity("hr_console_password_reset", ME.username + " reset the password for \"" + emp.full_name + "\" (" + emp.employee_id + ")" + (forced ? "" : " - could not force a change at next login"));
