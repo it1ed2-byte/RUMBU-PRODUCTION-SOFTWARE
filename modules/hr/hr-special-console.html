@@ -455,7 +455,7 @@
     <div class="panel" id="panel-pwreset">
       <div class="card-panel">
         <h3 style="margin-top:0;">Password Reset</h3>
-        <p style="font-size:12.5px;color:var(--hr-muted);margin:0 0 12px;">Enter a staff member's Employee ID to see their details and reset their login password. A one-time temporary password is generated for you to give to the staff member, and they must change it the next time they log in.</p>
+        <p style="font-size:12.5px;color:var(--hr-muted);margin:0 0 12px;">Enter a staff member's Employee ID to see their details and reset their login password. Their password is set to the standard temporary password (12345678), and they must change it the next time they log in.</p>
         <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
           <div style="flex:1;min-width:220px;max-width:360px;"><label>Employee ID *</label><input id="pw_emp_id" placeholder="e.g. H275" autocomplete="off"></div>
           <button onclick="pwLookup()">Look up</button>
@@ -2057,19 +2057,12 @@ function initHrTheme(){
 // Same mechanism as Reset Password in the admin area (User Access): the swift-handler edge function sets the new
 // password, and the kwp_mark_password_reset RPC makes the account change it at next login. Both are enforced on
 // the server, so this tab can only do what the database and the edge function allow for the signed-in user.
-const PW_BLOCKED_ROLES = ["super_admin","admin","hr_console"];   // privileged accounts are never reset from here
+const PW_BLOCKED_ROLES = ["super_admin","hr_console"];   // these two account types are never reset from here; every other account can be
 let PW_TARGET = null;   // { emp, profile, profileErr } for the person currently shown
 let PW_BUSY = false;
 
-// 10 characters from an unambiguous set (no 0/O, 1/l/I), with at least one capital, one lower-case and one digit.
-function pwGenerateTemp(){
-  const U="ABCDEFGHJKLMNPQRSTUVWXYZ", L="abcdefghijkmnopqrstuvwxyz", D="23456789", ALL=U+L+D;
-  const rnd = n => { const a = new Uint32Array(1); crypto.getRandomValues(a); return a[0] % n; };
-  const chars = [U[rnd(U.length)], L[rnd(L.length)], D[rnd(D.length)]];
-  while(chars.length < 10) chars.push(ALL[rnd(ALL.length)]);
-  for(let i = chars.length - 1; i > 0; i--){ const j = rnd(i + 1); [chars[i], chars[j]] = [chars[j], chars[i]]; }
-  return chars.join("");
-}
+// The standard temporary password used across the app for new and reset logins. The account must change it at next login.
+const PW_TEMP = "12345678";
 
 // Returns null when a reset is allowed, otherwise the reason it is not.
 function pwEligibility(emp, profile, profileErr){
@@ -2077,7 +2070,7 @@ function pwEligibility(emp, profile, profileErr){
   if(profileErr || !profile) return "The login account could not be checked, so a reset is not allowed from here." + (profileErr ? " (" + profileErr.message + ")" : "");
   if(emp.deactivated_by) return "This employee is deactivated. Reactivate them first if they should have access.";
   if(profile.id === ME.id) return "This is your own account. You cannot reset your own password from here.";
-  if(PW_BLOCKED_ROLES.indexOf(profile.role) !== -1) return "Admin, HR Console and Super Admin accounts cannot be reset from this tab. Please contact the Super Admin.";
+  if(PW_BLOCKED_ROLES.indexOf(profile.role) !== -1) return "HR Console and Super Admin accounts cannot be reset from this tab. Please contact the Super Admin.";
   return null;
 }
 
@@ -2142,14 +2135,14 @@ async function pwReset(){
   const reason = pwEligibility(emp, profile, null);
   if(reason){ alert(reason); return; }
   if(!confirm("Reset the password for " + emp.full_name + " (" + emp.employee_id + ")?\n\n" +
-    "A new temporary password will be generated. Their current password will stop working straight away, " +
-    "and they must change the temporary one at their next login.")) return;
+    "Their password will be set to the temporary password " + PW_TEMP + ". Their current password will stop working straight away, " +
+    "and they must change it at their next login.")) return;
 
   const status = document.getElementById("pwStatus");
   const btn = document.getElementById("pwResetBtn");
   PW_BUSY = true; if(btn) btn.disabled = true;
   status.className = "status"; status.textContent = "Resetting password...";
-  const temp = pwGenerateTemp();
+  const temp = PW_TEMP;
   try{
     const sess = await sb.auth.getSession();
     const token = sess && sess.data && sess.data.session ? sess.data.session.access_token : null;
@@ -2178,12 +2171,12 @@ async function pwReset(){
     document.getElementById("pwAction").innerHTML = "";
     document.getElementById("pwTemp").innerHTML =
       `<div style="border:1px solid var(--line);border-radius:10px;padding:14px;max-width:560px;">
-        <label style="margin-top:0;">Temporary password (shown once)</label>
+        <label style="margin-top:0;">Temporary password</label>
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:6px 0 10px;">
           <code id="pwTempVal" style="font-size:20px;font-weight:800;letter-spacing:1.5px;">${mvEsc(temp)}</code>
           <button class="btn-ghost" onclick="pwCopy()">Copy</button>
         </div>
-        <div style="font-size:12.5px;color:var(--hr-muted);">Give this to ${mvEsc(emp.full_name)} in person or by phone. It will not be shown again, and they must change it at their next login.</div>
+        <div style="font-size:12.5px;color:var(--hr-muted);">Tell ${mvEsc(emp.full_name)} to log in with this password. They must change it at their next login.</div>
         ${forced ? "" : `<div class="status err" style="display:block;margin-top:10px;">The password was reset, but the account could not be flagged to change it at next login. Please tell IT so they can set that flag.</div>`}
       </div>`;
   }catch(e){
