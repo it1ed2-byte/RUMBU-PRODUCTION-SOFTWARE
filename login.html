@@ -84,6 +84,12 @@
   .status{margin-top:14px;text-align:center;font-size:13px;font-weight:700;min-height:16px;}
   .status.err{color:var(--red);}
   .status.ok{color:#1d8a4e;}
+  [hidden]{display:none!important;}
+  .forgot-link{display:block;width:auto;margin:4px auto 0;padding:4px 8px;min-height:0;background:none;border:0;box-shadow:none;
+    color:#1F3864;font:700 13px Inter,'Segoe UI',Arial,sans-serif;text-decoration:underline;text-underline-offset:3px;cursor:pointer;letter-spacing:0;}
+  .forgot-link:hover{color:#2E75B6;background:none;}
+  .forgot-intro{font-size:13px;line-height:1.55;color:#5b6b82;margin:0 0 6px;}
+  .status.ok{display:block;color:#166534;background:#ecfdf3;border:1px solid #a7e3bf;border-radius:9px;padding:10px 12px;text-align:left;font-weight:600;line-height:1.5;}
   .pw-wrap{position:relative;}
   .pw-wrap input{padding-right:62px;}
   .pw-toggle{position:absolute;right:5px;top:50%;transform:translateY(-50%);width:auto;margin:0;padding:6px 9px;background:none;color:var(--blue);border:none;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;}
@@ -171,8 +177,22 @@
         <button type="button" class="pw-toggle" onclick="togglePasswordField('password', this)">Show</button>
       </div>
 
+      <div id="signInBox">
       <button id="loginBtn" onclick="login()">LOG IN</button>
       <div class="status" id="status" role="alert" aria-live="assertive"></div>
+      <button type="button" class="forgot-link" onclick="openForgot(true)">Forgot password?</button>
+      </div>
+
+      <div id="forgotBox" hidden>
+        <p class="forgot-intro">Ask for your password to be reset. Your HR office or IT will confirm it is you (by phone or in person), then reset it to the temporary password. You then choose a new one when you sign in.</p>
+        <label for="fp_login">Employee ID or username</label>
+        <input type="text" id="fp_login" autocomplete="username" placeholder="e.g. RB311" maxlength="120" onkeydown="if(event.key==='Enter'){sendForgot();}">
+        <label for="fp_contact">Phone number or extension (optional)</label>
+        <input type="text" id="fp_contact" autocomplete="tel" placeholder="Where HR can reach you" maxlength="60" onkeydown="if(event.key==='Enter'){sendForgot();}">
+        <button id="fpBtn" onclick="sendForgot()">SEND REQUEST</button>
+        <div class="status" id="fpStatus" role="alert" aria-live="assertive"></div>
+        <button type="button" class="forgot-link" onclick="openForgot(false)">Back to sign in</button>
+      </div>
       <div class="card-foot">Trouble signing in? Contact IT or your HR office.</div>
     </div>
   </main>
@@ -215,6 +235,45 @@ function togglePasswordField(inputId, btn){
   input.type = showing ? "password" : "text";
   btn.textContent = showing ? "Show" : "Hide";
 }
+
+// "Forgot password?": sends a reset request to HR / IT. The answer never says whether the login exists.
+function openForgot(show){
+  const h = document.querySelector(".card h1"); if(h) h.textContent = show ? "Reset your password" : "Sign in to RumbuApp";
+  document.getElementById("signInBox").hidden = show;
+  document.getElementById("forgotBox").hidden = !show;
+  document.querySelectorAll('label[for="password"], .pw-wrap').forEach(el => { el.hidden = show; });
+  document.querySelectorAll('label[for="username"], #username').forEach(el => { el.hidden = show; });
+  const st = document.getElementById("fpStatus"); st.className = "status"; st.textContent = "";
+  if(show){
+    const u = document.getElementById("username").value.trim();
+    const f = document.getElementById("fp_login"); if(u && !f.value) f.value = u;
+    setTimeout(() => f.focus(), 30);
+  }else{
+    setTimeout(() => document.getElementById("username").focus(), 30);
+  }
+}
+window.openForgot = openForgot;
+async function sendForgot(){
+  const login = document.getElementById("fp_login").value.trim();
+  const contact = document.getElementById("fp_contact").value.trim();
+  const st = document.getElementById("fpStatus"), btn = document.getElementById("fpBtn");
+  st.className = "status";
+  if(login.length < 2){ st.classList.add("err"); st.textContent = "Enter your Employee ID or username."; return; }
+  btn.disabled = true; btn.textContent = "SENDING…";
+  try{
+    const { error } = await sb.rpc("request_password_reset", { p_login: login, p_contact: contact || null });
+    if(error) throw error;
+    st.classList.add("ok");
+    st.textContent = "Request sent. If " + login + " has a RumbuApp login, your HR office or IT will contact you, then reset your password to the temporary password. Sign in with it and choose a new one.";
+    document.getElementById("fp_contact").value = "";
+  }catch(e){
+    st.classList.add("err");
+    st.textContent = (navigator.onLine === false) ? "You are offline. Connect to the internet and try again." : "The request could not be sent just now. Please try again, or contact IT or your HR office.";
+  }finally{
+    btn.disabled = false; btn.textContent = "SEND REQUEST";
+  }
+}
+window.sendForgot = sendForgot;
 
 async function login(){
   const username = document.getElementById("username").value.trim();

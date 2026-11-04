@@ -24,6 +24,7 @@
 </script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="../../auth.js"></script>
+<script src="../../password-requests.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
@@ -116,6 +117,10 @@
   .act-deactivate{background:#fee2e2;color:#991b1b;}
   .act-move{background:#ccfbf1;color:#0f766e;}
   .act-activate{background:#dcfce7;color:#166534;}
+  .hc-req-count{margin-left:auto;min-width:20px;height:20px;padding:0 6px;border-radius:10px;background:#d4a017;color:#1F3864;font-size:11px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;}
+  .hc-req-count[hidden]{display:none;}
+  #hcNav .item[hidden]{display:none;}
+  body.hc-folded .hc-req-count{position:absolute;top:4px;right:6px;min-width:16px;height:16px;font-size:9.5px;padding:0 4px;}
   .badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:10.5px;font-weight:700;}
   .b-active{background:#dcfce7;color:#166534;}
   .b-inactive{background:#fee2e2;color:#991b1b;}
@@ -360,6 +365,7 @@
       <button class="item" data-tab="salary" onclick="hcGo('salary')" title="Bulk Salary Update"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="2.6"/><path d="M6 9.5v5M18 9.5v5"/></svg><span class="lbl">Bulk Salary Update</span></button>
       <div class="sec"><span>Logins</span></div>
       <button class="item" data-tab="pwreset" onclick="hcGo('pwreset')" title="Password Reset"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3 21 2M17 6l3 3M15 8l2 2"/></svg><span class="lbl">Password Reset</span></button>
+      <button class="item" data-tab="pwrequests" id="hcNavPwReq" hidden onclick="hcGo('pwrequests')" title="Password Requests"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H8l-4 4Z"/><path d="M9.5 9.2a2.5 2.5 0 1 1 3.4 2.3c-.6.3-.9.7-.9 1.3M12 14.6v.1"/></svg><span class="lbl">Password Requests</span><span class="hc-req-count" id="hcPwReqCount" hidden></span></button>
       <div class="sec"><span>Organisation</span></div>
       <button class="item" data-tab="refdata" data-sec="rdBranch" onclick="hcGo('refdata','rdBranch')" title="Branches"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21V10l5 3V10l5 3V6l8 4v11H3Z"/></svg><span class="lbl">Branches</span></button>
       <button class="item" data-tab="refdata" data-sec="rdDept" onclick="hcGo('refdata','rdDept')" title="Departments"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg><span class="lbl">Departments</span></button>
@@ -601,6 +607,11 @@
     </div>
 
     <!-- PASSWORD RESET -->
+    <div class="panel" id="panel-pwrequests">
+      <div class="hc-head"><div class="grow"><h2>Password Requests</h2><p>Staff who pressed “Forgot password?” on the login page.</p></div></div>
+      <div class="card-panel"><div id="hcPwReqBox"></div></div>
+    </div>
+
     <div class="panel" id="panel-pwreset">
       <div class="hc-head"><div class="grow"><h2>Password Reset</h2><p>Reset a staff member’s login to the temporary password.</p></div></div>
       <div class="card-panel">
@@ -720,7 +731,7 @@ const BULK_FIELDS = ["employee_id","full_name","department","date_of_joining","b
 
 // ---- Menu and screens ------------------------------------------------------------
 const HC_TITLES = { dashboard: "Dashboard", directory: "Employee Directory", add: "Add Employee", bulk: "Bulk Upload Staff", salary: "Bulk Salary Update",
-  pwreset: "Password Reset", refdata: "Branches, Departments and Units", log: "Activity Log", rdBranch: "Branches", rdDept: "Departments", rdUnit: "Units" };
+  pwreset: "Password Reset", pwrequests: "Password Requests", refdata: "Branches, Departments and Units", log: "Activity Log", rdBranch: "Branches", rdDept: "Departments", rdUnit: "Units" };
 function hcGo(tab, section){
   document.querySelectorAll(".panel").forEach(p => p.classList.toggle("active", p.id === "panel-" + tab));
   document.querySelectorAll("#hcNav .item").forEach(b => {
@@ -736,11 +747,31 @@ function hcGo(tab, section){
       const tb = document.getElementById(btn); if(tb) tb.textContent = open ? "▲ Collapse" : "▼ Expand";
     });
   }
+  if(tab === "pwrequests") hcMountPwRequests();
   document.getElementById("hcCrumb").textContent = HC_TITLES[section || tab] || "";
   document.title = (HC_TITLES[section || tab] || "HR Console") + " · HR Console";
   try{ sessionStorage.setItem("hc_tab", JSON.stringify([tab, section || ""])); }catch(e){}
   hcNavMobile(false);
   window.scrollTo(0, 0);
+}
+// Password Requests: HR Console accounts handle ordinary staff, the Head of IT anyone.
+let hcPwReq = null;
+function hcPwReqAllowed(){ return !!ME && (ME.role === "hr_console" || !!ME.isHeadOfIt); }
+function hcPwReqBadge(n){
+  const b = document.getElementById("hcPwReqCount"); if(!b) return;
+  b.hidden = !n; b.textContent = n > 99 ? "99+" : String(n || "");
+}
+function hcMountPwRequests(){
+  if(!hcPwReqAllowed() || !window.RumbuResetRequests) return;
+  if(hcPwReq){ hcPwReq.reload(); return; }
+  hcPwReq = RumbuResetRequests.mount(document.getElementById("hcPwReqBox"), { me: ME, onCount: hcPwReqBadge });
+}
+async function hcPwReqCountOnly(){
+  if(!hcPwReqAllowed()) return;
+  try{
+    const { count } = await sb.from("password_reset_requests").select("id", { count: "exact", head: true }).eq("status", "pending");
+    hcPwReqBadge(count || 0);
+  }catch(e){}
 }
 // Older calls (setTab('directory', button)) still work.
 function setTab(tab){ hcGo(tab); }
@@ -813,6 +844,7 @@ async function init(){
     // else who somehow lands here (a stale link, a bookmark) is sent
     // back to the normal app shell rather than seeing HR data.
     CAN_EDIT_STRUCTURE = (ME.role === "super_admin") || !!ME.isHeadOfIt;
+    if(hcPwReqAllowed()){ const n = document.getElementById("hcNavPwReq"); if(n) n.hidden = false; hcPwReqCountOnly(); }
     if(ME.role !== "hr_console" && !CAN_EDIT_STRUCTURE){
       window.location.href = "../../index.html";
       return;
