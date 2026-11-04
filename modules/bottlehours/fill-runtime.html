@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Fill Runtime</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+  *{ box-sizing:border-box; }
+  body{ font-family:var(--sans); background:var(--bg); margin:0; padding:16px; }
+  .card{ background:var(--card); width:100%; max-width:1100px; margin:0 auto 16px; padding:20px; border-radius:12px; box-shadow:0 4px 12px rgba(0,0,0,.11); }
+  h2{ text-align:center; color:var(--heading); border-bottom:2px solid var(--heading); padding-bottom:10px; margin:0 0 12px; font-size:18px; }
+  h3{ color:var(--heading); font-size:14px; margin:0 0 12px; }
+  #connStatus{ font-size:12px; text-align:center; color:var(--muted); margin-bottom:6px; }
+  label{ font-size:12px; font-weight:600; color:var(--muted); margin-bottom:4px; display:block; }
+  input,select{ width:100%; padding:9px 12px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:13px; outline:none; }
+  input:focus,select:focus{ border-color:var(--accent); }
+  button{ padding:9px 16px; border:none; border-radius:8px; font-weight:700; font-size:13px; cursor:pointer; background:var(--heading); color:#fff; }
+  button:disabled{ opacity:.5; cursor:not-allowed; }
+  .btn-sm{ padding:5px 10px; font-size:12px; } .btn-accent{ background:var(--accent); } .btn-ghost{ background:var(--bg); color:var(--heading); border:1px solid var(--line); }
+  .top{ display:grid; grid-template-columns:220px 1fr; gap:14px; align-items:end; margin-bottom:14px; }
+  .note{ font-size:13px; color:var(--muted); padding-bottom:9px; }
+  .table-wrap{ overflow-x:auto; }
+  table{ border-collapse:collapse; width:100%; font-size:13px; }
+  th{ background:var(--heading); color:#fff; padding:10px 8px; text-align:left; white-space:nowrap; }
+  td{ padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:middle; }
+  td.hours{ text-align:right; font-weight:700; white-space:nowrap; min-width:150px; } th.r{ text-align:right; }
+  tr.bad td{ background:rgba(220,38,38,.08); }
+  .fgrid{ display:grid; grid-template-columns:1fr 1fr 1.4fr 1fr auto; gap:10px; align-items:end; margin-bottom:12px; }
+  .msg{ margin-top:10px; font-size:13px; font-weight:600; } .msg.ok{ color:#15803d; } .msg.err{ color:#dc2626; }
+  ul.errs{ margin:10px 0 0; padding-left:20px; color:#dc2626; font-size:13px; font-weight:600; }
+  .empty{ text-align:center; color:var(--muted); padding:20px; font-size:13px; }
+  .badge{ display:inline-block; padding:3px 10px; border-radius:20px; font-size:11px; font-weight:700; } .pending{ background:#fef3c7; color:#92400e; } .done{ background:#dcfce7; color:#15803d; }
+  .total td{ font-weight:700; background:var(--bg); }
+  #noAccess{ text-align:center; } #noAccess p{ color:var(--muted); font-size:14px; }
+  @media(max-width:800px){ .top,.fgrid{ grid-template-columns:1fr; } }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script src="br-common.js"></script>
+</head>
+<body>
+<div class="card" id="noAccess" style="display:none;">
+  <h2>Fill Runtime</h2>
+  <p>You have not been given this page. Ask your administrator to tick <b>Fill Runtime</b> for you in Manage Accounts.</p>
+</div>
+
+<div id="app" style="display:none;">
+  <div class="card">
+    <h2>Bottle Running Hours: Fill Runtime</h2>
+    <div id="connStatus">Connecting...</div>
+  </div>
+
+  <div class="card" id="noAssets" style="display:none;text-align:center;">
+    <h3>No assets are assigned to you</h3>
+    <p class="note" id="noAssetsText"></p>
+  </div>
+
+  <div class="card" id="formCard" style="display:none;">
+    <h3>Fill the running hours of your assets</h3>
+    <div class="top">
+      <div><label>Form Date</label><input type="date" id="f_date" onchange="onDateChange()"></div>
+      <div class="note" id="assetNote"></div>
+    </div>
+    <div class="table-wrap">
+      <table><thead><tr><th>Assets</th><th>Start Time</th><th>Stop Time</th><th class="r">Running Hours</th><th></th></tr></thead><tbody id="rows"></tbody></table>
+    </div>
+    <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;">
+      <button class="btn-ghost" onclick="addRow()">+ Add another row</button>
+      <button id="btnSubmit" onclick="submitForm()">Submit Running Hours</button>
+    </div>
+    <ul class="errs" id="errs"></ul>
+    <div class="msg" id="msg"></div>
+  </div>
+
+  <div class="card" id="reportCard" style="display:none;">
+    <h3>My entries and report</h3>
+    <div class="fgrid">
+      <div><label>From (form date)</label><input type="date" id="e_from"></div>
+      <div><label>To (form date)</label><input type="date" id="e_to"></div>
+      <div><label>Asset</label><select id="e_asset"><option value="">All assets</option></select></div>
+      <div><label>Status</label><select id="e_status"><option value="">All</option><option>Pending</option><option>Completed</option></select></div>
+      <div style="display:flex;gap:8px;"><button onclick="loadEntries()">Filter</button><button class="btn-accent" onclick="downloadPdf()">Download PDF</button></div>
+    </div>
+    <div class="table-wrap" id="entriesWrap"><div class="empty">Loading...</div></div>
+  </div>
+</div>
+
+<script>
+document.head.insertAdjacentHTML("beforeend", "<style>" + BR_PICKER_CSS + "</style>");
+const $ = id => document.getElementById(id);
+let ME = null, MY_EMPS = [], ASSETS = [], ENTRIES = [], LOADED = false;
+
+function setMsg(t, kind){ const m = $("msg"); m.textContent = t || ""; m.className = "msg" + (kind ? " " + kind : ""); }
+const myName = () => (MY_EMPS[0] && MY_EMPS[0].full_name) || ME.username;
+const myStaffId = () => (MY_EMPS[0] && MY_EMPS[0].employee_id) || "";
+const assetName = id => { const a = ASSETS.find(x => x.id === Number(id)); return a ? a.asset_name : "this asset"; };
+
+// ---------- the form ----------
+function rowEls(){ return [...$("rows").querySelectorAll("tr")]; }
+function addRow(assetId){
+  const tr = document.createElement("tr");
+  tr.innerHTML = '<td><select class="r_asset">' + ASSETS.map(a => '<option value="' + a.id + '">' + brEsc(a.asset_name) + '</option>').join("") + '</select></td>' +
+    '<td><input type="datetime-local" class="r_start"></td><td><input type="datetime-local" class="r_stop"></td><td class="hours r_hours">--</td>' +
+    '<td><button type="button" class="btn-sm btn-ghost r_rm" title="Remove this row">Remove</button></td>';
+  if(assetId != null) tr.querySelector(".r_asset").value = String(assetId);
+  tr.addEventListener("input", () => updateRow(tr));
+  tr.querySelector(".r_rm").onclick = () => { if(rowEls().length > 1) tr.remove(); else { tr.querySelector(".r_start").value = ""; tr.querySelector(".r_stop").value = ""; updateRow(tr); } };
+  $("rows").appendChild(tr); applyLimits(tr); return tr;
+}
+function applyLimits(tr){
+  const fd = $("f_date").value; if(!fd) return;
+  const s = tr.querySelector(".r_start"), e = tr.querySelector(".r_stop");
+  s.min = fd + "T00:00"; s.max = fd + "T23:59"; e.min = fd + "T00:00"; e.max = brAddDays(fd, 1) + "T23:59";
+}
+function onDateChange(){ rowEls().forEach(applyLimits); setMsg(""); $("errs").innerHTML = ""; }
+function updateRow(tr){
+  const s = brFromInput(tr.querySelector(".r_start").value), e = brFromInput(tr.querySelector(".r_stop").value), cell = tr.querySelector(".r_hours");
+  tr.classList.remove("bad");
+  if(!s || !e){ cell.textContent = "--"; cell.style.color = ""; return; }
+  const h = brHours(s, e);
+  if(h <= 0){ cell.textContent = "Stop is before start"; cell.style.color = "#dc2626"; }
+  else if(h > BR_MAX_HOURS){ cell.textContent = "Over " + BR_MAX_HOURS + " hours"; cell.style.color = "#dc2626"; }
+  else { cell.textContent = brHoursText(h); cell.style.color = ""; }
+}
+// Checks every row that has anything typed in it. Returns { rows, errors }.
+function checkRows(){
+  const fd = $("f_date").value, errors = [], rows = [];
+  if(!fd){ errors.push("Choose the form date."); return { rows, errors }; }
+  if(fd > brTodayWat()){ errors.push("The form date cannot be in the future."); return { rows, errors }; }
+  rowEls().forEach((tr, i) => {
+    const sv = tr.querySelector(".r_start").value, ev = tr.querySelector(".r_stop").value; if(!sv && !ev) return;
+    const id = Number(tr.querySelector(".r_asset").value), name = assetName(id), bad = m => { errors.push(name + ": " + m); tr.classList.add("bad"); };
+    if(!sv || !ev){ bad("fill both the start time and the stop time, or clear both."); return; }
+    const s = brFromInput(sv), e = brFromInput(ev); if(!s || !e){ bad("the time is not valid."); return; }
+    if(brYmdOf(new Date(s)) !== fd){ bad("the start time must be on the form date (" + brFmtDate(fd) + ")."); return; }
+    const h = brHours(s, e);
+    if(h <= 0){ bad("the stop time must be after the start time."); return; }
+    if(h > BR_MAX_HOURS){ bad("one run cannot be longer than " + BR_MAX_HOURS + " hours. Split it by form date."); return; }
+    if(new Date(e).getTime() > Date.now() + 5 * 60000){ bad("the stop time is in the future."); return; }
+    rows.push({ tr, id, name, s, e, h });
+  });
+  // two rows of the same asset must not overlap each other
+  const by = {}; rows.forEach(r => (by[r.id] = by[r.id] || []).push(r));
+  Object.values(by).forEach(list => { list.sort((a, b) => new Date(a.s) - new Date(b.s));
+    for(let k = 1; k < list.length; k++) if(new Date(list[k].s) < new Date(list[k - 1].e)){ errors.push(list[k].name + ": two of its rows overlap (" + brFmtDateTime(list[k - 1].s) + " to " + brFmtDateTime(list[k - 1].e) + " and " + brFmtDateTime(list[k].s) + " to " + brFmtDateTime(list[k].e) + ")."); list[k].tr.classList.add("bad"); } });
+  if(!rows.length && !errors.length) errors.push("Fill the start time and the stop time of at least one asset.");
+  return { rows, errors };
+}
+async function submitForm(){
+  setMsg(""); rowEls().forEach(tr => tr.classList.remove("bad")); $("errs").innerHTML = "";
+  const fd = $("f_date").value, chk = checkRows();
+  if(chk.errors.length){ $("errs").innerHTML = chk.errors.map(e => "<li>" + brEsc(e) + "</li>").join(""); return; }
+  const btn = $("btnSubmit"); btn.disabled = true; setMsg("Checking...");
+  try{
+    // runs that already exist for these assets (the database refuses overlaps too, this just says it politely)
+    const ids = [...new Set(chk.rows.map(r => r.id))], minS = chk.rows.reduce((m, r) => r.s < m ? r.s : m, chk.rows[0].s), maxE = chk.rows.reduce((m, r) => r.e > m ? r.e : m, chk.rows[0].e);
+    const ex = await sb.from("br_runtime").select("asset_id, start_time, stop_time").in("asset_id", ids).lt("start_time", maxE).gt("stop_time", minS);
+    if(ex.error) throw ex.error;
+    const clashes = [];
+    chk.rows.forEach(r => (ex.data || []).forEach(x => { if(x.asset_id === r.id && new Date(x.start_time) < new Date(r.e) && new Date(r.s) < new Date(x.stop_time)){ clashes.push(r.name + ": already has a run from " + brFmtDateTime(x.start_time) + " to " + brFmtDateTime(x.stop_time) + " that overlaps this one."); r.tr.classList.add("bad"); } }));
+    if(clashes.length){ $("errs").innerHTML = clashes.map(e => "<li>" + brEsc(e) + "</li>").join(""); setMsg(""); return; }
+    setMsg("Submitting...");
+    const { error } = await sb.from("br_runtime").insert(chk.rows.map(r => ({ asset_id: r.id, form_date: fd, start_time: r.s, stop_time: r.e })));
+    if(error) throw error;
+    const total = brSum2(chk.rows.map(r => r.h));
+    await brLog(ME, "bottle_runtime_filled", ME.username + " submitted " + chk.rows.length + " running-hours " + (chk.rows.length === 1 ? "entry" : "entries") + " for " + brFmtDate(fd) + " (" + chk.rows.map(r => r.name + " " + r.h.toFixed(2) + " h").join(", ").slice(0, 600) + "; total " + total.toFixed(2) + " h)");
+    chk.rows.forEach(r => { r.tr.querySelector(".r_start").value = ""; r.tr.querySelector(".r_stop").value = ""; updateRow(r.tr); });
+    setMsg("Submitted " + chk.rows.length + " running-hours " + (chk.rows.length === 1 ? "entry" : "entries") + " for " + brFmtDate(fd) + " (" + total.toFixed(2) + " hours).", "ok");
+    await loadEntries();
+  }catch(e){ setMsg(brErr(e), "err"); }
+  finally{ btn.disabled = false; }
+}
+
+// ---------- my entries and the report ----------
+function entriesQuery(){
+  let q = sb.from("br_runtime").select("id, asset_name, form_date, start_time, stop_time, running_hours, status, filled_at, completed_by, completed_at").eq("filled_by_id", ME.id);
+  const from = $("e_from").value, to = $("e_to").value, a = $("e_asset").value, st = $("e_status").value;
+  if(from) q = q.gte("form_date", from); if(to) q = q.lte("form_date", to); if(a) q = q.eq("asset_name", a); if(st) q = q.eq("status", st);
+  return q.order("form_date", { ascending: false }).order("start_time", { ascending: false }).order("id", { ascending: false });
+}
+async function fetchEntries(){
+  let rows = [];
+  for(let from = 0; from < 5000; from += 1000){ const { data, error } = await entriesQuery().range(from, from + 999); if(error) throw error; rows = rows.concat(data || []); if(!data || data.length < 1000) break; }
+  return rows;
+}
+async function loadEntries(){
+  const wrap = $("entriesWrap");
+  try{
+    ENTRIES = await fetchEntries(); LOADED = true;
+    const keep = $("e_asset").value, names = [...new Set(ASSETS.map(a => a.asset_name).concat(ENTRIES.map(r => r.asset_name)))].sort((x, y) => x.localeCompare(y));
+    $("e_asset").innerHTML = '<option value="">All assets</option>' + names.map(n => '<option>' + brEsc(n) + '</option>').join(""); $("e_asset").value = names.indexOf(keep) !== -1 ? keep : "";
+    if(!ENTRIES.length){ wrap.innerHTML = '<div class="empty">No entries for these filters.</div>'; return; }
+    const total = brSum2(ENTRIES.map(r => r.running_hours));
+    wrap.innerHTML = '<table><thead><tr><th>#</th><th>Form Date</th><th>Asset</th><th>Start Time</th><th>Stop Time</th><th class="r">Running Hours</th><th>Status</th></tr></thead><tbody>' +
+      ENTRIES.map((r, i) => '<tr><td>' + (i + 1) + '</td><td>' + brEsc(brFmtDate(r.form_date)) + '</td><td><b>' + brEsc(r.asset_name) + '</b></td><td>' + brEsc(brFmtDateTime(r.start_time)) + '</td><td>' + brEsc(brFmtDateTime(r.stop_time)) +
+        '</td><td class="hours">' + Number(r.running_hours).toFixed(2) + '</td><td><span class="badge ' + (r.status === "Completed" ? "done" : "pending") + '">' + brEsc(r.status) + '</span></td></tr>').join("") +
+      '<tr class="total"><td></td><td colspan="4">TOTAL (' + ENTRIES.length + ' ' + (ENTRIES.length === 1 ? "entry" : "entries") + ')</td><td class="hours">' + total.toFixed(2) + '</td><td></td></tr></tbody></table>';
+  }catch(e){ wrap.innerHTML = '<div class="empty" style="color:#dc2626;">' + brEsc(brErr(e)) + '</div>'; }
+}
+async function downloadPdf(){
+  let rows; try{ rows = await fetchEntries(); }catch(e){ $("entriesWrap").innerHTML = '<div class="empty" style="color:#dc2626;">' + brEsc(brErr(e)) + '</div>'; return; }
+  const from = $("e_from").value, to = $("e_to").value, a = $("e_asset").value, st = $("e_status").value, total = brSum2(rows.map(r => r.running_hours));
+  const r = brPdfReport({ me: ME, title: "My Running Hours", subtitle: "Running hours filled by " + myName(), docTitle: "Running Hours: " + myName(), landscape: false, emptyText: "No entries for these filters.",
+    details: [["Name", myName()], ["Staff ID", myStaffId()], ["Period", (from ? brFmtDate(from) : "Start") + " to " + (to ? brFmtDate(to) : "today")], ["Asset", a || "All assets"], ["Status", st || "All"]],
+    tiles: [["Total running hours", total.toFixed(2) + " h"], ["Entries", String(rows.length)], ["Pending", String(rows.filter(x => x.status === "Pending").length)], ["Completed", String(rows.filter(x => x.status === "Completed").length)]],
+    columns: [{ header: "S/N", align: "center", width: 10 }, { header: "Form Date", width: 26 }, { header: "Asset" }, { header: "Start Time", width: 32 }, { header: "Stop Time", width: 32 }, { header: "Hours", align: "right", width: 16 }, { header: "Status", width: 20 }],
+    rows: rows.map((x, i) => [String(i + 1), brFmtDate(x.form_date), x.asset_name, brFmtDateTime(x.start_time), brFmtDateTime(x.stop_time), Number(x.running_hours).toFixed(2), x.status]),
+    total: rows.length ? ["", "", "TOTAL (" + rows.length + ")", "", "", total.toFixed(2), ""] : null,
+    fileName: brFileName(["Running_Hours", myName(), from, to ? "to_" + to : "", a]) });
+  if(r.error){ $("entriesWrap").insertAdjacentHTML("afterbegin", '<div class="empty" style="color:#dc2626;">' + brEsc(r.error) + '</div>'); return; }
+  await brLog(ME, "bottle_report_downloaded", ME.username + " downloaded their Running Hours PDF (" + rows.length + " entr" + (rows.length === 1 ? "y" : "ies") + ", " + total.toFixed(2) + " h)");
+}
+
+async function init(){
+  const s = $("connStatus");
+  try{
+    ME = await requireAuth("../../login.html"); if(!ME) return;
+    if(!(await brGate(ME, BR_PAGES.fill))) return;
+    $("app").style.display = "block";
+    s.style.color = "#15803d"; s.textContent = "Connected as " + ME.username;
+    const emp = await sb.from("employees").select("id, employee_id, full_name").eq("linked_profile_id", ME.id);
+    if(emp.error) throw emp.error;
+    MY_EMPS = emp.data || [];
+    if(MY_EMPS.length){
+      const a = await sb.from("br_assets").select("id, asset_name, description").in("assigned_emp_pk", MY_EMPS.map(e => e.id)).order("asset_name");
+      if(a.error) throw a.error; ASSETS = a.data || [];
+    }
+    $("reportCard").style.display = "block";
+    const today = brTodayWat(); $("e_to").value = today; $("e_from").value = brAddDays(today, -6);
+    if(!ASSETS.length){
+      $("noAssets").style.display = "block";
+      $("noAssetsText").textContent = MY_EMPS.length ? "No asset has been assigned to you yet. Ask the person who manages the assets to assign yours in Manage Assets." : "Your login is not linked to an employee record, so no asset can be assigned to you. Ask HR to link it.";
+    } else {
+      $("formCard").style.display = "block";
+      $("f_date").value = today; $("f_date").max = today;
+      $("assetNote").textContent = "You fill " + ASSETS.length + " asset" + (ASSETS.length === 1 ? "" : "s") + " (" + ASSETS.map(a => a.asset_name).slice(0, 6).join(", ") + (ASSETS.length > 6 ? ", ..." : "") + "). Leave a row empty if the asset did not run.";
+      ASSETS.forEach(a => addRow(a.id));
+    }
+    await loadEntries();
+  }catch(e){ s.style.color = "#dc2626"; s.textContent = "Error: " + (e.message || e); }
+}
+init();
+</script>
+</body>
+</html>

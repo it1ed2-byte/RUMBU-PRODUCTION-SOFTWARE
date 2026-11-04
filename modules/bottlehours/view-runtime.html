@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>View Runtime</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+  *{ box-sizing:border-box; }
+  body{ font-family:var(--sans); background:var(--bg); margin:0; padding:16px; }
+  .card{ background:var(--card); width:100%; max-width:1200px; margin:0 auto 16px; padding:20px; border-radius:12px; box-shadow:0 4px 12px rgba(0,0,0,.11); }
+  h2{ text-align:center; color:var(--heading); border-bottom:2px solid var(--heading); padding-bottom:10px; margin:0 0 12px; font-size:18px; }
+  h3{ color:var(--heading); font-size:14px; margin:0 0 12px; }
+  #connStatus{ font-size:12px; text-align:center; color:var(--muted); margin-bottom:6px; }
+  label{ font-size:12px; font-weight:600; color:var(--muted); margin-bottom:4px; display:block; }
+  input,select{ width:100%; padding:9px 12px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:13px; outline:none; }
+  input:focus,select:focus{ border-color:var(--accent); }
+  button{ padding:9px 16px; border:none; border-radius:8px; font-weight:700; font-size:13px; cursor:pointer; background:var(--heading); color:#fff; }
+  button:disabled{ opacity:.5; cursor:not-allowed; }
+  .btn-accent{ background:var(--accent); } .btn-ghost{ background:var(--bg); color:var(--heading); border:1px solid var(--line); } .btn-ok{ background:#15803d; }
+  .fgrid{ display:grid; grid-template-columns:1fr 1fr 1.2fr 1.2fr 1fr; gap:10px; align-items:end; }
+  .btns{ display:flex; gap:8px; margin:12px 0 4px; flex-wrap:wrap; }
+  .tiles{ display:flex; gap:10px; margin:12px 0; flex-wrap:wrap; }
+  .tile{ flex:1 1 140px; border:1px solid var(--line); border-radius:10px; padding:10px 14px; background:var(--bg); }
+  .tile .n{ font-size:22px; font-weight:800; color:var(--heading); } .tile .l{ font-size:11px; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+  .table-wrap{ overflow-x:auto; }
+  table{ border-collapse:collapse; width:100%; font-size:13px; }
+  th{ background:var(--heading); color:#fff; padding:10px 8px; text-align:left; white-space:nowrap; }
+  td{ padding:9px 8px; border-bottom:1px solid var(--line); vertical-align:middle; }
+  tbody tr.row{ cursor:pointer; } tbody tr.row:hover td{ background:var(--bg); } tbody tr.row:focus{ outline:2px solid var(--accent); outline-offset:-2px; }
+  td.hours{ text-align:right; font-weight:700; white-space:nowrap; } th.r{ text-align:right; } .sub{ color:var(--muted); font-size:12px; }
+  .badge{ display:inline-block; padding:3px 10px; border-radius:20px; font-size:11px; font-weight:700; } .pending{ background:#fef3c7; color:#92400e; } .done{ background:#dcfce7; color:#15803d; }
+  .msg{ margin-top:8px; font-size:13px; font-weight:600; min-height:18px; } .msg.ok{ color:#15803d; } .msg.err{ color:#dc2626; }
+  .empty{ text-align:center; color:var(--muted); padding:20px; font-size:13px; }
+  .modal-bg{ position:fixed; inset:0; background:rgba(0,0,0,.45); display:none; align-items:center; justify-content:center; z-index:50; padding:16px; }
+  .modal{ background:var(--card); border-radius:12px; padding:20px; width:100%; max-width:520px; box-shadow:0 10px 30px rgba(0,0,0,.3); max-height:90vh; overflow:auto; }
+  dl{ display:grid; grid-template-columns:150px 1fr; gap:8px 12px; margin:0 0 10px; font-size:13px; } dt{ color:var(--muted); font-weight:600; } dd{ margin:0; font-weight:600; }
+  #noAccess{ text-align:center; } #noAccess p{ color:var(--muted); font-size:14px; }
+  @media(max-width:900px){ .fgrid{ grid-template-columns:1fr 1fr; } }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script src="br-common.js"></script>
+</head>
+<body>
+<div class="card" id="noAccess" style="display:none;">
+  <h2>View Runtime</h2>
+  <p>You have not been given this page. Ask your administrator to tick <b>View Runtime</b> for you in Manage Accounts.</p>
+</div>
+
+<div id="app" style="display:none;">
+  <div class="card">
+    <h2>Bottle Running Hours: View Runtime</h2>
+    <div id="connStatus">Connecting...</div>
+    <div class="fgrid">
+      <div><label>From (form date)</label><input type="date" id="v_from"></div>
+      <div><label>To (form date)</label><input type="date" id="v_to"></div>
+      <div><label>Asset</label><input type="text" id="v_asset" placeholder="Part of the name"></div>
+      <div><label>Filled by or owner</label><input type="text" id="v_who" placeholder="Username, name or staff ID"></div>
+      <div><label>Status</label><select id="v_status"><option value="">All</option><option>Pending</option><option>Completed</option></select></div>
+    </div>
+    <div class="btns">
+      <button onclick="applyFilters()">Filter</button><button class="btn-ghost" onclick="clearFilters()">Clear filter</button><button class="btn-ghost" onclick="applyFilters()">Refresh</button><button class="btn-accent" onclick="downloadPdf()">Download PDF</button>
+    </div>
+    <div class="tiles">
+      <div class="tile"><div class="n" id="t_pending">-</div><div class="l">Pending</div></div>
+      <div class="tile"><div class="n" id="t_done">-</div><div class="l">Completed</div></div>
+      <div class="tile"><div class="n" id="t_match">-</div><div class="l">Shown by this filter</div></div>
+    </div>
+    <div class="msg" id="msg"></div>
+  </div>
+
+  <div class="card">
+    <h3>Filled running hours <span class="sub">(newest first, click one to view it)</span></h3>
+    <div class="table-wrap" id="listWrap"><div class="empty">Loading...</div></div>
+    <div style="text-align:center;margin-top:12px;"><button class="btn-ghost" id="moreBtn" style="display:none;" onclick="loadMore()">Load more</button></div>
+  </div>
+</div>
+
+<div class="modal-bg" id="dBg">
+  <div class="modal">
+    <h3 id="dTitle">Running hours</h3>
+    <dl id="dBody"></dl>
+    <div class="msg" id="dMsg"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px;flex-wrap:wrap;">
+      <button class="btn-ghost" onclick="closeDetail()">Close</button>
+      <button class="btn-ok" id="dDone" onclick="markCompleted()">Mark as Completed</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const PAGE = 50;
+let ME = null, ROWS = [], MATCH = 0, CUR = null;
+
+function setMsg(t, kind){ const m = $("msg"); m.textContent = t || ""; m.className = "msg" + (kind ? " " + kind : ""); }
+function filtersQuery(sel, opts, withStatus){
+  let q = sb.from("br_runtime").select(sel, opts);
+  const from = $("v_from").value, to = $("v_to").value, a = brLike($("v_asset").value), w = brLike($("v_who").value), st = $("v_status").value;
+  if(from) q = q.gte("form_date", from);
+  if(to) q = q.lte("form_date", to);
+  if(a) q = q.ilike("asset_name", "%" + a + "%");
+  if(w) q = q.or("filled_by.ilike.%" + w + "%,owner_name.ilike.%" + w + "%,owner_employee_id.ilike.%" + w + "%");
+  if(withStatus && st) q = q.eq("status", st);
+  return q;
+}
+const newestFirst = q => q.order("filled_at", { ascending: false }).order("id", { ascending: false });
+
+async function counts(){
+  const one = async s => { const { count, error } = await filtersQuery("id", { count: "exact", head: true }, false).eq("status", s); if(error) throw error; return count || 0; };
+  const [p, d] = await Promise.all([one("Pending"), one("Completed")]);
+  $("t_pending").textContent = p; $("t_done").textContent = d;
+}
+async function applyFilters(){
+  setMsg(""); ROWS = []; $("listWrap").innerHTML = '<div class="empty">Loading...</div>';
+  try{
+    const { data, count, error } = await newestFirst(filtersQuery("*", { count: "exact" }, true)).range(0, PAGE - 1);
+    if(error) throw error;
+    ROWS = data || []; MATCH = count || 0; $("t_match").textContent = MATCH; render(); await counts();
+  }catch(e){ $("listWrap").innerHTML = '<div class="empty" style="color:#dc2626;">' + brEsc(brErr(e)) + '</div>'; }
+}
+async function loadMore(){
+  const btn = $("moreBtn"); btn.disabled = true;
+  try{
+    const { data, error } = await newestFirst(filtersQuery("*", null, true)).range(ROWS.length, ROWS.length + PAGE - 1);
+    if(error) throw error;
+    const have = new Set(ROWS.map(r => r.id)); ROWS = ROWS.concat((data || []).filter(r => !have.has(r.id))); render();
+  }catch(e){ setMsg(brErr(e), "err"); }
+  finally{ btn.disabled = false; }
+}
+function clearFilters(){ ["v_from", "v_to", "v_asset", "v_who", "v_status"].forEach(id => $(id).value = ""); applyFilters(); }
+function ownerOf(r){ return r.owner_name ? r.owner_name + (r.owner_employee_id ? " (" + r.owner_employee_id + ")" : "") : ""; }
+function render(){
+  const wrap = $("listWrap");
+  $("moreBtn").style.display = ROWS.length < MATCH ? "" : "none";
+  if(!ROWS.length){ wrap.innerHTML = '<div class="empty">No running hours have been filled for these filters.</div>'; return; }
+  wrap.innerHTML = '<table><thead><tr><th>Filled</th><th>Asset</th><th>Owner</th><th>Form Date</th><th>Start Time</th><th>Stop Time</th><th class="r">Hours</th><th>Filled by</th><th>Status</th></tr></thead><tbody>' +
+    ROWS.map(r => '<tr class="row" tabindex="0" data-id="' + r.id + '"><td style="white-space:nowrap;">' + brEsc(brFmtDateTime(r.filled_at)) + '</td><td><b>' + brEsc(r.asset_name) + '</b></td><td>' + brEsc(ownerOf(r)) + '</td><td>' + brEsc(brFmtDate(r.form_date)) +
+      '</td><td>' + brEsc(brFmtDateTime(r.start_time)) + '</td><td>' + brEsc(brFmtDateTime(r.stop_time)) + '</td><td class="hours">' + Number(r.running_hours).toFixed(2) + '</td><td>' + brEsc(r.filled_by) +
+      '</td><td><span class="badge ' + (r.status === "Completed" ? "done" : "pending") + '">' + brEsc(r.status) + '</span></td></tr>').join("") + '</tbody></table>' +
+    '<p class="sub" style="text-align:center;">Showing ' + ROWS.length + ' of ' + MATCH + '</p>';
+  wrap.querySelectorAll("tr.row").forEach(tr => { const open = () => openDetail(Number(tr.getAttribute("data-id"))); tr.onclick = open; tr.onkeydown = e => { if(e.key === "Enter" || e.key === " "){ e.preventDefault(); open(); } }; });
+}
+
+// ---------- one entry ----------
+function openDetail(id){ CUR = ROWS.find(r => r.id === id); if(!CUR) return; $("dMsg").textContent = ""; $("dMsg").className = "msg"; fillDetail(); $("dBg").style.display = "flex"; }
+function closeDetail(){ $("dBg").style.display = "none"; CUR = null; }
+function fillDetail(){
+  const r = CUR, done = r.status === "Completed";
+  $("dTitle").textContent = r.asset_name + (r.asset_id == null ? " (asset deleted)" : "");
+  const row = (k, v) => '<dt>' + brEsc(k) + '</dt><dd>' + brEsc(v) + '</dd>';
+  $("dBody").innerHTML = row("Asset", r.asset_name + (r.asset_id == null ? " (the asset has since been deleted)" : "")) + row("Assigned to", ownerOf(r) || "-") + row("Form date", brFmtDate(r.form_date)) +
+    row("Start time", brFmtDateTime(r.start_time)) + row("Stop time", brFmtDateTime(r.stop_time)) + row("Running hours", brHoursText(r.running_hours)) +
+    row("Filled by", r.filled_by) + row("Filled on", brFmtDateTime(r.filled_at)) + '<dt>Status</dt><dd><span class="badge ' + (done ? "done" : "pending") + '">' + brEsc(r.status) + '</span></dd>' +
+    (done ? row("Completed by", r.completed_by || "-") + row("Completed on", brFmtDateTime(r.completed_at)) : "");
+  $("dDone").style.display = done ? "none" : "";
+}
+async function markCompleted(){
+  if(!CUR || CUR.status === "Completed") return;
+  const r = CUR, m = $("dMsg"), btn = $("dDone");
+  if(!confirm("Mark this record as completed?\n\n" + r.asset_name + ", " + brFmtDate(r.form_date) + ", " + Number(r.running_hours).toFixed(2) + " hours.\nDo this once you have taken the record.")) return;
+  btn.disabled = true; m.className = "msg"; m.textContent = "Saving...";
+  try{
+    // only a Pending entry can be changed, so two people marking the same one cannot both succeed
+    const { data, error } = await sb.from("br_runtime").update({ status: "Completed" }).eq("id", r.id).eq("status", "Pending").select();
+    if(error) throw error;
+    if(!data || !data.length){ m.className = "msg err"; m.textContent = "Not saved: it was already marked completed by someone else, or you no longer have access. Refresh the list."; return; }
+    Object.assign(r, data[0]);
+    await brLog(ME, "bottle_runtime_completed", ME.username + " marked as completed: " + r.asset_name + ", " + brFmtDate(r.form_date) + ", " + Number(r.running_hours).toFixed(2) + " h (filled by " + r.filled_by + ")");
+    fillDetail(); m.className = "msg ok"; m.textContent = "Marked as completed."; render(); await counts();
+  }catch(e){ m.className = "msg err"; m.textContent = brErr(e); }
+  finally{ btn.disabled = false; }
+}
+
+// ---------- the report (PDF) ----------
+async function downloadPdf(){
+  let rows = [];
+  try{
+    for(let from = 0; from < 5000; from += 1000){ const { data, error } = await newestFirst(filtersQuery("*", null, true)).range(from, from + 999); if(error) throw error; rows = rows.concat(data || []); if(!data || data.length < 1000) break; }
+  }catch(e){ setMsg(brErr(e), "err"); return; }
+  const from = $("v_from").value, to = $("v_to").value, a = $("v_asset").value.trim(), w = $("v_who").value.trim(), st = $("v_status").value, total = brSum2(rows.map(r => r.running_hours));
+  const r = brPdfReport({ me: ME, title: "Running Hours Report", subtitle: "Filled running hours, newest first", docTitle: "Running Hours Report", landscape: true, emptyText: "No running hours for these filters.",
+    details: [["Period (form date)", (from ? brFmtDate(from) : "Start") + " to " + (to ? brFmtDate(to) : "today")], ["Asset", a || "All assets"], ["Filled by or owner", w || "Anyone"], ["Status", st || "All"]],
+    tiles: [["Total running hours", total.toFixed(2) + " h"], ["Entries", String(rows.length)], ["Pending", String(rows.filter(x => x.status === "Pending").length)], ["Completed", String(rows.filter(x => x.status === "Completed").length)]],
+    columns: [{ header: "S/N", align: "center", width: 10 }, { header: "Form Date", width: 24 }, { header: "Asset" }, { header: "Assigned to", width: 40 }, { header: "Start Time", width: 33 }, { header: "Stop Time", width: 33 }, { header: "Hours", align: "right", width: 16 }, { header: "Filled by", width: 28 }, { header: "Status", width: 20 }],
+    rows: rows.map((x, i) => [String(i + 1), brFmtDate(x.form_date), x.asset_name + (x.asset_id == null ? " (deleted)" : ""), ownerOf(x), brFmtDateTime(x.start_time), brFmtDateTime(x.stop_time), Number(x.running_hours).toFixed(2), x.filled_by, x.status]),
+    total: rows.length ? ["", "", "TOTAL (" + rows.length + ")", "", "", "", total.toFixed(2), "", ""] : null,
+    fileName: brFileName(["Running_Hours_Report", from, to ? "to_" + to : "", st, a, brTodayWat()]) });
+  if(r.error){ setMsg(r.error, "err"); return; }
+  await brLog(ME, "bottle_report_downloaded", ME.username + " downloaded the Running Hours Report PDF (" + rows.length + " entr" + (rows.length === 1 ? "y" : "ies") + ", " + total.toFixed(2) + " h)");
+}
+
+async function init(){
+  const s = $("connStatus");
+  try{
+    ME = await requireAuth("../../login.html"); if(!ME) return;
+    if(!(await brGate(ME, BR_PAGES.view))) return;
+    $("app").style.display = "block";
+    document.addEventListener("keydown", e => { if(e.key === "Escape") closeDetail(); });
+    ["v_asset", "v_who"].forEach(id => $(id).addEventListener("keydown", e => { if(e.key === "Enter") applyFilters(); }));
+    s.style.color = "#15803d"; s.textContent = "Connected as " + ME.username;
+    await applyFilters();
+  }catch(e){ s.style.color = "#dc2626"; s.textContent = "Error: " + (e.message || e); }
+}
+init();
+</script>
+</body>
+</html>

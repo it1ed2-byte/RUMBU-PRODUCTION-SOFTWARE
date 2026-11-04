@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Manage Assets</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){
+    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+  })();
+</script>
+<style>
+  *{ box-sizing:border-box; }
+  body{ font-family:var(--sans); background:var(--bg); margin:0; padding:16px; }
+  .card{ background:var(--card); width:100%; max-width:1200px; margin:0 auto 16px; padding:20px; border-radius:12px; box-shadow:0 4px 12px rgba(0,0,0,.11); }
+  h2{ text-align:center; color:var(--heading); border-bottom:2px solid var(--heading); padding-bottom:10px; margin:0 0 12px; font-size:18px; }
+  h3{ color:var(--heading); font-size:14px; margin:0 0 12px; }
+  #connStatus{ font-size:12px; text-align:center; color:var(--muted); margin-bottom:10px; }
+  label{ font-size:12px; font-weight:600; color:var(--muted); margin-bottom:4px; display:block; }
+  input,select{ width:100%; padding:9px 12px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:13px; outline:none; }
+  input:focus,select:focus{ border-color:var(--accent); }
+  button{ padding:9px 16px; border:none; border-radius:8px; font-weight:700; font-size:13px; cursor:pointer; background:var(--heading); color:#fff; }
+  button:disabled{ opacity:.5; cursor:not-allowed; }
+  .btn-sm{ padding:5px 10px; font-size:12px; } .btn-accent{ background:var(--accent); } .btn-danger{ background:#dc2626; }
+  .btn-ghost{ background:var(--bg); color:var(--heading); border:1px solid var(--line); }
+  .grid{ display:grid; grid-template-columns:1.2fr 1.4fr 1.6fr auto; gap:10px; align-items:start; }
+  .fgrid{ display:grid; grid-template-columns:2fr 1fr 1fr auto; gap:10px; align-items:end; }
+  .tabs{ display:flex; gap:8px; justify-content:center; margin-top:4px; }
+  .tab{ background:var(--bg); color:var(--heading); border:1px solid var(--line); } .tab.on{ background:var(--heading); color:#fff; }
+  .table-wrap{ overflow-x:auto; }
+  table{ border-collapse:collapse; width:100%; font-size:13px; }
+  th{ background:var(--heading); color:#fff; padding:10px 8px; text-align:left; white-space:nowrap; }
+  td{ padding:9px 8px; border-bottom:1px solid var(--line); vertical-align:middle; }
+  .num{ text-align:right; } .sub{ color:var(--muted); font-size:12px; }
+  .actions{ white-space:nowrap; display:flex; gap:6px; }
+  .msg{ margin-top:10px; font-size:13px; font-weight:600; min-height:18px; } .msg.ok{ color:#15803d; } .msg.err{ color:#dc2626; }
+  .empty{ text-align:center; color:var(--muted); padding:20px; font-size:13px; }
+  .badge{ display:inline-block; padding:3px 10px; border-radius:20px; font-size:11px; font-weight:700; } .badge.warn{ background:#fef3c7; color:#92400e; }
+  .field{ position:relative; }
+  .modal-bg{ position:fixed; inset:0; background:rgba(0,0,0,.45); display:none; align-items:center; justify-content:center; z-index:50; padding:16px; }
+  .modal{ background:var(--card); border-radius:12px; padding:20px; width:100%; max-width:460px; box-shadow:0 10px 30px rgba(0,0,0,.3); }
+  #noAccess{ text-align:center; } #noAccess p{ color:var(--muted); font-size:14px; }
+  @media(max-width:800px){ .grid,.fgrid{ grid-template-columns:1fr; } }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script src="br-common.js"></script>
+</head>
+<body>
+<div class="card" id="noAccess" style="display:none;">
+  <h2>Manage Assets</h2>
+  <p>You have not been given this page. Ask your administrator to tick <b>Manage Assets</b> for you in Manage Accounts.</p>
+</div>
+
+<div id="app" style="display:none;">
+  <div class="card">
+    <h2>Bottle Running Hours: Manage Assets</h2>
+    <div id="connStatus">Connecting...</div>
+    <div class="tabs"><button class="tab on" id="tabAssets" onclick="showTab('assets')">Assets</button><button class="tab" id="tabLog" onclick="showTab('log')">Activity Log</button></div>
+  </div>
+
+  <div id="paneAssets">
+    <div class="card">
+      <h3 id="formTitle">Add Asset</h3>
+      <div class="grid">
+        <div><label>Asset</label><input type="text" id="f_name" maxlength="120" placeholder="e.g. Blow Mould 1"></div>
+        <div><label>Description (optional)</label><input type="text" id="f_desc" maxlength="300" placeholder="e.g. Line 2 mould"></div>
+        <div class="field"><label>Fills the running hours (from the employee directory)</label><div id="f_pick"></div></div>
+        <div style="display:flex;gap:8px;padding-top:18px;"><button id="btnSave" onclick="saveAsset()">Save Asset</button><button id="btnCancel" class="btn-ghost" style="display:none;" onclick="resetForm()">Cancel</button></div>
+      </div>
+      <div class="msg" id="msg"></div>
+    </div>
+
+    <div class="card">
+      <h3>Assets <span class="sub" id="countNote"></span></h3>
+      <div class="fgrid" style="margin-bottom:12px;">
+        <div><label>Search (asset, person, staff ID)</label><input type="text" id="f_search" placeholder="Type to filter" oninput="renderAssets()"></div>
+        <div><label>Branch</label><select id="f_branch" onchange="renderAssets()"><option value="">All branches</option></select></div>
+        <div><label>Department</label><select id="f_dept" onchange="renderAssets()"><option value="">All departments</option></select></div>
+        <div style="display:flex;gap:8px;"><button class="btn-ghost" onclick="clearFilters()">Clear filter</button><button class="btn-accent" onclick="downloadAssetsPdf()">Download PDF</button></div>
+      </div>
+      <div class="table-wrap" id="assetsWrap"><div class="empty">Loading...</div></div>
+    </div>
+  </div>
+
+  <div id="paneLog" style="display:none;">
+    <div class="card">
+      <h3>Activity Log <span class="sub">(everything done in the Bottle Running Hours module)</span></h3>
+      <div class="fgrid" style="margin-bottom:12px;grid-template-columns:1fr 1fr 1.4fr 1fr auto;">
+        <div><label>From</label><input type="date" id="l_from"></div>
+        <div><label>To</label><input type="date" id="l_to"></div>
+        <div><label>Action</label><select id="l_action"><option value="">All actions</option><option value="bottle_asset_added">Asset added</option><option value="bottle_asset_edited">Asset edited</option><option value="bottle_asset_reassigned">Assignment changed</option><option value="bottle_asset_deleted">Asset deleted</option><option value="bottle_runtime_filled">Running hours filled</option><option value="bottle_runtime_completed">Marked completed</option><option value="bottle_report_downloaded">PDF downloaded</option></select></div>
+        <div><label>Done by</label><input type="text" id="l_who" placeholder="username"></div>
+        <div style="display:flex;gap:8px;"><button onclick="loadLog(true)">Filter</button><button class="btn-accent" onclick="downloadLogPdf()">Download PDF</button></div>
+      </div>
+      <div class="table-wrap" id="logWrap"><div class="empty">Loading...</div></div>
+      <div style="text-align:center;margin-top:12px;"><button class="btn-ghost" id="logMore" style="display:none;" onclick="loadLog(false)">Load more</button></div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="reBg">
+  <div class="modal">
+    <h3 id="reTitle">Change Assignment</h3>
+    <div class="field"><label>Who will fill the running hours</label><div id="re_pick"></div></div>
+    <div class="msg" id="reMsg"></div>
+    <div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end;"><button class="btn-ghost" onclick="closeReassign()">Cancel</button><button id="reSave" onclick="saveReassign()">Change Assignment</button></div>
+  </div>
+</div>
+
+<script>
+document.head.insertAdjacentHTML("beforeend", "<style>" + BR_PICKER_CSS + "</style>");
+const $ = id => document.getElementById(id);
+let ME = null, ASSETS = [], EDIT_ID = null, PICK = null, RE_PICK = null, RE_ID = null, LOG_ROWS = [], LOG_DONE = false;
+const LOG_PAGE = 100;
+const ACTION_LABEL = { bottle_asset_added: "Asset added", bottle_asset_edited: "Asset edited", bottle_asset_reassigned: "Assignment changed", bottle_asset_deleted: "Asset deleted",
+  bottle_runtime_filled: "Running hours filled", bottle_runtime_completed: "Marked completed", bottle_report_downloaded: "PDF downloaded" };
+
+function setMsg(t, kind){ const m = $("msg"); m.textContent = t || ""; m.className = "msg" + (kind ? " " + kind : ""); }
+function showTab(t){
+  $("paneAssets").style.display = t === "assets" ? "block" : "none"; $("paneLog").style.display = t === "log" ? "block" : "none";
+  $("tabAssets").classList.toggle("on", t === "assets"); $("tabLog").classList.toggle("on", t === "log");
+  if(t === "log" && !LOG_ROWS.length && !LOG_DONE) loadLog(true);
+}
+const who = a => a.assigned_name ? a.assigned_name + " (" + a.assigned_employee_id + ")" : "Nobody";
+
+// ---------- the assets ----------
+async function loadAssets(){
+  const all = [];
+  for(let from = 0; ; from += 1000){
+    const { data, error } = await sb.from("br_assets").select("*").order("asset_name").order("id").range(from, from + 999);
+    if(error) throw error;
+    all.push(...(data || []));
+    if(!data || data.length < 1000) break;
+  }
+  ASSETS = all; fillFilterLists(); renderAssets();
+}
+function fillFilterLists(){
+  const keep = { b: $("f_branch").value, d: $("f_dept").value };
+  const uniq = k => [...new Set(ASSETS.map(a => a[k]).filter(Boolean))].sort((x, y) => x.localeCompare(y));
+  $("f_branch").innerHTML = '<option value="">All branches</option>' + uniq("assigned_branch").map(v => '<option>' + brEsc(v) + '</option>').join("");
+  $("f_dept").innerHTML = '<option value="">All departments</option>' + uniq("assigned_department").map(v => '<option>' + brEsc(v) + '</option>').join("");
+  $("f_branch").value = keep.b; $("f_dept").value = keep.d;
+}
+function filtered(){
+  const q = $("f_search").value.trim().toLowerCase(), b = $("f_branch").value, d = $("f_dept").value;
+  return ASSETS.filter(a => (!b || (a.assigned_branch || "") === b) && (!d || (a.assigned_department || "") === d)
+    && (!q || [a.asset_name, a.description, a.assigned_name, a.assigned_employee_id].join(" ").toLowerCase().indexOf(q) !== -1));
+}
+function clearFilters(){ $("f_search").value = ""; $("f_branch").value = ""; $("f_dept").value = ""; renderAssets(); }
+function renderAssets(){
+  const list = filtered(), wrap = $("assetsWrap");
+  $("countNote").textContent = "(" + list.length + (list.length === ASSETS.length ? "" : " of " + ASSETS.length) + ")";
+  if(!list.length){ wrap.innerHTML = '<div class="empty">' + (ASSETS.length ? "No asset matches this filter." : "No asset has been added yet.") + '</div>'; return; }
+  wrap.innerHTML = '<table><thead><tr><th>#</th><th>Asset</th><th>Description</th><th>Assigned to (fills the running hours)</th><th>Branch</th><th>Department</th><th></th></tr></thead><tbody>' +
+    list.map((a, i) => '<tr data-id="' + a.id + '"><td>' + (i + 1) + '</td><td><b>' + brEsc(a.asset_name) + '</b></td><td>' + brEsc(a.description || "") + '</td><td>' +
+      (a.assigned_emp_pk ? brEsc(a.assigned_name) + ' <span class="sub">(' + brEsc(a.assigned_employee_id) + ')</span>' : '<span class="badge warn">Unassigned</span> <span class="sub">' + brEsc(a.assigned_name || "") + '</span>') +
+      '</td><td>' + brEsc(a.assigned_branch || "") + '</td><td>' + brEsc(a.assigned_department || "") + '</td><td class="actions">' +
+      '<button class="btn-sm btn-ghost" data-act="edit">Edit</button><button class="btn-sm btn-ghost" data-act="reassign">Change Assignment</button><button class="btn-sm btn-danger" data-act="delete">Delete</button></td></tr>').join("") + '</tbody></table>';
+  wrap.querySelectorAll("button[data-act]").forEach(b => b.onclick = () => {
+    const id = Number(b.closest("tr").getAttribute("data-id")); const a = ASSETS.find(x => x.id === id); if(!a) return;
+    if(b.dataset.act === "edit") startEdit(a); else if(b.dataset.act === "reassign") openReassign(a); else deleteAsset(a);
+  });
+}
+function empOf(a){ return a.assigned_emp_pk ? { id: a.assigned_emp_pk, employee_id: a.assigned_employee_id, full_name: a.assigned_name, branch: a.assigned_branch, department: a.assigned_department, unit: a.assigned_unit, linked_profile_id: true } : null; }
+function startEdit(a){
+  EDIT_ID = a.id; $("formTitle").textContent = "Edit Asset"; $("f_name").value = a.asset_name; $("f_desc").value = a.description || ""; PICK.set(empOf(a));
+  $("btnSave").textContent = "Save Changes"; $("btnCancel").style.display = ""; setMsg(""); window.scrollTo({ top: 0, behavior: "smooth" });
+}
+function resetForm(){ EDIT_ID = null; $("formTitle").textContent = "Add Asset"; $("f_name").value = ""; $("f_desc").value = ""; PICK.clear(); $("btnSave").textContent = "Save Asset"; $("btnCancel").style.display = "none"; }
+
+async function saveAsset(){
+  const name = $("f_name").value.trim().replace(/\s+/g, " "), desc = $("f_desc").value.trim(), emp = PICK.get();
+  if(!name){ setMsg("Enter the asset name.", "err"); return; }
+  if(name.length > 120){ setMsg("The asset name is too long (120 characters at most).", "err"); return; }
+  if(!emp){ setMsg("Choose who will fill the running hours for this asset.", "err"); return; }
+  if(ASSETS.some(a => a.id !== EDIT_ID && a.asset_name.trim().toLowerCase() === name.toLowerCase())){ setMsg("An asset called \"" + name + "\" already exists.", "err"); return; }
+  const btn = $("btnSave"); btn.disabled = true; setMsg("Saving...");
+  try{
+    if(EDIT_ID){
+      const old = ASSETS.find(a => a.id === EDIT_ID);
+      const { data, error } = await sb.from("br_assets").update({ asset_name: name, description: desc || null, assigned_emp_pk: emp.id }).eq("id", EDIT_ID).select();
+      if(error) throw error;
+      if(!data || !data.length) throw new Error("The asset was not saved (it may have been deleted, or you no longer have access).");
+      const changes = [];
+      if(old.asset_name !== name) changes.push("name \"" + old.asset_name + "\" to \"" + name + "\"");
+      if((old.description || "") !== desc) changes.push("description changed");
+      if(changes.length) await brLog(ME, "bottle_asset_edited", ME.username + " edited asset \"" + old.asset_name + "\": " + changes.join("; "));
+      if(old.assigned_emp_pk !== emp.id) await brLog(ME, "bottle_asset_reassigned", ME.username + " changed who fills the running hours for \"" + name + "\" from " + who(old) + " to " + emp.full_name + " (" + emp.employee_id + ")");
+      setMsg("Saved " + name + ".", "ok");
+    } else {
+      const { data, error } = await sb.from("br_assets").insert({ asset_name: name, description: desc || null, assigned_emp_pk: emp.id }).select();
+      if(error) throw error;
+      await brLog(ME, "bottle_asset_added", ME.username + " added asset \"" + name + "\", assigned to " + emp.full_name + " (" + emp.employee_id + ")");
+      setMsg("Added " + name + ".", "ok");
+    }
+    resetForm(); await loadAssets();
+  }catch(e){ setMsg(brErr(e), "err"); }
+  finally{ btn.disabled = false; }
+}
+
+// ---------- change who fills an asset ----------
+function openReassign(a){ RE_ID = a.id; $("reTitle").textContent = "Change Assignment: " + a.asset_name; RE_PICK.set(null); RE_PICK.clear(); $("reMsg").textContent = ""; $("reBg").style.display = "flex"; }
+function closeReassign(){ $("reBg").style.display = "none"; RE_ID = null; }
+async function saveReassign(){
+  const a = ASSETS.find(x => x.id === RE_ID), emp = RE_PICK.get(), m = $("reMsg");
+  if(!a) return;
+  if(!emp){ m.className = "msg err"; m.textContent = "Choose the new person."; return; }
+  if(a.assigned_emp_pk === emp.id){ m.className = "msg err"; m.textContent = emp.full_name + " already fills this asset."; return; }
+  $("reSave").disabled = true; m.className = "msg"; m.textContent = "Saving...";
+  try{
+    const { data, error } = await sb.from("br_assets").update({ assigned_emp_pk: emp.id }).eq("id", a.id).select();
+    if(error) throw error;
+    if(!data || !data.length) throw new Error("The assignment was not saved (the asset may have been deleted, or you no longer have access).");
+    await brLog(ME, "bottle_asset_reassigned", ME.username + " changed who fills the running hours for \"" + a.asset_name + "\" from " + who(a) + " to " + emp.full_name + " (" + emp.employee_id + ")");
+    closeReassign(); setMsg(a.asset_name + " is now assigned to " + emp.full_name + ".", "ok"); await loadAssets();
+  }catch(e){ m.className = "msg err"; m.textContent = brErr(e); }
+  finally{ $("reSave").disabled = false; }
+}
+
+// ---------- delete ----------
+async function deleteAsset(a){
+  let n = 0;
+  try{
+    const { count, error } = await sb.from("br_runtime").select("id", { count: "exact", head: true }).eq("asset_id", a.id);
+    if(error) throw error; n = count || 0;
+  }catch(e){ setMsg("Could not check the asset's entries: " + brErr(e), "err"); return; }
+  const text = n ? "Delete \"" + a.asset_name + "\"?\n\nIt has " + n + " running-hours " + (n === 1 ? "entry" : "entries") + ". They are kept and still appear in View Runtime under the asset's name, but the asset itself is removed and nobody can fill it any more."
+                 : "Delete \"" + a.asset_name + "\"? It has no running-hours entries.";
+  if(!confirm(text)) return;
+  try{
+    const { data, error } = await sb.from("br_assets").delete().eq("id", a.id).select();
+    if(error) throw error;
+    if(!data || !data.length) throw new Error("The asset was not deleted (it may already be gone, or you no longer have access).");
+    await brLog(ME, "bottle_asset_deleted", ME.username + " deleted asset \"" + a.asset_name + "\" (assigned to " + who(a) + ", " + n + " running-hours " + (n === 1 ? "entry" : "entries") + " kept)");
+    if(EDIT_ID === a.id) resetForm();
+    setMsg("Deleted " + a.asset_name + ".", "ok"); await loadAssets();
+  }catch(e){ setMsg(brErr(e), "err"); }
+}
+
+// ---------- the assets report (PDF) ----------
+async function downloadAssetsPdf(){
+  const list = filtered();
+  const f = [["Branch", $("f_branch").value || "All"], ["Department", $("f_dept").value || "All"], ["Search", $("f_search").value.trim() || "None"], ["Assets in this report", String(list.length)]];
+  const r = brPdfReport({ me: ME, title: "Asset Register", subtitle: "Assets and who fills each one's running hours", docTitle: "Asset Register", details: f, landscape: true, emptyText: "No asset matches these filters.",
+    columns: [{ header: "S/N", align: "center", width: 12 }, { header: "Asset", width: 52 }, { header: "Description" }, { header: "Assigned to", width: 52 }, { header: "Staff ID", width: 24 }, { header: "Branch", width: 30 }, { header: "Department", width: 40 }],
+    rows: list.map((a, i) => [String(i + 1), a.asset_name, a.description || "", a.assigned_name || "Unassigned", a.assigned_employee_id || "", a.assigned_branch || "", a.assigned_department || ""]),
+    total: null, fileName: brFileName(["Asset_Register", $("f_branch").value, $("f_dept").value, brTodayWat()]) });
+  if(r.error){ setMsg(r.error, "err"); return; }
+  await brLog(ME, "bottle_report_downloaded", ME.username + " downloaded the Asset Register PDF (" + list.length + " asset" + (list.length === 1 ? "" : "s") + ")");
+}
+
+// ---------- the activity log ----------
+function logQuery(){
+  let q = sb.from("activity_log").select("created_at, actor_username, action_type, description");
+  const a = $("l_action").value, from = $("l_from").value, to = $("l_to").value, w = brLike($("l_who").value);
+  q = a ? q.eq("action_type", a) : q.like("action_type", "bottle_%");
+  if(from) q = q.gte("created_at", brFromInput(from + "T00:00"));
+  if(to) q = q.lt("created_at", brFromInput(brAddDays(to, 1) + "T00:00"));
+  if(w) q = q.ilike("actor_username", "%" + w + "%");
+  return q.order("created_at", { ascending: false });
+}
+async function loadLog(reset){
+  const wrap = $("logWrap");
+  if(reset){ LOG_ROWS = []; LOG_DONE = false; wrap.innerHTML = '<div class="empty">Loading...</div>'; }
+  try{
+    const { data, error } = await logQuery().range(LOG_ROWS.length, LOG_ROWS.length + LOG_PAGE - 1);
+    if(error) throw error;
+    LOG_ROWS = LOG_ROWS.concat(data || []); LOG_DONE = !data || data.length < LOG_PAGE;
+    renderLog();
+  }catch(e){ wrap.innerHTML = '<div class="empty" style="color:#dc2626;">' + brEsc(brErr(e)) + '</div>'; }
+}
+function renderLog(){
+  const wrap = $("logWrap");
+  $("logMore").style.display = LOG_DONE ? "none" : "";
+  if(!LOG_ROWS.length){ wrap.innerHTML = '<div class="empty">No activity for these filters.</div>'; return; }
+  wrap.innerHTML = '<table><thead><tr><th>When</th><th>Done by</th><th>Action</th><th>Details</th></tr></thead><tbody>' +
+    LOG_ROWS.map(r => '<tr><td style="white-space:nowrap;">' + brEsc(brFmtDateTime(r.created_at)) + '</td><td>' + brEsc(r.actor_username) + '</td><td>' + brEsc(ACTION_LABEL[r.action_type] || r.action_type) + '</td><td>' + brEsc(r.description) + '</td></tr>').join("") + '</tbody></table>';
+}
+async function downloadLogPdf(){
+  let rows = [];
+  try{
+    for(let from = 0; from < 5000; from += 1000){
+      const { data, error } = await logQuery().range(from, from + 999);
+      if(error) throw error; rows = rows.concat(data || []); if(!data || data.length < 1000) break;
+    }
+  }catch(e){ $("logWrap").innerHTML = '<div class="empty" style="color:#dc2626;">' + brEsc(brErr(e)) + '</div>'; return; }
+  const a = $("l_action").value, from = $("l_from").value, to = $("l_to").value;
+  const r = brPdfReport({ me: ME, title: "Activity Log", subtitle: "Everything done in the Bottle Running Hours module", docTitle: "Activity Log", landscape: true, emptyText: "No activity for these filters.",
+    details: [["From", from ? brFmtDate(from) : "Start"], ["To", to ? brFmtDate(to) : "Today"], ["Action", a ? (ACTION_LABEL[a] || a) : "All actions"], ["Done by", $("l_who").value.trim() || "Anyone"], ["Records", String(rows.length)]],
+    columns: [{ header: "S/N", align: "center", width: 12 }, { header: "When", width: 40 }, { header: "Done by", width: 32 }, { header: "Action", width: 42 }, { header: "Details" }],
+    rows: rows.map((r2, i) => [String(i + 1), brFmtDateTime(r2.created_at), r2.actor_username || "", ACTION_LABEL[r2.action_type] || r2.action_type, r2.description || ""]), total: null,
+    fileName: brFileName(["Activity_Log", from, to ? "to_" + to : "", brTodayWat()]) });
+  if(r.error) $("logWrap").innerHTML = '<div class="empty" style="color:#dc2626;">' + brEsc(r.error) + '</div>';
+}
+
+async function init(){
+  const s = $("connStatus");
+  try{
+    ME = await requireAuth("../../login.html"); if(!ME) return;
+    if(!(await brGate(ME, BR_PAGES.manage))) return;
+    $("app").style.display = "block";
+    PICK = brPicker($("f_pick")); RE_PICK = brPicker($("re_pick"));
+    document.addEventListener("keydown", e => { if(e.key === "Escape") closeReassign(); });
+    s.style.color = "#15803d"; s.textContent = "Connected as " + ME.username;
+    await loadAssets();
+  }catch(e){ s.style.color = "#dc2626"; s.textContent = "Error: " + (e.message || e); }
+}
+init();
+</script>
+</body>
+</html>
