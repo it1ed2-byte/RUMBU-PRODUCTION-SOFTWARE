@@ -69,6 +69,13 @@
   .w{color:var(--amber);font-weight:bold;}
   .b{color:var(--red);font-weight:bold;}
   .dash{color:var(--muted);}
+  /* By Operator: machine > shift > date */
+  .g1 td{background:var(--line) !important;font-weight:800;color:var(--navy);}
+  .g2 td{background:var(--bg) !important;font-weight:700;color:var(--navy);}
+  .g3 td{background:var(--card) !important;}
+  td.indent1{padding-left:22px;text-align:left;}
+  td.indent2{padding-left:44px;text-align:left;}
+  td.opcell{text-align:left;white-space:normal;min-width:220px;}
 
   /* ── Print styles ── */
   .print-only{display:none;}
@@ -550,53 +557,63 @@ function renderByAsset(rows){
 }
 
 // ── By Operator view ───────────────────────────────────────
-// Each entry's KG, target and downtime are shared equally between the operators on it, so the table adds up to the
-// same total as the KPI cards. Entries saved without an operator are listed on their own line.
+// Grouped by machine, then shift, then date. The operators on one machine in one date and shift are one crew: the crew
+// has a single KG, target, efficiency and downtime (the machine's for that shift), which is not divided between people.
 function renderByOperator(rows){
-  const blank=()=>({entries:0,kg:0,tgt:0,ev:0,dt:0,sh:{Morning:0,Afternoon:0,Night:0},assets:new Set()});
-  const map={}, none=blank();
-  rows.forEach(r=>{
-    const kg=parseFloat(r.kg_produced||0), tgt=getTarget(r.asset_code), dt=dtMin(r);
-    const ops=opsOf(r);
-    const add=(d,share)=>{
-      d.entries++; d.kg+=kg*share; d.tgt+=tgt*share; if(d.sh[r.shift]!=null) d.sh[r.shift]+=kg*share; d.assets.add(r.asset_code);
-      if(dt>0){ d.ev++; d.dt+=dt*share; }
-    };
-    if(!ops.length){ add(none,1); return; }
-    ops.forEach(o=>{
-      if(!map[o.key]){ map[o.key]=blank(); map[o.key].id=o.id; map[o.key].name=o.name; }
-      add(map[o.key],1/ops.length);
-    });
-  });
-  const list=Object.values(map).sort((a,b)=>b.kg-a.kg);
-  const machineNames=set=>[...set].map(c=>assetName(c)).join(", ");
+  const box=document.getElementById("viewOperator");
+  if(!rows.length){ box.innerHTML="<p style='color:var(--muted);'>No data.</p>"; return; }
+
+  const sumOf=()=>({kg:0,tgt:0,dt:0,ops:new Set()});
+  const addTo=(t,r)=>{
+    t.kg+=parseFloat(r.kg_produced||0); t.tgt+=getTarget(r.asset_code); t.dt+=dtMin(r);
+    opsOf(r).forEach(o=>t.ops.add(o.key));
+  };
+  const cells=t=>`<td>${fmt(t.kg)}</td><td>${fmt(t.tgt)}</td><td>${effStr(t.kg,t.tgt)}</td><td>${durHtml(t.dt)}</td>`;
+  const crew=n=>n?n+(n===1?" operator":" operators"):'<span class="dash">—</span>';
+
+  // machines in the usual order, then any machine that only appears in the records (for example a deactivated one)
+  const codes=ASSETS.map(a=>a.asset_code);
+  rows.forEach(r=>{ if(codes.indexOf(r.asset_code)===-1) codes.push(r.asset_code); });
+  const shifts=SHIFTS.slice();
+  rows.forEach(r=>{ if(shifts.indexOf(r.shift)===-1) shifts.push(r.shift); });
 
   let html='<table><thead><tr>'+
-    '<th style="text-align:left;min-width:140px;">Operator</th><th>Employee ID</th><th>Entries</th><th>Machines</th>'+
-    '<th class="grp-m">Morning KG</th><th class="grp-a">Afternoon KG</th><th class="grp-n">Night KG</th>'+
-    '<th class="grp-t">Total KG</th><th class="grp-t">Target KG</th><th class="grp-t">Eff%</th>'+
-    '<th>Downtime Events</th><th>Downtime</th>'+
+    '<th style="text-align:left;min-width:150px;">Machine / Shift / Date</th><th style="text-align:left;">Operators</th>'+
+    '<th>KG</th><th>Target</th><th>Eff%</th><th>Downtime</th>'+
     '</tr></thead><tbody>';
-  let tKg=0,tTgt=0,tM=0,tA=0,tN=0,tDt=0;
-  const line=(label,idTxt,d)=>{
-    tKg+=d.kg; tTgt+=d.tgt; tM+=d.sh.Morning; tA+=d.sh.Afternoon; tN+=d.sh.Night; tDt+=d.dt;
-    return `<tr><td class="asset-cell">${label}</td><td>${idTxt}</td><td>${d.entries}</td>`+
-      `<td title="${esc(machineNames(d.assets))}">${d.assets.size}</td>`+
-      `<td>${fmt(d.sh.Morning)}</td><td>${fmt(d.sh.Afternoon)}</td><td>${fmt(d.sh.Night)}</td>`+
-      `<td><b>${fmt(d.kg)}</b></td><td>${fmt(d.tgt)}</td><td>${effStr(d.kg,d.tgt)}</td>`+
-      `<td>${d.ev||'<span class="dash">—</span>'}</td><td>${durHtml(d.dt)}</td></tr>`;
-  };
-  list.forEach(d=>{ html+=line(esc(d.name), esc(d.id||"—"), d); });
-  if(none.entries) html+=line('<span class="dash">No operator recorded</span>','<span class="dash">—</span>',none);
-  const totalEvents=rows.filter(r=>dtMin(r)>0).length;
-  html+=`<tr class="total-row"><td class="asset-cell">TOTAL</td><td></td><td></td><td></td>`+
-    `<td>${fmt(tM)}</td><td>${fmt(tA)}</td><td>${fmt(tN)}</td><td>${fmt(tKg)}</td><td>${fmt(tTgt)}</td><td>${effStr(tKg,tTgt)}</td>`+
-    `<td>${totalEvents}</td><td>${durHtml(tDt)}</td></tr>`;
+
+  codes.forEach(code=>{
+    const mRows=rows.filter(r=>r.asset_code===code);
+    if(!mRows.length) return;
+    const mt=sumOf(); mRows.forEach(r=>addTo(mt,r));
+    html+=`<tr class="g1"><td class="asset-cell">${esc(assetName(code))}</td><td style="text-align:left;">${crew(mt.ops.size)}</td>${cells(mt)}</tr>`;
+
+    shifts.forEach(sh=>{
+      const sRows=mRows.filter(r=>r.shift===sh);
+      if(!sRows.length) return;
+      const st=sumOf(); sRows.forEach(r=>addTo(st,r));
+      html+=`<tr class="g2"><td class="indent1">${esc(sh)}</td><td style="text-align:left;">${crew(st.ops.size)}</td>${cells(st)}</tr>`;
+
+      sRows.slice().sort((x,y)=>String(x.production_date).localeCompare(String(y.production_date))).forEach(r=>{
+        const ops=opsOf(r), et=sumOf(); addTo(et,r);
+        const dtCell=dtMin(r)>0
+          ? `<span title="${esc((r.downtime_reason||"")+(r.downtime_start?" ("+hhmm(r.downtime_start)+" to "+hhmm(r.downtime_end)+")":""))}">${durText(dtMin(r))}</span>`
+          : '<span class="dash">—</span>';
+        html+=`<tr class="g3"><td class="indent2">${fmtDate(r.production_date)}</td>`+
+          `<td class="opcell" title="${esc(ops.map(o=>o.id||o.name).join(", "))}">${ops.length?esc(ops.map(o=>o.name).join(", ")):'<span class="dash">No operator recorded</span>'}</td>`+
+          `<td>${fmt(et.kg)}</td><td>${fmt(et.tgt)}</td><td>${effStr(et.kg,et.tgt)}</td><td>${dtCell}</td></tr>`;
+      });
+    });
+  });
+  // grand total straight from the records, so it always equals the KPI cards
+  const g=sumOf(); rows.forEach(r=>addTo(g,r));
+  html+=`<tr class="total-row"><td class="asset-cell">TOTAL</td><td style="text-align:left;">${crew(g.ops.size)}</td>${cells(g)}</tr>`;
   html+='</tbody></table>'+
     '<div style="font-size:11px;color:var(--muted);margin-top:6px;text-align:left;">'+
-    'When a machine had more than one operator, its KG, target and downtime are shared equally between them (downtime shares are rounded to the nearest minute). '+
-    'Entries = machine shifts the operator took part in. Downtime Events = those shifts that had downtime. Hover over Machines to see which.</div>';
-  document.getElementById("viewOperator").innerHTML=list.length||none.entries?html:"<p style='color:var(--muted);'>No data.</p>";
+    'Operators on the same machine, date and shift work as one crew, so the crew has one combined KG, target, efficiency and downtime. Nothing is divided between people. '+
+    'Efficiency = KG produced ÷ target KG × 100; machine and shift lines add up the KG and targets first, then divide. '+
+    'Hover over a Downtime figure to see its reason and times.</div>';
+  box.innerHTML=html;
 }
 
 // ── Downtime view ──────────────────────────────────────────
