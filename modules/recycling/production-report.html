@@ -193,6 +193,11 @@
       </div>
 
       <div class="kpis" id="kpiRow"></div>
+      <div style="font-size:11px;color:var(--muted);margin:-6px 0 12px;">
+        <b>Efficiency %</b> = KG produced ÷ actual target KG × 100. &nbsp;<b>Actual target</b> = target KG − output lost to downtime, where
+        output lost to downtime = target KG × downtime minutes ÷ shift minutes (Morning 7 h, Afternoon 8 h, Night 9 h).
+        Machine, shift and overall lines add up the KG and the actual targets first, then divide. Hover over an efficiency figure to see its actual target.
+      </div>
 
       <div class="card">
         <!-- Tabs — visible on screen only; both views stack when printing -->
@@ -235,6 +240,14 @@ let ROWS=[];      // all records from server for the current run
 let FILTERED=[];  // ROWS after operator filter
 
 const SHIFTS = ["Morning","Afternoon","Night"];
+// Shift lengths in minutes (Morning 7 am - 2 pm, Afternoon 2 pm - 10 pm, Night 10 pm - 7 am), the same as the entry page.
+const SHIFT_MIN = { Morning:420, Afternoon:480, Night:540 };
+function shiftMin(r){ return SHIFT_MIN[r.shift]||0; }
+// Actual target of one entry = target KG - the output lost to downtime, where lost output = target KG x downtime minutes / shift minutes.
+function atgOf(r){
+  const t=getTarget(r.asset_code), m=shiftMin(r);
+  return m ? t-(t*Math.min(1,dtMin(r)/m)) : t;
+}
 
 function authHeaders(){
   return {"apikey":SUPABASE_ANON_KEY,"Authorization":"Bearer "+SUPABASE_ANON_KEY};
@@ -244,10 +257,17 @@ function fmt(v,dec=1){
   const x=parseFloat(v);
   return isNaN(x)?"-":x.toLocaleString(undefined,{minimumFractionDigits:dec,maximumFractionDigits:dec});
 }
-function effStr(kg,tgt){
-  if(!tgt) return '<span class="dash">—</span>';
-  const e=(kg/tgt)*100;
-  return `<span class="${e>=100?"g":e>=75?"w":"b"}">${e.toFixed(1)}%</span>`;
+// Actual efficiency % = KG produced / actual target KG x 100, where actual target = target KG - output lost to downtime.
+// Groups and totals add up the KG and the actual targets of their entries first and then divide.
+function effVal(kg,tgt,atg){
+  if(!tgt) return null;
+  return { atg, lost:tgt-atg, e: atg>0 ? (kg/atg)*100 : null };   // null: down for the whole shift, cannot be measured
+}
+function effStr(kg,tgt,atg){
+  const v=effVal(kg,tgt,atg);
+  if(!v||v.e==null) return '<span class="dash">—</span>';
+  const tip=`KG ${fmt(kg)} ÷ actual target ${fmt(v.atg)}  (target ${fmt(tgt)} − downtime loss ${fmt(v.lost)})`;
+  return `<span class="${v.e>=100?"g":v.e>=75?"w":"b"}" title="${tip}">${v.e.toFixed(1)}%</span>`;
 }
 function fmtDate(d){
   if(!d) return "—";
@@ -462,18 +482,20 @@ function getTarget(code){ const a=ASSETS.find(x=>x.asset_code===code); return a?
 function renderKPIs(rows){
   const totalKg =rows.reduce((s,r)=>s+parseFloat(r.kg_produced||0),0);
   const totalTgt=rows.reduce((s,r)=>s+getTarget(r.asset_code),0);
-  const eff=totalTgt?(totalKg/totalTgt)*100:0;
-  const cls=eff>=100?"good":(eff>=75?"warn":"bad");
+  const totalAtg=rows.reduce((s,r)=>s+atgOf(r),0);
+  const ev=effVal(totalKg,totalTgt,totalAtg);
+  const eff=(ev&&ev.e!=null)?ev.e:null;
+  const cls=eff==null?"":(eff>=100?"good":(eff>=75?"warn":"bad"));
   document.getElementById("kpiRow").innerHTML=
     `<div class="kpi"><div class="n">${fmt(totalKg)}</div><div class="l">Total KG Produced</div></div>`+
     `<div class="kpi"><div class="n">${fmt(totalTgt)}</div><div class="l">Total Target KG</div></div>`+
-    `<div class="kpi ${cls}"><div class="n">${eff.toFixed(1)}%</div><div class="l">Overall Efficiency</div></div>`+
+    `<div class="kpi ${cls}" title="${ev?"KG "+fmt(totalKg)+" ÷ actual target "+fmt(ev.atg)+"  (target "+fmt(totalTgt)+" − downtime loss "+fmt(ev.lost)+")":""}"><div class="n">${eff==null?"—":eff.toFixed(1)+"%"}</div><div class="l">Overall Efficiency</div></div>`+
     `<div class="kpi"><div class="n">${rows.length}</div><div class="l">Total Entries</div></div>`;
 }
 
 // ── By Shift view ──────────────────────────────────────────
 function renderByShift(rows){
-  const mk=()=>({kg:0,tgt:0,dt:0});
+  const mk=()=>({kg:0,tgt:0,dt:0,atg:0});
   const map={};
   ASSETS.forEach(a=>{ map[a.asset_code]={}; SHIFTS.forEach(s=>{ map[a.asset_code][s]=mk(); }); });
   rows.forEach(r=>{
@@ -483,6 +505,7 @@ function renderByShift(rows){
     c.kg +=parseFloat(r.kg_produced||0);
     c.tgt+=getTarget(r.asset_code);
     c.dt +=dtMin(r);
+    c.atg +=atgOf(r);
   });
 
   let html='<table><thead><tr>'+
@@ -497,27 +520,27 @@ function renderByShift(rows){
     '</tr></thead><tbody>';
 
   const tots={Morning:mk(),Afternoon:mk(),Night:mk()};
-  let gKg=0,gTgt=0,gDt=0;
+  let gKg=0,gTgt=0,gDt=0,gAtg=0;
 
   ASSETS.forEach(a=>{
     const d=map[a.asset_code]||{};
-    let rKg=0,rTgt=0,rDt=0,cells="";
+    let rKg=0,rTgt=0,rDt=0,rAtg=0,cells="";
     SHIFTS.forEach(s=>{
       const c=d[s]||mk();
-      cells+=`<td>${fmt(c.kg)}</td><td>${fmt(c.tgt)}</td><td>${effStr(c.kg,c.tgt)}</td><td>${durHtml(c.dt)}</td>`;
-      tots[s].kg+=c.kg; tots[s].tgt+=c.tgt; tots[s].dt+=c.dt; rKg+=c.kg; rTgt+=c.tgt; rDt+=c.dt;
+      cells+=`<td>${fmt(c.kg)}</td><td>${fmt(c.tgt)}</td><td>${effStr(c.kg,c.tgt,c.atg)}</td><td>${durHtml(c.dt)}</td>`;
+      tots[s].kg+=c.kg; tots[s].tgt+=c.tgt; tots[s].dt+=c.dt; tots[s].atg+=c.atg; rKg+=c.kg; rTgt+=c.tgt; rDt+=c.dt; rAtg+=c.atg;
     });
-    gKg+=rKg; gTgt+=rTgt; gDt+=rDt;
+    gKg+=rKg; gTgt+=rTgt; gDt+=rDt; gAtg+=rAtg;
     html+=`<tr><td class="asset-cell">${esc(a.asset_name)}</td>${cells}`+
-      `<td><b>${fmt(rKg)}</b></td><td>${fmt(rTgt)}</td><td>${effStr(rKg,rTgt)}</td><td>${durHtml(rDt)}</td></tr>`;
+      `<td><b>${fmt(rKg)}</b></td><td>${fmt(rTgt)}</td><td>${effStr(rKg,rTgt,rAtg)}</td><td>${durHtml(rDt)}</td></tr>`;
   });
 
   let totCells="";
   SHIFTS.forEach(s=>{
-    totCells+=`<td><b>${fmt(tots[s].kg)}</b></td><td>${fmt(tots[s].tgt)}</td><td>${effStr(tots[s].kg,tots[s].tgt)}</td><td>${durHtml(tots[s].dt)}</td>`;
+    totCells+=`<td><b>${fmt(tots[s].kg)}</b></td><td>${fmt(tots[s].tgt)}</td><td>${effStr(tots[s].kg,tots[s].tgt,tots[s].atg)}</td><td>${durHtml(tots[s].dt)}</td>`;
   });
   html+=`<tr class="total-row"><td class="asset-cell">TOTAL</td>${totCells}`+
-    `<td>${fmt(gKg)}</td><td>${fmt(gTgt)}</td><td>${effStr(gKg,gTgt)}</td><td>${durHtml(gDt)}</td></tr>`;
+    `<td>${fmt(gKg)}</td><td>${fmt(gTgt)}</td><td>${effStr(gKg,gTgt,gAtg)}</td><td>${durHtml(gDt)}</td></tr>`;
   html+="</tbody></table>";
   document.getElementById("viewShift").innerHTML=html;
 }
@@ -526,11 +549,12 @@ function renderByShift(rows){
 function renderByAsset(rows){
   const map={};
   rows.forEach(r=>{
-    if(!map[r.asset_code]) map[r.asset_code]={kg:0,tgt:0,entries:0,ev:0,dt:0};
+    if(!map[r.asset_code]) map[r.asset_code]={kg:0,tgt:0,entries:0,ev:0,dt:0,atg:0};
     const m=map[r.asset_code];
     m.kg+=parseFloat(r.kg_produced||0);
     m.tgt+=getTarget(r.asset_code);
     m.entries+=1;
+    m.atg+=atgOf(r);
     if(dtMin(r)>0){ m.ev+=1; m.dt+=dtMin(r); }
   });
 
@@ -540,18 +564,18 @@ function renderByAsset(rows){
     '<th>Downtime Events</th><th>Downtime</th>'+
     '</tr></thead><tbody>';
 
-  let tKg=0,tTgt=0,tEnt=0,tEv=0,tDt=0;
+  let tKg=0,tTgt=0,tEnt=0,tEv=0,tDt=0,tAtg=0;
   ASSETS.forEach(a=>{
-    const d=map[a.asset_code]||{kg:0,tgt:0,entries:0,ev:0,dt:0};
-    tKg+=d.kg; tTgt+=d.tgt; tEnt+=d.entries; tEv+=d.ev; tDt+=d.dt;
+    const d=map[a.asset_code]||{kg:0,tgt:0,entries:0,ev:0,dt:0,atg:0};
+    tKg+=d.kg; tTgt+=d.tgt; tEnt+=d.entries; tEv+=d.ev; tDt+=d.dt; tAtg+=d.atg;
     html+=`<tr><td class="asset-cell">${esc(a.asset_name)}</td>`+
       `<td>${d.entries}</td><td>${fmt(d.kg)}</td><td>${fmt(d.tgt)}</td>`+
-      `<td>${effStr(d.kg,d.tgt)}</td><td>${d.ev||'<span class="dash">—</span>'}</td><td>${durHtml(d.dt)}</td></tr>`;
+      `<td>${effStr(d.kg,d.tgt,d.atg)}</td><td>${d.ev||'<span class="dash">—</span>'}</td><td>${durHtml(d.dt)}</td></tr>`;
   });
 
   html+=`<tr class="total-row"><td class="asset-cell">TOTAL</td>`+
     `<td>${tEnt}</td><td>${fmt(tKg)}</td><td>${fmt(tTgt)}</td>`+
-    `<td>${effStr(tKg,tTgt)}</td><td>${tEv}</td><td>${durHtml(tDt)}</td></tr>`;
+    `<td>${effStr(tKg,tTgt,tAtg)}</td><td>${tEv}</td><td>${durHtml(tDt)}</td></tr>`;
   html+="</tbody></table>";
   document.getElementById("viewAsset").innerHTML=html;
 }
@@ -563,12 +587,12 @@ function renderByOperator(rows){
   const box=document.getElementById("viewOperator");
   if(!rows.length){ box.innerHTML="<p style='color:var(--muted);'>No data.</p>"; return; }
 
-  const sumOf=()=>({kg:0,tgt:0,dt:0,ops:new Set()});
+  const sumOf=()=>({kg:0,tgt:0,dt:0,atg:0,ops:new Set()});
   const addTo=(t,r)=>{
-    t.kg+=parseFloat(r.kg_produced||0); t.tgt+=getTarget(r.asset_code); t.dt+=dtMin(r);
+    t.kg+=parseFloat(r.kg_produced||0); t.tgt+=getTarget(r.asset_code); t.dt+=dtMin(r); t.atg+=atgOf(r);
     opsOf(r).forEach(o=>t.ops.add(o.key));
   };
-  const cells=t=>`<td>${fmt(t.kg)}</td><td>${fmt(t.tgt)}</td><td>${effStr(t.kg,t.tgt)}</td><td>${durHtml(t.dt)}</td>`;
+  const cells=t=>`<td>${fmt(t.kg)}</td><td>${fmt(t.tgt)}</td><td>${effStr(t.kg,t.tgt,t.atg)}</td><td>${durHtml(t.dt)}</td>`;
   const crew=n=>n?n+(n===1?" operator":" operators"):'<span class="dash">—</span>';
 
   // machines in the usual order, then any machine that only appears in the records (for example a deactivated one)
@@ -601,7 +625,7 @@ function renderByOperator(rows){
           : '<span class="dash">—</span>';
         html+=`<tr class="g3"><td class="indent2">${fmtDate(r.production_date)}</td>`+
           `<td class="opcell" title="${esc(ops.map(o=>o.id||o.name).join(", "))}">${ops.length?esc(ops.map(o=>o.name).join(", ")):'<span class="dash">No operator recorded</span>'}</td>`+
-          `<td>${fmt(et.kg)}</td><td>${fmt(et.tgt)}</td><td>${effStr(et.kg,et.tgt)}</td><td>${dtCell}</td></tr>`;
+          `<td>${fmt(et.kg)}</td><td>${fmt(et.tgt)}</td><td>${effStr(et.kg,et.tgt,et.atg)}</td><td>${dtCell}</td></tr>`;
       });
     });
   });
@@ -611,7 +635,7 @@ function renderByOperator(rows){
   html+='</tbody></table>'+
     '<div style="font-size:11px;color:var(--muted);margin-top:6px;text-align:left;">'+
     'Operators on the same machine, date and shift work as one crew, so the crew has one combined KG, target, efficiency and downtime. Nothing is divided between people. '+
-    'Efficiency = KG produced ÷ target KG × 100; machine and shift lines add up the KG and targets first, then divide. '+
+    'Efficiency = KG produced ÷ actual target KG × 100 (actual target = target minus the output lost to downtime). Machine and shift lines add up the KG and actual targets first, then divide. '+
     'Hover over a Downtime figure to see its reason and times.</div>';
   box.innerHTML=html;
 }
