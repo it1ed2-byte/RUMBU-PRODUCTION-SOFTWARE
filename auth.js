@@ -16,8 +16,9 @@
 //      to login.html. Accounts with no kwp_staff link are unaffected.
 // ============================================================
 
-const SUPABASE_URL = "https://betfhunzmhtdzgvufmfk.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp";
+// Which database: live on rumbu.vercel.app, the TEST database on preview links and local copies (see window.RUMBU_DB).
+const SUPABASE_URL = (window.RUMBU_DB = window.RUMBU_DB || (function(){var h = String(location.hostname || "");var test = h !== "rumbu.vercel.app" && (/\.vercel\.app$/.test(h) || h === "localhost" || /^127\./.test(h) || h === "" || location.protocol === "file:");return test ? { env: "test", url: "https://cbityajrnwmdjymzhgzt.supabase.co", key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNiaXR5YWpybndtZGp5bXpoZ3p0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM3ODA5OTcsImV4cCI6MjEwOTM1Njk5N30.ZJWt4-No17YZhmjFOJ8yedGC0TiD4uOeE7arlAu9T_k" } : { env: "live", url: "https://betfhunzmhtdzgvufmfk.supabase.co", key: "sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp" };})()).url;
+const SUPABASE_ANON_KEY = (window.RUMBU_DB = window.RUMBU_DB || (function(){var h = String(location.hostname || "");var test = h !== "rumbu.vercel.app" && (/\.vercel\.app$/.test(h) || h === "localhost" || /^127\./.test(h) || h === "" || location.protocol === "file:");return test ? { env: "test", url: "https://cbityajrnwmdjymzhgzt.supabase.co", key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNiaXR5YWpybndtZGp5bXpoZ3p0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM3ODA5OTcsImV4cCI6MjEwOTM1Njk5N30.ZJWt4-No17YZhmjFOJ8yedGC0TiD4uOeE7arlAu9T_k" } : { env: "live", url: "https://betfhunzmhtdzgvufmfk.supabase.co", key: "sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp" };})()).key;
 
 // ============================================================
 // RUMBU UI: logo, loading screens and friendly error messages
@@ -321,6 +322,23 @@ var RumbuUI = (function(){
 // noticed and explained wherever it happens, without each page having to check.
 // If the Supabase library itself could not be downloaded (no connection), sb stays null and
 // requireAuth() reports it as a connection problem instead of the page breaking silently.
+// On a preview link or a local copy the app uses the TEST database. Say so on screen, so nobody
+// mistakes test records for live ones (top window only; pages inside the app share the one banner).
+(function(){
+  try{
+    if(!window.RUMBU_DB || window.RUMBU_DB.env !== "test" || window.top !== window) return;
+    const show = function(){
+      if(document.getElementById("rumbuTestBanner")) return;
+      const b = document.createElement("div");
+      b.id = "rumbuTestBanner"; b.setAttribute("role", "status");
+      b.style.cssText = "position:fixed;left:50%;bottom:10px;transform:translateX(-50%);z-index:99999;background:#b45309;color:#fff;font:700 12px/1.3 Inter,'Segoe UI',Arial,sans-serif;padding:6px 14px;border-radius:999px;box-shadow:0 4px 14px rgba(0,0,0,.25);pointer-events:none;letter-spacing:.3px";
+      b.textContent = "TEST DATABASE · changes here do not touch live data";
+      document.body.appendChild(b);
+    };
+    if(document.body) show(); else document.addEventListener("DOMContentLoaded", show);
+  }catch(e){}
+})();
+
 const sb = (typeof supabase !== "undefined" && supabase.createClient)
   ? supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { global: { fetch: RumbuUI.wrapFetch() } })
   : null;
@@ -389,11 +407,18 @@ async function requireAuth(loginPath) {
     return null;
   }
 
-  const { data: profile, error: profErr } = await sb
+  const PROFILE_COLS = "id, username, role, super_admin_type, section_id, can_self_manage_todos, must_change_password, last_open_module";
+  let { data: profile, error: profErr } = await sb
     .from("profiles")
-    .select("id, username, role, super_admin_type, section_id, can_self_manage_todos, must_change_password, last_open_module")
+    .select(PROFILE_COLS + ", is_head_of_it")
     .eq("id", session.user.id)
     .single();
+  // Before head_of_it_marker.sql has been run the column does not exist yet: load without it.
+  let headMarkerMissing = false;
+  if (profErr && /is_head_of_it/i.test(profErr.message || "")) {
+    headMarkerMissing = true;
+    ({ data: profile, error: profErr } = await sb.from("profiles").select(PROFILE_COLS).eq("id", session.user.id).single());
+  }
 
   if (profErr || !profile) {
     if (profErr && /jwt|session/i.test(profErr.message || "")) RumbuUI.sessionExpired();
@@ -457,13 +482,17 @@ async function requireAuth(loginPath) {
     }
   }
 
-  // itops3 is the system IT administrator with full elevated access.
-  // A "Super Admin (full access)" is a super_admin whose type is exactly "full". Only itops3 can assign
+  // The Head of IT is the system IT administrator with full elevated access. It is the one account
+  // marked profiles.is_head_of_it (set only in the database, see head_of_it_marker.sql), so it no
+  // longer depends on the login name; the old name check is used only until that SQL has been run.
+  // A "Super Admin (full access)" is a super_admin whose type is exactly "full". Only the Head of IT can assign
   // it (enforced by the swift-handler edge function and a database guard), and it can change data across
-  // the system but cannot manage other Super Admin accounts: that stays itops3-only.
+  // the system but cannot manage other Super Admin accounts: that stays with the Head of IT.
   // Every other super_admin account is Viewer-only (read-only across the system). Any other type value,
   // including "management" and "technical", stays read-only, so existing accounts are unchanged.
-  const isItops = profile.username === "itops3";
+  const isHeadOfIt = profile.role === "super_admin" &&
+    (profile.is_head_of_it === true || (headMarkerMissing && profile.username === "itops3"));
+  const isItops = isHeadOfIt;   // older pages ask for isItops
   const isFullSuperAdmin = profile.role === "super_admin" && profile.super_admin_type === "full";
   const readOnly = profile.role === "super_admin" && !isItops && !isFullSuperAdmin;
 
@@ -482,6 +511,7 @@ async function requireAuth(loginPath) {
     departmentNames: departmentNames,
     canSelfManageTodos: !!profile.can_self_manage_todos,
     lastOpenModule: profile.last_open_module || null,
+    isHeadOfIt: isHeadOfIt,
     isItops: isItops,
     isFullSuperAdmin: isFullSuperAdmin,
     readOnly: readOnly

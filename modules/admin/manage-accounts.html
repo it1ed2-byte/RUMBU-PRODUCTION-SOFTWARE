@@ -734,7 +734,8 @@
 <div id="printArea"></div>
 
 <script>
-const EDGE_FUNCTION_URL = "https://betfhunzmhtdzgvufmfk.supabase.co/functions/v1/swift-handler";
+// Which database: live on rumbu.vercel.app, the TEST database on preview links and local copies (see window.RUMBU_DB).
+const EDGE_FUNCTION_URL = (window.RUMBU_DB = window.RUMBU_DB || (function(){var h = String(location.hostname || "");var test = h !== "rumbu.vercel.app" && (/\.vercel\.app$/.test(h) || h === "localhost" || /^127\./.test(h) || h === "" || location.protocol === "file:");return test ? { env: "test", url: "https://cbityajrnwmdjymzhgzt.supabase.co", key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNiaXR5YWpybndtZGp5bXpoZ3p0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM3ODA5OTcsImV4cCI6MjEwOTM1Njk5N30.ZJWt4-No17YZhmjFOJ8yedGC0TiD4uOeE7arlAu9T_k" } : { env: "live", url: "https://betfhunzmhtdzgvufmfk.supabase.co", key: "sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp" };})()).url + "/functions/v1/swift-handler";
 let ME = null;let ACCESS_TOKEN = null;
 // Whether the signed-in Admin's own staff record is flagged HR Admin for
 // their Branch. Set once in init() via loadMyHrStatus(). Super Admin never
@@ -2733,12 +2734,12 @@ function openEmployeeDetail(empId){
   // Access actions live here now that the list has no Action column.
   html += "<div class=\"card\" style=\"max-width:760px;\"><h3 style=\"margin-top:0;\">Access</h3>";
   if(e.has_system_access){
-    if(!isAdmin && (e.linked_role !== "super_admin" || ME.username === "itops3") && e.linked_profile_id){
+    if(!isAdmin && (e.linked_role !== "super_admin" || ME.isHeadOfIt) && e.linked_profile_id){
       // hr_console is a Rumbu-only role — AgriWatt is a separate company
       // that doesn't use that structure at all, so it's never even offered
       // as an option for someone whose Branch is AgriWatt, rather than
       // relying on someone remembering not to pick it.
-      // Only itops3 is ever offered a Super Admin choice, because only itops3 may assign it
+      // Only the Head of IT is ever offered a Super Admin choice, because only the Head of IT may assign it
       // (the swift-handler edge function and a database guard enforce that too).
       const choices = roleChoices(ME.username, e.linked_role, e.linked_super_admin_type, isAgriwattBranch(e.branch));
       html += "<label>Change role</label>" +
@@ -2752,7 +2753,7 @@ function openEmployeeDetail(empId){
     // Reset password — for when a staff member forgets theirs. Resets to the
     // temporary password and forces a change on next login. Not offered for
     // Super Admin accounts (protected server-side too).
-    if(!isAdmin && e.linked_profile_id && (e.linked_role !== "super_admin" || ME.username === "itops3")){
+    if(!isAdmin && e.linked_profile_id && (e.linked_role !== "super_admin" || ME.isHeadOfIt)){
       html += "<div style=\"margin-top:12px;padding-top:12px;border-top:1px solid var(--line);\">" +
         "<label>Forgot their password?</label>" +
         "<button style=\"margin:0;padding:8px 12px;\" onclick=\"resetAccessPassword(" + e.id + ")\">Reset Password</button>" +
@@ -3998,9 +3999,9 @@ function roleLabelOf(key){
   return key;
 }
 function roleBadgeText(role, type){ return (role === "super_admin" && type === "full") ? "super_admin (full)" : (role || "access"); }
-// Options for the Change role dropdown. Only itops3 is offered a Super Admin choice.
+// Options for the Change role dropdown. Only the Head of IT is offered a Super Admin choice.
 function roleChoices(meUsername, currentRole, currentType, hideHrConsole){
-  const isItops = meUsername === "itops3";
+  const isItops = !!(ME && ME.isHeadOfIt);   // the Head of IT, whatever the login is called
   const current = roleKeyOf(currentRole, currentType);
   return ["user","admin","super_admin","super_admin:full","hr_console"]
     .filter(k => k !== current)
@@ -4008,7 +4009,7 @@ function roleChoices(meUsername, currentRole, currentType, hideHrConsole){
     .filter(k => k !== "hr_console" || !hideHrConsole)
     .map(k => ({ value:k, label:roleLabelOf(k) }));
 }
-// Options for the itops3-only panel of an existing Super Admin account (the original wording is kept).
+// Options for the the Head of IT-only panel of an existing Super Admin account (the original wording is kept).
 function panelRoleChoices(currentKey){
   const all = [
     { value:"super_admin",      label:"super_admin (Viewer — read-only)" },
@@ -4036,7 +4037,7 @@ async function confirmSuperAdminKind(profileId, wantedType, wantedLabel){
 }
 
 // Changes an already-linked account's role directly from the Employee Directory
-// (e.g. User -> Admin). Changing a Super Admin account is itops3-only, and only itops3 can assign the Super Admin
+// (e.g. User -> Admin). Changing a Super Admin account is the Head of IT-only, and only the Head of IT can assign the Super Admin
 // role, either kind. The server enforces this; the checks here just give a clear message first.
 async function changeEmployeeRole(empId, profileId, currentKey){
   if(adminBlocked("Changing a role")) return;
@@ -4044,9 +4045,9 @@ async function changeEmployeeRole(empId, profileId, currentKey){
   const choice = sel ? sel.value : null;
   if(!choice || choice === currentKey) return;
   const pick = parseRoleChoice(choice);
-  if(pick.new_role === "super_admin" && ME.username !== "itops3"){ alert("Only itops3 can assign the Super Admin role."); return; }
+  if(pick.new_role === "super_admin" && !ME.isHeadOfIt){ alert("Only the Head of IT can assign the Super Admin role."); return; }
   const warn = choice === "super_admin:full"
-    ? "\n\nA Super Admin (full access) can change data across the whole system. Only itops3 can assign this."
+    ? "\n\nA Super Admin (full access) can change data across the whole system. Only the Head of IT can assign this."
     : "";
   if(!confirm("Change this account's role from \"" + roleLabelOf(currentKey) + "\" to \"" + roleLabelOf(choice) + "\"?" + warn)) return;
 
@@ -4140,8 +4141,8 @@ async function loadRoleDropdown(){
   MANAGEABLE_IDS = new Set();
   let rows = [];
   if(ME.role === "super_admin"){
-    // itops3 can manage everyone including other super_admin accounts
-    const rolesToLoad = ME.username === "itops3"
+    // the Head of IT can manage everyone including other super_admin accounts
+    const rolesToLoad = ME.isHeadOfIt
       ? ["admin","user","super_admin"]
       : ["admin","user"];
     rows = await fetchAllRows(sb.from("profiles").select("id, role, username, super_admin_type").in("role", rolesToLoad).order("id"));
@@ -4150,7 +4151,7 @@ async function loadRoleDropdown(){
   }
   rows.forEach(r=>MANAGEABLE_IDS.add(r.id));
   if(typeof UA !== "undefined"){ UA.usernames = {}; rows.forEach(r => { UA.usernames[r.id] = { username: r.username, role: r.role, super_admin_type: r.super_admin_type }; }); }
-  const sc = document.getElementById("uaChipSuper"); if(sc) sc.classList.toggle("hidden", ME.username !== "itops3");
+  const sc = document.getElementById("uaChipSuper"); if(sc) sc.classList.toggle("hidden", !ME.isHeadOfIt);
   resetManageRoleUI();
 }
 
@@ -4244,10 +4245,10 @@ function proceedRoleForEmployee(emp){
     return;
   }
 
-  if(emp.linked_role === "super_admin" && ME.username !== "itops3"){
+  if(emp.linked_role === "super_admin" && !ME.isHeadOfIt){
     noacc.className = "status err"; noacc.style.cssText = "";
     noacc.classList.remove("hidden");
-    noacc.textContent = esc(emp.full_name) + " is a Super Admin (" + (emp.linked_super_admin_type === "full" ? "full access" : "viewer") + ") account. Only itops3 can manage Super Admin accounts.";
+    noacc.textContent = esc(emp.full_name) + " is a Super Admin (" + (emp.linked_super_admin_type === "full" ? "full access" : "viewer") + ") account. Only the Head of IT can manage Super Admin accounts.";
     return;
   }
 
@@ -4297,7 +4298,7 @@ async function openRolePanelForProfile(id){
       <label>Branch / Section (governs which Branch's data and dropdowns this account sees everywhere in the app)</label>
       <div id="role_sections"></div>`;
 
-  // ── Super Admin management panel (itops3 only) ─────────────────────────────
+  // ── Super Admin management panel (the Head of IT only) ─────────────────────────────
   if(profile.role === "super_admin"){
     const saKey = roleKeyOf(profile.role, profile.super_admin_type);
     const saFull = saKey === "super_admin:full";
@@ -4306,7 +4307,7 @@ async function openRolePanelForProfile(id){
         ${saFull
           ? "ℹ️ <b>Super Admin — Full access.</b> This account can change data across the whole system, but it cannot manage other Super Admin accounts."
           : "ℹ️ <b>Super Admin — Viewer role.</b> This account can see everything in the system but cannot make any changes."}
-        Only <b>itops3</b> can assign or manage Super Admin accounts.
+        Only the <b>Head of IT</b> can assign or manage Super Admin accounts.
       </div>
       <p class="sub" style="margin-top:0;">Managing <b>${esc(profile.username)}</b> — current role: <b>${esc(roleLabelOf(saKey))}</b></p>
 
@@ -4494,7 +4495,7 @@ async function changeRoleFromPanel(id, currentUsername, currentKey){
     alert("This account is already " + roleLabelOf(currentKey) + ".");
     return;
   }
-  if(ME.username !== "itops3"){ alert("Only itops3 can manage Super Admin accounts."); return; }
+  if(!ME.isHeadOfIt){ alert("Only the Head of IT can manage Super Admin accounts."); return; }
   const pick = parseRoleChoice(choice);
   const isSuper = pick.new_role === "super_admin";
   const msg = isSuper
@@ -4532,7 +4533,7 @@ async function deleteRoleAccount(id, username){
 // People on the left; the chosen person on the right in three tabs:
 // Pages, Branches and Account. Changes collect in a save bar and are
 // shown in a summary before anything is written. The rules are the same
-// as before: only a Super Admin changes access, only itops3 manages
+// as before: only a Super Admin changes access, only the Head of IT manages
 // Super Admin accounts, an Admin can grant only what they hold, and
 // ticking "Manage Staff" still sets HR Admin status for the person's branch.
 // =========================================================
@@ -4639,8 +4640,8 @@ async function uaSelect(key){
       `<div style="margin-top:10px;"><button class="ua-btn solid" onclick="goGrantAccessFromRole(${p.empId})">Grant access in Staff Records</button></div></div>`;
     return;
   }
-  if(p.role === "super_admin" && ME.username !== "itops3"){
-    d.innerHTML = head + `<div class="ua-msg info">This is a Super Admin account. Only itops3 can manage Super Admin accounts.</div>`; return;
+  if(p.role === "super_admin" && !ME.isHeadOfIt){
+    d.innerHTML = head + `<div class="ua-msg info">This is a Super Admin account. Only the Head of IT can manage Super Admin accounts.</div>`; return;
   }
   if(!MANAGEABLE_IDS.has(p.profileId)){
     d.innerHTML = head + `<div class="ua-msg info">${ME.role === "admin" ? "This login was not created by you, so you cannot manage it here." : "This login cannot be managed here."}</div>`; return;
@@ -4841,7 +4842,7 @@ async function uaChangeRole(){
   if(!choice) return;
   if(adminBlocked("Changing a role")) return;
   const key = roleKeyOf(p.role, p.saType), pick = parseRoleChoice(choice);
-  if((pick.new_role === "super_admin" || p.role === "super_admin") && ME.username !== "itops3"){ alert("Only itops3 can manage Super Admin accounts."); return; }
+  if((pick.new_role === "super_admin" || p.role === "super_admin") && !ME.isHeadOfIt){ alert("Only the Head of IT can manage Super Admin accounts."); return; }
   if(!confirm("Change " + p.name + " from " + uaRoleWords(p.role, p.saType) + " to " + roleLabelOf(choice) + "?" + (choice === "super_admin:full" ? "\n\nA Super Admin with full access can change data across the whole system." : ""))) return;
   st.className = "ua-status"; st.textContent = "Changing role…";
   try{
