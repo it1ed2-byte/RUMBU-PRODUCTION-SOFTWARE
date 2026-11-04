@@ -278,6 +278,7 @@
   .sr-empty .ua-btn{margin-top:10px!important;}
   @media (max-width:1100px){ #emp_dir_controls,#admin_emp_dir_controls{grid-template-columns:1fr 1fr;} #emp_dir_controls .field:first-child,#admin_emp_dir_controls .field:first-child{grid-column:1/-1;} }
   @media (max-width:700px){ .sr-hide-sm{display:none;} }
+  .dev-hidden{display:none!important;}
 </style>
 </head>
 <body>
@@ -841,7 +842,10 @@ window.toggleAcctNav = toggleAcctNav;
   n.addEventListener("click", function(e){ if(e.target.closest && e.target.closest(".nav-item")) n.classList.remove("peek"); });
 })();
 
+// Developers (IT, view-only) may use only these two screens here.
+const DEV_SECTIONS = ["sec-change-password", "sec-activity-log"];
 function showSection(secId){
+  if(ME && ME.isDeveloper && DEV_SECTIONS.indexOf(secId) === -1) secId = "sec-change-password";
   document.querySelectorAll(".panel").forEach(p=>p.classList.toggle("active", p.id === secId));
   document.querySelectorAll(".nav-item").forEach(b=>b.classList.toggle("active", b.getAttribute("data-sec") === secId));
   const main = document.querySelector(".admin-main");
@@ -867,6 +871,15 @@ async function init(){
   const status = document.getElementById("connStatus");
   try{
     ME = await requireAuth("../../login.html");
+    if(ME.isDeveloper){
+      // hide every other screen, and the headings left with nothing under them
+      document.querySelectorAll("#adminNav .nav-item[data-sec]").forEach(b => { if(DEV_SECTIONS.indexOf(b.getAttribute("data-sec")) === -1) b.classList.add("dev-hidden"); });
+      document.querySelectorAll("#adminNav .nav-title").forEach(t => {
+        let n = t.nextElementSibling, any = false;
+        while(n && !n.classList.contains("nav-title")){ if(n.classList.contains("nav-item") && !n.classList.contains("dev-hidden")) any = true; n = n.nextElementSibling; }
+        if(!any) t.classList.add("dev-hidden");
+      });
+    }
     if(!ME) return;
 
     // These four do not depend on each other, so ask for all of them at once.
@@ -3992,10 +4005,11 @@ async function linkPendingEmployeeIfAny(newProfileId){
 /*==SA-PURE-START==*/
 // Super Admin comes in two kinds: "super_admin" = Viewer (read-only), "super_admin:full" = Super Admin (full access).
 // Every other role is just its own name.
-function roleKeyOf(role, type){ return role === "super_admin" ? (type === "full" ? "super_admin:full" : "super_admin") : (role || ""); }
+function roleKeyOf(role, type){ return role === "super_admin" ? (type === "full" ? "super_admin:full" : type === "technical" ? "super_admin:technical" : "super_admin") : (role || ""); }
 function roleLabelOf(key){
   if(key === "super_admin") return "super_admin (Viewer — read-only)";
   if(key === "super_admin:full") return "super_admin (Full access)";
+  if(key === "super_admin:technical") return "Developer (IT, view-only)";
   return key;
 }
 function roleBadgeText(role, type){ return (role === "super_admin" && type === "full") ? "super_admin (full)" : (role || "access"); }
@@ -4003,9 +4017,9 @@ function roleBadgeText(role, type){ return (role === "super_admin" && type === "
 function roleChoices(meUsername, currentRole, currentType, hideHrConsole){
   const isItops = !!(ME && ME.isHeadOfIt);   // the Head of IT, whatever the login is called
   const current = roleKeyOf(currentRole, currentType);
-  return ["user","admin","super_admin","super_admin:full","hr_console"]
+  return ["user","admin","super_admin","super_admin:full","super_admin:technical","hr_console"]
     .filter(k => k !== current)
-    .filter(k => isItops || (k !== "super_admin" && k !== "super_admin:full"))
+    .filter(k => isItops || (k !== "super_admin" && k !== "super_admin:full" && k !== "super_admin:technical"))
     .filter(k => k !== "hr_console" || !hideHrConsole)
     .map(k => ({ value:k, label:roleLabelOf(k) }));
 }
@@ -4014,6 +4028,7 @@ function panelRoleChoices(currentKey){
   const all = [
     { value:"super_admin",      label:"super_admin (Viewer — read-only)" },
     { value:"super_admin:full", label:"super_admin (Full access)" },
+    { value:"super_admin:technical", label:"Developer (IT, view-only)" },
     { value:"admin",            label:"admin (Write access — Section-scoped)" },
     { value:"user",             label:"user (Limited access)" }
   ];
@@ -4022,6 +4037,7 @@ function panelRoleChoices(currentKey){
 // What to send to the server for a chosen option.
 function parseRoleChoice(value){
   if(value === "super_admin:full") return { new_role:"super_admin", super_admin_type:"full" };
+  if(value === "super_admin:technical") return { new_role:"super_admin", super_admin_type:"technical" };
   if(value === "super_admin")      return { new_role:"super_admin", super_admin_type:"viewer" };
   return { new_role:value };
 }
@@ -4547,7 +4563,7 @@ function uaInitials(name){
   return (String(name || "").replace(/[^A-Za-z0-9]/g, "").slice(0, 2) || "?").toUpperCase();
 }
 function uaRoleWords(role, type){
-  if(role === "super_admin") return type === "full" ? "Super Admin (full access)" : "Super Admin (viewer)";
+  if(role === "super_admin") return type === "full" ? "Super Admin (full access)" : type === "technical" ? "Developer (view-only)" : type === "management" ? "Super Admin (Head of IT)" : "Super Admin (viewer)";
   return ({ admin: "Admin", user: "User", hr_console: "HR Console" })[role] || (role ? String(role) : "No login yet");
 }
 
@@ -4728,7 +4744,7 @@ function uaRenderDetail(){
     `<div class="ua-tabs" role="tablist">${tabs.map(t => `<button class="ua-tab" role="tab" aria-selected="${UA.tab === t[0]}" onclick="uaTab('${t[0]}')">${t[1]}${t[2] != null ? `<span class="ua-n" id="uaN_${t[0]}">${t[2]}</span>` : ""}</button>`).join("")}</div>` +
     `<div class="ua-pane" id="uaPane" role="tabpanel"></div>` +
     `<div class="ua-savebar" id="uaSaveBar" hidden><span class="ua-dirty" id="uaDirty"></span><button class="ua-btn" onclick="uaDiscard()">Discard</button><button class="ua-btn solid" onclick="uaReview()">Save changes</button></div>`;
-  if(isSuper) d.querySelector(".ua-pane").insertAdjacentHTML("beforebegin", `<div class="ua-msg info" style="margin-bottom:0;">${p.saType === "full" ? "<b>Super Admin with full access.</b> This account can change data across the whole system." : "<b>Super Admin viewer.</b> This account can see everything but change nothing."} Pages and branches do not apply to it.</div>`);
+  if(isSuper) d.querySelector(".ua-pane").insertAdjacentHTML("beforebegin", `<div class="ua-msg info" style="margin-bottom:0;">${p.saType === "full" ? "<b>Super Admin with full access.</b> This account can change data across the whole system." : p.saType === "technical" ? "<b>Developer (IT).</b> Sees every module on live but cannot change any data, accounts or settings; the database refuses it. Developers build and test on the test system, and the Head of IT approves what goes live." : "<b>Super Admin viewer.</b> This account can see everything but change nothing."} Pages and branches do not apply to it.</div>`);
   uaRenderPane(); uaUpdateSaveBar();
 }
 function uaTab(t){ UA.tab = t; document.querySelectorAll(".ua-tab").forEach(b => b.setAttribute("aria-selected", String(b.getAttribute("onclick").indexOf("'" + t + "'") >= 0))); uaRenderPane(); }
@@ -4843,7 +4859,7 @@ async function uaChangeRole(){
   if(adminBlocked("Changing a role")) return;
   const key = roleKeyOf(p.role, p.saType), pick = parseRoleChoice(choice);
   if((pick.new_role === "super_admin" || p.role === "super_admin") && !ME.isHeadOfIt){ alert("Only the Head of IT can manage Super Admin accounts."); return; }
-  if(!confirm("Change " + p.name + " from " + uaRoleWords(p.role, p.saType) + " to " + roleLabelOf(choice) + "?" + (choice === "super_admin:full" ? "\n\nA Super Admin with full access can change data across the whole system." : ""))) return;
+  if(!confirm("Change " + p.name + " from " + uaRoleWords(p.role, p.saType) + " to " + roleLabelOf(choice) + "?" + (choice === "super_admin:full" ? "\n\nA Super Admin with full access can change data across the whole system." : choice === "super_admin:technical" ? "\n\nAs a Developer they can see every module on live but cannot change any data, accounts or settings." : ""))) return;
   st.className = "ua-status"; st.textContent = "Changing role…";
   try{
     const res = await callEdgeFunction(Object.assign({ action: "change_role", target_id: p.profileId }, pick));

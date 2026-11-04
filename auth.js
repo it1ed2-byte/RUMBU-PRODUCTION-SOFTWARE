@@ -494,7 +494,21 @@ async function requireAuth(loginPath) {
     (profile.is_head_of_it === true || (headMarkerMissing && profile.username === "itops3"));
   const isItops = isHeadOfIt;   // older pages ask for isItops
   const isFullSuperAdmin = profile.role === "super_admin" && profile.super_admin_type === "full";
+  // A Developer (IT) is a Super Admin of type "technical": view-only on live, enforced by the database
+  // (developer_role.sql) as well as by the screens. Manage Accounts is closed to them apart from
+  // changing their own password and reading the activity log.
+  const isDeveloper = profile.role === "super_admin" && profile.super_admin_type === "technical" && !isHeadOfIt;
   const readOnly = profile.role === "super_admin" && !isItops && !isFullSuperAdmin;
+  if(isDeveloper && /\/modules\/admin\//.test(location.pathname)){
+    const sec = new URLSearchParams(location.search).get("section") || "";
+    if(sec !== "change-password" && sec !== "activity-log"){
+      const stop = () => { document.body.innerHTML = '<div style="max-width:520px;margin:12vh auto;padding:28px;border:1px solid #d8dee8;border-radius:14px;background:#fff;font:14px/1.6 Inter,Segoe UI,Arial,sans-serif;color:#1f2430;text-align:center">' +
+        '<h2 style="margin:0 0 8px;color:#1F3864;font-size:18px">Not available to Developer accounts</h2>' +
+        'Accounts, branches, modules and access are managed by the Head of IT. You can still change your own password and read the activity log.</div>'; };
+      if(document.body) stop(); else document.addEventListener("DOMContentLoaded", stop);
+      throw new Error("Developer accounts cannot open this Manage Accounts screen.");
+    }
+  }
 
   if(readOnly) _scheduleReadOnly();
 
@@ -512,6 +526,7 @@ async function requireAuth(loginPath) {
     canSelfManageTodos: !!profile.can_self_manage_todos,
     lastOpenModule: profile.last_open_module || null,
     isHeadOfIt: isHeadOfIt,
+    isDeveloper: isDeveloper,
     isItops: isItops,
     isFullSuperAdmin: isFullSuperAdmin,
     readOnly: readOnly
