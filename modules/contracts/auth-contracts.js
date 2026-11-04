@@ -11,8 +11,9 @@
 
 'use strict';
 
-const _CNT_URL = 'https://betfhunzmhtdzgvufmfk.supabase.co';
-const _CNT_KEY = 'sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp';
+// Which database: live on rumbu.vercel.app, the TEST database on preview links and local copies (see window.RUMBU_DB).
+const _CNT_URL = (window.RUMBU_DB = window.RUMBU_DB || (function(){var h = String(location.hostname || "");var test = h !== "rumbu.vercel.app" && (/\.vercel\.app$/.test(h) || h === "localhost" || /^127\./.test(h) || h === "" || location.protocol === "file:");return test ? { env: "test", url: "https://cbityajrnwmdjymzhgzt.supabase.co", key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNiaXR5YWpybndtZGp5bXpoZ3p0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM3ODA5OTcsImV4cCI6MjEwOTM1Njk5N30.ZJWt4-No17YZhmjFOJ8yedGC0TiD4uOeE7arlAu9T_k" } : { env: "live", url: "https://betfhunzmhtdzgvufmfk.supabase.co", key: "sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp" };})()).url;
+const _CNT_KEY = (window.RUMBU_DB = window.RUMBU_DB || (function(){var h = String(location.hostname || "");var test = h !== "rumbu.vercel.app" && (/\.vercel\.app$/.test(h) || h === "localhost" || /^127\./.test(h) || h === "" || location.protocol === "file:");return test ? { env: "test", url: "https://cbityajrnwmdjymzhgzt.supabase.co", key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNiaXR5YWpybndtZGp5bXpoZ3p0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM3ODA5OTcsImV4cCI6MjEwOTM1Njk5N30.ZJWt4-No17YZhmjFOJ8yedGC0TiD4uOeE7arlAu9T_k" } : { env: "live", url: "https://betfhunzmhtdzgvufmfk.supabase.co", key: "sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp" };})()).key;
 
 /**
  * Returns the best available Supabase client.

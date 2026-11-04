@@ -16,8 +16,9 @@
 //      to login.html. Accounts with no kwp_staff link are unaffected.
 // ============================================================
 
-const SUPABASE_URL = "https://betfhunzmhtdzgvufmfk.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp";
+// Which database: live on rumbu.vercel.app, the TEST database on preview links and local copies (see window.RUMBU_DB).
+const SUPABASE_URL = (window.RUMBU_DB = window.RUMBU_DB || (function(){var h = String(location.hostname || "");var test = h !== "rumbu.vercel.app" && (/\.vercel\.app$/.test(h) || h === "localhost" || /^127\./.test(h) || h === "" || location.protocol === "file:");return test ? { env: "test", url: "https://cbityajrnwmdjymzhgzt.supabase.co", key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNiaXR5YWpybndtZGp5bXpoZ3p0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM3ODA5OTcsImV4cCI6MjEwOTM1Njk5N30.ZJWt4-No17YZhmjFOJ8yedGC0TiD4uOeE7arlAu9T_k" } : { env: "live", url: "https://betfhunzmhtdzgvufmfk.supabase.co", key: "sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp" };})()).url;
+const SUPABASE_ANON_KEY = (window.RUMBU_DB = window.RUMBU_DB || (function(){var h = String(location.hostname || "");var test = h !== "rumbu.vercel.app" && (/\.vercel\.app$/.test(h) || h === "localhost" || /^127\./.test(h) || h === "" || location.protocol === "file:");return test ? { env: "test", url: "https://cbityajrnwmdjymzhgzt.supabase.co", key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNiaXR5YWpybndtZGp5bXpoZ3p0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM3ODA5OTcsImV4cCI6MjEwOTM1Njk5N30.ZJWt4-No17YZhmjFOJ8yedGC0TiD4uOeE7arlAu9T_k" } : { env: "live", url: "https://betfhunzmhtdzgvufmfk.supabase.co", key: "sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp" };})()).key;
 
 // ============================================================
 // RUMBU UI: logo, loading screens and friendly error messages
@@ -321,6 +322,23 @@ var RumbuUI = (function(){
 // noticed and explained wherever it happens, without each page having to check.
 // If the Supabase library itself could not be downloaded (no connection), sb stays null and
 // requireAuth() reports it as a connection problem instead of the page breaking silently.
+// On a preview link or a local copy the app uses the TEST database. Say so on screen, so nobody
+// mistakes test records for live ones (top window only; pages inside the app share the one banner).
+(function(){
+  try{
+    if(!window.RUMBU_DB || window.RUMBU_DB.env !== "test" || window.top !== window) return;
+    const show = function(){
+      if(document.getElementById("rumbuTestBanner")) return;
+      const b = document.createElement("div");
+      b.id = "rumbuTestBanner"; b.setAttribute("role", "status");
+      b.style.cssText = "position:fixed;left:50%;bottom:10px;transform:translateX(-50%);z-index:99999;background:#b45309;color:#fff;font:700 12px/1.3 Inter,'Segoe UI',Arial,sans-serif;padding:6px 14px;border-radius:999px;box-shadow:0 4px 14px rgba(0,0,0,.25);pointer-events:none;letter-spacing:.3px";
+      b.textContent = "TEST DATABASE · changes here do not touch live data";
+      document.body.appendChild(b);
+    };
+    if(document.body) show(); else document.addEventListener("DOMContentLoaded", show);
+  }catch(e){}
+})();
+
 const sb = (typeof supabase !== "undefined" && supabase.createClient)
   ? supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { global: { fetch: RumbuUI.wrapFetch() } })
   : null;
