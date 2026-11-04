@@ -48,6 +48,13 @@
   .op-chip{display:inline-flex;align-items:center;gap:6px;background:var(--bg);border:1px solid var(--line);border-radius:999px;padding:5px 6px 5px 12px;font-size:12.5px;font-weight:600;}
   .op-chip button{border:none;background:var(--line);color:var(--text);width:20px;height:20px;border-radius:50%;cursor:pointer;font-size:11px;line-height:1;padding:0;}
   .op-count{font-size:11px;color:var(--muted);margin:-6px 0 14px;}
+  /* downtime */
+  .dt-row{display:flex;gap:12px;}
+  .dt-row>div{flex:1;min-width:0;}
+  .dt-total{margin:0 0 14px;padding:9px 12px;border-radius:8px;font-size:13px;font-weight:700;
+    background:#eff6ff;border:1px solid #bfdbfe;color:var(--navy);}
+  .dt-total.ok{background:#f0fdf4;border-color:#bbf7d0;color:var(--green);}
+  .dt-total.err{background:#fef2f2;border-color:#fecaca;color:var(--red);}
   /* NOT called ".main": styles.css already uses .main for the whole page area (height:100vh), which made this button as tall as the screen. */
   button.btn-save{
     display:block;width:auto;min-width:200px;height:auto;margin:6px auto 0;padding:11px 28px;
@@ -102,6 +109,24 @@
 
       <label>KG Produced</label>
       <input type="number" id="kgProduced" min="0" step="0.1" placeholder="0.0">
+
+      <!-- Downtime: Yes shows the time fields; the duration is worked out automatically -->
+      <label>Was there downtime? <span style="color:var(--red);">*</span></label>
+      <select id="downtimeSel" onchange="onDowntimeChange()">
+        <option value="">— Select —</option>
+        <option value="No">No</option>
+        <option value="Yes">Yes</option>
+      </select>
+
+      <div id="downtimeBox" style="display:none;">
+        <div class="dt-row">
+          <div><label>Start Time</label><input type="time" id="dtStart" oninput="calcDowntime()"></div>
+          <div><label>End Time</label><input type="time" id="dtEnd" oninput="calcDowntime()"></div>
+        </div>
+        <label>Reason for Downtime</label>
+        <input type="text" id="dtReason" maxlength="200" placeholder="e.g. motor fault, power outage, waiting for material" autocomplete="off">
+        <div class="dt-total" id="dtTotal">Downtime: enter the start and end time</div>
+      </div>
 
       <!-- Operators: one or more Recycling employees per machine -->
       <label>Operators <span style="font-weight:400;color:var(--muted);">(add everyone who ran this machine)</span></label>
@@ -275,6 +300,40 @@ document.getElementById("opInput").addEventListener("input", e => {
   if(v && OPERATORS.some(o => opLabel(o).toLowerCase() === v)) addOperator();
 });
 
+// ── Downtime ───────────────────────────────────────────────
+const SHIFT_MINUTES = { Morning: 420, Afternoon: 480, Night: 540 };   // 7 h, 8 h, 9 h
+function toMin(t){ const p = String(t).split(":"); return Number(p[0]) * 60 + Number(p[1]); }
+function fmtDuration(min){ const h = Math.floor(min / 60), m = min % 60; return h && !m ? h + " h" : (h ? h + " h " : "") + m + " min"; }
+// Works out the minutes between start and end. A Night shift may cross midnight (e.g. 23:30 to 00:40).
+function downtimeMinutes(){
+  const s = document.getElementById("dtStart").value, e = document.getElementById("dtEnd").value;
+  const shift = document.getElementById("shift").value;
+  if(!s || !e) return { minutes: null, error: null };
+  const a = toMin(s); let b = toMin(e);
+  if(b === a) return { minutes: null, error: "Start and end time cannot be the same." };
+  if(b < a){
+    if(shift === "Night") b += 1440;
+    else return { minutes: null, error: "End time must be after the start time." };
+  }
+  const mins = b - a, max = SHIFT_MINUTES[shift];
+  if(max && mins > max) return { minutes: null, error: "That is longer than the " + shift + " shift (" + fmtDuration(max) + ")." };
+  return { minutes: mins, error: null };
+}
+function calcDowntime(){
+  const box = document.getElementById("dtTotal"), r = downtimeMinutes();
+  if(r.error){ box.textContent = r.error; box.className = "dt-total err"; return; }
+  if(r.minutes == null){ box.textContent = "Downtime: enter the start and end time"; box.className = "dt-total"; return; }
+  box.textContent = "Downtime: " + fmtDuration(r.minutes) + " (" + r.minutes + " minutes)";
+  box.className = "dt-total ok";
+}
+function onDowntimeChange(){
+  const yes = document.getElementById("downtimeSel").value === "Yes";
+  document.getElementById("downtimeBox").style.display = yes ? "block" : "none";
+  if(!yes){ document.getElementById("dtStart").value = ""; document.getElementById("dtEnd").value = ""; document.getElementById("dtReason").value = ""; }
+  calcDowntime();
+}
+document.getElementById("shift").addEventListener("change", calcDowntime);   // the Night rule depends on the shift
+
 // ── Submit ─────────────────────────────────────────────────
 async function submitEntry(){
   const btn       = document.getElementById("submitBtn");
@@ -290,6 +349,21 @@ async function submitEntry(){
   if(!branch)              { showStatus("err","Select a branch."); return; }
   if(!assetCode)           { showStatus("err","Select a machine."); return; }
   if(isNaN(kg) || kg < 0) { showStatus("err","Enter a valid KG produced value."); return; }
+
+  // downtime: a Yes/No answer is required; Yes needs start, end and a reason
+  const dtAnswer = document.getElementById("downtimeSel").value;
+  if(!dtAnswer) { showStatus("err","Answer \"Was there downtime?\" with Yes or No."); return; }
+  let dtStart = null, dtEnd = null, dtMinutes = 0, dtReason = null;
+  if(dtAnswer === "Yes"){
+    dtStart = document.getElementById("dtStart").value;
+    dtEnd   = document.getElementById("dtEnd").value;
+    dtReason = document.getElementById("dtReason").value.trim();
+    if(!dtStart || !dtEnd) { showStatus("err","Enter the downtime start time and end time."); return; }
+    const dt = downtimeMinutes();
+    if(dt.error) { showStatus("err", dt.error); return; }
+    if(!dtReason) { showStatus("err","Enter the reason for the downtime."); return; }
+    dtMinutes = dt.minutes;
+  }
 
   // Picking a name from the list adds it straight away. If a name was typed but not picked, add it now when it is a
   // clear match; otherwise stop, so nobody is left out of the entry by accident.
@@ -319,7 +393,12 @@ async function submitEntry(){
           kg_produced:   kg,
           operator_id:   operatorId,
           operator_name: operatorName,
-          entered_by:    ME.username || ""
+          entered_by:    ME.username || "",
+          had_downtime:     dtAnswer === "Yes",
+          downtime_start:   dtStart,
+          downtime_end:     dtEnd,
+          downtime_minutes: dtMinutes,
+          downtime_reason:  dtReason
         })
       }
     );
@@ -329,18 +408,24 @@ async function submitEntry(){
     }
     if(!res.ok){
       const j = await res.json().catch(()=>({}));
-      throw new Error(j.message || j.details || "Save failed (HTTP " + res.status + ").");
+      const msg = j.message || j.details || ("Save failed (HTTP " + res.status + ").");
+      if(/downtime/i.test(msg) && /column/i.test(msg)){
+        throw new Error("The database does not have the downtime columns yet. Please ask IT to run the downtime database update, then try again.");
+      }
+      throw new Error(msg);
     }
 
     const machineName = assetSel.options[assetSel.selectedIndex].text;
     showStatus("ok","✅ Saved — " + machineName + " · " + shift + " · " + date +
-      (CHOSEN.length ? " · " + CHOSEN.length + " operator" + (CHOSEN.length===1?"":"s") : ""));
+      (CHOSEN.length ? " · " + CHOSEN.length + " operator" + (CHOSEN.length===1?"":"s") : "") +
+      (dtAnswer === "Yes" ? " · downtime " + fmtDuration(dtMinutes) : ""));
 
     // Reset form — keep date, shift, branch for fast back-to-back entry
     document.getElementById("asset").value        = "";
     document.getElementById("targetKg").value     = "";
     document.getElementById("kgProduced").value   = "";
     CHOSEN = []; renderChips(); setOpNote("", "");
+    document.getElementById("downtimeSel").value = ""; onDowntimeChange();
 
   }catch(e){
     showStatus("err","❌ " + e.message);

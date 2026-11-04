@@ -118,6 +118,8 @@
     #viewShift{display:block !important;}
     #viewAsset{display:block !important;}
     #viewOperator{display:block !important;}
+    #viewDowntime{display:block !important;}
+    @page{size:A4 landscape;margin:10mm;}
   }
 </style>
 </head>
@@ -191,6 +193,7 @@
           <div class="tab active" onclick="showView('shift',this)">By Shift</div>
           <div class="tab"        onclick="showView('asset',this)">By Asset</div>
         <div class="tab"        onclick="showView('operator',this)">By Operator</div>
+        <div class="tab"        onclick="showView('downtime',this)">Downtime</div>
         </div>
 
         <!-- Print view labels -->
@@ -208,6 +211,11 @@
           Production by Operator
         </div>
         <div class="tbl-wrap" id="viewOperator" style="display:none;"></div>
+
+        <div class="print-only" style="font-weight:bold;color:#1F3864;margin:16px 0 4px;font-size:11pt;">
+          Downtime
+        </div>
+        <div class="tbl-wrap" id="viewDowntime" style="display:none;"></div>
       </div>
 
     </div><!-- #reportArea -->
@@ -238,6 +246,15 @@ function fmtDate(d){
   if(!d) return "—";
   return new Date(d).toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"});
 }
+
+// ── Downtime helpers ───────────────────────────────────────
+let DT_OK = true;   // false when the database does not have the downtime columns yet
+function dtMin(r){ const n=parseInt(r.downtime_minutes,10); return isNaN(n)||n<0?0:n; }
+function durText(min){ min=Math.round(min); const h=Math.floor(min/60), m=min%60; return (h?h+"h ":"")+m+"m"; }   // 85 -> "1h 25m"
+function durHtml(min){ min=Math.round(min); return min>0?`<span title="${min} minutes">${durText(min)}</span>`:'<span class="dash">—</span>'; }
+function hhmm(t){ return t?String(t).slice(0,5):"—"; }
+function branchLabel(v){ return v==="MamaSannu"?"Mama Sannu":(v||"—"); }
+function assetName(code){ const a=ASSETS.find(x=>x.asset_code===code); return a?a.asset_name:code; }
 
 // ── Init ──────────────────────────────────────────────────
 async function init(){
@@ -304,7 +321,7 @@ async function runReport(){
 
   try{
     let url=SUPABASE_URL+"/rest/v1/recycling_production"+
-      "?select=production_date,shift,asset_code,branch,kg_produced,operator_id,operator_name"+
+      "?select=production_date,shift,asset_code,branch,kg_produced,operator_id,operator_name,had_downtime,downtime_start,downtime_end,downtime_minutes,downtime_reason"+
       "&production_date=gte."+from+"&production_date=lte."+to+
       "&order=production_date.asc";
 
@@ -317,7 +334,13 @@ async function runReport(){
       url+="&branch=in.("+encodeURIComponent(list)+")";
     }
 
-    const res=await fetch(url,{headers:authHeaders()});
+    let res=await fetch(url,{headers:authHeaders()});
+    DT_OK=true;
+    if(res.status===400){
+      // the downtime columns are not in the database yet: load without them so the report still works
+      res=await fetch(url.replace(",downtime_reason","").replace(",downtime_minutes","").replace(",downtime_end","").replace(",downtime_start","").replace(",had_downtime",""),{headers:authHeaders()});
+      DT_OK=false;
+    }
     if(!res.ok) throw new Error("recycling_production: HTTP "+res.status);
     ROWS=await res.json();
 
@@ -326,7 +349,8 @@ async function runReport(){
     FILTERED=ROWS;
 
     status.className="status ok";
-    status.textContent=ROWS.length.toLocaleString()+" record(s) loaded.";
+    status.textContent=ROWS.length.toLocaleString()+" record(s) loaded."+
+      (DT_OK?"":" Downtime is not available yet: the downtime database update has not been run.");
 
     if(!ROWS.length){
       document.getElementById("reportArea").style.display="none";
@@ -387,6 +411,7 @@ function renderAll(rows){
   renderByShift(rows);
   renderByAsset(rows);
   renderByOperator(rows);
+  renderDowntime(rows);
   updatePrintHeader();
 }
 
@@ -441,48 +466,51 @@ function renderKPIs(rows){
 
 // ── By Shift view ──────────────────────────────────────────
 function renderByShift(rows){
+  const mk=()=>({kg:0,tgt:0,dt:0});
   const map={};
-  ASSETS.forEach(a=>{ map[a.asset_code]={}; SHIFTS.forEach(s=>{ map[a.asset_code][s]={kg:0,tgt:0}; }); });
+  ASSETS.forEach(a=>{ map[a.asset_code]={}; SHIFTS.forEach(s=>{ map[a.asset_code][s]=mk(); }); });
   rows.forEach(r=>{
     if(!map[r.asset_code]) map[r.asset_code]={};
-    if(!map[r.asset_code][r.shift]) map[r.asset_code][r.shift]={kg:0,tgt:0};
-    map[r.asset_code][r.shift].kg  +=parseFloat(r.kg_produced||0);
-    map[r.asset_code][r.shift].tgt +=getTarget(r.asset_code);
+    if(!map[r.asset_code][r.shift]) map[r.asset_code][r.shift]=mk();
+    const c=map[r.asset_code][r.shift];
+    c.kg +=parseFloat(r.kg_produced||0);
+    c.tgt+=getTarget(r.asset_code);
+    c.dt +=dtMin(r);
   });
 
   let html='<table><thead><tr>'+
     '<th rowspan="2" style="text-align:left;min-width:80px;">Machine</th>'+
-    '<th colspan="3" class="grp-m">Morning</th>'+
-    '<th colspan="3" class="grp-a">Afternoon</th>'+
-    '<th colspan="3" class="grp-n">Night</th>'+
-    '<th colspan="3" class="grp-t">Overall</th>'+
+    '<th colspan="4" class="grp-m">Morning</th>'+
+    '<th colspan="4" class="grp-a">Afternoon</th>'+
+    '<th colspan="4" class="grp-n">Night</th>'+
+    '<th colspan="4" class="grp-t">Overall</th>'+
     '</tr><tr>'+
-    SHIFTS.map(()=>'<th>KG</th><th>Target</th><th>Eff%</th>').join("")+
-    '<th>KG</th><th>Target</th><th>Eff%</th>'+
+    SHIFTS.map(()=>'<th>KG</th><th>Target</th><th>Eff%</th><th>Downtime</th>').join("")+
+    '<th>KG</th><th>Target</th><th>Eff%</th><th>Downtime</th>'+
     '</tr></thead><tbody>';
 
-  const tots={Morning:{kg:0,tgt:0},Afternoon:{kg:0,tgt:0},Night:{kg:0,tgt:0}};
-  let gKg=0,gTgt=0;
+  const tots={Morning:mk(),Afternoon:mk(),Night:mk()};
+  let gKg=0,gTgt=0,gDt=0;
 
   ASSETS.forEach(a=>{
     const d=map[a.asset_code]||{};
-    let rKg=0,rTgt=0,cells="";
+    let rKg=0,rTgt=0,rDt=0,cells="";
     SHIFTS.forEach(s=>{
-      const kg=(d[s]||{kg:0}).kg, tgt=(d[s]||{tgt:0}).tgt;
-      cells+=`<td>${fmt(kg)}</td><td>${fmt(tgt)}</td><td>${effStr(kg,tgt)}</td>`;
-      tots[s].kg+=kg; tots[s].tgt+=tgt; rKg+=kg; rTgt+=tgt;
+      const c=d[s]||mk();
+      cells+=`<td>${fmt(c.kg)}</td><td>${fmt(c.tgt)}</td><td>${effStr(c.kg,c.tgt)}</td><td>${durHtml(c.dt)}</td>`;
+      tots[s].kg+=c.kg; tots[s].tgt+=c.tgt; tots[s].dt+=c.dt; rKg+=c.kg; rTgt+=c.tgt; rDt+=c.dt;
     });
-    gKg+=rKg; gTgt+=rTgt;
-    html+=`<tr><td class="asset-cell">${a.asset_name}</td>${cells}`+
-      `<td><b>${fmt(rKg)}</b></td><td>${fmt(rTgt)}</td><td>${effStr(rKg,rTgt)}</td></tr>`;
+    gKg+=rKg; gTgt+=rTgt; gDt+=rDt;
+    html+=`<tr><td class="asset-cell">${esc(a.asset_name)}</td>${cells}`+
+      `<td><b>${fmt(rKg)}</b></td><td>${fmt(rTgt)}</td><td>${effStr(rKg,rTgt)}</td><td>${durHtml(rDt)}</td></tr>`;
   });
 
   let totCells="";
   SHIFTS.forEach(s=>{
-    totCells+=`<td><b>${fmt(tots[s].kg)}</b></td><td>${fmt(tots[s].tgt)}</td><td>${effStr(tots[s].kg,tots[s].tgt)}</td>`;
+    totCells+=`<td><b>${fmt(tots[s].kg)}</b></td><td>${fmt(tots[s].tgt)}</td><td>${effStr(tots[s].kg,tots[s].tgt)}</td><td>${durHtml(tots[s].dt)}</td>`;
   });
   html+=`<tr class="total-row"><td class="asset-cell">TOTAL</td>${totCells}`+
-    `<td>${fmt(gKg)}</td><td>${fmt(gTgt)}</td><td>${effStr(gKg,gTgt)}</td></tr>`;
+    `<td>${fmt(gKg)}</td><td>${fmt(gTgt)}</td><td>${effStr(gKg,gTgt)}</td><td>${durHtml(gDt)}</td></tr>`;
   html+="</tbody></table>";
   document.getElementById("viewShift").innerHTML=html;
 }
@@ -491,43 +519,49 @@ function renderByShift(rows){
 function renderByAsset(rows){
   const map={};
   rows.forEach(r=>{
-    if(!map[r.asset_code]) map[r.asset_code]={kg:0,tgt:0,entries:0};
-    map[r.asset_code].kg      +=parseFloat(r.kg_produced||0);
-    map[r.asset_code].tgt     +=getTarget(r.asset_code);
-    map[r.asset_code].entries +=1;
+    if(!map[r.asset_code]) map[r.asset_code]={kg:0,tgt:0,entries:0,ev:0,dt:0};
+    const m=map[r.asset_code];
+    m.kg+=parseFloat(r.kg_produced||0);
+    m.tgt+=getTarget(r.asset_code);
+    m.entries+=1;
+    if(dtMin(r)>0){ m.ev+=1; m.dt+=dtMin(r); }
   });
 
   let html='<table><thead><tr>'+
     '<th style="text-align:left;">Machine</th>'+
     '<th>Entries</th><th>KG Produced</th><th>Target KG</th><th>Efficiency %</th>'+
+    '<th>Downtime Events</th><th>Downtime</th>'+
     '</tr></thead><tbody>';
 
-  let tKg=0,tTgt=0,tEnt=0;
+  let tKg=0,tTgt=0,tEnt=0,tEv=0,tDt=0;
   ASSETS.forEach(a=>{
-    const d=map[a.asset_code]||{kg:0,tgt:0,entries:0};
-    tKg+=d.kg; tTgt+=d.tgt; tEnt+=d.entries;
-    html+=`<tr><td class="asset-cell">${a.asset_name}</td>`+
+    const d=map[a.asset_code]||{kg:0,tgt:0,entries:0,ev:0,dt:0};
+    tKg+=d.kg; tTgt+=d.tgt; tEnt+=d.entries; tEv+=d.ev; tDt+=d.dt;
+    html+=`<tr><td class="asset-cell">${esc(a.asset_name)}</td>`+
       `<td>${d.entries}</td><td>${fmt(d.kg)}</td><td>${fmt(d.tgt)}</td>`+
-      `<td>${effStr(d.kg,d.tgt)}</td></tr>`;
+      `<td>${effStr(d.kg,d.tgt)}</td><td>${d.ev||'<span class="dash">—</span>'}</td><td>${durHtml(d.dt)}</td></tr>`;
   });
 
   html+=`<tr class="total-row"><td class="asset-cell">TOTAL</td>`+
     `<td>${tEnt}</td><td>${fmt(tKg)}</td><td>${fmt(tTgt)}</td>`+
-    `<td>${effStr(tKg,tTgt)}</td></tr>`;
+    `<td>${effStr(tKg,tTgt)}</td><td>${tEv}</td><td>${durHtml(tDt)}</td></tr>`;
   html+="</tbody></table>";
   document.getElementById("viewAsset").innerHTML=html;
 }
 
 // ── By Operator view ───────────────────────────────────────
-// Each entry's KG and target are shared equally between the operators on it, so the table adds up to the
+// Each entry's KG, target and downtime are shared equally between the operators on it, so the table adds up to the
 // same total as the KPI cards. Entries saved without an operator are listed on their own line.
 function renderByOperator(rows){
-  const blank=()=>({entries:0,kg:0,tgt:0,sh:{Morning:0,Afternoon:0,Night:0},assets:new Set()});
+  const blank=()=>({entries:0,kg:0,tgt:0,ev:0,dt:0,sh:{Morning:0,Afternoon:0,Night:0},assets:new Set()});
   const map={}, none=blank();
   rows.forEach(r=>{
-    const kg=parseFloat(r.kg_produced||0), tgt=getTarget(r.asset_code);
+    const kg=parseFloat(r.kg_produced||0), tgt=getTarget(r.asset_code), dt=dtMin(r);
     const ops=opsOf(r);
-    const add=(d,share)=>{ d.entries++; d.kg+=kg*share; d.tgt+=tgt*share; if(d.sh[r.shift]!=null) d.sh[r.shift]+=kg*share; d.assets.add(r.asset_code); };
+    const add=(d,share)=>{
+      d.entries++; d.kg+=kg*share; d.tgt+=tgt*share; if(d.sh[r.shift]!=null) d.sh[r.shift]+=kg*share; d.assets.add(r.asset_code);
+      if(dt>0){ d.ev++; d.dt+=dt*share; }
+    };
     if(!ops.length){ add(none,1); return; }
     ops.forEach(o=>{
       if(!map[o.key]){ map[o.key]=blank(); map[o.key].id=o.id; map[o.key].name=o.name; }
@@ -535,30 +569,78 @@ function renderByOperator(rows){
     });
   });
   const list=Object.values(map).sort((a,b)=>b.kg-a.kg);
-  const machineNames=set=>[...set].map(c=>{ const a=ASSETS.find(x=>x.asset_code===c); return a?a.asset_name:c; }).join(", ");
+  const machineNames=set=>[...set].map(c=>assetName(c)).join(", ");
 
   let html='<table><thead><tr>'+
     '<th style="text-align:left;min-width:140px;">Operator</th><th>Employee ID</th><th>Entries</th><th>Machines</th>'+
     '<th class="grp-m">Morning KG</th><th class="grp-a">Afternoon KG</th><th class="grp-n">Night KG</th>'+
     '<th class="grp-t">Total KG</th><th class="grp-t">Target KG</th><th class="grp-t">Eff%</th>'+
+    '<th>Downtime Events</th><th>Downtime</th>'+
     '</tr></thead><tbody>';
-  let tKg=0,tTgt=0,tM=0,tA=0,tN=0;
-  const line=(label,idTxt,d,cls)=>{
-    tKg+=d.kg; tTgt+=d.tgt; tM+=d.sh.Morning; tA+=d.sh.Afternoon; tN+=d.sh.Night;
+  let tKg=0,tTgt=0,tM=0,tA=0,tN=0,tDt=0;
+  const line=(label,idTxt,d)=>{
+    tKg+=d.kg; tTgt+=d.tgt; tM+=d.sh.Morning; tA+=d.sh.Afternoon; tN+=d.sh.Night; tDt+=d.dt;
     return `<tr><td class="asset-cell">${label}</td><td>${idTxt}</td><td>${d.entries}</td>`+
       `<td title="${esc(machineNames(d.assets))}">${d.assets.size}</td>`+
       `<td>${fmt(d.sh.Morning)}</td><td>${fmt(d.sh.Afternoon)}</td><td>${fmt(d.sh.Night)}</td>`+
-      `<td><b>${fmt(d.kg)}</b></td><td>${fmt(d.tgt)}</td><td>${effStr(d.kg,d.tgt)}</td></tr>`;
+      `<td><b>${fmt(d.kg)}</b></td><td>${fmt(d.tgt)}</td><td>${effStr(d.kg,d.tgt)}</td>`+
+      `<td>${d.ev||'<span class="dash">—</span>'}</td><td>${durHtml(d.dt)}</td></tr>`;
   };
   list.forEach(d=>{ html+=line(esc(d.name), esc(d.id||"—"), d); });
   if(none.entries) html+=line('<span class="dash">No operator recorded</span>','<span class="dash">—</span>',none);
+  const totalEvents=rows.filter(r=>dtMin(r)>0).length;
   html+=`<tr class="total-row"><td class="asset-cell">TOTAL</td><td></td><td></td><td></td>`+
-    `<td>${fmt(tM)}</td><td>${fmt(tA)}</td><td>${fmt(tN)}</td><td>${fmt(tKg)}</td><td>${fmt(tTgt)}</td><td>${effStr(tKg,tTgt)}</td></tr>`;
+    `<td>${fmt(tM)}</td><td>${fmt(tA)}</td><td>${fmt(tN)}</td><td>${fmt(tKg)}</td><td>${fmt(tTgt)}</td><td>${effStr(tKg,tTgt)}</td>`+
+    `<td>${totalEvents}</td><td>${durHtml(tDt)}</td></tr>`;
   html+='</tbody></table>'+
     '<div style="font-size:11px;color:var(--muted);margin-top:6px;text-align:left;">'+
-    'When a machine had more than one operator, its KG and target are shared equally between them. '+
-    'Entries = machine shifts the operator took part in. Hover over Machines to see which.</div>';
+    'When a machine had more than one operator, its KG, target and downtime are shared equally between them (downtime shares are rounded to the nearest minute). '+
+    'Entries = machine shifts the operator took part in. Downtime Events = those shifts that had downtime. Hover over Machines to see which.</div>';
   document.getElementById("viewOperator").innerHTML=list.length||none.entries?html:"<p style='color:var(--muted);'>No data.</p>";
+}
+
+// ── Downtime view ──────────────────────────────────────────
+function renderDowntime(rows){
+  const box=document.getElementById("viewDowntime");
+  if(!DT_OK){ box.innerHTML="<p style='color:var(--muted);'>Downtime is not available yet: the downtime database update has not been run.</p>"; return; }
+  const dts=rows.filter(r=>dtMin(r)>0);
+  if(!dts.length){ box.innerHTML="<p style='color:var(--muted);'>No downtime was recorded for the selected filters.</p>"; return; }
+
+  const total=dts.reduce((s,r)=>s+dtMin(r),0);
+  const machines=new Set(dts.map(r=>r.asset_code)).size;
+  let html='<div class="kpis" style="margin-top:12px;">'+
+    `<div class="kpi bad"><div class="n">${durText(total)}</div><div class="l">Total Downtime</div></div>`+
+    `<div class="kpi"><div class="n">${dts.length}</div><div class="l">Downtime Events</div></div>`+
+    `<div class="kpi"><div class="n">${machines}</div><div class="l">Machines Affected</div></div>`+
+    `<div class="kpi"><div class="n">${durText(total/dts.length)}</div><div class="l">Average per Event</div></div>`+
+    '</div>';
+
+  // by reason (same wording in different case or spacing counts as one reason)
+  const rmap={};
+  dts.forEach(r=>{
+    const label=String(r.downtime_reason||"").trim()||"(No reason given)";
+    const key=label.toLowerCase().replace(/\s+/g," ");
+    if(!rmap[key]) rmap[key]={label,ev:0,dt:0};
+    rmap[key].ev++; rmap[key].dt+=dtMin(r);
+  });
+  const reasons=Object.values(rmap).sort((a,b)=>b.dt-a.dt);
+  html+='<div style="font-weight:bold;color:var(--navy);margin:14px 0 2px;">Downtime by reason</div>'+
+    '<table><thead><tr><th style="text-align:left;">Reason</th><th>Events</th><th>Total Time</th><th>Share</th></tr></thead><tbody>'+
+    reasons.map(x=>`<tr><td class="asset-cell">${esc(x.label)}</td><td>${x.ev}</td><td>${durHtml(x.dt)}</td><td>${(x.dt/total*100).toFixed(1)}%</td></tr>`).join("")+
+    `<tr class="total-row"><td class="asset-cell">TOTAL</td><td>${dts.length}</td><td>${durHtml(total)}</td><td>100.0%</td></tr></tbody></table>`;
+
+  // every record
+  const order={Morning:0,Afternoon:1,Night:2};
+  const list=dts.slice().sort((a,b)=>String(b.production_date).localeCompare(String(a.production_date))
+    || (order[a.shift]-order[b.shift]) || String(assetName(a.asset_code)).localeCompare(String(assetName(b.asset_code))));
+  html+='<div style="font-weight:bold;color:var(--navy);margin:16px 0 2px;">Downtime records</div>'+
+    '<table><thead><tr><th>Date</th><th>Shift</th><th>Branch</th><th style="text-align:left;">Machine</th><th>Start</th><th>End</th><th>Duration</th><th style="text-align:left;">Reason</th><th style="text-align:left;">Operators</th></tr></thead><tbody>'+
+    list.map(r=>`<tr><td>${fmtDate(r.production_date)}</td><td>${esc(r.shift)}</td><td>${esc(branchLabel(r.branch))}</td>`+
+      `<td class="asset-cell">${esc(assetName(r.asset_code))}</td><td>${hhmm(r.downtime_start)}</td><td>${hhmm(r.downtime_end)}</td>`+
+      `<td><b>${durHtml(dtMin(r))}</b></td><td style="text-align:left;white-space:normal;">${esc(r.downtime_reason||"—")}</td>`+
+      `<td style="text-align:left;white-space:normal;">${esc(opsOf(r).map(o=>o.name).join(", ")||"—")}</td></tr>`).join("")+
+    '</tbody></table>';
+  box.innerHTML=html;
 }
 
 // ── Tab switching (screen only) ────────────────────────────
@@ -568,6 +650,7 @@ function showView(view,tabEl){
   document.getElementById("viewShift").style.display=view==="shift"?"block":"none";
   document.getElementById("viewAsset").style.display=view==="asset"?"block":"none";
   document.getElementById("viewOperator").style.display=view==="operator"?"block":"none";
+  document.getElementById("viewDowntime").style.display=view==="downtime"?"block":"none";
 }
 
 init();
