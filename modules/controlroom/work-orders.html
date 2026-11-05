@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Work Orders — Control Room</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+(function(){
+  function apply(t){ if(t) document.documentElement.setAttribute("data-theme",t); }
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+  try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+})();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body { padding: 20px; }
+  .wrap { max-width: 1100px; margin: 0 auto; }
+
+  /* ---- HEADER ROW ---- */
+  .page-header {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    flex-wrap: wrap; gap: 10px; margin-bottom: 16px;
+  }
+  .page-header h2 { margin: 0; font-size: 17px; color: var(--heading); }
+  .page-header p  { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
+  .btn { padding: 8px 18px; border: none; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer; text-decoration: none; display: inline-block; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: var(--accent-2, #1d4ed8); }
+
+  /* ---- STAT CARDS ---- */
+  .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px,1fr)); gap: 10px; margin-bottom: 16px; }
+  .stat-card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px 16px; text-align: center;
+  }
+  .stat-label { font-size: 11px; font-weight: 700; text-transform: uppercase;
+                letter-spacing: .4px; color: var(--muted); margin-bottom: 4px; }
+  .stat-val   { font-size: 26px; font-weight: 800; color: var(--heading); line-height: 1.1; }
+  .stat-sub   { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  /* ---- FILTERS ---- */
+  .filter-card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px 16px; margin-bottom: 14px;
+  }
+  .filter-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px,1fr)); gap: 10px; align-items: end; }
+  .filter-grid .full { grid-column: 1 / -1; }
+  label   { display: block; font-size: 11px; font-weight: 700; text-transform: uppercase;
+            letter-spacing: .4px; color: var(--muted); margin-bottom: 4px; }
+  input, select {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--line);
+    border-radius: 8px; font-size: 13px; font-family: inherit;
+    background: var(--bg); color: var(--text); box-sizing: border-box;
+  }
+  input:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(37,99,235,.12); }
+  .btn-ghost { background: transparent; border: 1px solid var(--line); color: var(--text); padding: 8px 14px; }
+  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ---- TABLE ---- */
+  .table-card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    overflow: hidden;
+  }
+  .table-toolbar {
+    padding: 12px 16px; display: flex; justify-content: space-between;
+    align-items: center; border-bottom: 1px solid var(--line); flex-wrap: wrap; gap: 8px;
+  }
+  .rec-info { font-size: 12px; color: var(--muted); }
+  .tbl-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th {
+    font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px;
+    color: var(--muted); background: var(--bg); position: sticky; top: 0; z-index: 1;
+  }
+  tr:last-child td { border-bottom: none; }
+  tr.data-row { cursor: pointer; transition: background .1s; }
+  tr.data-row:hover td { background: var(--hover, rgba(37,99,235,.06)); }
+  .wo-num { font-weight: 700; color: var(--accent); font-family: monospace; font-size: 13px; }
+  .src-badge {
+    display: inline-block; padding: 2px 7px; border-radius: 999px;
+    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px;
+  }
+  .src-rumbu  { background: #dbeafe; color: #1d4ed8; }
+  .src-sheet  { background: #d1fae5; color: #065f46; }
+  [data-theme="dark"] .src-rumbu { background: #1e3a5f; color: #93c5fd; }
+  [data-theme="dark"] .src-sheet { background: #064e3b; color: #6ee7b7; }
+  .shift-m { color: #d97706; font-weight: 700; }
+  .shift-n { color: #6366f1; font-weight: 700; }
+  .empty-row td { text-align: center; color: var(--muted); padding: 40px; font-size: 13px; }
+
+  /* ---- PAGINATION ---- */
+  .pagination {
+    padding: 12px 16px; display: flex; justify-content: space-between;
+    align-items: center; border-top: 1px solid var(--line); flex-wrap: wrap; gap: 8px;
+  }
+  .page-info  { font-size: 12px; color: var(--muted); }
+  .page-btns  { display: flex; gap: 6px; }
+  .page-btn {
+    padding: 5px 12px; border: 1px solid var(--line); border-radius: 6px;
+    font-size: 12px; font-weight: 700; cursor: pointer; background: var(--bg); color: var(--text);
+  }
+  .page-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .page-btn:disabled { opacity: .4; cursor: not-allowed; }
+  .page-btn.current { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+  /* ---- LOADING ---- */
+  .loading { text-align: center; padding: 40px; color: var(--muted); font-size: 13px; }
+  .spinner {
+    display: inline-block; width: 18px; height: 18px;
+    border: 2px solid var(--line); border-top-color: var(--accent);
+    border-radius: 50%; animation: spin .6s linear infinite; vertical-align: middle;
+    margin-right: 6px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- HEADER -->
+  <div class="page-header">
+    <div>
+      <h2>⚙ Work Orders</h2>
+      <p>Control Room — all maintenance and breakdown records</p>
+    </div>
+    <a class="btn btn-primary" href="new-work-order.html">+ New Work Order</a>
+  </div>
+
+  <!-- STAT CARDS -->
+  <div class="stats">
+    <div class="stat-card">
+      <div class="stat-label">Today</div>
+      <div class="stat-val" id="st-today">—</div>
+      <div class="stat-sub">work orders</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">This Week</div>
+      <div class="stat-val" id="st-week">—</div>
+      <div class="stat-sub">work orders</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">This Month</div>
+      <div class="stat-val" id="st-month">—</div>
+      <div class="stat-sub">work orders</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">From App</div>
+      <div class="stat-val" id="st-app">—</div>
+      <div class="stat-sub">source: rumbu</div>
+    </div>
+  </div>
+
+  <!-- FILTERS -->
+  <div class="filter-card">
+    <div class="filter-grid">
+      <div>
+        <label>Search Work Order</label>
+        <input type="text" id="f-wo" placeholder="e.g. 123456 or W000012" oninput="scheduleSearch()">
+      </div>
+      <div>
+        <label>From Date</label>
+        <input type="date" id="f-from" onchange="applyFilters()">
+      </div>
+      <div>
+        <label>To Date</label>
+        <input type="date" id="f-to" onchange="applyFilters()">
+      </div>
+      <div>
+        <label>Section</label>
+        <select id="f-section" onchange="applyFilters()">
+          <option value="">All Sections</option>
+        </select>
+      </div>
+      <div>
+        <label>Shift</label>
+        <select id="f-shift" onchange="applyFilters()">
+          <option value="">All Shifts</option>
+          <option value="Morning">Morning</option>
+          <option value="Night">Night</option>
+        </select>
+      </div>
+      <div>
+        <label>Source</label>
+        <select id="f-source" onchange="applyFilters()">
+          <option value="">All Sources</option>
+          <option value="rumbu">App (rumbu)</option>
+          <option value="spreadsheet">Spreadsheet</option>
+        </select>
+      </div>
+      <div style="align-self:end;">
+        <button class="btn btn-ghost" onclick="clearFilters()">Clear Filters</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TABLE -->
+  <div class="table-card">
+    <div class="table-toolbar">
+      <span class="rec-info" id="rec-info">Loading…</span>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Work Order</th>
+            <th>Date</th>
+            <th>Asset</th>
+            <th>Section</th>
+            <th>Job Code</th>
+            <th>Department</th>
+            <th>Shift</th>
+            <th>Source</th>
+          </tr>
+        </thead>
+        <tbody id="tbl-body">
+          <tr><td colspan="8" class="loading"><span class="spinner"></span>Loading records…</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="pagination">
+      <span class="page-info" id="page-info"></span>
+      <div class="page-btns">
+        <button class="page-btn" id="btn-prev" onclick="goPage(-1)" disabled>← Prev</button>
+        <button class="page-btn current" id="btn-page">1</button>
+        <button class="page-btn" id="btn-next" onclick="goPage(1)" disabled>Next →</button>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /wrap -->
+
+<script>
+// =============================================
+// CONFIG
+// =============================================
+const TABLE      = 'control';
+const PAGE_SIZE  = 50;
+const EDIT_PAGE  = 'edit-record.html';
+
+let SESSION_TOKEN = SUPABASE_ANON_KEY;
+let currentPage   = 0;
+let totalCount    = 0;
+let searchTimer   = null;
+
+// =============================================
+// INIT
+// =============================================
+requireAuth(async function(user, profile) {
+  try {
+    const sb = window._supabase || window.supabase;
+    if (sb) {
+      const { data: { session } } = await sb.auth.getSession();
+      SESSION_TOKEN = session?.access_token || SUPABASE_ANON_KEY;
+    }
+  } catch(e) {}
+
+  await Promise.all([loadSections(), loadStats()]);
+  setDefaultDates();
+  await loadPage(0);
+});
+
+function setDefaultDates() {
+  // Default to current month
+  const now   = new Date();
+  const y     = now.getFullYear();
+  const m     = String(now.getMonth() + 1).padStart(2, '0');
+  document.getElementById('f-from').value = y + '-' + m + '-01';
+  document.getElementById('f-to').value   = y + '-' + m + '-' + String(now.getDate()).padStart(2, '0');
+}
+
+// =============================================
+// SECTION DROPDOWN — from cr_assets
+// =============================================
+async function loadSections() {
+  try {
+    const rows = await apiGet('cr_assets?select=section&is_active=eq.true&order=section.asc');
+    const unique = [...new Set(rows.map(r => r.section).filter(Boolean))].sort();
+    const sel = document.getElementById('f-section');
+    unique.forEach(s => {
+      const o = document.createElement('option');
+      o.value = s; o.textContent = s;
+      sel.appendChild(o);
+    });
+  } catch(e) { /* skip — filter still usable, just without section options */ }
+}
+
+// =============================================
+// STATS
+// =============================================
+async function loadStats() {
+  try {
+    const now   = new Date();
+    const todayStr  = now.toISOString().slice(0, 10);
+    const weekStart = new Date(now); weekStart.setDate(now.getDate() - now.getDay());
+    const weekStr   = weekStart.toISOString().slice(0, 10);
+    const monthStr  = now.toISOString().slice(0, 7) + '-01';
+
+    const [tod, wk, mo, app] = await Promise.all([
+      apiGet(TABLE + '?select=id&created_at=gte.' + todayStr + 'T00:00:00&limit=1', true),
+      apiGet(TABLE + '?select=id&created_at=gte.' + weekStr  + 'T00:00:00&limit=1', true),
+      apiGet(TABLE + '?select=id&created_at=gte.' + monthStr + 'T00:00:00&limit=1', true),
+      apiGet(TABLE + '?select=id&source_system=eq.rumbu&limit=1', true)
+    ]);
+
+    document.getElementById('st-today').textContent  = tod  != null ? tod  : '—';
+    document.getElementById('st-week').textContent   = wk   != null ? wk   : '—';
+    document.getElementById('st-month').textContent  = mo   != null ? mo   : '—';
+    document.getElementById('st-app').textContent    = app  != null ? app  : '—';
+  } catch(e) { /* non-critical */ }
+}
+
+// =============================================
+// LOAD PAGE
+// =============================================
+async function loadPage(page) {
+  document.getElementById('tbl-body').innerHTML =
+    '<tr><td colspan="8" class="loading"><span class="spinner"></span>Loading…</td></tr>';
+  document.getElementById('rec-info').textContent = 'Loading…';
+
+  currentPage = page;
+  const from = page * PAGE_SIZE;
+  const to   = from + PAGE_SIZE - 1;
+
+  try {
+    const qs      = buildQuery();
+    const headers = authHeaders({ 'Prefer': 'count=exact', 'Range': from + '-' + to });
+    const url     = SUPABASE_URL.replace(/\/+$/, '') + '/rest/v1/' + TABLE + '?' + qs;
+    const resp    = await fetch(url, { headers });
+
+    if (!resp.ok) throw new Error(await resp.text());
+
+    const rangeHeader = resp.headers.get('content-range') || '';
+    totalCount = parseInt((rangeHeader.split('/')[1] || '0'), 10) || 0;
+    const rows = await resp.json();
+
+    renderTable(rows);
+    renderPagination();
+  } catch(err) {
+    document.getElementById('tbl-body').innerHTML =
+      '<tr><td colspan="8" class="empty-row" style="color:var(--bad);">Error loading records: ' + esc(err.message) + '</td></tr>';
+    document.getElementById('rec-info').textContent = 'Error';
+  }
+}
+
+// =============================================
+// BUILD QUERY STRING
+// =============================================
+function buildQuery() {
+  const parts = [
+    'select=id,work_order,created_at,asset,section,job_code,department,shift,source_system',
+    'order=created_at.desc,id.desc'
+  ];
+
+  const wo   = (document.getElementById('f-wo').value  || '').trim();
+  const from = document.getElementById('f-from').value;
+  const to   = document.getElementById('f-to').value;
+  const sect = document.getElementById('f-section').value;
+  const shft = document.getElementById('f-shift').value;
+  const src  = document.getElementById('f-source').value;
+
+  if (wo) {
+    // ilike for case-insensitive partial match on work_order
+    parts.push('work_order=ilike.*' + encodeURIComponent(wo) + '*');
+  }
+  if (from) parts.push('created_at=gte.' + from + 'T00:00:00');
+  if (to)   parts.push('created_at=lte.' + to   + 'T23:59:59');
+  if (sect) parts.push('section=eq.' + encodeURIComponent(sect));
+  if (shft) parts.push('shift=eq.'   + encodeURIComponent(shft));
+  if (src)  parts.push('source_system=eq.' + encodeURIComponent(src));
+
+  return parts.join('&');
+}
+
+// =============================================
+// RENDER TABLE
+// =============================================
+function renderTable(rows) {
+  const tbody = document.getElementById('tbl-body');
+  if (!rows || rows.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-row">No work orders match the current filters.</td></tr>';
+    document.getElementById('rec-info').textContent = '0 records';
+    return;
+  }
+
+  const start = currentPage * PAGE_SIZE + 1;
+  const end   = start + rows.length - 1;
+  document.getElementById('rec-info').textContent =
+    'Showing ' + start + '–' + end + ' of ' + totalCount.toLocaleString() + ' records';
+
+  tbody.innerHTML = '';
+  rows.forEach(r => {
+    const tr = document.createElement('tr');
+    tr.className = 'data-row';
+    tr.onclick   = () => openRecord(r.work_order);
+
+    const dateStr = r.created_at ? formatDate(r.created_at) : '—';
+    const src     = r.source_system || 'spreadsheet';
+    const srcLabel = src === 'rumbu' ? 'App' : 'Sheet';
+    const srcClass = src === 'rumbu' ? 'src-rumbu' : 'src-sheet';
+    const shiftCls = (r.shift||'').toLowerCase().startsWith('m') ? 'shift-m' : 'shift-n';
+
+    tr.innerHTML =
+      '<td><span class="wo-num">' + esc(r.work_order) + '</span></td>' +
+      '<td>' + dateStr + '</td>' +
+      '<td>' + esc(r.asset || '—') + '</td>' +
+      '<td>' + esc(r.section || '—') + '</td>' +
+      '<td>' + esc(r.job_code || '—') + '</td>' +
+      '<td>' + esc(r.department || '—') + '</td>' +
+      '<td><span class="' + shiftCls + '">' + esc(r.shift || '—') + '</span></td>' +
+      '<td><span class="src-badge ' + srcClass + '">' + srcLabel + '</span></td>';
+
+    tbody.appendChild(tr);
+  });
+}
+
+// =============================================
+// PAGINATION
+// =============================================
+function renderPagination() {
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  document.getElementById('btn-prev').disabled = currentPage === 0;
+  document.getElementById('btn-next').disabled = currentPage >= totalPages - 1;
+  document.getElementById('btn-page').textContent = (currentPage + 1) + ' / ' + totalPages;
+  document.getElementById('page-info').textContent =
+    'Page ' + (currentPage + 1) + ' of ' + totalPages;
+}
+
+function goPage(dir) {
+  const totalPages = Math.ceil(totalCount / PAGE_SIZE);
+  const next = currentPage + dir;
+  if (next < 0 || next >= totalPages) return;
+  loadPage(next);
+}
+
+// =============================================
+// FILTER ACTIONS
+// =============================================
+function applyFilters() {
+  loadPage(0);
+}
+
+function scheduleSearch() {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => loadPage(0), 400);
+}
+
+function clearFilters() {
+  document.getElementById('f-wo').value      = '';
+  document.getElementById('f-from').value    = '';
+  document.getElementById('f-to').value      = '';
+  document.getElementById('f-section').value = '';
+  document.getElementById('f-shift').value   = '';
+  document.getElementById('f-source').value  = '';
+  loadPage(0);
+}
+
+// =============================================
+// OPEN RECORD
+// =============================================
+function openRecord(wo) {
+  if (!wo) return;
+  window.location.href = EDIT_PAGE + '?wo=' + encodeURIComponent(wo);
+}
+
+// =============================================
+// API HELPERS
+// =============================================
+function authHeaders(extra) {
+  return Object.assign({
+    'apikey':        SUPABASE_ANON_KEY,
+    'Authorization': 'Bearer ' + SESSION_TOKEN,
+    'Content-Type':  'application/json'
+  }, extra || {});
+}
+
+async function apiGet(path, countOnly) {
+  const url  = SUPABASE_URL.replace(/\/+$/, '') + '/rest/v1/' + path;
+  const hdrs = authHeaders(countOnly ? { 'Prefer': 'count=exact', 'Range': '0-0' } : {});
+  const resp = await fetch(url, { headers: hdrs });
+  if (!resp.ok) throw new Error(await resp.text());
+  if (countOnly) {
+    const cr = resp.headers.get('content-range') || '';
+    return parseInt((cr.split('/')[1] || '0'), 10) || 0;
+  }
+  return resp.json();
+}
+
+// =============================================
+// UTILS
+// =============================================
+function formatDate(iso) {
+  if (!iso) return '—';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric' });
+  } catch(e) { return iso.slice(0, 10); }
+}
+
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+</script>
+</body>
+</html>
