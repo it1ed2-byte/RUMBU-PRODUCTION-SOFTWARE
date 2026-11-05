@@ -329,27 +329,36 @@ let EDIT_STATE    = null; // { table, id, fields }
 // =============================================
 // AUTH + ROLE CHECK
 // =============================================
-requireAuth(async function(user, profile) {
-  // Allow super_admin, admin, or head_of_it
-  const role = (profile.role || '').toLowerCase();
-  const allowed = ['super_admin', 'admin'].includes(role) || profile.is_head_of_it;
-  if (!allowed) {
-    document.getElementById('deniedBox').style.display = 'block';
-    return;
-  }
-  document.getElementById('mainContent').style.display = 'block';
+document.addEventListener('DOMContentLoaded', async function () {
   try {
-    const sb = window._supabase || window.supabase;
-    if (sb) {
+    // 1. requireAuth takes the login path and returns the profile (it redirects itself on failure)
+    const profile = await requireAuth('../../login.html');
+    if (!profile) return;
+
+    // 2. Role gate: super_admin, admin, or the Head of IT
+    const role = String(profile.role || '').toLowerCase().replace(/[^a-z]/g, '');
+    const allowed = ['superadmin', 'admin', 'headofit'].includes(role) || !!profile.is_head_of_it;
+    if (!allowed) {
+      document.getElementById('deniedBox').style.display = 'block';
+      return;
+    }
+    document.getElementById('mainContent').style.display = 'block';
+
+    // 3. Use the signed-in user's JWT so RLS sees an authenticated request
+    try {
       const { data: { session } } = await sb.auth.getSession();
       SESSION_TOKEN = session?.access_token || SUPABASE_ANON_KEY;
-    }
-  } catch(e) {}
-  await Promise.all([
-    loadTable('nurses'), loadTable('jobcodes'),
-    loadTable('assets'), loadTable('extruders')
-  ]);
+    } catch (e) { /* fall back to anon key */ }
+
+    await Promise.all([
+      loadTable('nurses'), loadTable('jobcodes'),
+      loadTable('assets'), loadTable('extruders')
+    ]);
+  } catch (err) {
+    console.error('cr-reference-data boot failed', err);
+  }
 });
+
 
 // =============================================
 // TABS
@@ -374,6 +383,9 @@ async function loadTable(tab) {
     document.getElementById(countId).textContent = rows.length + ' record(s)';
   } catch(err) {
     console.error('loadTable ' + tab, err);
+    const cid = tabConfig(tab).countId;
+    const el = document.getElementById(cid);
+    if (el) el.textContent = 'Load failed: ' + (err.message || err);
   }
 }
 
