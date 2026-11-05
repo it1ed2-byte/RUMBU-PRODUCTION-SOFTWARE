@@ -119,6 +119,9 @@
     width: 18px; height: 18px; border-radius: 50%; background: var(--accent);
     color: #fff; font-size: 10px; margin-right: 6px; vertical-align: 1px;
   }
+  input.invalid { border-color: var(--bad, #dc2626) !important; box-shadow: 0 0 0 3px rgba(220,38,38,.12); }
+  input.valid   { border-color: var(--ok, #16a34a); }
+  .field-err { font-size: 11.5px; font-weight: 700; color: var(--bad, #dc2626); margin-top: 5px; min-height: 0; }
   .hint { font-size: 11.5px; color: var(--muted); margin-top: 5px; }
   .opt { font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--muted); }
 
@@ -181,6 +184,7 @@
         <input type="text" id="f-asset" list="dl-assets" autocomplete="off"
                placeholder="Type or pick asset, e.g. WE-04" oninput="onAssetChange()">
         <datalist id="dl-assets"></datalist>
+        <div class="field-err" id="err-asset"></div>
         <div id="openWoWarn" class="warn-box" hidden>⚠️ <span id="openWoMsg"></span></div>
       </div>
 
@@ -189,13 +193,15 @@
         <input type="text" id="f-nurse" list="dl-nurses" autocomplete="off"
                placeholder="Type or pick nurse">
         <datalist id="dl-nurses"></datalist>
+        <div class="field-err" id="err-nurse"></div>
       </div>
 
       <div class="field">
         <label><span class="step-no">3</span>Duration (minutes) <span class="req">*</span></label>
         <input type="number" id="f-duration" min="0" step="1" inputmode="numeric"
                placeholder="How long has the machine been stopped? e.g. 30"
-               oninput="onDurationChange()">
+               max="1440" oninput="onDurationChange()" onkeydown="blockNonDigit(event)">
+        <div class="field-err" id="err-duration"></div>
         <div class="hint">Sets stop time (now minus duration), starting time (now) and shift.</div>
       </div>
 
@@ -205,6 +211,7 @@
                placeholder="Type or pick job code when repair is finished"
                oninput="onJobCodeChange()">
         <datalist id="dl-jobcodes"></datalist>
+        <div class="field-err" id="err-jobcode"></div>
         <div class="hint">Selecting a job code sets the finish time to now and closes the order.</div>
       </div>
 
@@ -264,7 +271,8 @@ const TZ    = 'Africa/Lagos';
 let SESSION_TOKEN = SUPABASE_ANON_KEY;
 let ME_PROFILE    = null;
 
-let ASSETS = {}, JOBS = {}, NURSES = new Set(), EXTRUDERS = {};
+let ASSETS = {}, JOBS = {}, NURSES = {}, EXTRUDERS = {};
+const MAX_DURATION = 1440;   // minutes (24 hours)
 
 // Values captured by the triggers
 const AUTO = {};
@@ -345,12 +353,71 @@ async function loadReferenceData() {
 
   assets.forEach(a => { if (a.asset) ASSETS[norm(a.asset)] = a; });
   jobs.forEach(j => { if (j.job_code) JOBS[norm(j.job_code)] = j; });
-  nurses.forEach(n => { if (n.full_name) NURSES.add(n.full_name.trim()); });
+  nurses.forEach(n => { if (n.full_name) NURSES[norm(n.full_name)] = n.full_name.trim(); });
   ext.forEach(e => { if (e.asset) EXTRUDERS[norm(e.asset)] = e; });
 
   fill('dl-assets',   assets.map(a => a.asset).filter(Boolean));
   fill('dl-jobcodes', jobs.map(j => j.job_code).filter(Boolean));
-  fill('dl-nurses',   Array.from(NURSES));
+  fill('dl-nurses',   Object.values(NURSES));
+  bindStrictPickers();
+}
+
+// =============================================
+// STRICT PICKERS: only values that exist in the database are accepted
+// =============================================
+const PICKERS = {
+  'f-asset':   { err: 'err-asset',   label: 'asset',     find: v => ASSETS[norm(v)] ? ASSETS[norm(v)].asset : null,     required: true,  after: () => onAssetChange() },
+  'f-nurse':   { err: 'err-nurse',   label: 'nurse name', find: v => NURSES[norm(v)] || null,                            required: true,  after: () => {} },
+  'f-jobcode': { err: 'err-jobcode', label: 'job code',  find: v => JOBS[norm(v)] ? JOBS[norm(v)].job_code : null,     required: false, after: () => onJobCodeChange() }
+};
+
+function bindStrictPickers() {
+  Object.keys(PICKERS).forEach(id => {
+    const el = document.getElementById(id);
+    el.addEventListener('change', () => enforcePicker(id));
+    el.addEventListener('blur',   () => enforcePicker(id));
+  });
+}
+
+// Snap a typed value to the exact database value, or reject it
+function enforcePicker(id) {
+  const p  = PICKERS[id];
+  const el = document.getElementById(id);
+  const er = document.getElementById(p.err);
+  const raw = el.value.trim();
+
+  if (!raw) {
+    el.classList.remove('valid', 'invalid');
+    er.textContent = '';
+    p.after();
+    return !p.required;
+  }
+  const match = p.find(raw);
+  if (match) {
+    el.value = match;
+    el.classList.remove('invalid'); el.classList.add('valid');
+    er.textContent = '';
+    p.after();
+    return true;
+  }
+  el.value = '';
+  el.classList.remove('valid'); el.classList.add('invalid');
+  er.textContent = '"' + raw + '" is not in the ' + p.label + ' list. Pick one from the list.';
+  p.after();
+  return false;
+}
+
+// Duration: whole minutes only
+function blockNonDigit(e) {
+  if (['e','E','+','-','.',','].includes(e.key)) e.preventDefault();
+}
+function durationError() {
+  const v = document.getElementById('f-duration').value;
+  if (v === '') return 'Enter the duration in minutes.';
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 0) return 'Duration must be a whole number of minutes.';
+  if (n > MAX_DURATION) return 'Duration cannot be more than ' + MAX_DURATION + ' minutes (24 hours).';
+  return '';
 }
 
 // =============================================
@@ -401,9 +468,13 @@ async function checkOpenOrders(asset) {
 // =============================================
 function onDurationChange() {
   clearAuto(['stop','start','shift','date']);
-  const v = document.getElementById('f-duration').value;
-  const mins = Number(v);
-  if (v !== '' && Number.isFinite(mins) && mins >= 0) {
+  const el  = document.getElementById('f-duration');
+  const err = durationError();
+  document.getElementById('err-duration').textContent = el.value === '' ? '' : err;
+  el.classList.toggle('invalid', el.value !== '' && !!err);
+  el.classList.toggle('valid', el.value !== '' && !err);
+  const mins = Number(el.value);
+  if (!err) {
     const now  = new Date();
     const stop = new Date(now.getTime() - mins * 60000);
     AUTO.start = now;
@@ -457,24 +528,28 @@ function renderAuto() {
 // SUBMIT
 // =============================================
 async function submitForm() {
-  const assetIn = document.getElementById('f-asset').value;
-  const nurseIn = document.getElementById('f-nurse').value.trim();
-  const durIn   = document.getElementById('f-duration').value;
-  const jobIn   = document.getElementById('f-jobcode').value;
+  const durIn = document.getElementById('f-duration').value;
 
-  const a = ASSETS[norm(assetIn)];
-  if (!a)                         return setStatus('Pick a valid asset from the list.', 'err');
-  if (!nurseIn)                   return setStatus('Nurse name is required.', 'err');
-  if (!NURSES.has(nurseIn))       return setStatus('Pick a nurse name from the list.', 'err');
-  if (durIn === '' || !AUTO.start) return setStatus('Enter the duration in minutes.', 'err');
-  if (jobIn.trim() && !JOBS[norm(jobIn)]) return setStatus('Job code not recognised. Pick one from the list or leave it blank.', 'err');
+  const okAsset = enforcePicker('f-asset');
+  const okNurse = enforcePicker('f-nurse');
+  const okJob   = enforcePicker('f-jobcode');
+  const dErr    = durationError();
+  if (dErr) {
+    document.getElementById('err-duration').textContent = dErr;
+    document.getElementById('f-duration').classList.add('invalid');
+  }
+  if (!okAsset || !okNurse || !okJob || dErr || !AUTO.start) {
+    return setStatus('Fix the fields marked in red. Asset, nurse and job code must be picked from the list.', 'err');
+  }
+  const a = ASSETS[norm(document.getElementById('f-asset').value)];
+  const nurseVal = document.getElementById('f-nurse').value;
 
-  const j = JOBS[norm(jobIn)] || null;
+  const j = JOBS[norm(document.getElementById('f-jobcode').value)] || null;
   const username = ME_PROFILE ? (ME_PROFILE.username || ME_PROFILE.email || null) : null;
 
   const payload = {
     assets:             a.asset,
-    nurse_name:         nurseIn,
+    nurse_name:         nurseVal,
     date:               toDbDate(AUTO.date || AUTO.start),
     duration:           String(Number(durIn)),
     mc_stoppage_time:   toDbTs(AUTO.stop),
@@ -518,7 +593,11 @@ async function submitForm() {
 }
 
 function resetForm() {
-  ['f-asset','f-nurse','f-duration','f-jobcode'].forEach(id => { document.getElementById(id).value = ''; });
+  ['f-asset','f-nurse','f-duration','f-jobcode'].forEach(id => {
+    const el = document.getElementById(id);
+    el.value = ''; el.classList.remove('valid', 'invalid');
+  });
+  ['err-asset','err-nurse','err-duration','err-jobcode'].forEach(id => { document.getElementById(id).textContent = ''; });
   clearAuto(Object.keys(AUTO));
   document.getElementById('openWoWarn').hidden = true;
   document.getElementById('successBox').hidden = true;
