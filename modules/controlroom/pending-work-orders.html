@@ -166,7 +166,7 @@ document.addEventListener('DOMContentLoaded', async function () {
       SESSION_TOKEN = session?.access_token || SUPABASE_ANON_KEY;
     } catch (e) {}
 
-    const jobs = await apiGetAll('cr_job_codes?select=job_code,estimated_min,department&is_active=eq.true&order=job_code.asc');
+    const jobs = await cachedGetAll('jobs','cr_job_codes?select=job_code,estimated_min,department&is_active=eq.true&order=job_code.asc');
     jobs.forEach(j => { if (j.job_code) JOBS[norm(j.job_code)] = j; });
     document.getElementById('dl-jobcodes').innerHTML =
       jobs.map(j => '<option value="' + esc(j.job_code) + '"></option>').join('');
@@ -295,14 +295,33 @@ function apiGet(path) {
   return fetch(base() + path, { headers: authHeaders() })
     .then(r => r.ok ? r.json() : r.text().then(t => { throw new Error(t); }));
 }
+// PostgREST returns at most 1000 rows per call. Fetch the first page with a
+// total count, then fetch any remaining pages in parallel.
 async function apiGetAll(path) {
-  const out = []; const PAGE = 1000;
-  for (let off = 0; ; off += PAGE) {
-    const rows = await apiGet(path + '&limit=' + PAGE + '&offset=' + off);
-    out.push(...rows);
-    if (rows.length < PAGE) break;
+  const PAGE = 1000;
+  const sep = path.includes('?') ? '&' : '?';
+  const resp = await fetch(base() + path, { headers: authHeaders({ 'Prefer': 'count=exact', 'Range': '0-' + (PAGE - 1) }) });
+  if (!resp.ok) throw new Error(await resp.text());
+  const first = await resp.json();
+  const total = parseInt(((resp.headers.get('content-range') || '').split('/')[1] || '0'), 10) || first.length;
+  if (total <= first.length) return first;
+  const rest = [];
+  for (let off = PAGE; off < total; off += PAGE) {
+    rest.push(apiGet(path + sep + 'limit=' + PAGE + '&offset=' + off));
   }
-  return out;
+  return first.concat(...(await Promise.all(rest)));
+}
+
+// Reference data changes rarely, so keep a copy for 30 minutes in this browser tab
+const REF_TTL_MS = 30 * 60 * 1000;
+async function cachedGetAll(key, path) {
+  try {
+    const c = JSON.parse(sessionStorage.getItem('cr_ref_' + key) || 'null');
+    if (c && Date.now() - c.t < REF_TTL_MS) return c.rows;
+  } catch (e) {}
+  const rows = await apiGetAll(path);
+  try { sessionStorage.setItem('cr_ref_' + key, JSON.stringify({ t: Date.now(), rows })); } catch (e) {}
+  return rows;
 }
 function apiPatch(path, body) {
   return fetch(base() + path, { method: 'PATCH', headers: authHeaders({ 'Prefer': 'return=representation' }),
