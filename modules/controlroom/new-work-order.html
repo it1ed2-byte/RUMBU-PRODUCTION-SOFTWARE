@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>New Work Order — Control Room</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+(function(){
+  function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
+  window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+  try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+})();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body { padding: 20px; }
+  .wrap { max-width: 860px; margin: 0 auto; }
+
+  .section-card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px 20px;
+    margin-bottom: 16px;
+  }
+  .section-card h3 {
+    margin: 0 0 14px;
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    color: var(--heading);
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 8px;
+  }
+
+  .fgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .fgrid.three { grid-template-columns: 1fr 1fr 1fr; }
+  @media(max-width: 600px){
+    .fgrid, .fgrid.three { grid-template-columns: 1fr; }
+  }
+
+  label { display: block; font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 4px; letter-spacing: .2px; }
+  label .req { color: var(--bad); margin-left: 2px; }
+
+  input, select, textarea {
+    width: 100%; padding: 9px 11px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font-size: 14px;
+    font-family: inherit;
+    background: var(--bg);
+    color: var(--text);
+    box-sizing: border-box;
+  }
+  input:focus, select:focus, textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(37,99,235,.12);
+  }
+  textarea { resize: vertical; min-height: 68px; }
+
+  .readonly-field {
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 9px 11px;
+    font-size: 13px;
+    color: var(--muted);
+    min-height: 36px;
+    font-family: inherit;
+    opacity: .85;
+  }
+
+  .open-wo-warn {
+    display: none;
+    background: #fff8e6;
+    border: 1px solid #f5a623;
+    color: #7a4f00;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    margin-bottom: 14px;
+    line-height: 1.4;
+  }
+  [data-theme="dark"] .open-wo-warn { background: #3b2a00; color: #ffd580; border-color: #9a6a00; }
+
+  .extruder-block { display: none; }
+
+  .btn-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 4px; }
+  button.primary {
+    padding: 11px 28px;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background .15s;
+  }
+  button.primary:hover { background: var(--accent-2, #1d4ed8); }
+  button.primary:disabled { opacity: .55; cursor: not-allowed; }
+  button.ghost {
+    padding: 11px 20px;
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .status-msg { font-size: 13px; font-weight: 700; min-height: 18px; }
+  .status-msg.ok { color: var(--ok, #16a34a); }
+  .status-msg.err { color: var(--bad, #dc2626); }
+
+  .success-banner {
+    display: none;
+    background: #f0fdf4;
+    border: 1px solid #86efac;
+    border-radius: 10px;
+    padding: 16px 20px;
+    margin-bottom: 16px;
+    text-align: center;
+  }
+  [data-theme="dark"] .success-banner { background: #052e16; border-color: #166534; }
+  .success-banner .wo-num {
+    font-size: 26px;
+    font-weight: 800;
+    color: var(--ok, #16a34a);
+    letter-spacing: 2px;
+    margin: 6px 0 2px;
+  }
+  .success-banner p { font-size: 13px; color: var(--muted); margin: 0; }
+
+  #connStatus { font-size: 12px; font-weight: 700; text-align: center; margin-bottom: 12px; min-height: 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="section-card" style="margin-bottom:12px;">
+    <h2 style="margin:0 0 2px;font-size:17px;color:var(--heading);">New Maintenance Work Order</h2>
+    <p class="sub" style="margin:0;font-size:12px;">Complete all required fields. Work order number is assigned automatically.</p>
+  </div>
+
+  <div id="connStatus">Loading reference data…</div>
+
+  <!-- Success Banner -->
+  <div class="success-banner" id="successBanner">
+    <p>Work order created successfully</p>
+    <div class="wo-num" id="successWO"></div>
+    <p id="successAsset" style="margin-top:4px;font-size:12px;"></p>
+    <div style="margin-top:12px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
+      <button class="primary" onclick="resetForm()">+ New Work Order</button>
+      <button class="ghost" onclick="window.parent.postMessage({rumbuNav:'controlroom/work-orders.html'},'*')">View All Work Orders</button>
+    </div>
+  </div>
+
+  <!-- OPEN WO WARNING -->
+  <div class="open-wo-warn" id="openWoWarn"></div>
+
+  <!-- SECTION 1: MACHINE & LOCATION -->
+  <div class="section-card" id="formArea">
+    <h3>1 — Machine &amp; Location</h3>
+    <div class="fgrid">
+      <div>
+        <label for="fAsset">Asset <span class="req">*</span></label>
+        <select id="fAsset" onchange="onAssetChange()">
+          <option value="">— Select asset —</option>
+        </select>
+      </div>
+      <div>
+        <label>Shed</label>
+        <div class="readonly-field" id="dShed">—</div>
+      </div>
+      <div>
+        <label>Unit / Group</label>
+        <div class="readonly-field" id="dUnit">—</div>
+      </div>
+      <div>
+        <label>Section</label>
+        <div class="readonly-field" id="dSection">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECTION 2: INCIDENT DETAILS -->
+  <div class="section-card">
+    <h3>2 — Incident Details</h3>
+    <div class="fgrid">
+      <div>
+        <label for="fDate">Date <span class="req">*</span></label>
+        <input type="date" id="fDate">
+      </div>
+      <div>
+        <label for="fDuration">Duration (minutes) <span class="req">*</span></label>
+        <input type="number" id="fDuration" min="0" step="1" placeholder="e.g. 45" oninput="onDurationInput()">
+      </div>
+      <div>
+        <label>Machine Stopped Time</label>
+        <div class="readonly-field" id="dStoppage">—</div>
+      </div>
+      <div>
+        <label>Starting Time</label>
+        <div class="readonly-field" id="dStarting">—</div>
+      </div>
+      <div>
+        <label for="fJobCode">Job Code <span class="req">*</span></label>
+        <select id="fJobCode" onchange="onJobCodeChange()">
+          <option value="">— Select job code —</option>
+        </select>
+      </div>
+      <div>
+        <label>Finished Time</label>
+        <div class="readonly-field" id="dFinish">—</div>
+      </div>
+      <div>
+        <label>Department</label>
+        <div class="readonly-field" id="dDept">—</div>
+      </div>
+      <div>
+        <label>Estimated Duration (min)</label>
+        <div class="readonly-field" id="dEst">—</div>
+      </div>
+    </div>
+    <div style="margin-top:14px;">
+      <label>Shift</label>
+      <div class="readonly-field" id="dShift" style="font-weight:700;font-size:14px;">—</div>
+    </div>
+  </div>
+
+  <!-- SECTION 3: EXTRUDER (shown only for extruder assets) -->
+  <div class="section-card extruder-block" id="extruderCard">
+    <h3>3 — Extruder Details <span style="font-weight:400;font-size:11px;color:var(--muted);">(auto-filled)</span></h3>
+    <div class="fgrid three">
+      <div>
+        <label>Type</label>
+        <div class="readonly-field" id="dType">—</div>
+      </div>
+      <div>
+        <label>Nozzles</label>
+        <div class="readonly-field" id="dNozzles">—</div>
+      </div>
+      <div>
+        <label>Denier</label>
+        <div class="readonly-field" id="dDenier">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECTION 4: ASSIGNMENT -->
+  <div class="section-card">
+    <h3 id="nurseSection">4 — Assignment</h3>
+    <div class="fgrid">
+      <div>
+        <label for="fNurse">Nurse <span class="req">*</span></label>
+        <select id="fNurse">
+          <option value="">— Select nurse —</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <!-- SECTION 5: NOTES -->
+  <div class="section-card">
+    <h3>5 — Notes &amp; Parts</h3>
+    <div class="fgrid">
+      <div>
+        <label for="fPart">Part Needed <span class="req">*</span></label>
+        <input type="text" id="fPart" placeholder="e.g. Bearing, Belt, N/A">
+      </div>
+      <div style="grid-column:1/-1;">
+        <label for="fDesc">Description / Fault Details <span class="req">*</span></label>
+        <textarea id="fDesc" placeholder="Describe the fault or maintenance activity…"></textarea>
+      </div>
+    </div>
+  </div>
+
+  <!-- SUBMIT -->
+  <div class="section-card">
+    <div class="btn-row">
+      <button class="primary" id="submitBtn" onclick="submitForm()">Create Work Order</button>
+      <button class="ghost" onclick="resetForm()">Clear Form</button>
+      <span class="status-msg" id="submitMsg"></span>
+    </div>
+  </div>
+
+</div><!-- /wrap -->
+
+<script>
+// =============================================
+// CONFIG
+// =============================================
+const TABLE      = 'control';
+const NURSES_T   = 'cr_nurses';
+const JOB_T      = 'cr_job_codes';
+const ASSETS_T   = 'cr_assets';
+const EXTRUDER_T = 'cr_extruder_groups';
+const TZ         = 'Africa/Lagos';
+
+// Extruder unit identifiers (section values that indicate extruder)
+const EXTRUDER_SECTIONS = [
+  'extruder 1','extruder 2','extruder 3','extruder 4','extruder 5','mamasannu extruder'
+];
+
+// Shift boundaries (Nigeria time)
+const MORNING_START = 7;   // 07:00
+const MORNING_END   = 19;  // 19:00
+
+// =============================================
+// STATE
+// =============================================
+let ME           = null;
+let SESSION_TOKEN = null;
+let assetMap     = {};   // asset -> {shed, grp, section}
+let jobMap       = {};   // job_code -> {estimated_min, department}
+let extruderMap  = {};   // asset -> {type, nozzles, denier}
+let stopTime     = null; // Date object
+let startTime    = null; // Date object
+let finishTime   = null; // Date object
+
+// =============================================
+// AUTH
+// =============================================
+requireAuth(async function(user, profile) {
+  ME = profile;
+  try {
+    const sb = window._supabase || window.supabase;
+    if (sb) {
+      const { data: { session } } = await sb.auth.getSession();
+      SESSION_TOKEN = session?.access_token || SUPABASE_ANON_KEY;
+    } else {
+      SESSION_TOKEN = SUPABASE_ANON_KEY;
+    }
+  } catch(e) {
+    SESSION_TOKEN = SUPABASE_ANON_KEY;
+  }
+  await loadRefData();
+});
+
+// =============================================
+// LOAD REFERENCE DATA
+// =============================================
+async function loadRefData() {
+  setStatus('Loading reference data…', '');
+  try {
+    const [nurses, jobs, assets, extruders] = await Promise.all([
+      apiGet(NURSES_T + '?select=full_name,emp_id&is_active=eq.true&order=name.asc'),
+      apiGet(JOB_T    + '?select=job_code,estimated_min,department&is_active=eq.true&order=job_code.asc'),
+      apiGet(ASSETS_T + '?select=asset,shed,grp,section&is_active=eq.true&order=asset.asc'),
+      apiGet(EXTRUDER_T + '?select=asset,type,nozzles,denier&is_active=eq.true')
+    ]);
+
+    // Nurses
+    const nSel = document.getElementById('fNurse');
+    nurses.forEach(n => {
+      const o = document.createElement('option');
+      o.value = n.full_name;
+      o.textContent = n.full_name;
+      nSel.appendChild(o);
+    });
+
+    // Job codes
+    const jSel = document.getElementById('fJobCode');
+    jobs.forEach(j => {
+      jobMap[j.job_code] = { est: j.estimated_min, dept: j.department };
+      const o = document.createElement('option');
+      o.value = j.job_code;
+      o.textContent = j.job_code + (j.department ? '  (' + j.department + ')' : '');
+      jSel.appendChild(o);
+    });
+
+    // Assets
+    const aSel = document.getElementById('fAsset');
+    assets.forEach(a => {
+      assetMap[a.asset] = { shed: a.shed, grp: a.grp, section: a.section };
+      const o = document.createElement('option');
+      o.value = a.asset;
+      o.textContent = a.asset;
+      aSel.appendChild(o);
+    });
+
+    // Extruders
+    extruders.forEach(e => {
+      extruderMap[e.asset] = { type: e.type, nozzles: e.nozzles, denier: e.denier };
+    });
+
+    // Set date default to today
+    document.getElementById('fDate').value = todayLocal();
+
+    setStatus('', '');
+    document.getElementById('connStatus').textContent = '';
+    document.getElementById('formArea').style.display = '';
+
+  } catch(err) {
+    setStatus('Failed to load reference data: ' + err.message, 'err');
+    document.getElementById('connStatus').textContent = '⚠ Could not load reference data. Check your connection.';
+  }
+}
+
+// =============================================
+// ASSET CHANGE
+// =============================================
+async function onAssetChange() {
+  const asset = document.getElementById('fAsset').value;
+  const info  = assetMap[asset] || {};
+
+  document.getElementById('dShed').textContent    = info.shed    || '—';
+  document.getElementById('dUnit').textContent    = info.grp     || '—';
+  document.getElementById('dSection').textContent = info.section || '—';
+
+  // Extruder block
+  const isExt = asset && EXTRUDER_SECTIONS.includes((info.section || '').toLowerCase());
+  document.querySelectorAll('.extruder-block').forEach(el => {
+    el.style.display = isExt ? '' : 'none';
+  });
+  if (isExt && extruderMap[asset]) {
+    const ex = extruderMap[asset];
+    document.getElementById('dType').textContent   = ex.type   ?? '—';
+    document.getElementById('dNozzles').textContent = ex.nozzles ?? '—';
+    document.getElementById('dDenier').textContent = ex.denier  ?? '—';
+  } else {
+    document.getElementById('dType').textContent   = '—';
+    document.getElementById('dNozzles').textContent = '—';
+    document.getElementById('dDenier').textContent  = '—';
+  }
+
+  // Check for open work orders on this asset
+  if (asset) await checkOpenWO(asset);
+  else hideWarn();
+}
+
+async function checkOpenWO(asset) {
+  try {
+    const rows = await apiGet(
+      TABLE + '?select=work_order,date,nurse_name&assets=eq.' +
+      encodeURIComponent(asset) + '&finish_time=is.null&order=date.desc&limit=3'
+    );
+    if (rows && rows.length) {
+      const list = rows.map(r =>
+        'WO ' + r.work_order + ' (' + (r.date || '') + ')' +
+        (r.nurse_name ? ' — ' + r.nurse_name : '')
+      ).join('; ');
+      showWarn(
+        '⚠ ' + asset + ' has ' + rows.length +
+        ' open work order(s) with no finish time: ' + list +
+        '. You may still proceed.'
+      );
+    } else {
+      hideWarn();
+    }
+  } catch(e) {
+    hideWarn();
+  }
+}
+
+function showWarn(msg) {
+  const el = document.getElementById('openWoWarn');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+function hideWarn() {
+  document.getElementById('openWoWarn').style.display = 'none';
+}
+
+// =============================================
+// DURATION INPUT
+// =============================================
+function onDurationInput() {
+  const mins = parseInt(document.getElementById('fDuration').value, 10);
+  if (isNaN(mins) || mins < 0) {
+    stopTime = null; startTime = null;
+    document.getElementById('dStoppage').textContent = '—';
+    document.getElementById('dStarting').textContent = '—';
+    document.getElementById('dShift').textContent    = '—';
+    return;
+  }
+  const now = new Date();
+  stopTime  = new Date(now.getTime() - mins * 60000);
+  startTime = now;
+  document.getElementById('dStoppage').textContent = fmtDateTime(stopTime);
+  document.getElementById('dStarting').textContent = fmtDateTime(startTime);
+
+  // Auto-detect shift from stoppage hour
+  const hour = stopTime.getHours();
+  const shift = (hour >= MORNING_START && hour < MORNING_END) ? 'Morning' : 'Night';
+  document.getElementById('dShift').textContent = shift;
+}
+
+// =============================================
+// JOB CODE CHANGE
+// =============================================
+function onJobCodeChange() {
+  const code = document.getElementById('fJobCode').value;
+  const info = jobMap[code] || {};
+  document.getElementById('dDept').textContent = info.dept || '—';
+  document.getElementById('dEst').textContent  = info.est  != null ? info.est + ' min' : '—';
+
+  if (code) {
+    finishTime = new Date();
+    document.getElementById('dFinish').textContent = fmtDateTime(finishTime);
+  } else {
+    finishTime = null;
+    document.getElementById('dFinish').textContent = '—';
+  }
+}
+
+// =============================================
+// SUBMIT
+// =============================================
+async function submitForm() {
+  const asset   = document.getElementById('fAsset').value.trim();
+  const dateVal = document.getElementById('fDate').value;
+  const durVal  = document.getElementById('fDuration').value;
+  const jobCode = document.getElementById('fJobCode').value.trim();
+  const nurse   = document.getElementById('fNurse').value.trim();
+  const part    = document.getElementById('fPart').value.trim();
+  const desc    = document.getElementById('fDesc').value.trim();
+
+  // Validate required
+  if (!asset)   return setStatus('Please select an asset.', 'err');
+  if (!dateVal) return setStatus('Please select a date.', 'err');
+  if (!durVal && durVal !== '0') return setStatus('Please enter duration (enter 0 if no downtime).', 'err');
+  if (!jobCode) return setStatus('Please select a job code.', 'err');
+  if (!nurse)   return setStatus('Please select a nurse.', 'err');
+  if (!part)    return setStatus('Please enter part needed (use N/A if none).', 'err');
+  if (!desc)    return setStatus('Please enter a description.', 'err');
+
+  const info    = assetMap[asset]  || {};
+  const jobInfo = jobMap[jobCode]  || {};
+  const shift   = document.getElementById('dShift').textContent;
+  const isExt   = EXTRUDER_SECTIONS.includes((info.section || '').toLowerCase());
+  const exInfo  = isExt ? (extruderMap[asset] || {}) : {};
+
+  const payload = {
+    assets:             asset,
+    nurse_name:         nurse,
+    date:               dateVal,
+    duration:           String(parseInt(durVal, 10)),
+    job_code:           jobCode,
+    mc_stoppage_time:   stopTime  ? stopTime.toISOString()  : null,
+    starting_time:      startTime ? startTime.toISOString() : null,
+    finish_time:        finishTime ? finishTime.toISOString() : null,
+    part_needed:        part,
+    description:        desc,
+    shift:              (shift === '—' ? null : shift),
+    department:         jobInfo.dept  || null,
+    shed:               info.shed     != null ? String(info.shed) : null,
+    unit:               info.grp      || null,
+    section:            info.section  || null,
+    estimated_duration: jobInfo.est   != null ? String(jobInfo.est) : null,
+    nozzle:             isExt && exInfo.nozzles != null ? exInfo.nozzles : null,
+    type:               isExt && exInfo.type    != null ? String(exInfo.type)   : null,
+    denier:             isExt && exInfo.denier  != null ? exInfo.denier  : null,
+    source_system:      'rumbu',
+    created_by:         ME ? (ME.username || ME.full_name || 'web') : 'web',
+    updated_by:         ME ? (ME.username || ME.full_name || 'web') : 'web'
+  };
+
+  setStatus('Saving…', '');
+  document.getElementById('submitBtn').disabled = true;
+
+  try {
+    const res = await fetch(
+      SUPABASE_URL.replace(/\/+$/, '') + '/rest/v1/' + TABLE,
+      {
+        method: 'POST',
+        headers: {
+          'apikey':        SUPABASE_ANON_KEY,
+          'Authorization': 'Bearer ' + SESSION_TOKEN,
+          'Content-Type':  'application/json',
+          'Prefer':        'return=representation'
+        },
+        body: JSON.stringify(payload)
+      }
+    );
+
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error('HTTP ' + res.status + ': ' + txt);
+    }
+
+    const rows = await res.json();
+    const wo   = rows && rows[0] && rows[0].work_order;
+
+    // Show success
+    document.getElementById('successWO').textContent   = wo || '—';
+    document.getElementById('successAsset').textContent = asset + ' · ' + (jobCode) + ' · ' + nurse;
+    document.getElementById('successBanner').style.display = 'block';
+    document.getElementById('successBanner').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setStatus('', '');
+    clearForm();
+
+  } catch(err) {
+    setStatus('Save failed: ' + err.message, 'err');
+  } finally {
+    document.getElementById('submitBtn').disabled = false;
+  }
+}
+
+// =============================================
+// HELPERS
+// =============================================
+function apiGet(path) {
+  return fetch(SUPABASE_URL.replace(/\/+$/, '') + '/rest/v1/' + path, {
+    headers: {
+      'apikey':        SUPABASE_ANON_KEY,
+      'Authorization': 'Bearer ' + (SESSION_TOKEN || SUPABASE_ANON_KEY)
+    }
+  }).then(r => {
+    if (!r.ok) return r.text().then(t => { throw new Error(t); });
+    return r.json();
+  });
+}
+
+function setStatus(msg, cls) {
+  const el = document.getElementById('submitMsg');
+  el.textContent  = msg;
+  el.className    = 'status-msg' + (cls ? ' ' + cls : '');
+}
+
+function fmtDateTime(d) {
+  if (!(d instanceof Date) || isNaN(d)) return '—';
+  const pad = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) +
+    ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+}
+
+function todayLocal() {
+  const d = new Date();
+  const pad = n => String(n).padStart(2,'0');
+  return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate());
+}
+
+function clearForm() {
+  ['fAsset','fJobCode','fNurse'].forEach(id => document.getElementById(id).value = '');
+  ['fDuration','fPart','fDesc'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('fDate').value = todayLocal();
+  ['dShed','dUnit','dSection','dStoppage','dStarting','dFinish',
+   'dDept','dEst','dShift','dType','dNozzles','dDenier']
+    .forEach(id => document.getElementById(id).textContent = '—');
+  document.querySelectorAll('.extruder-block').forEach(el => el.style.display = 'none');
+  hideWarn();
+  stopTime = null; startTime = null; finishTime = null;
+  setStatus('', '');
+}
+
+function resetForm() {
+  document.getElementById('successBanner').style.display = 'none';
+  clearForm();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+</script>
+</body>
+</html>
