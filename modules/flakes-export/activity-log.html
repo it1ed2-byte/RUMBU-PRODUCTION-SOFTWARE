@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Export Activity Log — Flakes Export Form</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+  (function(){ try{ document.documentElement.setAttribute("data-theme", localStorage.getItem("rumbu_theme")||"navy"); }catch(e){} })();
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) document.documentElement.setAttribute("data-theme",e.data.rumbuTheme); });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script src="../../auth.js"></script>
+<script src="fef-common.js"></script>
+<style>
+  body{padding:20px;}
+  .wrap{max-width:1150px;margin:0 auto;}
+  label{font-size:12px;font-weight:700;display:block;margin:0 0 4px;color:var(--muted);}
+  input,select{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;font-family:inherit;background:var(--card);color:var(--text);box-sizing:border-box;}
+  .fgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px;align-items:end;}
+  .tbl{width:100%;border-collapse:collapse;font-size:13px;}
+  .tbl th{background:var(--th-bg);color:var(--th-fg);text-align:left;padding:8px 10px;font-size:12px;white-space:nowrap;}
+  .tbl td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top;}
+  .st{font-size:13px;font-weight:700;min-height:18px;margin-top:10px;} .st.ok{color:var(--ok);} .st.bad{color:var(--bad);}
+  .hint{font-size:12px;color:var(--muted);}
+  .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;} .actions button{width:auto;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <button onclick="(window.parent&&window.parent.closeModule)?window.parent.closeModule():(window.location.href='../../index.html')" style="max-width:200px;margin-bottom:12px;background:var(--accent);">← Back</button>
+  <div id="connStatus" style="font-size:12px;font-weight:700;text-align:center;margin-bottom:10px;color:var(--muted);">Loading...</div>
+  <div id="appArea" style="display:none;">
+    <div class="card-panel">
+      <div id="title" style="font-weight:700;font-size:15px;color:var(--heading);margin:0 0 4px;">Activity Log</div>
+      <p class="hint" id="sub" style="margin:0 0 12px;"></p>
+      <div class="fgrid">
+        <div><label>From</label><input type="date" id="fFrom"></div>
+        <div><label>To</label><input type="date" id="fTo"></div>
+        <div><label>Step</label><select id="fStep"></select></div>
+        <div><label>Action</label><select id="fAction"></select></div>
+        <div><label>Form no</label><input id="fForm" placeholder="e.g. 00053"></div>
+        <div id="personBox"><label>Person</label><select id="fPerson"><option value="">Everyone</option></select></div>
+      </div>
+      <div class="actions">
+        <button onclick="run()" id="btnRun">Show activity</button>
+        <button class="btn-ghost" onclick="downloadPdf()" id="btnPdf" disabled>Download PDF</button>
+      </div>
+      <div class="st" id="status"></div>
+    </div>
+    <div class="card-panel" style="margin-top:16px;"><div id="out"><p class="hint">Choose a date range and press Show activity.</p></div></div>
+  </div>
+</div>
+
+<script>
+let ME=null, ACTOR="", ALL=false, ROWS=[], LAST=null;
+const $ = id => document.getElementById(id);
+const PAGE = 1000, MAX_PAGES = 20;
+
+async function init(){
+  const cs = $("connStatus");
+  try{
+    ME = await requireAuth("../../login.html"); if(!ME) return;
+    cs.style.display = "none"; $("appArea").style.display = "block";
+    ACTOR = ME.username;
+    try{ const { data:emp } = await sb.from("employees").select("full_name").eq("linked_profile_id", ME.id).maybeSingle(); if(emp && emp.full_name) ACTOR = emp.full_name; }catch(e){}
+    ALL = ME.role === "admin" || ME.role === "super_admin";                 // the same rule the database uses
+    $("title").textContent = ALL ? "Export Activity Log" : "My Activity Log";
+    $("sub").textContent = ALL ? "Every action on the Flakes Export Form, by everyone. Filter by person, step, action or form, and download a PDF."
+                               : "Your own actions on the Flakes Export Form. Choose a date range, filter, and download a PDF.";
+    $("personBox").style.display = ALL ? "" : "none";
+    $("fStep").innerHTML = '<option value="">All steps</option>' + FEF_STEPS.map(s => `<option value="${s.key}">${s.no}. ${fefEsc(s.label)}</option>`).join("");
+    $("fAction").innerHTML = '<option value="">All actions</option>' + Object.keys(FEF_ACTIONS).map(k => `<option value="${k}">${fefEsc(FEF_ACTIONS[k])}</option>`).join("");
+    const today = fefTodayYMD(), d = new Date(Date.now() - 29 * 86400000), p = fefWat(d);
+    $("fTo").value = today; $("fFrom").value = p.y + "-" + fefPad2(p.m) + "-" + fefPad2(p.d);
+    if(ALL){
+      const { data } = await sb.from("fef_step_owners").select("profile_id,employee_name");
+      const seen = {}; (data || []).forEach(o => { if(o.profile_id && !seen[o.profile_id]){ seen[o.profile_id] = o.employee_name || "?"; } });
+      PEOPLE = seen; fillPeople();
+    }
+    await run();
+  }catch(e){ cs.style.display = "block"; cs.style.color = "var(--bad)"; cs.textContent = "Error: " + e.message; }
+}
+let PEOPLE = {};
+function fillPeople(){
+  const cur = $("fPerson").value;
+  $("fPerson").innerHTML = '<option value="">Everyone</option>' + Object.keys(PEOPLE).sort((a, b) => String(PEOPLE[a]).localeCompare(String(PEOPLE[b]))).map(id => `<option value="${fefEsc(id)}">${fefEsc(PEOPLE[id])}</option>`).join("");
+  $("fPerson").value = cur;
+}
+function say(t, cls){ $("status").className = "st " + (cls || ""); $("status").textContent = t; }
+
+function filters(){
+  return { from:$("fFrom").value, to:$("fTo").value, step:$("fStep").value, action:$("fAction").value, form:$("fForm").value.trim(), person:ALL ? $("fPerson").value : "" };
+}
+async function run(){
+  const f = filters();
+  if(!f.from || !f.to){ say("Choose both dates.", "bad"); return; }
+  if(f.from > f.to){ say("The From date must not be after the To date.", "bad"); return; }
+  $("btnRun").disabled = true; say("Loading...", "");
+  try{
+    const rows = []; let capped = false;
+    for(let pg = 0; pg < MAX_PAGES; pg++){
+      let q = sb.from("fef_activity_log").select("*").gte("created_at", fefDayStartISO(f.from)).lte("created_at", fefDayEndISO(f.to)).order("created_at", { ascending:false }).order("id", { ascending:false });
+      if(f.step) q = q.eq("step", f.step);
+      if(f.action) q = q.eq("action", f.action);
+      if(f.form) q = q.ilike("form_no", "%" + f.form.replace(/[%,()]/g, "") + "%");
+      if(f.person) q = q.eq("actor_profile_id", f.person);
+      if(!ALL) q = q.eq("actor_profile_id", ME.id);
+      const { data, error } = await q.range(pg * PAGE, pg * PAGE + PAGE - 1);
+      if(error) throw new Error(error.message);
+      rows.push(...(data || []));
+      if(!data || data.length < PAGE) break;
+      if(pg === MAX_PAGES - 1) capped = true;
+    }
+    ROWS = rows; LAST = f;
+    if(ALL){ rows.forEach(r => { if(r.actor_profile_id && !PEOPLE[r.actor_profile_id]) PEOPLE[r.actor_profile_id] = r.actor_name || "?"; }); fillPeople(); $("fPerson").value = f.person; }
+    draw();
+    say(rows.length + " action(s) from " + fefFmtDate(f.from) + " to " + fefFmtDate(f.to) + "." + (capped ? " Showing the newest " + rows.length + ". Narrow the dates to see the rest." : ""), capped ? "bad" : "ok");
+    $("btnPdf").disabled = false;
+  }catch(e){ say("Error: " + e.message, "bad"); }
+  finally{ $("btnRun").disabled = false; }
+}
+function draw(){
+  if(!ROWS.length){ $("out").innerHTML = '<p class="hint">No activity matches these filters.</p>'; return; }
+  $("out").innerHTML = '<div class="table-scroll"><table class="tbl"><thead><tr><th>Date and time</th><th>Form</th><th>Step</th><th>Action</th><th>Detail</th><th>Person</th></tr></thead><tbody>' +
+    ROWS.map(r => `<tr><td>${fefEsc(fefFmtDT(r.created_at))}</td><td>${fefEsc(r.form_no || "-")}</td><td>${fefEsc(r.step ? fefStepLabel(r.step) : "-")}</td><td>${fefEsc(FEF_ACTIONS[r.action] || r.action)}</td><td>${fefEsc(r.detail || "")}</td><td>${fefEsc(r.actor_name || "")}</td></tr>`).join("") + "</tbody></table></div>";
+}
+function downloadPdf(){
+  if(!LAST) return;
+  if(!(window.jspdf && window.jspdf.jsPDF)){ say("The PDF library did not load. Check your connection and reopen this page.", "bad"); return; }
+  const f = LAST, title = "Flakes Export Form: " + (ALL ? "Activity Log" : "My Activity Log");
+  const personText = ALL ? (f.person ? (PEOPLE[f.person] || "Selected person") : "Everyone") : ACTOR;
+  const doc = fefBuildActivityPdf({ title, periodText:fefFmtDate(f.from) + " to " + fefFmtDate(f.to),
+    filtersText:"Person: " + personText + "   |   Step: " + (f.step ? fefStepLabel(f.step) : "All") + "   |   Action: " + (f.action ? FEF_ACTIONS[f.action] : "All") + (f.form ? "   |   Form: " + f.form : ""),
+    rows:ROWS.map(r => [fefFmtDT(r.created_at), r.form_no || "-", r.step ? fefStepLabel(r.step) : "-", FEF_ACTIONS[r.action] || r.action, r.detail || "", r.actor_name || ""]), generatedBy:ACTOR });
+  doc.save(fefFileName([title, fefFmtDate(f.from).replace(/ /g, ""), "To", fefFmtDate(f.to).replace(/ /g, "")]));
+}
+
+init();
+</script>
+</body>
+</html>
