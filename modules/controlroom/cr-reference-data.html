@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Control Room — Reference Data Admin</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+(function(){
+  function apply(t){ if(t) document.documentElement.setAttribute("data-theme",t); }
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+  try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+})();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  body { padding: 20px; }
+  .wrap { max-width: 1000px; margin: 0 auto; }
+
+  /* ---- ACCESS DENIED ---- */
+  .denied {
+    display: none;
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--bad, #dc2626);
+  }
+  .denied h2 { font-size: 20px; margin-bottom: 8px; }
+  .denied p  { font-size: 13px; color: var(--muted); }
+
+  /* ---- TABS ---- */
+  .tab-bar {
+    display: flex;
+    gap: 4px;
+    border-bottom: 2px solid var(--line);
+    margin-bottom: 18px;
+    flex-wrap: wrap;
+  }
+  .tab-btn {
+    padding: 9px 18px;
+    border: none;
+    background: none;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--muted);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    border-radius: 6px 6px 0 0;
+    transition: color .15s;
+  }
+  .tab-btn:hover  { color: var(--accent); }
+  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); background: var(--card); }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  /* ---- CARDS ---- */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px 20px;
+    margin-bottom: 16px;
+  }
+  .card h3 { margin: 0 0 14px; font-size: 14px; color: var(--heading); }
+
+  /* ---- FORM GRID ---- */
+  .fgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; align-items: end; }
+  label  { display: block; font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 4px; }
+  label .req { color: var(--bad); }
+  input, select {
+    width: 100%; padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font-size: 13px;
+    font-family: inherit;
+    background: var(--bg);
+    color: var(--text);
+    box-sizing: border-box;
+  }
+  input:focus, select:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(37,99,235,.12);
+  }
+
+  /* ---- BUTTONS ---- */
+  .btn { padding: 8px 18px; border: none; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: var(--accent-2, #1d4ed8); }
+  .btn-primary:disabled { opacity: .55; cursor: not-allowed; }
+  .btn-ghost { background: transparent; border: 1px solid var(--line); color: var(--text); }
+  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-row { display: flex; gap: 8px; align-items: center; margin-top: 4px; flex-wrap: wrap; }
+  .status { font-size: 12px; font-weight: 700; min-height: 16px; }
+  .status.ok  { color: var(--ok, #16a34a); }
+  .status.err { color: var(--bad, #dc2626); }
+
+  /* ---- TABLE ---- */
+  .tbl-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--line); }
+  th { font-size: 11px; font-weight: 700; text-transform: uppercase;
+       letter-spacing: .4px; color: var(--muted); background: var(--bg); position: sticky; top: 0; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--hover, rgba(0,0,0,.03)); }
+  .badge {
+    display: inline-block; padding: 2px 8px; border-radius: 999px;
+    font-size: 11px; font-weight: 700;
+  }
+  .badge.active   { background: #dcfce7; color: #15803d; }
+  .badge.inactive { background: #f3f4f6; color: #9ca3af; }
+  [data-theme="dark"] .badge.active   { background: #052e16; color: #4ade80; }
+  [data-theme="dark"] .badge.inactive { background: #1f2937; color: #6b7280; }
+
+  .act-btn {
+    padding: 3px 10px; border: 1px solid var(--line); border-radius: 6px;
+    font-size: 11px; font-weight: 700; cursor: pointer; background: var(--bg);
+    color: var(--text); margin-right: 4px;
+  }
+  .act-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .act-btn.danger:hover { border-color: var(--bad); color: var(--bad); }
+
+  /* ---- EDIT MODAL ---- */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,.45); z-index: 100;
+    align-items: center; justify-content: center;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 24px;
+    width: 100%;
+    max-width: 500px;
+    margin: 20px;
+    box-shadow: 0 8px 32px rgba(0,0,0,.18);
+  }
+  .modal h3 { margin: 0 0 16px; font-size: 15px; color: var(--heading); }
+  .modal .fgrid { grid-template-columns: 1fr; }
+
+  /* search */
+  .search-row { display: flex; gap: 10px; margin-bottom: 12px; align-items: center; flex-wrap: wrap; }
+  .search-row input { max-width: 280px; }
+  .rec-count { font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ACCESS DENIED -->
+  <div class="denied" id="deniedBox">
+    <h2>🔒 Access Restricted</h2>
+    <p>This page is for authorised administrators only.<br>Contact the Head of IT if you need access.</p>
+  </div>
+
+  <!-- MAIN CONTENT -->
+  <div id="mainContent" style="display:none;">
+
+    <div class="card" style="margin-bottom:12px;padding:14px 20px;">
+      <h2 style="margin:0 0 2px;font-size:17px;color:var(--heading);">Control Room — Reference Data</h2>
+      <p style="margin:0;font-size:12px;color:var(--muted);">Admin-only. Manage nurses, job codes, assets and extruder specifications.</p>
+    </div>
+
+    <!-- TABS -->
+    <div class="tab-bar">
+      <button class="tab-btn active" onclick="switchTab('nurses',this)">👤 Nurses</button>
+      <button class="tab-btn" onclick="switchTab('jobcodes',this)">🔧 Job Codes</button>
+      <button class="tab-btn" onclick="switchTab('assets',this)">🏭 Assets</button>
+      <button class="tab-btn" onclick="switchTab('extruders',this)">⚙ Extruder Specs</button>
+    </div>
+
+    <!-- ===================== NURSES TAB ===================== -->
+    <div class="tab-panel active" id="tab-nurses">
+      <div class="card">
+        <h3>Add New Nurse</h3>
+        <div class="fgrid">
+          <div><label>Full Name <span class="req">*</span></label><input type="text" id="n-name" placeholder="e.g. AMADU UMAR"></div>
+          <div><label>Staff ID <span class="req">*</span></label><input type="text" id="n-id" placeholder="e.g. H127"></div>
+          <div style="align-self:end;">
+            <button class="btn btn-primary" onclick="addRecord('nurses')">Add Nurse</button>
+          </div>
+        </div>
+        <div class="status" id="n-status" style="margin-top:8px;"></div>
+      </div>
+      <div class="card">
+        <div class="search-row">
+          <input type="text" placeholder="Search name or ID…" oninput="filterTable('nurses-tbl',this.value)">
+          <select onchange="filterActive('nurses-tbl',this.value)">
+            <option value="">All</option><option value="active">Active</option><option value="inactive">Inactive</option>
+          </select>
+          <span class="rec-count" id="nurses-count"></span>
+        </div>
+        <div class="tbl-wrap">
+          <table id="nurses-tbl">
+            <thead><tr><th>Name</th><th>Staff ID</th><th>Full Name</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== JOB CODES TAB ===================== -->
+    <div class="tab-panel" id="tab-jobcodes">
+      <div class="card">
+        <h3>Add New Job Code</h3>
+        <div class="fgrid">
+          <div><label>Job Code <span class="req">*</span></label><input type="text" id="j-code" placeholder="e.g. 218B"></div>
+          <div><label>Est. Duration (min) <span class="req">*</span></label><input type="number" id="j-est" min="0" placeholder="e.g. 60"></div>
+          <div><label>Department <span class="req">*</span></label><input type="text" id="j-dept" placeholder="e.g. Technical"></div>
+          <div style="align-self:end;">
+            <button class="btn btn-primary" onclick="addRecord('jobcodes')">Add Job Code</button>
+          </div>
+        </div>
+        <div class="status" id="j-status" style="margin-top:8px;"></div>
+      </div>
+      <div class="card">
+        <div class="search-row">
+          <input type="text" placeholder="Search code or department…" oninput="filterTable('jc-tbl',this.value)">
+          <select onchange="filterActive('jc-tbl',this.value)">
+            <option value="">All</option><option value="active">Active</option><option value="inactive">Inactive</option>
+          </select>
+          <span class="rec-count" id="jc-count"></span>
+        </div>
+        <div class="tbl-wrap">
+          <table id="jc-tbl">
+            <thead><tr><th>Job Code</th><th>Est. Duration (min)</th><th>Department</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== ASSETS TAB ===================== -->
+    <div class="tab-panel" id="tab-assets">
+      <div class="card">
+        <h3>Add New Asset</h3>
+        <div class="fgrid">
+          <div><label>Asset Code <span class="req">*</span></label><input type="text" id="a-asset" placeholder="e.g. WA-01"></div>
+          <div><label>Shed</label><input type="text" id="a-shed" placeholder="e.g. 2"></div>
+          <div><label>Group</label><input type="text" id="a-grp" placeholder="e.g. WA12,WG7,8"></div>
+          <div><label>Section</label><input type="text" id="a-sect" placeholder="e.g. Rumbu Mainmat"></div>
+          <div style="align-self:end;">
+            <button class="btn btn-primary" onclick="addRecord('assets')">Add Asset</button>
+          </div>
+        </div>
+        <div class="status" id="a-status" style="margin-top:8px;"></div>
+      </div>
+      <div class="card">
+        <div class="search-row">
+          <input type="text" placeholder="Search asset, shed or section…" oninput="filterTable('asset-tbl',this.value)">
+          <select onchange="filterActive('asset-tbl',this.value)">
+            <option value="">All</option><option value="active">Active</option><option value="inactive">Inactive</option>
+          </select>
+          <span class="rec-count" id="asset-count"></span>
+        </div>
+        <div class="tbl-wrap">
+          <table id="asset-tbl">
+            <thead><tr><th>Asset</th><th>Shed</th><th>Group</th><th>Section</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== EXTRUDER SPECS TAB ===================== -->
+    <div class="tab-panel" id="tab-extruders">
+      <div class="card">
+        <h3>Add New Extruder Asset</h3>
+        <div class="fgrid">
+          <div><label>Asset Code <span class="req">*</span></label><input type="text" id="e-asset" placeholder="e.g. MX-99"></div>
+          <div><label>Type</label><input type="number" id="e-type" step="0.01" placeholder="e.g. 2"></div>
+          <div><label>Nozzles</label><input type="number" id="e-nozzles" step="0.1" placeholder="e.g. 4"></div>
+          <div><label>Denier</label><input type="number" id="e-denier" step="0.01" placeholder="e.g. 0.51"></div>
+          <div><label>Length</label><input type="number" id="e-length" step="0.1" placeholder="e.g. 133"></div>
+          <div style="align-self:end;">
+            <button class="btn btn-primary" onclick="addRecord('extruders')">Add Extruder Asset</button>
+          </div>
+        </div>
+        <div class="status" id="e-status" style="margin-top:8px;"></div>
+      </div>
+      <div class="card">
+        <div class="search-row">
+          <input type="text" placeholder="Search asset…" oninput="filterTable('ext-tbl',this.value)">
+          <select onchange="filterActive('ext-tbl',this.value)">
+            <option value="">All</option><option value="active">Active</option><option value="inactive">Inactive</option>
+          </select>
+          <span class="rec-count" id="ext-count"></span>
+        </div>
+        <div class="tbl-wrap">
+          <table id="ext-tbl">
+            <thead><tr><th>Asset</th><th>Type</th><th>Nozzles</th><th>Denier</th><th>Length</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /mainContent -->
+</div><!-- /wrap -->
+
+<!-- ===================== EDIT MODAL ===================== -->
+<div class="modal-overlay" id="editModal">
+  <div class="modal">
+    <h3 id="modalTitle">Edit Record</h3>
+    <div id="modalFields" class="fgrid"></div>
+    <div class="btn-row" style="margin-top:16px;">
+      <button class="btn btn-primary" id="modalSaveBtn" onclick="saveEdit()">Save Changes</button>
+      <button class="btn btn-ghost" onclick="closeModal()">Cancel</button>
+      <span class="status" id="modal-status"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+// =============================================
+// CONFIG
+// =============================================
+const NURSES_T   = 'cr_nurses';
+const JOB_T      = 'cr_job_codes';
+const ASSETS_T   = 'cr_assets';
+const EXTRUDER_T = 'cr_extruder_groups';
+
+let SESSION_TOKEN = SUPABASE_ANON_KEY;
+let EDIT_STATE    = null; // { table, id, fields }
+
+// =============================================
+// AUTH + ROLE CHECK
+// =============================================
+requireAuth(async function(user, profile) {
+  // Allow super_admin, admin, or head_of_it
+  const role = (profile.role || '').toLowerCase();
+  const allowed = ['super_admin', 'admin'].includes(role) || profile.is_head_of_it;
+  if (!allowed) {
+    document.getElementById('deniedBox').style.display = 'block';
+    return;
+  }
+  document.getElementById('mainContent').style.display = 'block';
+  try {
+    const sb = window._supabase || window.supabase;
+    if (sb) {
+      const { data: { session } } = await sb.auth.getSession();
+      SESSION_TOKEN = session?.access_token || SUPABASE_ANON_KEY;
+    }
+  } catch(e) {}
+  await Promise.all([
+    loadTable('nurses'), loadTable('jobcodes'),
+    loadTable('assets'), loadTable('extruders')
+  ]);
+});
+
+// =============================================
+// TABS
+// =============================================
+function switchTab(name, btn) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  btn.classList.add('active');
+}
+
+// =============================================
+// LOAD TABLE DATA
+// =============================================
+async function loadTable(tab) {
+  const { tblId, supaTable, buildRow, countId } = tabConfig(tab);
+  try {
+    const rows = await apiGet(supaTable + '?order=id.asc&limit=2000');
+    const tbody = document.querySelector('#' + tblId + ' tbody');
+    tbody.innerHTML = '';
+    rows.forEach(r => tbody.appendChild(buildRow(r)));
+    document.getElementById(countId).textContent = rows.length + ' record(s)';
+  } catch(err) {
+    console.error('loadTable ' + tab, err);
+  }
+}
+
+function tabConfig(tab) {
+  const cfg = {
+    nurses: {
+      tblId: 'nurses-tbl', supaTable: NURSES_T, countId: 'nurses-count',
+      buildRow: r => buildRow_nurses(r)
+    },
+    jobcodes: {
+      tblId: 'jc-tbl', supaTable: JOB_T, countId: 'jc-count',
+      buildRow: r => buildRow_jobcodes(r)
+    },
+    assets: {
+      tblId: 'asset-tbl', supaTable: ASSETS_T, countId: 'asset-count',
+      buildRow: r => buildRow_assets(r)
+    },
+    extruders: {
+      tblId: 'ext-tbl', supaTable: EXTRUDER_T, countId: 'ext-count',
+      buildRow: r => buildRow_extruders(r)
+    }
+  };
+  return cfg[tab];
+}
+
+function badge(active) {
+  return '<span class="badge ' + (active ? 'active' : 'inactive') + '">' +
+    (active ? 'Active' : 'Inactive') + '</span>';
+}
+
+function actionBtns(tab, id, active) {
+  return '<button class="act-btn" onclick="openEdit(\'' + tab + '\',' + id + ')">Edit</button>' +
+    '<button class="act-btn ' + (active ? 'danger' : '') + '" onclick="toggleActive(\'' + tab + '\',' + id + ',' + active + ')">' +
+    (active ? 'Deactivate' : 'Reactivate') + '</button>';
+}
+
+function buildRow_nurses(r) {
+  const tr = document.createElement('tr');
+  tr.dataset.search = ((r.name||'') + ' ' + (r.emp_id||'')).toLowerCase();
+  tr.dataset.active = r.is_active ? 'active' : 'inactive';
+  tr.innerHTML = '<td>' + esc(r.name) + '</td><td>' + esc(r.emp_id) + '</td>' +
+    '<td>' + esc(r.full_name) + '</td><td>' + badge(r.is_active) + '</td>' +
+    '<td>' + actionBtns('nurses', r.id, r.is_active) + '</td>';
+  return tr;
+}
+
+function buildRow_jobcodes(r) {
+  const tr = document.createElement('tr');
+  tr.dataset.search = ((r.job_code||'') + ' ' + (r.department||'')).toLowerCase();
+  tr.dataset.active = r.is_active ? 'active' : 'inactive';
+  tr.innerHTML = '<td><strong>' + esc(r.job_code) + '</strong></td>' +
+    '<td>' + (r.estimated_min ?? '—') + '</td><td>' + esc(r.department) + '</td>' +
+    '<td>' + badge(r.is_active) + '</td>' +
+    '<td>' + actionBtns('jobcodes', r.id, r.is_active) + '</td>';
+  return tr;
+}
+
+function buildRow_assets(r) {
+  const tr = document.createElement('tr');
+  tr.dataset.search = ((r.asset||'') + ' ' + (r.shed||'') + ' ' + (r.section||'')).toLowerCase();
+  tr.dataset.active = r.is_active ? 'active' : 'inactive';
+  tr.innerHTML = '<td><strong>' + esc(r.asset) + '</strong></td>' +
+    '<td>' + esc(r.shed) + '</td><td>' + esc(r.grp) + '</td>' +
+    '<td>' + esc(r.section) + '</td><td>' + badge(r.is_active) + '</td>' +
+    '<td>' + actionBtns('assets', r.id, r.is_active) + '</td>';
+  return tr;
+}
+
+function buildRow_extruders(r) {
+  const tr = document.createElement('tr');
+  tr.dataset.search = (r.asset||'').toLowerCase();
+  tr.dataset.active = r.is_active ? 'active' : 'inactive';
+  tr.innerHTML = '<td><strong>' + esc(r.asset) + '</strong></td>' +
+    '<td>' + (r.type??'—') + '</td><td>' + (r.nozzles??'—') + '</td>' +
+    '<td>' + (r.denier??'—') + '</td><td>' + (r.length??'—') + '</td>' +
+    '<td>' + badge(r.is_active) + '</td>' +
+    '<td>' + actionBtns('extruders', r.id, r.is_active) + '</td>';
+  return tr;
+}
+
+// =============================================
+// ADD RECORD
+// =============================================
+async function addRecord(tab) {
+  const { payload, validate, supaTable, statusId, conflictCol } = addConfig(tab);
+  const p = payload();
+  const err = validate(p);
+  if (err) return setStatus(statusId, err, 'err');
+  setStatus(statusId, 'Saving…', '');
+  try {
+    await apiPost(supaTable + '?on_conflict=' + conflictCol, p);
+    setStatus(statusId, '✓ Added successfully.', 'ok');
+    clearAddForm(tab);
+    await loadTable(tab);
+  } catch(e) {
+    setStatus(statusId, 'Error: ' + e.message, 'err');
+  }
+}
+
+function addConfig(tab) {
+  const cfgs = {
+    nurses: {
+      supaTable: NURSES_T, statusId: 'n-status', conflictCol: 'emp_id',
+      payload: () => ({
+        name:   (document.getElementById('n-name').value || '').trim().toUpperCase(),
+        emp_id: (document.getElementById('n-id').value   || '').trim().toUpperCase(),
+        is_active: true
+      }),
+      validate: p => {
+        if (!p.name)   return 'Name is required.';
+        if (!p.emp_id) return 'Staff ID is required.';
+        return null;
+      }
+    },
+    jobcodes: {
+      supaTable: JOB_T, statusId: 'j-status', conflictCol: 'job_code',
+      payload: () => ({
+        job_code:      (document.getElementById('j-code').value || '').trim().toUpperCase(),
+        estimated_min: parseFloat(document.getElementById('j-est').value  || '0'),
+        department:    (document.getElementById('j-dept').value || '').trim().toUpperCase(),
+        is_active:     true
+      }),
+      validate: p => {
+        if (!p.job_code)        return 'Job code is required.';
+        if (isNaN(p.estimated_min)) return 'Estimated duration must be a number.';
+        if (!p.department)      return 'Department is required.';
+        return null;
+      }
+    },
+    assets: {
+      supaTable: ASSETS_T, statusId: 'a-status', conflictCol: 'asset',
+      payload: () => ({
+        asset:   (document.getElementById('a-asset').value || '').trim().toUpperCase(),
+        shed:    (document.getElementById('a-shed').value  || '').trim() || null,
+        grp:     (document.getElementById('a-grp').value   || '').trim() || null,
+        section: (document.getElementById('a-sect').value  || '').trim() || null,
+        is_active: true
+      }),
+      validate: p => {
+        if (!p.asset) return 'Asset code is required.';
+        return null;
+      }
+    },
+    extruders: {
+      supaTable: EXTRUDER_T, statusId: 'e-status', conflictCol: 'asset',
+      payload: () => ({
+        asset:   (document.getElementById('e-asset').value   || '').trim().toUpperCase(),
+        type:    parseFloatOrNull(document.getElementById('e-type').value),
+        nozzles: parseFloatOrNull(document.getElementById('e-nozzles').value),
+        denier:  parseFloatOrNull(document.getElementById('e-denier').value),
+        length:  parseFloatOrNull(document.getElementById('e-length').value),
+        is_active: true
+      }),
+      validate: p => {
+        if (!p.asset) return 'Asset code is required.';
+        return null;
+      }
+    }
+  };
+  return cfgs[tab];
+}
+
+function clearAddForm(tab) {
+  const maps = {
+    nurses:   ['n-name','n-id'],
+    jobcodes: ['j-code','j-est','j-dept'],
+    assets:   ['a-asset','a-shed','a-grp','a-sect'],
+    extruders:['e-asset','e-type','e-nozzles','e-denier','e-length']
+  };
+  (maps[tab] || []).forEach(id => { document.getElementById(id).value = ''; });
+}
+
+// =============================================
+// TOGGLE ACTIVE
+// =============================================
+async function toggleActive(tab, id, currentlyActive) {
+  const supaTable = { nurses: NURSES_T, jobcodes: JOB_T, assets: ASSETS_T, extruders: EXTRUDER_T }[tab];
+  const action    = currentlyActive ? 'Deactivate' : 'Reactivate';
+  if (!confirm(action + ' this record?')) return;
+  try {
+    await apiPatch(supaTable + '?id=eq.' + id, { is_active: !currentlyActive });
+    await loadTable(tab);
+  } catch(e) {
+    alert('Failed: ' + e.message);
+  }
+}
+
+// =============================================
+// EDIT MODAL
+// =============================================
+async function openEdit(tab, id) {
+  const supaTable = { nurses: NURSES_T, jobcodes: JOB_T, assets: ASSETS_T, extruders: EXTRUDER_T }[tab];
+  try {
+    const rows = await apiGet(supaTable + '?id=eq.' + id);
+    if (!rows || !rows[0]) return alert('Record not found.');
+    const r = rows[0];
+    EDIT_STATE = { tab, supaTable, id };
+
+    const titles = { nurses: 'Edit Nurse', jobcodes: 'Edit Job Code', assets: 'Edit Asset', extruders: 'Edit Extruder Asset' };
+    document.getElementById('modalTitle').textContent = titles[tab];
+
+    const container = document.getElementById('modalFields');
+    container.innerHTML = '';
+
+    const fieldDefs = {
+      nurses:   [['name','Name','text',r.name],['emp_id','Staff ID','text',r.emp_id]],
+      jobcodes: [['job_code','Job Code','text',r.job_code],['estimated_min','Est. Duration (min)','number',r.estimated_min],['department','Department','text',r.department]],
+      assets:   [['asset','Asset Code','text',r.asset],['shed','Shed','text',r.shed||''],['grp','Group','text',r.grp||''],['section','Section','text',r.section||'']],
+      extruders:[['asset','Asset Code','text',r.asset],['type','Type','number',r.type],['nozzles','Nozzles','number',r.nozzles],['denier','Denier','number',r.denier],['length','Length','number',r.length]]
+    };
+
+    fieldDefs[tab].forEach(([key, label, type, val]) => {
+      const div = document.createElement('div');
+      div.innerHTML = '<label>' + esc(label) + '</label>' +
+        '<input type="' + type + '" id="me-' + key + '" value="' + esc(String(val ?? '')) + '"' +
+        (key === 'emp_id' || (key === 'asset' && tab !== 'nurses') ? ' style="opacity:.7;" readonly' : '') + '>';
+      container.appendChild(div);
+    });
+
+    setStatus('modal-status', '', '');
+    document.getElementById('editModal').classList.add('open');
+  } catch(e) {
+    alert('Could not load record: ' + e.message);
+  }
+}
+
+async function saveEdit() {
+  if (!EDIT_STATE) return;
+  const { tab, supaTable, id } = EDIT_STATE;
+
+  const fieldKeys = {
+    nurses:   ['name','emp_id'],
+    jobcodes: ['job_code','estimated_min','department'],
+    assets:   ['asset','shed','grp','section'],
+    extruders:['asset','type','nozzles','denier','length']
+  };
+  const numericKeys = new Set(['estimated_min','type','nozzles','denier','length']);
+
+  const payload = {};
+  fieldKeys[tab].forEach(key => {
+    const el = document.getElementById('me-' + key);
+    if (!el || el.readOnly) return;
+    const v = el.value.trim();
+    payload[key] = numericKeys.has(key) ? (v === '' ? null : parseFloat(v)) : (v || null);
+  });
+
+  setStatus('modal-status', 'Saving…', '');
+  document.getElementById('modalSaveBtn').disabled = true;
+  try {
+    await apiPatch(supaTable + '?id=eq.' + id, payload);
+    setStatus('modal-status', '✓ Saved.', 'ok');
+    await loadTable(tab);
+    setTimeout(closeModal, 900);
+  } catch(e) {
+    setStatus('modal-status', 'Error: ' + e.message, 'err');
+  } finally {
+    document.getElementById('modalSaveBtn').disabled = false;
+  }
+}
+
+function closeModal() {
+  document.getElementById('editModal').classList.remove('open');
+  EDIT_STATE = null;
+}
+document.getElementById('editModal').addEventListener('click', function(e) {
+  if (e.target === this) closeModal();
+});
+
+// =============================================
+// SEARCH / FILTER
+// =============================================
+function filterTable(tblId, query) {
+  const q = query.toLowerCase();
+  document.querySelectorAll('#' + tblId + ' tbody tr').forEach(tr => {
+    const match = !q || (tr.dataset.search || '').includes(q);
+    tr.style.display = match ? '' : 'none';
+  });
+  updateCount(tblId);
+}
+
+function filterActive(tblId, val) {
+  document.querySelectorAll('#' + tblId + ' tbody tr').forEach(tr => {
+    const match = !val || tr.dataset.active === val;
+    tr.style.display = match ? '' : 'none';
+  });
+  updateCount(tblId);
+}
+
+function updateCount(tblId) {
+  const countIds = { 'nurses-tbl':'nurses-count','jc-tbl':'jc-count','asset-tbl':'asset-count','ext-tbl':'ext-count' };
+  const visible = document.querySelectorAll('#' + tblId + ' tbody tr:not([style*="display: none"])').length;
+  const cid = countIds[tblId];
+  if (cid) document.getElementById(cid).textContent = visible + ' record(s)';
+}
+
+// =============================================
+// API HELPERS
+// =============================================
+function authHeaders(extra) {
+  return Object.assign({
+    'apikey':        SUPABASE_ANON_KEY,
+    'Authorization': 'Bearer ' + SESSION_TOKEN,
+    'Content-Type':  'application/json'
+  }, extra || {});
+}
+
+function apiGet(path) {
+  return fetch(SUPABASE_URL.replace(/\/+$/,'') + '/rest/v1/' + path, {
+    headers: authHeaders()
+  }).then(r => r.ok ? r.json() : r.text().then(t => { throw new Error(t); }));
+}
+
+function apiPost(path, body) {
+  return fetch(SUPABASE_URL.replace(/\/+$/,'') + '/rest/v1/' + path, {
+    method: 'POST',
+    headers: authHeaders({ 'Prefer': 'resolution=merge-duplicates,return=minimal' }),
+    body: JSON.stringify(body)
+  }).then(r => { if (!r.ok) return r.text().then(t => { throw new Error(t); }); });
+}
+
+function apiPatch(path, body) {
+  return fetch(SUPABASE_URL.replace(/\/+$/,'') + '/rest/v1/' + path, {
+    method: 'PATCH',
+    headers: authHeaders({ 'Prefer': 'return=minimal' }),
+    body: JSON.stringify(body)
+  }).then(r => { if (!r.ok) return r.text().then(t => { throw new Error(t); }); });
+}
+
+function setStatus(id, msg, cls) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = msg;
+  el.className   = 'status' + (cls ? ' ' + cls : '');
+}
+
+function parseFloatOrNull(v) {
+  const n = parseFloat(v);
+  return isNaN(n) ? null : n;
+}
+
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+</script>
+</body>
+</html>
