@@ -76,7 +76,7 @@
 
   <div class="card-panel">
     <h2 class="pg">Stage 10 &mdash; Odoo Packaging</h2>
-    <p class="sub">Every approved batch appears here by itself. Generate and print its labels, then, once the bags are packed in Odoo, open the batch (click its title), press <b>Bagged in Odoo</b>, enter the Odoo package number of each bag and submit.</p>
+    <p class="sub">Every approved batch appears here by itself. Generate and print its labels, then, once the bags are packed in Odoo, open the batch (click its title), press <b>Bagged in Odoo</b>, enter the Odoo package number of each bag and submit. Bags packed together in Odoo can share one number: type it on bag 1 and press <b>Same number for all bags</b>.</p>
     <div id="dutyNote" class="sub"></div>
     <div class="toolbar">
       <button class="fbtn" id="f_all" onclick="setFilter('all')">All</button>
@@ -533,6 +533,7 @@ function actionsHtml(r){
     parts.push(`<button class="btn-ghost btn-sm" onclick="rebuildPdf10(${id})">Create labels PDF</button>`);
   }
   if(editing){
+    if(r.bags.length > 1) parts.push(`<button class="btn-ghost btn-sm" onclick="sameOdooForAll(${id})" title="Copy bag 1's number to every bag of this batch">Same number for all bags</button>`);
     parts.push(`<button class="btn-sm" onclick="submitOdoo(${id})">Submit</button>`);
     parts.push(`<button class="btn-ghost btn-sm" onclick="cancelOdoo(${id})">Cancel</button>`);
   } else if(packed){
@@ -620,6 +621,21 @@ function openOdoo(id){
   flash(id, ""); renderBatchList();
   const first = r.bags[0] && document.getElementById("odoo_" + id + "_" + r.bags[0].id); if(first) first.focus();
 }
+// Bags packed together in Odoo share one package number: copy bag 1's number to every bag of the batch.
+function sameOdooForAll(id){
+  const r = rowOf(id); if(!r || !r.bags.length) return;
+  const first = document.getElementById("odoo_" + id + "_" + r.bags[0].id);
+  const v = String(first ? first.value : "").trim().toUpperCase();
+  if(!v){ flash(id, "Type the Odoo package number on bag 1 first.", "var(--bad)"); if(first) first.focus(); return; }
+  DRAFT[id] = DRAFT[id] || {};
+  r.bags.forEach(g => {
+    const el = document.getElementById("odoo_" + id + "_" + g.id);
+    if(el) el.value = v;
+    DRAFT[id][g.id] = v;
+  });
+  flash(id, "All " + r.bags.length + " bags now carry " + esc(v) + ". Press Submit to save.", "var(--ok)");
+}
+window.sameOdooForAll = sameOdooForAll;
 function cancelOdoo(id){ EDITING.delete(id); delete DRAFT[id]; flash(id, ""); renderBatchList(); }
 function onOdooInput(id, bagId, el){
   el.value = el.value.toUpperCase().replace(/[^A-Z0-9._\/-]/g, "");   // capitals only; spaces and odd characters are dropped as typed
@@ -629,16 +645,15 @@ function onOdooInput(id, bagId, el){
 async function submitOdoo(id){
   const r = rowOf(id); if(!r) return;
   useRun(id); if(!needDuty()) return;
-  const items = [], seen = {};
+  const items = [];
   for(let i = 0; i < r.bags.length; i++){
     const g = r.bags[i], el = document.getElementById("odoo_" + id + "_" + g.id);
     const v = String((el ? el.value : (DRAFT[id] || {})[g.id]) || "").trim().toUpperCase();
     if(!v) return flash(id, "Enter the Odoo package number of bag " + (i + 1) + " (" + esc(g.reference_number) + ").", "var(--bad)");
     if(!NUM_RE.test(v)) return flash(id, "\"" + esc(v) + "\" is not a valid Odoo package number. Use letters, numbers and - . / only, 2 to 40 characters, for example AB-03041.", "var(--bad)");
-    if(seen[v]) return flash(id, "The number " + esc(v) + " is used on two bags of this batch. Each bag has its own Odoo package.", "var(--bad)");
-    seen[v] = true;
+    // bags of this batch may share a number; a number belonging to another batch is refused
     const clash = ROWS.find(x => x.b.id !== id && x.bags.some(y => y.odoo_package_no && String(y.odoo_package_no).toUpperCase() === v));
-    if(clash){ const other = clash.bags.find(y => y.odoo_package_no && String(y.odoo_package_no).toUpperCase() === v); return flash(id, "The number " + esc(v) + " is already used by bag " + esc(other.reference_number) + ".", "var(--bad)"); }
+    if(clash){ const other = clash.bags.find(y => y.odoo_package_no && String(y.odoo_package_no).toUpperCase() === v); return flash(id, "The number " + esc(v) + " is already used by another batch (" + esc((clash.c && clash.c.form_number) || "") + " batch " + esc(clash.b.batch_no) + ", bag " + esc(other.reference_number) + "). Bags can share a number only within one batch.", "var(--bad)"); }
     items.push({ bag_id: g.id, number: v });
   }
   flash(id, "Saving...");
