@@ -377,6 +377,30 @@ function _kwpForceChangePath(loginPath){
 // Throws a descriptive Error on any failure — callers should wrap this in
 // try/catch and show err.message somewhere visible, rather than letting
 // it fail silently.
+// ── System Audit Log ─────────────────────────────────────────────────────────
+// Sign-ins, sign-outs and screens opened are written to public.audit_log (system_audit_log.sql).
+// Changes to data are recorded by the database itself. Logging never blocks or breaks a page.
+function rumbuAudit(kind, page, details){
+  try{
+    return Promise.race([
+      sb.rpc("log_event", { p_kind: kind, p_page: page || null, p_details: details || null }).then(() => {}, () => {}),
+      new Promise(r => setTimeout(r, 1500))
+    ]);
+  }catch(e){ return Promise.resolve(); }
+}
+window.rumbuAudit = rumbuAudit;
+function _rumbuAuditPage(){
+  if(window.__rumbuPageLogged) return;
+  window.__rumbuPageLogged = true;
+  const path = location.pathname;
+  if(/(^|\/)(index\.html)?$/.test(path) || /login\.html$/.test(path)) return;  // the shell itself: covered by the sign-in
+  const q = location.search.length > 1 && location.search.length < 200 ? location.search : "";
+  let title = document.title || "";
+  try{ const cp = window.top !== window && window.top.document.getElementById("crumbPage"); if(cp && cp.textContent.trim()) title = cp.textContent.trim(); }catch(e){}
+  rumbuAudit("page", path + q, { title: title.replace(/\s*·\s*RumbuApp\s*$/, "") });
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 async function requireAuth(loginPath) {
   loginPath = loginPath || "login.html";
   if (!sb) throw new Error("Could not reach the server: the app could not load its connection library. Check your internet connection.");
@@ -444,6 +468,7 @@ async function requireAuth(loginPath) {
       .maybeSingle();
     if (kwpLink && kwpLink.status !== "Active") {
       window.__rumbuLoggingOut = true; RumbuUI.forgetSession();
+      await rumbuAudit("sign_out", null, { reason: "Signed out: staff record not active" });
       await sb.auth.signOut();
       (window.top||window).location.href = loginPath + "?blocked=inactive";
       return null;
@@ -511,6 +536,7 @@ async function requireAuth(loginPath) {
   }
 
   if(readOnly) _scheduleReadOnly();
+  setTimeout(_rumbuAuditPage, 400);
 
   return {
     id: profile.id,
@@ -629,6 +655,7 @@ async function logout(loginPath) {
   window.__rumbuLoggingOut = true;
   try{ window.top.__rumbuLoggingOut = true; }catch(e){}
   RumbuUI.forgetSession();
+  await rumbuAudit("sign_out", null, null);
   try{ await sb.auth.signOut(); }catch(e){ /* offline: the local sign-out still happens */ }
   (window.top||window).location.href = loginPath || "login.html";
 }

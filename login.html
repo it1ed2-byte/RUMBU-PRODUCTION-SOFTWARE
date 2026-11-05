@@ -275,6 +275,11 @@ async function sendForgot(){
 }
 window.sendForgot = sendForgot;
 
+// System Audit Log: a failed attempt is recorded with the login that was typed (never the password)
+function logFailedSignIn(login){
+  try{ sb.rpc("log_failed_sign_in", { p_login: String(login || "").slice(0, 120) }).then(() => {}, () => {}); }catch(e){}
+}
+
 async function login(){
   const username = document.getElementById("username").value.trim();
   const password = document.getElementById("password").value;
@@ -324,6 +329,7 @@ async function login(){
     if(!email && username.indexOf("@") !== -1) email = username;
 
     if(!email){
+      logFailedSignIn(username);
       status.className = "status err"; status.textContent = "Invalid username or password.";
       return;
     }
@@ -331,9 +337,15 @@ async function login(){
     const { error: signInErr } = await sb.auth.signInWithPassword({ email, password });
     if(signInErr){
       if(isNetworkError(signInErr)){ showNetError(status); return; }
+      logFailedSignIn(username);
       status.className = "status err"; status.textContent = "Invalid username or password.";
       return;
     }
+    // System Audit Log: record the sign-in (never holds the person up for more than 1.5 s)
+    await Promise.race([
+      sb.rpc("log_event", { p_kind: "sign_in", p_page: "login", p_details: { login: username } }).then(() => {}, () => {}),
+      new Promise(r => setTimeout(r, 1500))
+    ]);
     RumbuUI.markSession();
     const go = document.getElementById("goingIn");
     go.innerHTML = RumbuUI.loaderHtml("Opening RumbuApp");
