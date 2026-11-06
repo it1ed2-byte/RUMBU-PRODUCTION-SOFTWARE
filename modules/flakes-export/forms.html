@@ -48,6 +48,11 @@
   .diff.bad{background:#fee2e2;} .diff.bad .val{color:#991b1b;} .diff.ok{background:#d1fae5;} .diff.ok .val{color:#065f46;}
   .files{margin:4px 0 6px;font-size:12px;} .files .f{display:flex;gap:8px;align-items:center;padding:4px 0;border-bottom:1px dashed var(--line);} .files .f a{flex:1;word-break:break-all;} .files .f button{background:none;border:none;color:var(--bad);cursor:pointer;font-weight:800;padding:0 6px;width:auto;}
   .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;} .actions button{width:auto;}
+  .attbox{border:1px dashed var(--line);border-radius:10px;padding:8px 12px 10px;background:var(--bg);}
+  .ext{display:inline-block;min-width:38px;text-align:center;font-size:10px;font-weight:800;padding:2px 6px;border-radius:5px;background:var(--line);color:var(--heading);}
+  .files .f .wait{flex:1;word-break:break-all;} .files .f .wait small{color:var(--muted);display:block;font-size:11px;}
+  .addbtn{display:inline-block;padding:7px 14px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--heading);font-size:12px;font-weight:700;cursor:pointer;margin-top:6px;}
+  .addbtn:hover{background:var(--bg);}
   .st{font-size:13px;font-weight:700;min-height:18px;margin-top:10px;} .st.ok{color:var(--ok);} .st.bad{color:var(--bad);}
   .cm{border-bottom:1px solid var(--line);padding:8px 0;font-size:13px;} .cm .who{font-size:11px;color:var(--muted);font-weight:700;margin-bottom:2px;}
   .chipline{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:0 0 10px;font-size:12px;color:var(--muted);}
@@ -96,10 +101,21 @@
 </div>
 
 <script>
-let ME=null, ACTOR="", CLIENTS=[], FORMS=[], OWNERS=[], MY_STEPS=new Set(), CUR=null, VIEW="details", COMMENTS=[], FILES={odoo:[],wb:[],wi:[]}, BUSY=false;
+let ME=null, ACTOR="", CLIENTS=[], FORMS=[], OWNERS=[], MY_STEPS=new Set(), CUR=null, VIEW="details", COMMENTS=[], FILES={odoo:[],wb:[],ship:[],wi:[]}, STAGED={odoo:[],wb:[],ship:[],wi:[]}, BUSY=false;
 const $ = id => document.getElementById(id);
 const ctx = () => ({ ME, mySteps:MY_STEPS });
-const KIND_FIELD = { odoo:"odoo_slips", wb:"weighbridge_attachments", wi:"weight_issue_attachments" };
+const KIND_FIELD = { odoo:"odoo_slips", wb:"weighbridge_attachments", ship:"shipping_attachments", wi:"weight_issue_attachments" };
+let DRAFT = {};          // what was typed but not saved yet, per step, so looking at another step does not lose it
+function resetStaged(){ STAGED = { odoo:[], wb:[], ship:[], wi:[] }; DRAFT = {}; }
+function captureDraft(){
+  const vals = {};
+  document.querySelectorAll("#panel [id^='f_']").forEach(el => { if(!el.readOnly && !el.disabled) vals[el.id] = el.value; });
+  if(Object.keys(vals).length) DRAFT[VIEW] = vals;
+}
+function applyDraft(key){
+  const vals = DRAFT[key]; if(!vals) return;
+  Object.keys(vals).forEach(id => { const el = $(id); if(el && !el.readOnly && !el.disabled) el.value = vals[id]; });
+}
 
 function blankForm(){ return { id:null, form_no:null, status:"in_progress", current_step:"details", steps_done:{}, weight_issue_required:null, form_date:fefTodayYMD(),
   odoo_slips:[], weighbridge_attachments:[], weight_issue_attachments:[] }; }
@@ -170,20 +186,20 @@ function renderList(){
 /* ---------------- open / close ---------------- */
 function newForm(){
   const p = fefCanCreate(ctx()); if(!p.ok){ alert(p.reason); return; }
-  CUR = null; VIEW = "details"; COMMENTS = []; render(); $("formCard").scrollIntoView({ behavior:"smooth", block:"start" });
+  CUR = null; VIEW = "details"; COMMENTS = []; resetStaged(); render(); $("formCard").scrollIntoView({ behavior:"smooth", block:"start" });
 }
 async function openForm(id){
   const f = FORMS.find(x => x.id === id); if(!f) return;
-  CUR = f; VIEW = f.status === "completed" ? "completed" : f.current_step; await loadComments(); render(); $("formCard").scrollIntoView({ behavior:"smooth", block:"start" });
+  resetStaged(); CUR = f; VIEW = f.status === "completed" ? "completed" : f.current_step; await loadComments(); render(); $("formCard").scrollIntoView({ behavior:"smooth", block:"start" });
 }
-function closeForm(){ CUR = null; $("formCard").style.display = "none"; }
+function closeForm(){ resetStaged(); CUR = null; $("formCard").style.display = "none"; }
 async function loadComments(){
   COMMENTS = [];
   if(!CUR || !CUR.id) return;
   const { data } = await sb.from("fef_comments").select("*").eq("form_id", CUR.id).order("created_at", { ascending:true });
   COMMENTS = data || [];
 }
-function viewStep(k){ VIEW = k; render(); }
+function viewStep(k){ captureDraft(); VIEW = k; render(); }
 
 /* ---------------- drawing the form ---------------- */
 function ownersText(k){
@@ -210,21 +226,41 @@ function render(){
   renderComments();
 }
 
-function fileList(kind, editable){
-  const arr = FILES[kind];
-  return '<div class="files" id="lst_' + kind + '">' + (arr.length ? arr.map((x, i) =>
-    `<div class="f"><a href="${fefEsc(x.url)}" target="_blank" rel="noopener">${fefEsc(x.name)}</a><span style="color:var(--muted);">${fefEsc(fefSize(x.size))}</span>` +
-    (editable ? `<button title="Remove" onclick="removeFile('${kind}',${i})">✕</button>` : "") + "</div>").join("") : '<div style="color:var(--muted);">No file attached.</div>') + "</div>";
+function extOf(n){ const m = /\.([A-Za-z0-9]{1,5})$/.exec(n || ""); return m ? m[1].toUpperCase() : "FILE"; }
+function attRows(kind, editable){
+  const saved = FILES[kind], wait = STAGED[kind];
+  const rows = saved.map((x, i) => `<div class="f"><span class="ext">${fefEsc(extOf(x.name))}</span><a href="${fefEsc(x.url)}" target="_blank" rel="noopener">${fefEsc(x.name)}</a><span style="color:var(--muted);">${fefEsc(fefSize(x.size))}</span>` +
+      (editable ? `<button title="Remove" onclick="removeFile('${kind}',${i})">✕</button>` : "") + "</div>")
+    .concat(wait.map((f, i) => `<div class="f"><span class="ext">${fefEsc(extOf(f.name))}</span><span class="wait">${fefEsc(f.name)}<small>Will upload when you save</small></span><span style="color:var(--muted);">${fefEsc(fefSize(f.size))}</span><button title="Remove" onclick="removeStaged('${kind}',${i})">✕</button></div>`));
+  return rows.length ? rows.join("") : '<div style="color:var(--muted);">No file attached.</div>';
 }
-function removeFile(kind, i){ FILES[kind].splice(i, 1); $("lst_" + kind).outerHTML = fileList(kind, true); }
-function filePicker(kind, editable){
-  return fileList(kind, editable) + (editable ? `<input type="file" id="new_${kind}" multiple>` : "");
+function attBox(kind, editable){
+  return `<div class="attbox" id="att_${kind}"><div class="files" id="lst_${kind}">${attRows(kind, editable)}</div>` + (editable
+    ? `<label class="addbtn">+ Add files<input type="file" id="new_${kind}" multiple hidden onchange="stageFiles('${kind}')"></label>
+       <div class="hint" style="margin:4px 0 0;">Any file type: PDF, Word, Excel, photos and more. You can add files several times. Up to ${FEF_MAX_FILES} files, ${FEF_MAX_FILE_MB} MB each.</div>` : "") + "</div>";
+}
+function redrawAtt(kind){ const box = $("att_" + kind); if(box) box.outerHTML = attBox(kind, true); }
+function removeFile(kind, i){ FILES[kind].splice(i, 1); redrawAtt(kind); }
+function removeStaged(kind, i){ STAGED[kind].splice(i, 1); redrawAtt(kind); }
+/* Files are collected here as they are picked, so the box can be used again and again; they upload when the step is saved. */
+function stageFiles(kind){
+  const input = $("new_" + kind); if(!input) return;
+  const picked = Array.from(input.files || []), notes = [];
+  for(const f of picked){
+    if(!f.size){ notes.push(f.name + " is empty, so it was skipped."); continue; }
+    if(f.size > FEF_MAX_FILE_MB * 1048576){ notes.push(f.name + " is larger than " + FEF_MAX_FILE_MB + " MB, so it was skipped."); continue; }
+    if(STAGED[kind].some(s => s.name === f.name && s.size === f.size && s.lastModified === f.lastModified) || FILES[kind].some(s => s.name === f.name && s.size === f.size)){ notes.push(f.name + " is already added."); continue; }
+    if(FILES[kind].length + STAGED[kind].length >= FEF_MAX_FILES){ notes.push("Only " + FEF_MAX_FILES + " files fit here, so " + f.name + " was skipped."); continue; }
+    STAGED[kind].push(f);
+  }
+  redrawAtt(kind);
+  msg(notes.length ? notes.join(" ") : "", notes.length ? "bad" : "");
 }
 function val(v){ return fefEsc(v == null ? "" : v); }
 
 function renderPanel(form){
   const key = VIEW, isNew = !form.id, def = FEF_STEPS.find(s => s.key === key);
-  FILES.odoo = (form.odoo_slips || []).slice(); FILES.wb = (form.weighbridge_attachments || []).slice(); FILES.wi = (form.weight_issue_attachments || []).slice();
+  FILES.odoo = (form.odoo_slips || []).slice(); FILES.wb = (form.weighbridge_attachments || []).slice(); FILES.ship = (form.shipping_attachments || []).slice(); FILES.wi = (form.weight_issue_attachments || []).slice();
   let perm;
   if(isNew) perm = key === "details" ? fefCanCreate(ctx()) : { ok:false, reason:"Save Details first." };
   else if(key === "completed") perm = completePerm(form);
@@ -241,18 +277,19 @@ function renderPanel(form){
       <div><label>Form No</label><input id="f_formno" value="${val(form.form_no || "Assigned when you save")}" readonly></div></div>
       <div class="grid2"><div><label>Client name *</label><input id="f_client" list="clientList" maxlength="120" autocomplete="off" placeholder="Type the client name, or pick from the list" value="${val(form.client_name)}"${dis}><datalist id="clientList">${CLIENTS.map(c => `<option value="${val(c.client_name)}"></option>`).join("")}</datalist></div>
       <div><label>Picking slip no *</label><input id="f_picking" value="${val(form.picking_slip_no)}"${dis}></div></div>
-      <label>Odoo delivery, picking &amp; packages slip</label>${filePicker("odoo", ed)}`;
+      <label>Odoo delivery, picking &amp; packages slip</label>${attBox("odoo", ed)}`;
   }else if(key === "delivery_details"){
     body = `<div class="grid2"><div><label>Delivery slip weight (net), kg *</label><input type="number" step="0.01" min="0" id="f_slip" value="${val(form.delivery_slip_weight_net)}"${dis}></div>
       <div><label>Bag(s) quantity *</label><input type="number" step="1" min="0" id="f_bags" value="${val(form.bags_quantity)}"${dis}></div>
       <div><label>Vehicle number *</label><input id="f_vehicle" value="${val(form.vehicle_number)}"${dis}></div>
       <div><label>Container number *</label><input id="f_container" value="${val(form.container_number)}"${dis}></div>
       <div><label>Rumbu weighbridge weight, kg *</label><input type="number" step="0.01" min="0" id="f_wb" value="${val(form.rumbu_weighbridge_weight)}"${dis}></div></div>
-      <label>Weighbridge attachment</label>${filePicker("wb", ed)}`;
+      <label>Weighbridge attachment</label>${attBox("wb", ed)}`;
   }else if(key === "shipping_info"){
     const diff = fefDiff(form.delivery_slip_weight_net, form.rumbu_weighbridge_weight);
     body = `<div class="grid2"><div><label>Bill of lading number *</label><input id="f_bol" value="${val(form.bill_of_lading_number)}"${dis}></div>
       <div><label>Shipping line name *</label><input id="f_line" value="${val(form.shipping_line_name)}"${dis}></div></div>
+      <label>Shipping documents (optional): bill of lading copy, packing list, certificates</label>${attBox("ship", ed)}
       ${diffBox(diff, "Difference between delivery slip weight and Rumbu weighbridge weight")}
       <div class="hint">If the two weights differ, submitting this step opens the Weight Issue step. If they match, the form goes straight to Completed.</div>`;
   }else if(key === "weight_issue"){
@@ -260,11 +297,12 @@ function renderPanel(form){
     else if(form.weight_issue_required === false) body = diffBox(form.weight_diff, "Weights match. The Weight Issue step is not needed.");
     else body = diffBox(form.weight_diff, "The weights differ. Explain the difference.") +
       `<label>Remark *</label><textarea id="f_remark" rows="4" placeholder="Reason for the weight difference, and what was done about it"${dis}>${val(form.weight_issue_remark)}</textarea>
-       <label>Attachment (optional)</label>${filePicker("wi", ed)}`;
+       <label>Attachments (optional)</label>${attBox("wi", ed)}`;
   }else{
     const rows = [["Form No", form.form_no], ["Client", form.client_name], ["Picking slip no", form.picking_slip_no], ["Vehicle / container", [form.vehicle_number, form.container_number].filter(Boolean).join(" / ")],
       ["Delivery slip weight (net)", form.delivery_slip_weight_net != null ? fefNum(form.delivery_slip_weight_net) + " kg" : ""], ["Rumbu weighbridge weight", form.rumbu_weighbridge_weight != null ? fefNum(form.rumbu_weighbridge_weight) + " kg" : ""],
-      ["Difference", form.weight_diff != null ? fefNum(form.weight_diff) + " kg" : ""], ["Bill of lading / line", [form.bill_of_lading_number, form.shipping_line_name].filter(Boolean).join(" / ")]];
+      ["Difference", form.weight_diff != null ? fefNum(form.weight_diff) + " kg" : ""], ["Bill of lading / line", [form.bill_of_lading_number, form.shipping_line_name].filter(Boolean).join(" / ")],
+      ["Attachments", (n => n ? n + " file(s)" : "None")(["odoo_slips","weighbridge_attachments","shipping_attachments","weight_issue_attachments"].reduce((t, k) => t + (form[k] || []).length, 0))]];
     body = `<table class="tbl" style="margin-top:8px;"><tbody>${rows.map(r => `<tr><td style="width:220px;color:var(--muted);font-weight:700;">${fefEsc(r[0])}</td><td>${fefEsc(r[1] || "-")}</td></tr>`).join("")}</tbody></table>`;
     if(form.status === "completed") body += `<div class="hint" style="margin-top:10px;">Completed by <b>${fefEsc(form.completed_by_name || "")}</b> on ${fefEsc(fefFmtDT(form.completed_at))}.</div>`;
     else if(ed) body += '<div class="hint warn" style="margin-top:10px;">Check the summary above. Marking the form complete closes it and creates the PDF of the whole process.</div>';
@@ -279,6 +317,7 @@ function renderPanel(form){
   }
   $("panel").innerHTML = `<h4>Step ${def.no}: ${fefEsc(def.label)}${def.alt ? ' <span style="font-weight:400;color:var(--muted);font-size:12px;">(' + fefEsc(def.alt) + ")</span>" : ""}</h4>
     <div class="hint">${hint}</div>${body}<div class="actions">${btns}</div><div class="st" id="stepStatus"></div>`;
+  applyDraft(key);
 }
 function diffBox(diff, label){
   const cls = diff == null ? "" : (fefWeightsDiffer(diff) ? " bad" : " ok");
@@ -346,7 +385,7 @@ function requiredMissing(key, p){
   else if(key === "weight_issue"){ if(!p.weight_issue_remark) m.push("remark"); }
   return m;
 }
-const FILE_FOR = { details:["odoo"], delivery_details:["wb"], weight_issue:["wi"] };
+const FILE_FOR = { details:["odoo"], delivery_details:["wb"], shipping_info:["ship"], weight_issue:["wi"] };
 
 async function guardedUpdate(form, patch){
   const { data, error } = await sb.from("fef_forms").update(Object.assign({ updated_at:new Date().toISOString() }, patch))
@@ -357,6 +396,7 @@ async function guardedUpdate(form, patch){
 }
 function keep(row){ const i = FORMS.findIndex(x => x.id === row.id); if(i >= 0) FORMS[i] = row; else FORMS.unshift(row); CUR = row; }
 async function staleReload(){
+  DRAFT = {};
   await loadForms(); const f = FORMS.find(x => CUR && x.id === CUR.id); if(f){ CUR = f; VIEW = f.status === "completed" ? "completed" : f.current_step; await loadComments(); render(); }
   msg("This form was just changed by someone else, or you no longer have permission for this step. The latest version is shown. Check it and try again.", "bad");
 }
@@ -375,8 +415,8 @@ async function saveStep(key, submit){
     // attachments: keep what was not removed, add what was chosen
     const folder = (form ? form.form_no : "new").replace(/[^A-Za-z0-9]+/g, "-");
     for(const kind of (FILE_FOR[key] || [])){
-      const input = $("new_" + kind), added = input && input.files.length ? await fefUploadFiles(sb, Array.from(input.files), folder) : [];
-      p[KIND_FIELD[kind]] = FILES[kind].concat(added);
+      const added = STAGED[kind].length ? await fefUploadFiles(sb, STAGED[kind], folder) : [], list = FILES[kind].concat(added), field = KIND_FIELD[kind];
+      if(kind !== "ship" || (form && field in form) || list.length) p[field] = list;      // older databases without the shipping column are left alone unless files are added
     }
     let row = form;
     if(!form){                                   // first save of a new form: take the next number, then create it
@@ -407,10 +447,14 @@ async function saveStep(key, submit){
       const w = await fefLog(sb, ME, ACTOR, updated, key, "submitted", detail); if(w) warn.push(w);
       VIEW = updated.current_step;
     }else if(!form){ VIEW = "details"; }
+    (FILE_FOR[key] || []).forEach(k => { STAGED[k] = []; });
+    delete DRAFT[key];
     renderList(); render();
     msg((submit ? "Submitted. " : "Saved. ") + (warn.length ? "Note: the activity log line could not be written (" + warn[0] + ")." : ""), warn.length ? "bad" : "ok");
   }catch(e){
-    if(e.stale) await staleReload(); else msg("Error: " + e.message, "bad");
+    if(e.stale) await staleReload();
+    else if(/shipping_attachments/.test(e.message || "")) msg("The database does not have the shipping documents column yet. Run flakes-export-add-shipping-attachments.sql in Supabase, then try again.", "bad");
+    else msg("Error: " + e.message, "bad");
   }finally{ busy(false); }
 }
 

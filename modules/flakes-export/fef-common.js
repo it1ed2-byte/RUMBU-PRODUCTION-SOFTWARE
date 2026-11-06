@@ -11,6 +11,8 @@ const FEF_STEPS = [
   { key:"weight_issue",     no:4, label:"Weight Issue",     conditional:true },
   { key:"completed",        no:5, label:"Completed" }
 ];
+/* attachment limits (change here if needed) */
+const FEF_MAX_FILE_MB = 25, FEF_MAX_FILES = 20;
 const FEF_ACTIONS = {
   created:"Created form", saved:"Saved draft", submitted:"Submitted step", edited:"Edited step", completed:"Marked complete",
   commented:"Added comment", owner_added:"Owner added", owner_removed:"Owner removed", numbering_changed:"Form numbering changed"
@@ -28,7 +30,7 @@ function fefWat(d){
     .formatToParts(d).forEach(p => { o[p.type] = p.value; });
   return { y:+o.year, m:+o.month, d:+o.day, hh:o.hour, mm:o.minute };
 }
-function fefFmtDT(iso){ if(!iso) return ""; const p = fefWat(new Date(iso)); return fefPad2(p.d) + " " + FEF_MON[p.m-1] + " " + p.y + ", " + p.hh + ":" + p.mm; }
+function fefFmtDT(iso){ if(!iso) return ""; const d0 = new Date(iso); if(isNaN(d0.getTime())) return String(iso); const p = fefWat(d0); return fefPad2(p.d) + " " + FEF_MON[p.m-1] + " " + p.y + ", " + p.hh + ":" + p.mm; }
 function fefFmtDate(v){
   if(!v) return "";
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(v));
@@ -173,6 +175,20 @@ function fefRunningFrame(doc, title){
     doc.text("Page " + i + " of " + pages, W - MX, H - 22, { align:"right" });
   }
 }
+async function fefShrinkImage(dataUrl, maxPx){
+  try{
+    if(typeof document === "undefined" || typeof Image === "undefined") return dataUrl;
+    const probe = document.createElement("canvas"); if(!probe.getContext || !probe.getContext("2d")) return dataUrl;
+    const img = new Image();
+    await new Promise((ok, no) => { img.onload = ok; img.onerror = no; img.src = dataUrl; });
+    const big = Math.max(img.naturalWidth, img.naturalHeight), scale = Math.min(1, (maxPx || 1600) / big);
+    // every JPEG goes through the canvas (the browser straightens phone photos stored sideways); only a small PNG is kept exactly as it is
+    if(!/^data:image\/jpe?g/i.test(dataUrl) && scale >= 1 && dataUrl.length < 1200000) return dataUrl;
+    const cv = document.createElement("canvas"); cv.width = Math.max(1, Math.round(img.naturalWidth * scale)); cv.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    const g = cv.getContext("2d"); g.fillStyle = "#ffffff"; g.fillRect(0, 0, cv.width, cv.height); g.drawImage(img, 0, 0, cv.width, cv.height);
+    return cv.toDataURL("image/jpeg", 0.85);
+  }catch(e){ return dataUrl; }
+}
 async function fefImageData(url){
   try{
     const ctl = (typeof AbortController !== "undefined") ? new AbortController() : null;
@@ -181,10 +197,12 @@ async function fefImageData(url){
     if(t) clearTimeout(t);
     if(!res.ok) return null;
     const blob = await res.blob();
-    return await new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = () => no(r.error); r.readAsDataURL(blob); });
+    const raw = await new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = () => no(r.error); r.readAsDataURL(blob); });
+    return await fefShrinkImage(raw, 1600);
   }catch(e){ return null; }
 }
-function fefIsImage(f){ return /^image\//.test(f.type || "") || /\.(jpe?g|png)$/i.test(f.name || ""); }
+/* only JPEG and PNG can be placed inside the PDF; every other file is listed with its link */
+function fefIsImage(f){ return /^image\/(jpeg|png)$/.test(f.type || "") || (!f.type && /\.(jpe?g|png)$/i.test(f.name || "")); }
 
 /* ---- the whole process, in the layout of the KissFlow report ---- */
 /* ctx = { form, owners:{step:[names]}, comments:[{author_name,created_at,comment,step}], printedBy } */
@@ -253,7 +271,8 @@ async function fefBuildFormPdf(ctx){
   section("SHIPPING INFO");
   const diffTxt = form.weight_diff == null ? "-" : fefNum(form.weight_diff) + " kg";
   kv([{ label:"Bill of Lading Number", value:form.bill_of_lading_number }, { label:"Shipping Line Name", value:form.shipping_line_name },
-      { label:"Difference between delivery slip weight and Rumbu weighbridge weight", value:diffTxt, wide:true, bold:true }]);
+      { label:"Difference between delivery slip weight and Rumbu weighbridge weight", value:diffTxt, wide:true, bold:true },
+      { label:"Shipping Documents", value:files(form.shipping_attachments), wide:true }]);
   if(form.weight_issue_required){
     section("WEIGHT ISSUE");
     kv([{ label:"Remark", value:form.weight_issue_remark, wide:true }, { label:"Attachments", value:files(form.weight_issue_attachments), wide:true }]);
@@ -291,7 +310,7 @@ async function fefBuildFormPdf(ctx){
 
   // attachments: images are embedded when they can be fetched; every file is listed with its link
   const att = [];
-  [["Odoo slip", form.odoo_slips], ["Weighbridge", form.weighbridge_attachments], ["Weight issue", form.weight_issue_attachments]].forEach(([label, arr]) => (arr || []).forEach(f => att.push({ label, f })));
+  [["Odoo slip", form.odoo_slips], ["Weighbridge", form.weighbridge_attachments], ["Shipping", form.shipping_attachments], ["Weight issue", form.weight_issue_attachments]].forEach(([label, arr]) => (arr || []).forEach(f => att.push({ label, f })));
   if(att.length){
     section("ATTACHMENTS");
     for(const a of att){
