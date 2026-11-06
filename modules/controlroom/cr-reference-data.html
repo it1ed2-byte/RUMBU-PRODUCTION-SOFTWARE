@@ -210,6 +210,7 @@
           <div><label>Job Code <span class="req">*</span></label><input type="text" id="j-code" placeholder="e.g. 218B"></div>
           <div><label>Est. Duration (min) <span class="req">*</span></label><input type="number" id="j-est" min="0" placeholder="e.g. 60"></div>
           <div><label>Department <span class="req">*</span></label><input type="text" id="j-dept" placeholder="e.g. Technical"></div>
+          <div><label>Description</label><input type="text" id="j-desc" placeholder="e.g. Pre heating"></div>
           <div style="align-self:end;">
             <button class="btn btn-primary" onclick="addRecord('jobcodes')">Add Job Code</button>
           </div>
@@ -218,7 +219,7 @@
       </div>
       <div class="card">
         <div class="search-row">
-          <input type="text" placeholder="Search code or department…" oninput="filterTable('jc-tbl',this.value)">
+          <input type="text" placeholder="Search code, department or description…" oninput="filterTable('jc-tbl',this.value)">
           <select onchange="filterActive('jc-tbl',this.value)">
             <option value="">All</option><option value="active">Active</option><option value="inactive">Inactive</option>
           </select>
@@ -226,7 +227,7 @@
         </div>
         <div class="tbl-wrap">
           <table id="jc-tbl">
-            <thead><tr><th>Job Code</th><th>Est. Duration (min)</th><th>Department</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Job Code</th><th>Description</th><th>Est. Duration (min)</th><th>Department</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
@@ -376,7 +377,7 @@ function switchTab(name, btn) {
 async function loadTable(tab) {
   const { tblId, supaTable, buildRow, countId } = tabConfig(tab);
   try {
-    const rows = await apiGet(supaTable + '?order=id.asc&limit=2000');
+    const rows = await apiGetAll(supaTable + '?order=id.asc');
     const tbody = document.querySelector('#' + tblId + ' tbody');
     tbody.innerHTML = '';
     rows.forEach(r => tbody.appendChild(buildRow(r)));
@@ -434,9 +435,10 @@ function buildRow_nurses(r) {
 
 function buildRow_jobcodes(r) {
   const tr = document.createElement('tr');
-  tr.dataset.search = ((r.job_code||'') + ' ' + (r.department||'')).toLowerCase();
+  tr.dataset.search = ((r.job_code||'') + ' ' + (r.department||'') + ' ' + (r.description||'')).toLowerCase();
   tr.dataset.active = r.is_active ? 'active' : 'inactive';
   tr.innerHTML = '<td><strong>' + esc(r.job_code) + '</strong></td>' +
+    '<td>' + (r.description ? esc(r.description) : '—') + '</td>' +
     '<td>' + (r.estimated_min ?? '—') + '</td><td>' + esc(r.department) + '</td>' +
     '<td>' + badge(r.is_active) + '</td>' +
     '<td>' + actionBtns('jobcodes', r.id, r.is_active) + '</td>';
@@ -506,6 +508,7 @@ function addConfig(tab) {
         job_code:      (document.getElementById('j-code').value || '').trim().toUpperCase(),
         estimated_min: parseFloat(document.getElementById('j-est').value  || '0'),
         department:    (document.getElementById('j-dept').value || '').trim().toUpperCase(),
+        description:   (document.getElementById('j-desc').value || '').trim().toUpperCase() || null,
         is_active:     true
       }),
       validate: p => {
@@ -551,7 +554,7 @@ function addConfig(tab) {
 function clearAddForm(tab) {
   const maps = {
     nurses:   ['n-name','n-id'],
-    jobcodes: ['j-code','j-est','j-dept'],
+    jobcodes: ['j-code','j-est','j-dept','j-desc'],
     assets:   ['a-asset','a-shed','a-grp','a-sect'],
     extruders:['e-asset','e-type','e-nozzles','e-denier','e-length']
   };
@@ -592,7 +595,7 @@ async function openEdit(tab, id) {
 
     const fieldDefs = {
       nurses:   [['name','Name','text',r.name],['emp_id','Staff ID','text',r.emp_id]],
-      jobcodes: [['job_code','Job Code','text',r.job_code],['estimated_min','Est. Duration (min)','number',r.estimated_min],['department','Department','text',r.department]],
+      jobcodes: [['job_code','Job Code','text',r.job_code],['description','Description','text',r.description],['estimated_min','Est. Duration (min)','number',r.estimated_min],['department','Department','text',r.department]],
       assets:   [['asset','Asset Code','text',r.asset],['shed','Shed','text',r.shed||''],['grp','Group','text',r.grp||''],['section','Section','text',r.section||'']],
       extruders:[['asset','Asset Code','text',r.asset],['type','Type','number',r.type],['nozzles','Nozzles','number',r.nozzles],['denier','Denier','number',r.denier],['length','Length','number',r.length]]
     };
@@ -618,7 +621,7 @@ async function saveEdit() {
 
   const fieldKeys = {
     nurses:   ['name','emp_id'],
-    jobcodes: ['job_code','estimated_min','department'],
+    jobcodes: ['job_code','description','estimated_min','department'],
     assets:   ['asset','shed','grp','section'],
     extruders:['asset','type','nozzles','denier','length']
   };
@@ -690,6 +693,17 @@ function authHeaders(extra) {
     'Authorization': 'Bearer ' + SESSION_TOKEN,
     'Content-Type':  'application/json'
   }, extra || {});
+}
+
+// Supabase returns at most 1000 rows per request, so read larger tables in pages
+async function apiGetAll(path) {
+  const PAGE = 1000, out = [];
+  for (let off = 0; ; off += PAGE) {
+    const rows = await apiGet(path + '&limit=' + PAGE + '&offset=' + off);
+    out.push(...rows);
+    if (rows.length < PAGE) break;
+  }
+  return out;
 }
 
 function apiGet(path) {
