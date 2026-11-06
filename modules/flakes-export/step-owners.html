@@ -40,6 +40,7 @@
     <div class="card-panel">
       <div style="font-weight:700;font-size:15px;color:var(--heading);margin:0 0 4px;">Manage Step Owners</div>
       <p class="hint" style="margin:0 0 6px;">Choose who fills each step of the Flakes Export Form, from the employee directory. Several people can own a step and any one of them can act. An employee needs a login to be added. Super Admins can act on every open step without being an owner.</p>
+      <div id="whoami" class="hint" style="margin:6px 0 0;"></div>
       <div id="notice" class="st"></div>
     </div>
     <div class="steps" id="steps" style="margin-top:16px;"></div>
@@ -79,12 +80,19 @@ async function init(){
     ACTOR = ME.username;
     try{ const { data:emp } = await sb.from("employees").select("full_name").eq("linked_profile_id", ME.id).maybeSingle(); if(emp && emp.full_name) ACTOR = emp.full_name; }catch(e){}
     CAN = fefIsAdminLike(ME);
+    $("whoami").textContent = "You are signed in as " + who() + ". Only an Admin account, or a Super Admin who is not a developer (technical) account, can change step owners.";
     if(!CAN) say("notice", ME.readOnly ? "View only: your account cannot change step owners." : "Only an Admin or Super Admin can change step owners. You can see who they are.", "bad");
     await loadOwners();
     if(CAN) await resync();
     await loadSettings();
     render();
   }catch(e){ cs.style.display = "block"; cs.style.color = "var(--bad)"; cs.textContent = "Error: " + e.message; }
+}
+function who(){ return ME.username + " (" + ME.role + (ME.superAdminType ? ", " + ME.superAdminType : "") + ")"; }
+function denied(msg){
+  return /row-level security|view-only access/i.test(msg || "")
+    ? "The database refused this change for your account " + who() + ". Only an Admin account, or a Super Admin who is not a developer (technical) account, can do it. Sign in with one of those. (Database said: " + msg + ")"
+    : "Error: " + msg;
 }
 function say(id, t, cls){ const el = $(id); if(el){ el.className = "st " + (cls || ""); el.textContent = t; } }
 async function loadOwners(){
@@ -133,7 +141,7 @@ async function saveNumbering(){
   if(!confirm("Set the next form number to " + p + " - " + String(n).padStart(SETTINGS.number_width || 5, "0") + "? A number that already exists will be refused when someone saves a form.")) return;
   say("numStatus", "Saving...", "");
   const { data, error } = await sb.from("fef_settings").update({ form_prefix:p, next_number:n }).eq("id", 1).select();
-  if(error){ say("numStatus", "Error: " + error.message, "bad"); return; }
+  if(error){ say("numStatus", denied(error.message), "bad"); return; }
   if(!data || data.length !== 1){ say("numStatus", "Not saved. You may not have permission.", "bad"); return; }
   SETTINGS = data[0];
   const w = await fefLog(sb, ME, ACTOR, null, null, "numbering_changed", "Prefix " + p + ", next number " + n);
@@ -191,7 +199,7 @@ async function addOwner(step, i){
   say("notice", "Adding...", "");
   const { error } = await sb.from("fef_step_owners").insert({ step, employee_id:e.id, profile_id:e.linked_profile_id, employee_name:e.full_name, employee_code:e.employee_id,
     branch:e.branch || null, department:e.department || null, added_by:ME.id, added_by_name:ACTOR });
-  if(error){ say("notice", /duplicate key/.test(error.message) ? e.full_name + " is already an owner of this step." : "Error: " + error.message, "bad"); return; }
+  if(error){ say("notice", /duplicate key/.test(error.message) ? e.full_name + " is already an owner of this step." : denied(error.message), "bad"); return; }
   let access;
   try{ const added = await grantPages(e.linked_profile_id); access = added.length ? "Page access given: " + added.join(" and ") + "." : "They already had the page access."; }
   catch(ge){ access = "BUT page access could not be given automatically (" + ge.message + "). Give them Export Forms and Export Activity Log in Manage Role."; }
@@ -204,7 +212,7 @@ async function removeOwner(id){
   const o = OWNERS.find(x => x.id === id); if(!o) return;
   if(!confirm("Remove " + (o.employee_name || "this person") + " from " + fefStepLabel(o.step) + "? Their page access stays as it is.")) return;
   const { data, error } = await sb.from("fef_step_owners").delete().eq("id", id).select();
-  if(error){ say("notice", "Error: " + error.message, "bad"); return; }
+  if(error){ say("notice", denied(error.message), "bad"); return; }
   if(!data || data.length !== 1){ say("notice", "Not removed. You may not have permission.", "bad"); return; }
   const w = await fefLog(sb, ME, ACTOR, null, o.step, "owner_removed", (o.employee_name || "") + " removed from " + fefStepLabel(o.step));
   await loadOwners(); await resync(); render();
