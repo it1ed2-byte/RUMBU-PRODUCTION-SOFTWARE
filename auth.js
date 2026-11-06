@@ -351,6 +351,51 @@ try{
     if(event === "SIGNED_OUT" && RumbuUI.hadSession()) RumbuUI.sessionExpired();
   });
 }catch(e){}
+// ---- Database requests sent with the public key are sent as the signed-in user -------------
+// Many pages call the database directly with fetch() and the public (anon) key. Tables that only
+// answer signed-in users would then refuse them. This upgrades any such request to the signed-in
+// user's session automatically, so those pages keep working with no change of their own.
+// Requests that already carry a user's token, requests to other sites, and pages with nobody
+// signed in are left exactly as they are.
+(function(){
+  if(!sb || !window.fetch || window.__rumbuFetchUpgraded) return;
+  window.__rumbuFetchUpgraded = true;
+  const original = window.fetch.bind(window);
+  const REST = SUPABASE_URL.replace(/\/+$/, "") + "/rest/v1/";
+  const ANON_BEARER = "Bearer " + SUPABASE_ANON_KEY;
+  let TOKEN = null, ready = null;
+  function load(){
+    if(!ready) ready = sb.auth.getSession()
+      .then(function(r){ TOKEN = (r && r.data && r.data.session && r.data.session.access_token) || null; })
+      .catch(function(){ TOKEN = null; });
+    return ready;
+  }
+  load();
+  try{ sb.auth.onAuthStateChange(function(event, session){ TOKEN = session ? session.access_token : null; ready = Promise.resolve(); }); }catch(e){}
+
+  function anonAuthKey(headers){
+    if(!headers) return null;
+    if(typeof Headers !== "undefined" && headers instanceof Headers) return headers.get("Authorization") === ANON_BEARER ? "headers" : null;
+    if(Array.isArray(headers)) return null;
+    for(const k in headers){ if(k.toLowerCase() === "authorization" && headers[k] === ANON_BEARER) return k; }
+    return null;
+  }
+  window.fetch = async function(input, init){
+    try{
+      const url = typeof input === "string" ? input : (input && input.url) || "";
+      const key = url.indexOf(REST) === 0 && init ? anonAuthKey(init.headers) : null;
+      if(key){
+        await load();
+        if(TOKEN){
+          if(key === "headers"){ const hd = new Headers(init.headers); hd.set("Authorization", "Bearer " + TOKEN); init = Object.assign({}, init, { headers: hd }); }
+          else { const hd = Object.assign({}, init.headers); hd[key] = "Bearer " + TOKEN; init = Object.assign({}, init, { headers: hd }); }
+        }
+      }
+    }catch(e){ /* on any doubt, send the request unchanged */ }
+    return original(input, init);
+  };
+})();
+
 // Coming back to the app after a while (screen locked, other app): check the session is still good.
 if(RumbuUI._isHost){
   document.addEventListener("visibilitychange", async function(){
