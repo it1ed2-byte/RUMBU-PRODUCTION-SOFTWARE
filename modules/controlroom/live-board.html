@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Live Board — Control Room</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+(function(){
+  function apply(t){ if(t) document.documentElement.setAttribute("data-theme",t); }
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+  try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+})();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  [hidden] { display: none !important; }
+  body { padding: 18px; }
+  .wrap { max-width: 1400px; margin: 0 auto; }
+  .hdr { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+  .hdr h2 { margin: 0 0 2px; font-size: 17px; color: var(--heading); }
+  .hdr p  { margin: 0; font-size: 12px; color: var(--muted); }
+  .clock { font-family: monospace; font-size: 15px; font-weight: 800; color: var(--accent); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-bottom: 12px; }
+
+  .tabs { display: flex; gap: 6px; border-bottom: 2px solid var(--line); margin-bottom: 12px; flex-wrap: wrap; }
+  .tab { padding: 9px 16px; border: none; background: none; font-size: 13px; font-weight: 700; color: var(--muted);
+         cursor: pointer; border-bottom: 3px solid transparent; margin-bottom: -2px; }
+  .tab.on { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab .n { display: inline-block; min-width: 20px; padding: 1px 7px; margin-left: 6px; border-radius: 999px;
+            background: var(--bg); border: 1px solid var(--line); font-size: 11px; }
+
+  .toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin-bottom: 12px; }
+  .ctl { display: flex; flex-direction: column; gap: 3px; }
+  .ctl label { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); }
+  .ctl select, .ctl input { padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px;
+                            background: var(--bg); color: var(--text); font-family: inherit; }
+  .chk { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text); padding-bottom: 7px; }
+  .btn { padding: 8px 14px; border: none; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-ghost { background: transparent; border: 1px solid var(--line); color: var(--text); }
+  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-ok { background: #16a34a; color: #fff; }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+
+  .status { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin-left: auto; padding-bottom: 7px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.ok { background: #16a34a; animation: pulse 2s infinite; }
+  .dot.load { background: #d97706; animation: pulse 1s infinite; }
+  .dot.err { background: #dc2626; }
+  @keyframes pulse { 50% { opacity: .35; } }
+
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 12px; }
+  @media (max-width: 700px) { .stats { grid-template-columns: 1fr 1fr; } }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+  .stat .k { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); }
+  .stat .v { font-size: 26px; font-weight: 800; color: var(--heading); }
+  .stat.g .v { color: #16a34a; } .stat.a .v { color: #d97706; } .stat.r .v { color: #dc2626; }
+
+  .tbl-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 9px 10px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); background: var(--bg); white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  tr.amber { background: rgba(217,119,6,.07); }
+  tr.red   { background: rgba(220,38,38,.09); }
+  .mins { font-weight: 800; white-space: nowrap; }
+  .mins.g { color: #16a34a; } .mins.a { color: #d97706; } .mins.r { color: #dc2626; }
+  .asset { font-weight: 800; color: var(--heading); }
+  .muted { color: var(--muted); font-size: 12px; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 800; }
+  .pill.m { background: #fef3c7; color: #92400e; } .pill.n { background: #dbeafe; color: #1e40af; }
+  .pill.old { background: #fee2e2; color: #991b1b; }
+  [data-theme="dark"] .pill.m { background: #451a03; color: #fcd34d; }
+  [data-theme="dark"] .pill.n { background: #172554; color: #93c5fd; }
+  [data-theme="dark"] .pill.old { background: #450a0a; color: #fca5a5; }
+  .empty { text-align: center; padding: 34px 10px; color: var(--muted); font-size: 13px; }
+
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px);
+    background: #16a34a; color: #fff; padding: 12px 20px; border-radius: 10px; font-size: 14px; font-weight: 700;
+    box-shadow: 0 8px 24px rgba(0,0,0,.2); opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 300; }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.err { background: #dc2626; }
+
+  /* TV mode: large text, dark, no controls */
+  body.tv { padding: 10px; }
+  body.tv .wrap { max-width: none; }
+  body.tv .hide-tv { display: none !important; }
+  body.tv table { font-size: 18px; }
+  body.tv .stat .v { font-size: 40px; }
+  body.tv .hdr h2 { font-size: 24px; }
+  #tvExit { display: none; position: fixed; top: 8px; right: 12px; z-index: 400; }
+  body.tv #tvExit { display: block; }
+</style>
+</head>
+<body>
+<button id="tvExit" class="btn btn-ghost" onclick="toggleTV()">✕ Exit TV view</button>
+<div class="wrap">
+
+  <div class="hdr">
+    <div>
+      <h2>⚡ Live Board</h2>
+      <p id="sub">Control Room · loading…</p>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center;">
+      <span class="clock" id="clock">--:--:--</span>
+      <button class="btn btn-ghost hide-tv" onclick="toggleTV()">📺 TV view</button>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab on" data-t="tl" onclick="setTab('tl')">Technical Loss<span class="n" id="n-tl">0</span></button>
+    <button class="tab" data-t="rep" onclick="setTab('rep')">Open Repairs<span class="n" id="n-rep">0</span></button>
+    <button class="tab hide-tv" data-t="hist" onclick="setTab('hist')">Treated History</button>
+  </div>
+
+  <!-- ================= TECHNICAL LOSS ================= -->
+  <section id="pane-tl">
+    <div class="toolbar hide-tv">
+      <div class="ctl"><label>Shed</label>
+        <select id="tl-shed" onchange="renderTL()"><option value="">All sheds</option></select></div>
+      <label class="chk"><input type="checkbox" id="tl-old" onchange="loadTL()"> Include untreated from earlier shifts (last 24 h)</label>
+      <button class="btn btn-ghost" onclick="loadTL()">↻ Refresh</button>
+      <div class="status"><span class="dot" id="tl-dot"></span><span id="tl-status">Connecting…</span></div>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="k">Machines down</div><div class="v" id="tl-total">—</div></div>
+      <div class="stat g"><div class="k">Under 30 min</div><div class="v" id="tl-g">—</div></div>
+      <div class="stat a"><div class="k">30 to 60 min</div><div class="v" id="tl-a">—</div></div>
+      <div class="stat r"><div class="k">Over 60 min</div><div class="v" id="tl-r">—</div></div>
+    </div>
+    <div class="card" style="padding:0;">
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>#</th><th>Asset</th><th>Shed</th><th>Down for</th><th>Stopped</th><th>Description</th><th>Shift</th><th class="hide-tv">Action</th></tr></thead>
+          <tbody id="tl-body"><tr><td colspan="8" class="empty">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= OPEN REPAIRS ================= -->
+  <section id="pane-rep" hidden>
+    <div class="toolbar hide-tv">
+      <div class="ctl"><label>Section</label>
+        <select id="rep-sec" onchange="renderRep()"><option value="">All sections</option></select></div>
+      <button class="btn btn-ghost" onclick="loadRep()">↻ Refresh</button>
+      <span class="muted" style="padding-bottom:7px;">Work orders saved in the app without a job code. Close them on New Work Order.</span>
+      <div class="status"><span class="dot" id="rep-dot"></span><span id="rep-status">Connecting…</span></div>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="k">Open repairs</div><div class="v" id="rep-total">—</div></div>
+      <div class="stat g"><div class="k">Under 30 min</div><div class="v" id="rep-g">—</div></div>
+      <div class="stat a"><div class="k">30 to 60 min</div><div class="v" id="rep-a">—</div></div>
+      <div class="stat r"><div class="k">Over 60 min</div><div class="v" id="rep-r">—</div></div>
+    </div>
+    <div class="card" style="padding:0;">
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>#</th><th>Work Order</th><th>Asset</th><th>Section</th><th>Unit</th><th>Nurse</th><th>Open for</th><th>Stopped</th><th>Shift</th></tr></thead>
+          <tbody id="rep-body"><tr><td colspan="9" class="empty">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= TREATED HISTORY ================= -->
+  <section id="pane-hist" hidden>
+    <div class="toolbar">
+      <div class="ctl"><label>From</label><input type="date" id="h-from"></div>
+      <div class="ctl"><label>To</label><input type="date" id="h-to"></div>
+      <div class="ctl"><label>Shift</label>
+        <select id="h-shift"><option value="">All shifts</option><option>Morning</option><option>Night</option></select></div>
+      <div class="ctl"><label>Shed</label>
+        <select id="h-shed"><option value="">All sheds</option></select></div>
+      <button class="btn btn-primary" onclick="loadHist()">Load History</button>
+      <div class="status"><span class="dot" id="h-dot"></span><span id="h-status">Pick dates and click Load History.</span></div>
+    </div>
+    <div class="card" style="padding:0;">
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>#</th><th>Date</th><th>Asset</th><th>Shed</th><th>Shift</th><th>Description</th><th>Stop to treatment</th><th>Treated at</th><th>Treated by</th></tr></thead>
+          <tbody id="h-body"><tr><td colspan="9" class="empty">No history loaded yet.</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+// =============================================
+// CONFIG
+// =============================================
+const TZ = 'Africa/Lagos';
+const REFRESH_SEC = 60;
+let SESSION_TOKEN = SUPABASE_ANON_KEY, ME = null, TAB = 'tl';
+let TL_ROWS = [], REP_ROWS = [], NEXT_IN = REFRESH_SEC;
+const SHED_OPTIONS = ['1','2','3','4','5','6','MamaSannu','Others'];
+
+// =============================================
+// TIME
+// tracking_table: true UTC text "2026-11-06 13:05:22.481 UTC"
+// control:        WAT wall clock "2026-11-06T14:05:22" (stored as if UTC)
+// treated_table:  ISO UTC "2026-11-06T13:20:00.000Z"
+// =============================================
+function wp(d) {
+  const p = {};
+  new Intl.DateTimeFormat('en-GB', { timeZone: TZ, year:'numeric', month:'2-digit', day:'2-digit',
+    hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false }).formatToParts(d).forEach(x => p[x.type] = x.value);
+  if (p.hour === '24') p.hour = '00';
+  return p;
+}
+function watDate(d) { const p = wp(d); return p.year + '-' + p.month + '-' + p.day; }
+function hm(d) { if (!d) return '—'; const p = wp(d); return p.hour + ':' + p.minute; }
+function dhm(d) { if (!d) return '—'; const p = wp(d); return p.day + '/' + p.month + ' ' + p.hour + ':' + p.minute; }
+function shiftOf(d) { const h = +wp(d).hour; return (h >= 7 && h < 19) ? 'Morning' : 'Night'; }
+function parseUtcText(v) {
+  if (!v) return null;
+  const s = String(v).trim();
+  const d = new Date(/Z$|UTC$|[+-]\d\d:?\d\d$/.test(s) ? s.replace(' UTC', 'Z').replace(' ', 'T') : s.replace(' ', 'T') + 'Z');
+  return isNaN(d) ? null : d;
+}
+// control times are WAT wall clock: convert to a real instant (WAT = UTC+1)
+function parseWatWall(v) {
+  const m = String(v || '').match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})/);
+  return m ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4] - 1, +m[5], +m[6])) : null;
+}
+function shiftStart(now) {
+  const p = wp(now), h = +p.hour;
+  const mid = Date.UTC(+p.year, +p.month - 1, +p.day) - 3600000;   // WAT midnight
+  if (h >= 7 && h < 19) return new Date(mid + 7 * 3600000);
+  if (h >= 19)          return new Date(mid + 19 * 3600000);
+  return new Date(mid - 5 * 3600000);
+}
+function minsSince(d) { return d ? Math.max(0, Math.round((Date.now() - d.getTime()) / 60000)) : null; }
+function fmtMins(m) { if (m == null) return '—'; if (m < 60) return m + ' min'; return Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'm'; }
+function band(m) { return m == null ? '' : m >= 60 ? 'r' : m >= 30 ? 'a' : 'g'; }
+
+// =============================================
+// BOOT
+// =============================================
+document.addEventListener('DOMContentLoaded', async function () {
+  try {
+    ME = await requireAuth('../../login.html');
+    if (!ME) return;
+    await refreshToken();
+
+    const shedOpts = SHED_OPTIONS.map(s => '<option value="' + s + '">' + (/^\d+$/.test(s) ? 'Shed ' + s : s) + '</option>').join('');
+    document.getElementById('tl-shed').insertAdjacentHTML('beforeend', shedOpts);
+    document.getElementById('h-shed').insertAdjacentHTML('beforeend', shedOpts);
+    const today = watDate(new Date());
+    document.getElementById('h-to').value = today;
+    document.getElementById('h-from').value = watDate(new Date(Date.now() - 6 * 86400000));
+
+    tick(); setInterval(tick, 1000);
+    await Promise.all([loadTL(), loadRep()]);
+  } catch (e) {
+    document.getElementById('sub').textContent = '❌ ' + (e.message || e);
+  }
+});
+
+async function refreshToken() {
+  try {
+    const { data: { session } } = await sb.auth.getSession();
+    SESSION_TOKEN = session?.access_token || SUPABASE_ANON_KEY;
+  } catch (e) {}
+}
+
+function tick() {
+  const now = new Date();
+  document.getElementById('clock').textContent = hm(now) + ':' + wp(now).second;
+  document.getElementById('sub').textContent = 'Control Room · ' + shiftOf(now) + ' shift since ' + hm(shiftStart(now)) +
+    ' · auto-refresh in ' + NEXT_IN + ' s';
+  if (document.hidden) return;
+  NEXT_IN--;
+  if (NEXT_IN <= 0) { NEXT_IN = REFRESH_SEC; refreshToken().then(() => { loadTL(); loadRep(); }); }
+}
+
+function setTab(t) {
+  TAB = t;
+  document.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b.dataset.t === t));
+  ['tl','rep','hist'].forEach(x => { document.getElementById('pane-' + x).hidden = x !== t; });
+}
+
+function toggleTV() {
+  const el = document.documentElement;
+  if (!document.fullscreenElement) (el.requestFullscreen || el.webkitRequestFullscreen).call(el);
+  else (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+}
+document.addEventListener('fullscreenchange', () => {
+  const on = !!document.fullscreenElement;
+  document.body.classList.toggle('tv', on);
+  if (on) { document.documentElement.dataset.prevTheme = document.documentElement.getAttribute('data-theme') || '';
+            document.documentElement.setAttribute('data-theme', 'dark'); }
+  else    { const p = document.documentElement.dataset.prevTheme;
+            if (p) document.documentElement.setAttribute('data-theme', p); else document.documentElement.removeAttribute('data-theme'); }
+});
+
+function setDot(id, st, msg) {
+  document.getElementById(id + '-dot').className = 'dot ' + st;
+  document.getElementById(id + '-status').textContent = msg;
+}
+
+// =============================================
+// TECHNICAL LOSS
+// =============================================
+async function loadTL() {
+  setDot('tl', 'load', 'Loading…');
+  try {
+    const now = new Date();
+    const from = document.getElementById('tl-old').checked ? new Date(now.getTime() - 24 * 3600000) : shiftStart(now);
+    const days = Array.from(new Set([watDate(new Date(from.getTime() - 86400000)), watDate(from), watDate(now)]));
+    const rows = await apiGetAll('tracking_table?select=id,assets,shed,description,shift,mc_stoppage_time,operator_name' +
+      '&job_code=ilike.technical%20loss&date_col=in.(' + days.join(',') + ')&order=id.desc');
+    const cands = rows.map(r => Object.assign(r, { _t: parseUtcText(r.mc_stoppage_time) }))
+                      .filter(r => r._t && r._t >= from);
+    const treated = await treatedIds(cands.map(r => r.id));
+    const start = shiftStart(now);
+    TL_ROWS = cands.filter(r => !treated.has(String(r.id))).map(r => Object.assign(r, { _old: r._t < start }));
+    renderTL();
+    setDot('tl', 'ok', 'Updated ' + hm(new Date()));
+  } catch (e) {
+    setDot('tl', 'err', 'Error: ' + e.message + ' · retrying automatically');
+  }
+}
+
+async function treatedIds(ids) {
+  const out = new Set();
+  for (let i = 0; i < ids.length; i += 150) {
+    const t = await apiGet('treated_table?select=id_number&id_number=in.(' + ids.slice(i, i + 150).join(',') + ')');
+    t.forEach(x => out.add(String(x.id_number)));
+  }
+  return out;
+}
+
+function renderTL() {
+  const shed = document.getElementById('tl-shed').value;
+  const list = TL_ROWS.filter(r => !shed || String(r.shed) === shed)
+                      .sort((a, b) => a._t - b._t);            // longest down first
+  const mins = list.map(r => minsSince(r._t));
+  document.getElementById('n-tl').textContent = TL_ROWS.length;
+  document.getElementById('tl-total').textContent = list.length;
+  document.getElementById('tl-g').textContent = mins.filter(m => m < 30).length;
+  document.getElementById('tl-a').textContent = mins.filter(m => m >= 30 && m < 60).length;
+  document.getElementById('tl-r').textContent = mins.filter(m => m >= 60).length;
+
+  const body = document.getElementById('tl-body');
+  if (!list.length) { body.innerHTML = '<tr><td colspan="8" class="empty">✅ No machines waiting on Technical Loss.</td></tr>'; return; }
+  body.innerHTML = list.map((r, i) => {
+    const m = minsSince(r._t), b = band(m);
+    return '<tr class="' + (b === 'r' ? 'red' : b === 'a' ? 'amber' : '') + '">' +
+      '<td class="muted">' + (i + 1) + '</td>' +
+      '<td><span class="asset">' + esc(r.assets) + '</span></td>' +
+      '<td>' + esc(r.shed || '—') + '</td>' +
+      '<td class="mins ' + b + '">' + fmtMins(m) + (r._old ? ' <span class="pill old">earlier shift</span>' : '') + '</td>' +
+      '<td>' + (r._old ? dhm(r._t) : hm(r._t)) + '</td>' +
+      '<td class="muted">' + esc(r.description || '') + '</td>' +
+      '<td>' + shiftPill(r.shift) + '</td>' +
+      '<td class="hide-tv"><button class="btn btn-ok" id="tb-' + r.id + '" onclick="markTreated(' + r.id + ')">TREATED</button></td>' +
+    '</tr>';
+  }).join('');
+}
+
+async function markTreated(id) {
+  const r = TL_ROWS.find(x => x.id === id);
+  if (!r || !confirm('Mark ' + r.assets + ' as TREATED?')) return;
+  const btn = document.getElementById('tb-' + id);
+  btn.disabled = true; btn.textContent = 'Saving…';
+  try {
+    // Do not create a second treatment if someone else has just treated it
+    const exists = await apiGet('treated_table?select=id&id_number=eq.' + id + '&limit=1');
+    if (!exists.length) {
+      await apiPost('treated_table', {
+        id_number: id,
+        treated_time: new Date().toISOString(),
+        treated_by: ME ? (ME.username || ME.email || null) : null
+      });
+      toast('✓ ' + r.assets + ' marked as treated');
+    } else {
+      toast(r.assets + ' was already treated by someone else', true);
+    }
+    TL_ROWS = TL_ROWS.filter(x => x.id !== id);
+    renderTL();
+  } catch (e) {
+    btn.disabled = false; btn.textContent = 'TREATED';
+    toast('Could not save: ' + e.message, true);
+  }
+}
+
+// =============================================
+// OPEN REPAIRS (control, app work orders with no finish time)
+// =============================================
+async function loadRep() {
+  setDot('rep', 'load', 'Loading…');
+  try {
+    REP_ROWS = (await apiGetAll('control?select=id,work_order,assets,section,unit,nurse_name,shift,mc_stoppage_time,starting_time' +
+      '&finish_time=is.null&created_by=not.is.null&order=mc_stoppage_time.asc.nullslast'))
+      .map(r => Object.assign(r, { _t: parseWatWall(r.mc_stoppage_time || r.starting_time) }));
+    const sel = document.getElementById('rep-sec'), keep = sel.value;
+    const secs = Array.from(new Set(REP_ROWS.map(r => r.section).filter(Boolean))).sort();
+    sel.innerHTML = '<option value="">All sections</option>' + secs.map(s => '<option' + (s === keep ? ' selected' : '') + '>' + esc(s) + '</option>').join('');
+    renderRep();
+    setDot('rep', 'ok', 'Updated ' + hm(new Date()));
+  } catch (e) {
+    setDot('rep', 'err', 'Error: ' + e.message);
+  }
+}
+
+function renderRep() {
+  const sec = document.getElementById('rep-sec').value;
+  const list = REP_ROWS.filter(r => !sec || r.section === sec);
+  const mins = list.map(r => minsSince(r._t));
+  document.getElementById('n-rep').textContent = REP_ROWS.length;
+  document.getElementById('rep-total').textContent = list.length;
+  document.getElementById('rep-g').textContent = mins.filter(m => m < 30).length;
+  document.getElementById('rep-a').textContent = mins.filter(m => m >= 30 && m < 60).length;
+  document.getElementById('rep-r').textContent = mins.filter(m => m >= 60).length;
+  const body = document.getElementById('rep-body');
+  if (!list.length) { body.innerHTML = '<tr><td colspan="9" class="empty">✅ No open repairs.</td></tr>'; return; }
+  body.innerHTML = list.map((r, i) => {
+    const m = minsSince(r._t), b = band(m);
+    return '<tr class="' + (b === 'r' ? 'red' : b === 'a' ? 'amber' : '') + '">' +
+      '<td class="muted">' + (i + 1) + '</td>' +
+      '<td style="font-family:monospace;font-weight:800;">' + esc(r.work_order) + '</td>' +
+      '<td><span class="asset">' + esc(r.assets) + '</span></td>' +
+      '<td>' + esc(r.section || '—') + '</td><td>' + esc(r.unit || '—') + '</td>' +
+      '<td>' + esc(r.nurse_name || '—') + '</td>' +
+      '<td class="mins ' + b + '">' + fmtMins(m) + '</td>' +
+      '<td>' + hm(r._t) + '</td><td>' + shiftPill(r.shift) + '</td>' +
+    '</tr>';
+  }).join('');
+}
+
+// =============================================
+// TREATED HISTORY (filtered in the database, so it is always complete)
+// =============================================
+async function loadHist() {
+  const from = document.getElementById('h-from').value, to = document.getElementById('h-to').value;
+  const shift = document.getElementById('h-shift').value, shed = document.getElementById('h-shed').value;
+  if (!from || !to || from > to) { setDot('h', 'err', 'Pick a valid date range.'); return; }
+  setDot('h', 'load', 'Loading…');
+  const body = document.getElementById('h-body');
+  body.innerHTML = '<tr><td colspan="9" class="empty">Loading…</td></tr>';
+  try {
+    // WAT day boundaries as UTC ISO text (treated_time is ISO UTC)
+    const fromIso = new Date(Date.parse(from + 'T00:00:00Z') - 3600000).toISOString();
+    const toIso   = new Date(Date.parse(to   + 'T00:00:00Z') - 3600000 + 86400000).toISOString();
+    const treated = await apiGetAll('treated_table?select=id_number,treated_time,treated_by' +
+      '&treated_time=gte.' + fromIso + '&treated_time=lt.' + toIso + '&order=treated_time.desc');
+    const ids = Array.from(new Set(treated.map(t => t.id_number).filter(Boolean)));
+    const track = {};
+    for (let i = 0; i < ids.length; i += 150) {
+      const rows = await apiGet('tracking_table?select=id,date_col,assets,shed,shift,description,mc_stoppage_time,job_code' +
+        '&id=in.(' + ids.slice(i, i + 150).join(',') + ')');
+      rows.forEach(r => { track[String(r.id)] = r; });
+    }
+    const seen = new Set();
+    let list = treated.map(t => {
+      const r = track[String(t.id_number)];
+      if (!r || seen.has(String(t.id_number))) return null;     // one line per stop
+      seen.add(String(t.id_number));
+      const stop = parseUtcText(r.mc_stoppage_time), at = parseUtcText(t.treated_time);
+      return Object.assign({}, r, { _at: at, _by: t.treated_by, _mins: stop && at ? Math.round((at - stop) / 60000) : null });
+    }).filter(Boolean);
+    if (shift) list = list.filter(r => String(r.shift || '').toLowerCase() === shift.toLowerCase());
+    if (shed)  list = list.filter(r => String(r.shed) === shed);
+
+    setDot('h', 'ok', list.length + ' treated stop(s) from ' + from + ' to ' + to);
+    if (!list.length) { body.innerHTML = '<tr><td colspan="9" class="empty">No treated stops for these filters.</td></tr>'; return; }
+    body.innerHTML = list.map((r, i) => {
+      const b = band(r._mins);
+      return '<tr>' +
+        '<td class="muted">' + (i + 1) + '</td><td>' + esc(r.date_col || '—') + '</td>' +
+        '<td><span class="asset">' + esc(r.assets) + '</span></td><td>' + esc(r.shed || '—') + '</td>' +
+        '<td>' + shiftPill(r.shift) + '</td><td class="muted">' + esc(r.description || '') + '</td>' +
+        '<td class="mins ' + b + '">' + fmtMins(r._mins) + '</td>' +
+        '<td>' + dhm(r._at) + '</td><td>' + esc(r._by || '—') + '</td>' +
+      '</tr>';
+    }).join('');
+  } catch (e) {
+    setDot('h', 'err', 'Error: ' + e.message);
+    body.innerHTML = '<tr><td colspan="9" class="empty">❌ ' + esc(e.message) + '</td></tr>';
+  }
+}
+
+// =============================================
+// HELPERS
+// =============================================
+function shiftPill(s) {
+  const v = String(s || '').toLowerCase();
+  if (!v) return '—';
+  return v.startsWith('m') ? '<span class="pill m">Morning</span>' : '<span class="pill n">Night</span>';
+}
+function authHeaders(extra) {
+  return Object.assign({ 'apikey': SUPABASE_ANON_KEY, 'Authorization': 'Bearer ' + SESSION_TOKEN,
+    'Content-Type': 'application/json' }, extra || {});
+}
+function base() { return SUPABASE_URL.replace(/\/+$/, '') + '/rest/v1/'; }
+function apiGet(path) {
+  return fetch(base() + path, { headers: authHeaders() })
+    .then(r => r.ok ? r.json() : r.text().then(t => { throw new Error(t); }));
+}
+async function apiGetAll(path) {
+  const PAGE = 1000, sep = path.includes('?') ? '&' : '?';
+  const resp = await fetch(base() + path, { headers: authHeaders({ 'Prefer': 'count=exact', 'Range': '0-' + (PAGE - 1) }) });
+  if (!resp.ok) throw new Error(await resp.text());
+  const first = await resp.json();
+  const total = parseInt(((resp.headers.get('content-range') || '').split('/')[1] || '0'), 10) || first.length;
+  if (total <= first.length) return first;
+  const rest = [];
+  for (let off = PAGE; off < total; off += PAGE) rest.push(apiGet(path + sep + 'limit=' + PAGE + '&offset=' + off));
+  return first.concat(...(await Promise.all(rest)));
+}
+function apiPost(path, body) {
+  return fetch(base() + path, { method: 'POST', headers: authHeaders({ 'Prefer': 'return=minimal' }), body: JSON.stringify(body) })
+    .then(r => r.ok ? null : r.text().then(t => { throw new Error(t); }));
+}
+let _tt = null;
+function toast(msg, err) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.className = 'toast show' + (err ? ' err' : '');
+  clearTimeout(_tt); _tt = setTimeout(() => { t.className = 'toast'; }, 3500);
+}
+function esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+</script>
+</body>
+</html>
