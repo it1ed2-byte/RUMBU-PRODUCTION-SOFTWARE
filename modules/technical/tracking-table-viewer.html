@@ -1,241 +1,345 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Tracking Table Viewer</title>
+<title>Maintenance Tracking — Monitoring Room reports</title>
 <link rel="stylesheet" href="../../styles.css">
 <script>
-  (function(){
-    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
-    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
-    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
-  })();
+(function(){
+  function apply(t){ if(t) document.documentElement.setAttribute("data-theme",t); }
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+  try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+})();
 </script>
-<style>
-  body { font-family:var(--sans); margin: 15px; color:var(--text); }
-  h3 { margin-bottom: 10px; }
-  input, select, button {
-    padding: 6px 8px; margin: 5px; font-size: 12px; border-radius: 5px; border:1px solid var(--line);
-  }
-  button { background-color: #4CAF50; color: white; font-weight: bold; cursor:pointer; }
-  button:hover { background-color: #45a049; }
-  form { display: flex; flex-wrap: wrap; align-items: center; }
-  label { margin-right: 10px; font-size: 12px; }
-  #status { font-size: 12px; font-weight: bold; margin: 6px 0; }
-  #tableContainer, #summaryLegend { margin-top: 15px; }
-  table { border-collapse: collapse; width: 100%; font-size: 10px; }
-  th, td { border:1px solid var(--line); padding: 4px 6px; text-align: center; }
-  th { background-color: #f2f2f2; }
-  tr:hover { background-color: #f1f1f1; }
-  #tableContainer { transition: opacity 0.5s ease-in-out; overflow-x:auto; }
-  @media screen and (max-width: 768px) {
-    form { flex-direction: column; }
-    label { margin-bottom: 5px; }
-    table { font-size: 9px; }
-  }
-</style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="../../auth.js"></script>
+<style>
+  [hidden] { display: none !important; }
+  body { padding: 18px; }
+  .wrap { max-width: 1400px; margin: 0 auto; }
+  .hdr h2 { margin: 0 0 2px; font-size: 17px; color: var(--heading); }
+  .hdr p  { margin: 0 0 12px; font-size: 12px; color: var(--muted); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-bottom: 12px; }
+  .filters { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 10px; align-items: end; }
+  @media (max-width: 1100px) { .filters { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+  @media (max-width: 600px)  { .filters { grid-template-columns: 1fr 1fr; } }
+  .ctl { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .ctl label { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); }
+  .ctl input, .ctl select { width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px;
+                            background: var(--bg); color: var(--text); font-family: inherit; box-sizing: border-box; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; align-items: center; }
+  .btn { padding: 8px 14px; border: none; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-ghost { background: transparent; border: 1px solid var(--line); color: var(--text); }
+  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+  .status { font-size: 12px; color: var(--muted); margin-left: auto; }
+  .status.err { color: var(--bad, #dc2626); font-weight: 700; }
+
+  .stats { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+  @media (max-width: 900px) { .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 11px 13px; }
+  .stat .k { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); }
+  .stat .v { font-size: 22px; font-weight: 800; color: var(--heading); }
+
+  .tabs { display: flex; gap: 6px; border-bottom: 2px solid var(--line); margin-bottom: 12px; flex-wrap: wrap; }
+  .tab { padding: 9px 16px; border: none; background: none; font-size: 13px; font-weight: 700; color: var(--muted);
+         cursor: pointer; border-bottom: 3px solid transparent; margin-bottom: -2px; }
+  .tab.on { color: var(--accent); border-bottom-color: var(--accent); }
+
+  .tbl-wrap { overflow: auto; max-height: 64vh; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { padding: 7px 9px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: middle; white-space: nowrap; }
+  th { position: sticky; top: 0; z-index: 1; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px;
+       color: var(--muted); background: var(--bg); cursor: pointer; user-select: none; }
+  th.num, td.num { text-align: right; }
+  td.desc { white-space: normal; min-width: 180px; color: var(--muted); }
+  .asset { font-weight: 800; color: var(--heading); }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 800; }
+  .p-tl { background: #fee2e2; color: #991b1b; } .p-nr { background: #fef3c7; color: #92400e; }
+  .p-ot { background: var(--bg); border: 1px solid var(--line); color: var(--muted); }
+  .p-app { background: #dbeafe; color: #1e40af; } .p-sheet { background: var(--bg); border: 1px solid var(--line); color: var(--muted); }
+  .p-ok { background: #dcfce7; color: #15803d; } .p-wait { background: #fef3c7; color: #92400e; }
+  [data-theme="dark"] .p-tl { background: #450a0a; color: #fca5a5; }
+  [data-theme="dark"] .p-nr, [data-theme="dark"] .p-wait { background: #451a03; color: #fcd34d; }
+  [data-theme="dark"] .p-app { background: #172554; color: #93c5fd; }
+  [data-theme="dark"] .p-ok { background: #052e16; color: #4ade80; }
+  tr.hf td { background: rgba(220,38,38,.07); }
+  .hf-flag { color: var(--bad, #dc2626); font-weight: 800; }
+  .muted { color: var(--muted); }
+  .empty { text-align: center; padding: 34px 10px; color: var(--muted); font-size: 13px; }
+  .note { font-size: 11.5px; color: var(--muted); margin-top: 8px; }
+
+  @media print {
+    body { padding: 0; } .no-print { display: none !important; }
+    .tbl-wrap { max-height: none; overflow: visible; } .card { border: 0; padding: 0; }
+    table { font-size: 9.5px; } th { position: static; }
+  }
+</style>
 </head>
 <body>
+<div class="wrap">
+  <div class="hdr">
+    <h2>Maintenance Tracking</h2>
+    <p>Machine stops reported by the Monitoring Room (from the sheet and from Report Stop), with treatment status. Times in Nigeria time.</p>
+  </div>
 
-<h3>Tracking Table Viewer</h3>
-<div id="status">Connecting to Supabase...</div>
+  <div class="card no-print">
+    <div class="filters">
+      <div class="ctl"><label>From</label><input type="date" id="f-from"></div>
+      <div class="ctl"><label>To</label><input type="date" id="f-to"></div>
+      <div class="ctl"><label>Shift</label>
+        <select id="f-shift"><option value="">All</option><option>Morning</option><option>Night</option></select></div>
+      <div class="ctl"><label>Shed</label>
+        <select id="f-shed"><option value="">All</option></select></div>
+      <div class="ctl"><label>Stop code</label>
+        <select id="f-code"><option value="">All</option></select></div>
+      <div class="ctl"><label>Operator ID or name</label><input type="text" id="f-op" placeholder="All" list="dl-op"></div>
+      <div class="ctl"><label>Asset</label><input type="text" id="f-asset" placeholder="All" list="dl-asset"></div>
+      <div class="ctl"><label>High frequency from</label>
+        <select id="f-hf"><option>2</option><option selected>3</option><option>4</option><option>5</option></select></div>
+    </div>
+    <datalist id="dl-op"></datalist><datalist id="dl-asset"></datalist>
+    <div class="actions">
+      <button class="btn btn-primary" onclick="run()">Show report</button>
+      <button class="btn btn-ghost" onclick="exportCsv()">⬇ Export CSV</button>
+      <button class="btn btn-ghost" onclick="window.print()">🖨 Print</button>
+      <button class="btn btn-ghost" onclick="clearFilters()">Clear filters</button>
+      <span class="status" id="status">Choose dates and click Show report.</span>
+    </div>
+  </div>
 
-<form id="filterForm">
-  <label>Start Date: <input type="date" id="startDate" required></label>
-  <label>End Date: <input type="date" id="endDate" required></label>
-  <label>Shift:
-    <select id="shift"><option value="">All</option><option value="Morning">Morning</option><option value="Night">Night</option></select>
-  </label>
-  <label>Section:
-    <select id="section"><option value="">All</option></select>
-  </label>
-  <label>ID: <input type="text" id="id" placeholder="Leave empty for all"></label>
-  <label>Assets: <input type="text" id="assets" placeholder="Leave empty for all"></label>
-  <label>Job Code:
-    <select id="jobCode"><option value="">All</option><option value="No Repair">No Repair</option><option value="Bad Pipe">Bad Pipe</option><option value="Faulty">Faulty</option></select>
-  </label>
-  <button type="button" onclick="fetchData()">View Table</button>
-  <button type="button" onclick="fetchSummary()">View Summary</button>
-</form>
+  <div class="stats" id="stats" hidden>
+    <div class="stat"><div class="k">Stops reported</div><div class="v" id="s-total">0</div></div>
+    <div class="stat"><div class="k">Technical loss</div><div class="v" id="s-tl">0</div></div>
+    <div class="stat"><div class="k">TL treated</div><div class="v" id="s-tr">0</div></div>
+    <div class="stat"><div class="k">Avg stop to treated</div><div class="v" id="s-resp">—</div></div>
+    <div class="stat"><div class="k">No repair</div><div class="v" id="s-nr">0</div></div>
+    <div class="stat"><div class="k">High-frequency assets</div><div class="v" id="s-hf">0</div></div>
+  </div>
 
-<div id="summaryLegend"></div>
-<div id="tableContainer"></div>
+  <div class="tabs no-print" id="tabs" hidden>
+    <button class="tab on" data-t="detail" onclick="setTab('detail')">Detail</button>
+    <button class="tab" data-t="asset" onclick="setTab('asset')">By asset</button>
+    <button class="tab" data-t="op" onclick="setTab('op')">By operator</button>
+  </div>
+  <div class="card" style="padding:0;"><div class="tbl-wrap" id="out"><div class="empty">No report yet.</div></div></div>
+  <div class="note">Sheet reports carry only the stop time; operator, duration, start and finish times are recorded for reports made in the app.
+    “Stop to treated” applies to Technical Loss only. Click a column heading to sort.</div>
+</div>
 
 <script>
-const SECTION_DISPLAY_MAP = { "Rumbu Mainmat": "Rumbu Mainmat", "MamaSannu": "Mama Sannu" };
-function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
-function parseDT(v){ const d=new Date(v); return isNaN(d)?null:d; }
-function secondsBetween(a,b){ return (!a||!b)?0:Math.round((b-a)/1000); }
-function formatSeconds(sec){
-  sec = sec || 0;
-  const h = String(Math.floor(sec/3600)).padStart(2,"0");
-  const m = String(Math.floor((sec%3600)/60)).padStart(2,"0");
-  const s = String(sec%60).padStart(2,"0");
-  return h+":"+m+":"+s;
+const TZ = 'Africa/Lagos';
+const COLS = 'id,date_col,assets,shed,shift,job_code,description,operator_id,operator_name,rank,duration,mc_stoppage_time,starting_time,finish_time,created_by';
+let SESSION_TOKEN = SUPABASE_ANON_KEY;
+let ROWS = [], TAB = 'detail', SORT = { key: null, dir: 1 }, LAST = { cols: [], rows: [] };
+
+// ---------- time (tracking_table holds true UTC text: "2026-11-06 13:05:22.481 UTC") ----------
+function wp(d) {
+  const p = {};
+  new Intl.DateTimeFormat('en-GB', { timeZone: TZ, year:'numeric', month:'2-digit', day:'2-digit',
+    hour:'2-digit', minute:'2-digit', hour12:false }).formatToParts(d).forEach(x => p[x.type] = x.value);
+  if (p.hour === '24') p.hour = '00';
+  return p;
+}
+function today() { const p = wp(new Date()); return p.year + '-' + p.month + '-' + p.day; }
+function parseTs(v) {
+  if (!v) return null;
+  const s = String(v).trim();
+  const d = new Date(/Z$|UTC$|[+-]\d\d:?\d\d$/.test(s) ? s.replace(' UTC', 'Z').replace(' ', 'T') : s.replace(' ', 'T') + 'Z');
+  return isNaN(d) ? null : d;
+}
+function hm(d) { if (!d) return ''; const p = wp(d); return p.hour + ':' + p.minute; }
+function dmy(iso) { const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? m[3] + '/' + m[2] + '/' + m[1] : ''; }
+function minsBetween(a, b) { return a && b ? Math.round((b - a) / 60000) : null; }
+function fmtM(m) { if (m == null) return '—'; if (m < 60) return m + ' min'; return Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'm'; }
+const kind = c => { const v = String(c || '').toLowerCase(); return v === 'technical loss' ? 'tl' : v.startsWith('no repair') ? 'nr' : 'ot'; };
+
+// ---------- boot ----------
+document.addEventListener('DOMContentLoaded', async () => {
+  try {
+    const me = await requireAuth('../../login.html');
+    if (!me) return;
+    try { const { data: { session } } = await sb.auth.getSession(); SESSION_TOKEN = session?.access_token || SUPABASE_ANON_KEY; } catch (e) {}
+    document.getElementById('f-from').value = today();
+    document.getElementById('f-to').value = today();
+    ['1','2','3','4','5','6','MamaSannu'].forEach(s => document.getElementById('f-shed').insertAdjacentHTML('beforeend',
+      '<option value="' + s + '">' + (/^\d$/.test(s) ? 'Shed ' + s : s) + '</option>'));
+    const [codes, ops] = await Promise.all([
+      apiGet('cr_stop_codes?select=code&is_active=eq.true&order=sort_order.asc').catch(() => []),
+      apiGetAll('cr_operators?select=operator_id,operator_name&is_active=eq.true&order=operator_id.asc').catch(() => [])
+    ]);
+    codes.forEach(c => document.getElementById('f-code').insertAdjacentHTML('beforeend', '<option>' + esc(c.code) + '</option>'));
+    document.getElementById('dl-op').innerHTML = ops.map(o => '<option value="' + esc(o.operator_id) + '">' + esc(o.operator_name) + '</option>').join('');
+    run();
+  } catch (e) { setStatus('❌ ' + (e.message || e), true); }
+});
+
+function clearFilters() {
+  ['f-shift','f-shed','f-code'].forEach(id => document.getElementById(id).value = '');
+  ['f-op','f-asset'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('f-from').value = today(); document.getElementById('f-to').value = today();
+}
+function setStatus(t, err) { const el = document.getElementById('status'); el.textContent = t; el.className = 'status' + (err ? ' err' : ''); }
+
+// ---------- load: every filter is applied in the database ----------
+async function run() {
+  const from = val('f-from'), to = val('f-to');
+  if (!from || !to || from > to) { setStatus('Pick a valid date range.', true); return; }
+  setStatus('Loading…');
+  try {
+    let q = 'tracking_table?select=' + COLS + '&date_col=gte.' + from + '&date_col=lte.' + to + '&order=id.desc';
+    if (val('f-shift')) q += '&shift=eq.' + enc(val('f-shift'));
+    if (val('f-shed'))  q += '&shed=eq.' + enc(val('f-shed'));
+    if (val('f-code'))  q += '&job_code=ilike.' + enc(val('f-code'));
+    if (val('f-asset')) q += '&assets=ilike.*' + enc(val('f-asset').trim()) + '*';
+    const op = val('f-op').trim();
+    if (op) q += '&or=(operator_id.ilike.*' + enc(op) + '*,operator_name.ilike.*' + enc(op) + '*)';
+    const rows = await apiGetAll(q);
+
+    const tlIds = rows.filter(r => kind(r.job_code) === 'tl').map(r => r.id);
+    const treated = {};
+    const batches = [];
+    for (let i = 0; i < tlIds.length; i += 150) batches.push(tlIds.slice(i, i + 150));
+    (await Promise.all(batches.map(b => apiGet('treated_table?select=id_number,treated_time,treated_by&id_number=in.(' + b.join(',') + ')'))))
+      .forEach(list => list.forEach(t => { treated[String(t.id_number)] = t; }));
+
+    ROWS = rows.map(r => {
+      const stop = parseTs(r.mc_stoppage_time), t = treated[String(r.id)], at = t ? parseTs(t.treated_time) : null;
+      return Object.assign(r, {
+        _k: kind(r.job_code), _stop: stop, _at: at, _by: t ? t.treated_by : null,
+        _resp: kind(r.job_code) === 'tl' ? minsBetween(stop, at) : null,
+        _wait: minsBetween(stop, parseTs(r.starting_time)),
+        _src: r.created_by ? 'App' : 'Sheet'
+      });
+    });
+    document.getElementById('dl-asset').innerHTML = Array.from(new Set(ROWS.map(r => r.assets).filter(Boolean))).sort()
+      .map(a => '<option value="' + esc(a) + '"></option>').join('');
+    SORT = { key: null, dir: 1 };
+    render();
+    setStatus(ROWS.length + ' stop(s) · ' + dmy(from) + (from !== to ? ' to ' + dmy(to) : ''));
+  } catch (e) { setStatus('❌ ' + (e.message || e), true); }
 }
 
-let MON_ROWS = [];
-
-// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
-// `query` may include extra params like "&order=col.desc" (no leading select).
-async function fetchAllRows(table, query){
-  let all = [], offset = 0; const pageSize = 1000;
-  const q = query || "";
-  for(let guard=0; guard<500; guard++){
-    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
-    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=*" + q, { headers });
-    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
-    const batch = await res.json();
-    all = all.concat(batch);
-    if(batch.length < pageSize) break;
-    offset += pageSize;
-  }
-  return all;
+// ---------- render ----------
+function setTab(t) {
+  TAB = t; SORT = { key: null, dir: 1 };
+  document.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b.dataset.t === t));
+  render();
 }
+function render() {
+  const hfMin = +val('f-hf');
+  const tl = ROWS.filter(r => r._k === 'tl'), tr = tl.filter(r => r._at), resp = tr.map(r => r._resp).filter(m => m != null && m >= 0);
+  const byAsset = groupBy(ROWS, r => r.assets || '(blank)');
+  document.getElementById('stats').hidden = false;
+  document.getElementById('tabs').hidden = false;
+  document.getElementById('s-total').textContent = ROWS.length;
+  document.getElementById('s-tl').textContent = tl.length;
+  document.getElementById('s-tr').textContent = tr.length + (tl.length ? ' (' + Math.round(tr.length / tl.length * 100) + '%)' : '');
+  document.getElementById('s-resp').textContent = resp.length ? fmtM(Math.round(resp.reduce((a, b) => a + b, 0) / resp.length)) : '—';
+  document.getElementById('s-nr').textContent = ROWS.filter(r => r._k === 'nr').length;
+  document.getElementById('s-hf').textContent = Object.values(byAsset).filter(g => g.length >= hfMin).length;
 
+  if (TAB === 'detail') return table(DETAIL_COLS, ROWS.map(r => ({
+    date: r.date_col, stopped: r._stop, asset: r.assets, shed: r.shed, shift: r.shift, code: r.job_code, _k: r._k,
+    op: [r.operator_id, r.operator_name].filter(Boolean).join(' · '), rank: r.rank, desc: r.description,
+    dur: r.duration, wait: r._wait, status: r._k === 'tl' ? (r._at ? 'Treated' : 'Waiting') : '',
+    at: r._at, resp: r._resp, by: r._by, src: r._src
+  })), hfMin, null);
 
-
-async function init(){
-  const status = document.getElementById("status");
-  try{
-    const me = await requireAuth("../../login.html");
-    if(!me) return;
-
-    const mySections = (me.sectionNames && me.sectionNames.length)
-      ? me.sectionNames.map(s => SECTION_DISPLAY_MAP[s] || s)
-      : ["Rumbu Mainmat","Mama Sannu"];
-    document.getElementById("section").innerHTML = '<option value="">All</option>' +
-      mySections.map(s=>`<option value="${s}">${s}</option>`).join("");
-
-    MON_ROWS = await fetchAllRows("monitoring", "");
-    status.style.color = "#1d8a4e";
-    status.textContent = "Connected. monitoring: " + MON_ROWS.length + " rows.";
-  }catch(e){
-    status.style.color = "#c0392b";
-    status.textContent = "Could not read data: " + (e.message||e);
-  }
-}
-
-function getFormData(){
-  return {
-    startDate: document.getElementById("startDate").value,
-    endDate: document.getElementById("endDate").value,
-    shift: document.getElementById("shift").value,
-    section: document.getElementById("section").value,
-    id: document.getElementById("id").value.trim(),
-    assets: document.getElementById("assets").value.trim(),
-    jobCode: document.getElementById("jobCode").value
-  };
-}
-
-function filteredRows(f){
-  if(!MON_ROWS.length) return [];
-  return MON_ROWS.filter(r=>{
-    if(!f.startDate || !f.endDate) return false;
-    if(r.date_col < f.startDate || r.date_col > f.endDate) return false;
-    if(f.shift && r.shift !== f.shift) return false;
-    // NOTE: preserved exactly as the original — Section is filtered against
-    // the RANK field, not a real Section column.
-    if(f.section && r.rank !== f.section) return false;
-    if(f.id && r.asset_id !== f.id) return false;
-    if(f.assets && r.assets !== f.assets) return false;
-    if(f.jobCode && r.job_code !== f.jobCode) return false;
-    return true;
-  });
-}
-
-// --- Detailed Table ---
-function fetchData(){
-  const form = getFormData();
-  const container = document.getElementById("tableContainer");
-  if(!form.startDate || !form.endDate){ alert("Please select Start and End dates"); return; }
-  container.style.opacity = 0.5;
-  container.innerHTML = "Loading...";
-
-  const rows = filteredRows(form).sort((a,b)=>(b.date_col||"").localeCompare(a.date_col||""));
-  const data = rows.map(r=>{
-    const stop=parseDT(r.m_c_stoppage_time), start=parseDT(r.starting_time), finish=parseDT(r.finish_time);
+  const keyFn = TAB === 'asset' ? (r => r.assets || '(blank)') : (r => r.operator_id || r.operator_name || '(not recorded)');
+  const groups = groupBy(ROWS, keyFn);
+  const list = Object.keys(groups).map(k => {
+    const g = groups[k], tl2 = g.filter(r => r._k === 'tl'), tr2 = tl2.filter(r => r._at);
+    const rs = tr2.map(r => r._resp).filter(m => m != null && m >= 0);
+    const first = g[g.length - 1];
     return {
-      Date: r.date_col, ID: r.asset_id, Assets: r.assets, Operator_Name: r.operator_name,
-      Downtime: formatSeconds(secondsBetween(stop, finish)),
-      Confirming_Time: formatSeconds(secondsBetween(start, finish)),
-      Waiting_Time: formatSeconds(secondsBetween(stop, start)),
-      Job_Code: r.job_code
+      key: k, name: TAB === 'op' ? (first.operator_name || (first.operator_id ? '' : 'Not recorded by the sheet')) : '',
+      shed: TAB === 'asset' ? first.shed : '', stops: g.length, tl: tl2.length, nr: g.filter(r => r._k === 'nr').length,
+      ot: g.filter(r => r._k === 'ot').length, waiting: tl2.length - tr2.length,
+      avg: rs.length ? Math.round(rs.reduce((a, b) => a + b, 0) / rs.length) : null,
+      last: g.reduce((m, r) => (r._stop && (!m || r._stop > m)) ? r._stop : m, null)
     };
-  }).slice(0, 1000);
-
-  renderTable(data);
+  }).sort((a, b) => b.stops - a.stops);
+  table(TAB === 'asset' ? ASSET_COLS : OP_COLS, list, hfMin, 'stops');
 }
 
-function renderTable(data){
-  const container = document.getElementById("tableContainer");
-  document.getElementById("summaryLegend").innerHTML = "";
-  if(data.length === 0){ container.innerHTML = "<p>No records found.</p>"; return; }
-  let html = `<table><tr><th>Date</th><th>ID</th><th>Assets</th><th>Name</th>
-    <th>Downtime</th><th>Confirming Time</th><th>Waiting Time</th><th>Job Code</th></tr>`;
-  data.forEach(row=>{
-    html += `<tr><td>${row.Date}</td><td>${row.ID}</td><td>${row.Assets}</td><td>${row.Operator_Name}</td>` +
-      `<td>${row.Downtime}</td><td>${row.Confirming_Time}</td><td>${row.Waiting_Time}</td><td>${row.Job_Code}</td></tr>`;
-  });
-  html += "</table>";
-  container.innerHTML = html;
-  container.style.opacity = 1;
-}
+const DETAIL_COLS = [
+  ['date','Date', r => dmy(r.date)], ['stopped','Stopped', r => hm(r.stopped)], ['asset','Asset', r => '<span class="asset">' + esc(r.asset) + '</span>', true],
+  ['shed','Shed'], ['shift','Shift'], ['code','Stop code', r => '<span class="pill p-' + r._k + '">' + esc(r.code || '—') + '</span>', true],
+  ['op','Operator'], ['rank','Rank'], ['desc','Description', null, false, 'desc'],
+  ['dur','Down before report', r => r.dur == null ? '—' : r.dur + ' min', false, 'num'],
+  ['status','Status', r => r.status ? '<span class="pill ' + (r.status === 'Treated' ? 'p-ok' : 'p-wait') + '">' + r.status + '</span>' : '', true],
+  ['at','Treated at', r => hm(r.at)], ['resp','Stop to treated', r => r.resp == null ? '' : fmtM(r.resp), false, 'num'],
+  ['by','Treated by'], ['src','Source', r => '<span class="pill ' + (r.src === 'App' ? 'p-app' : 'p-sheet') + '">' + r.src + '</span>', true]
+];
+const SUM_TAIL = [
+  ['stops','Stops', r => r.stops, false, 'num'], ['tl','Technical loss', r => r.tl, false, 'num'],
+  ['nr','No repair', r => r.nr, false, 'num'], ['ot','Other', r => r.ot, false, 'num'],
+  ['waiting','TL waiting', r => r.waiting || '', false, 'num'], ['avg','Avg stop to treated', r => fmtM(r.avg), false, 'num'],
+  ['last','Last stop', r => r.last ? dmy(new Date(r.last.getTime() + 3600000).toISOString()) + ' ' + hm(r.last) : '']
+];
+const ASSET_COLS = [['key','Asset', r => '<span class="asset">' + esc(r.key) + '</span>', true], ['shed','Shed']].concat(SUM_TAIL);
+const OP_COLS = [['key','Operator ID'], ['name','Name']].concat(SUM_TAIL);
 
-// --- Summary Table ---
-function fetchSummary(){
-  const form = getFormData();
-  const container = document.getElementById("tableContainer");
-  if(!form.startDate || !form.endDate){ alert("Please select Start and End dates"); return; }
-  container.style.opacity = 0.5;
-  container.innerHTML = "Loading summary...";
-
-  const rows = filteredRows(form);
-  const groups = {};
-  rows.forEach(r=>{
-    const key = [r.date_col, r.assets, r.asset_id, r.operator_name, r.shift].join("||");
-    if(!groups[key]) groups[key] = {
-      Date: r.date_col, Assets: r.assets, ID: r.asset_id, Operator_Name: r.operator_name, Shift: r.shift,
-      Frequency: 0, Total_Downtime: 0, Total_Confirming: 0, Total_Waiting: 0
-    };
-    const g = groups[key];
-    const stop=parseDT(r.m_c_stoppage_time), start=parseDT(r.starting_time), finish=parseDT(r.finish_time);
-    g.Frequency++;
-    g.Total_Downtime += secondsBetween(stop, finish);
-    g.Total_Confirming += secondsBetween(start, finish);
-    g.Total_Waiting += secondsBetween(stop, start);
-  });
-
-  const data = Object.values(groups).sort((a,b)=>b.Frequency-a.Frequency).slice(0,1000);
-  renderSummary(data);
-}
-
-function renderSummary(data){
-  const container = document.getElementById("tableContainer");
-  const legend = document.getElementById("summaryLegend");
-
-  if(data.length === 0){
-    legend.innerHTML = ""; container.innerHTML = "<p>No summary records found.</p>"; return;
+function table(cols, rows, hfMin, hfKey) {
+  if (SORT.key) {
+    const c = cols.find(x => x[0] === SORT.key);
+    rows = rows.slice().sort((a, b) => {
+      const x = a[SORT.key], y = b[SORT.key];
+      const nx = x instanceof Date ? x.getTime() : x, ny = y instanceof Date ? y.getTime() : y;
+      if (nx == null || nx === '') return 1; if (ny == null || ny === '') return -1;
+      return (typeof nx === 'number' && typeof ny === 'number' ? nx - ny : String(nx).localeCompare(String(ny))) * SORT.dir;
+    });
   }
-  legend.innerHTML = '<span style="background-color:#ffcccc; padding:3px 6px; border-radius:3px;">High Frequency (&ge;3)</span>';
+  LAST = { cols, rows };
+  const out = document.getElementById('out');
+  if (!rows.length) { out.innerHTML = '<div class="empty">No stops match these filters.</div>'; return; }
+  out.innerHTML = '<table><thead><tr>' + (hfKey ? '<th>#</th>' : '') + cols.map(c =>
+      '<th class="' + (c[4] === 'num' ? 'num' : '') + '" onclick="sortBy(\'' + c[0] + '\')">' + c[1] +
+      (SORT.key === c[0] ? (SORT.dir > 0 ? ' ▲' : ' ▼') : '') + '</th>').join('') + '</tr></thead><tbody>' +
+    rows.map((r, i) => {
+      const hf = hfKey && r[hfKey] >= hfMin;
+      return '<tr' + (hf ? ' class="hf"' : '') + '>' + (hfKey ? '<td class="muted">' + (i + 1) + (hf ? ' <span class="hf-flag" title="High frequency">⚑</span>' : '') + '</td>' : '') +
+        cols.map(c => {
+          const v = c[2] ? c[2](r) : r[c[0]];
+          return '<td class="' + (c[4] || '') + '">' + (c[3] ? v : esc(v == null ? '' : v)) + '</td>';
+        }).join('') + '</tr>';
+    }).join('') + '</tbody></table>';
+}
+function sortBy(k) { SORT = SORT.key === k ? { key: k, dir: -SORT.dir } : { key: k, dir: 1 }; render(); }
 
-  let html = `<table><tr><th>Date</th><th>Assets</th><th>ID</th><th>Operator</th><th>Shift</th>
-    <th>Frequency</th><th>Sum of Downtime</th><th>Sum of Confirming Time</th><th>Sum of Waiting Time</th></tr>`;
-  data.forEach(row=>{
-    const highlight = row.Frequency >= 3 ? 'style="background-color:#ffcccc; font-weight:bold;"' : '';
-    html += `<tr ${highlight}><td>${row.Date}</td><td>${row.Assets}</td><td>${row.ID}</td><td>${row.Operator_Name}</td>` +
-      `<td>${row.Shift}</td><td>${row.Frequency}</td><td>${formatSeconds(row.Total_Downtime)}</td>` +
-      `<td>${formatSeconds(row.Total_Confirming)}</td><td>${formatSeconds(row.Total_Waiting)}</td></tr>`;
-  });
-  html += "</table>";
-  container.innerHTML = html;
-  container.style.opacity = 1;
+// ---------- export ----------
+function exportCsv() {
+  if (!LAST.rows.length) { alert('Show a report first.'); return; }
+  const strip = s => String(s == null ? '' : s).replace(/<[^>]+>/g, '');
+  const lines = [LAST.cols.map(c => c[1])].concat(LAST.rows.map(r => LAST.cols.map(c => strip(c[2] ? c[2](r) : r[c[0]]))));
+  const csv = lines.map(l => l.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',')).join('\r\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['\ufeff' + csv], { type: 'text/csv' }));
+  a.download = 'Maintenance_Tracking_' + ({ detail: 'Detail', asset: 'By_Asset', op: 'By_Operator' })[TAB] + '_' + val('f-from') + '_to_' + val('f-to') + '.csv';
+  document.body.appendChild(a); a.click(); a.remove();
 }
 
-init();
+// ---------- helpers ----------
+function groupBy(rows, fn) { const g = {}; rows.forEach(r => { const k = fn(r); (g[k] = g[k] || []).push(r); }); return g; }
+function val(id) { return document.getElementById(id).value; }
+function enc(s) { return encodeURIComponent(s); }
+function headers(extra) { return Object.assign({ 'apikey': SUPABASE_ANON_KEY, 'Authorization': 'Bearer ' + SESSION_TOKEN }, extra || {}); }
+function base() { return SUPABASE_URL.replace(/\/+$/, '') + '/rest/v1/'; }
+function apiGet(path) { return fetch(base() + path, { headers: headers() }).then(r => r.ok ? r.json() : r.text().then(t => { throw new Error(t); })); }
+async function apiGetAll(path) {
+  const PAGE = 1000;
+  const resp = await fetch(base() + path, { headers: headers({ 'Prefer': 'count=exact', 'Range': '0-' + (PAGE - 1) }) });
+  if (!resp.ok) throw new Error(await resp.text());
+  const first = await resp.json();
+  const total = parseInt(((resp.headers.get('content-range') || '').split('/')[1] || '0'), 10) || first.length;
+  if (total <= first.length) return first;
+  const rest = [];
+  for (let off = PAGE; off < total; off += PAGE) rest.push(apiGet(path + '&limit=' + PAGE + '&offset=' + off));
+  return first.concat(...(await Promise.all(rest)));
+}
+function esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 </script>
 </body>
 </html>
