@@ -159,22 +159,138 @@ function fefPdfSafe(v){
   }
   return out;
 }
+function fefPdfLines(v){ return v == null ? "" : String(v).split("\n").map(fefPdfSafe).join("\n"); }   // like fefPdfSafe, but keeps line breaks
 function fefFileName(parts){ return parts.filter(Boolean).map(p => String(p).replace(/[^A-Za-z0-9]+/g, " ").trim().split(" ").filter(Boolean).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join("_")).join("_") + ".pdf"; }
-function fefRunningFrame(doc, title){
-  const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), MX = 40;
-  const pages = doc.internal.getNumberOfPages();
-  for(let i = 1; i <= pages; i++){
-    doc.setPage(i);
-    doc.setFont("helvetica","bold"); doc.setFontSize(8); doc.setTextColor(...FEF_NAVY);
-    doc.text("RUMBU INDUSTRIES GROUP", MX, 30);
-    doc.setFont("helvetica","normal"); doc.text(fefPdfSafe(title), W - MX, 30, { align:"right" });
-    doc.setDrawColor(...FEF_BLUE); doc.setLineWidth(1); doc.line(MX, 38, W - MX, 38);
-    doc.setDrawColor(200,208,220); doc.setLineWidth(0.5); doc.line(MX, H - 34, W - MX, H - 34);
-    doc.setFontSize(8); doc.setTextColor(110,110,110);
-    doc.text("CONFIDENTIAL", MX, H - 22);
-    doc.text("Page " + i + " of " + pages, W - MX, H - 22, { align:"right" });
+/* ====================================================================
+   RUMBU LETTERHEAD for the PDFs: the same look as the Gate Pass and the Overtime documents
+   (gradient band, rounded white logo box, company name and email, document badge, number strip),
+   with the Step 6 style of tables (blue section titles, navy headers, bold totals).
+   Change the three constants below to change the letterhead text everywhere.
+   ==================================================================== */
+const FEF_COMPANY = "Rumbu Industries Limited", FEF_EMAIL = "info@rumbuindustries.com", FEF_ADDRESS = "";
+const FEF_LOGO_PATHS = ["../../icon-512.png", "../../icon-192.png"];       // the Rumbu logo files at the site root
+const FEF_GREY = [209,213,219], FEF_PALE = [248,250,252], FEF_STRIPE = [240,244,250];
+let FEF_LOGO_CACHE = null;
+/* The logo is fetched from the site while the PDF is made. If it cannot be loaded the letterhead shows a plain "R" mark instead. */
+async function fefLogoData(){
+  if(FEF_LOGO_CACHE) return FEF_LOGO_CACHE;
+  for(const p of FEF_LOGO_PATHS){
+    try{
+      const res = await fetch(p); if(!res.ok) continue;
+      const blob = await res.blob();
+      const data = await new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = () => no(r.error); r.readAsDataURL(blob); });
+      if(/^data:image\/png/.test(data)){ FEF_LOGO_CACHE = data; return data; }
+    }catch(e){ /* try the next path */ }
+  }
+  return null;
+}
+function fefLogoBox(doc, logo, x, y, s, r){
+  doc.setFillColor(255,255,255); doc.roundedRect(x, y, s, s, r, r, "F");
+  let drawn = false;
+  if(logo){ try{ const pad = Math.max(2, s * 0.06); doc.addImage(logo, "PNG", x + pad, y + pad, s - pad*2, s - pad*2); drawn = true; }catch(e){ drawn = false; } }
+  if(!drawn){ doc.setFont("helvetica","bold"); doc.setFontSize(s * 0.62); doc.setTextColor(...FEF_NAVY); doc.text("R", x + s/2, y + s * 0.72, { align:"center" }); }
+}
+function fefGradient(doc, x, y, w, h, c1, c2){
+  const n = 72;
+  for(let i = 0; i < n; i++){
+    const t = i / (n - 1), col = c1.map((v, k) => Math.round(v + (c2[k] - v) * t));
+    doc.setFillColor(col[0], col[1], col[2]); doc.rect(x + w * i / n, y, w / n + 0.8, h, "F");
   }
 }
+/* The header band. Returns the y where it ends. */
+function fefBand(doc, o){
+  const S = fefPdfSafe, W = doc.internal.pageSize.getWidth(), BH = 88, MX = 36;
+  fefGradient(doc, 0, 0, W, BH, FEF_NAVY, FEF_BLUE);
+  fefLogoBox(doc, o.logo, MX, 17, 54, 7);
+  const tx = MX + 54 + 16;
+  doc.setTextColor(255,255,255); doc.setFont("helvetica","bold"); doc.setFontSize(17); doc.text(S(FEF_COMPANY), tx, 38);
+  doc.setFont("helvetica","normal"); doc.setFontSize(8.5); doc.setTextColor(214,224,240); doc.text(S(FEF_EMAIL), tx, 51);
+  doc.setFont("helvetica","bold"); doc.setFontSize(9); doc.setTextColor(255,255,255); doc.text(S(String(o.subtitle || "").toUpperCase()), tx, FEF_ADDRESS ? 63 : 66, { charSpace:0.8 });
+  if(FEF_ADDRESS){ doc.setFont("helvetica","normal"); doc.setFontSize(8); doc.setTextColor(214,224,240); doc.text(S(FEF_ADDRESS), tx, 76); }
+  // the document badge and number, on the right
+  const label = S(String(o.badge || "").toUpperCase()); doc.setFont("helvetica","bold"); doc.setFontSize(10);
+  const bw = doc.getTextWidth(label) + label.length * 1.2 + 26, bx = W - MX - bw;
+  doc.setFillColor(77,138,193); doc.setDrawColor(119,165,208); doc.setLineWidth(0.8); doc.roundedRect(bx, 24, bw, 24, 5, 5, "FD");
+  doc.setTextColor(255,255,255); doc.text(label, bx + 13, 40, { charSpace:1.2 });
+  if(o.docNo){ doc.setFont("helvetica","normal"); doc.setFontSize(9.5); doc.setTextColor(225,233,245); doc.text(S(o.docNo), W - MX, 64, { align:"right" }); }
+  return BH;
+}
+/* The number strip under the band. Returns the y where it ends. */
+function fefStrip(doc, y, left, right){
+  const S = fefPdfSafe, W = doc.internal.pageSize.getWidth(), MX = 36, h = 26;
+  doc.setFillColor(...FEF_STRIPE); doc.rect(0, y, W, h, "F");
+  doc.setDrawColor(...FEF_BLUE); doc.setLineWidth(2); doc.line(0, y + h, W, y + h);
+  doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.setTextColor(...FEF_NAVY); doc.text(S(left), MX, y + 17);
+  doc.setFont("helvetica","normal"); doc.setFontSize(9); doc.setTextColor(85,85,85); doc.text(S(right), W - MX, y + 17, { align:"right" });
+  return y + h + 1;
+}
+/* A section title in the house style: small blue capitals over a blue rule. Returns the y to continue from. */
+function fefSection(doc, y, text){
+  const W = doc.internal.pageSize.getWidth(), MX = 36;
+  doc.setFont("helvetica","bold"); doc.setFontSize(9); doc.setTextColor(...FEF_BLUE); doc.text(fefPdfSafe(String(text).toUpperCase()), MX, y, { charSpace:0.8 });
+  doc.setDrawColor(...FEF_BLUE); doc.setLineWidth(1.2); doc.line(MX, y + 5, W - MX, y + 5);
+  return y + 13;
+}
+/* The pale fact box (like the Form No / Branch / Date box on the Step 6 page). Returns the y below it. */
+function fefInfoBox(doc, y, items){
+  const W = doc.internal.pageSize.getWidth(), MX = 36, CW = W - MX * 2, pad = 10, lh = 15, maxW = CW - pad * 2, S = fefPdfSafe;
+  doc.setFontSize(9);
+  const toks = items.filter(it => it[1] !== undefined && it[1] !== null && String(it[1]) !== "").map(it => ({ l:S(it[0]) + ": ", v:S(it[1]) }));
+  doc.setFont("helvetica","normal"); const sep = doc.getTextWidth("   |   ");
+  const lines = [[]]; let cur = 0;
+  toks.forEach(t => {
+    doc.setFont("helvetica","bold"); const wl = doc.getTextWidth(t.l); doc.setFont("helvetica","normal"); const w = wl + doc.getTextWidth(t.v);
+    if(cur && cur + sep + w > maxW){ lines.push([]); cur = 0; }
+    const x = cur ? cur + sep : 0; lines[lines.length - 1].push({ t, x, wl, sepX:cur ? cur : null }); cur = x + w;
+  });
+  const h = lines.length * lh + 10;
+  doc.setFillColor(...FEF_PALE); doc.setDrawColor(...FEF_GREY); doc.setLineWidth(0.6); doc.roundedRect(MX, y, CW, h, 5, 5, "FD");
+  lines.forEach((ln, i) => ln.forEach(p => {
+    const ty = y + 8 + lh * i + 8;
+    if(p.sepX !== null){ doc.setFont("helvetica","normal"); doc.setTextColor(150,150,150); doc.text("|", MX + pad + p.sepX + sep/2 - 1, ty); }
+    doc.setFont("helvetica","bold"); doc.setTextColor(...FEF_NAVY); doc.text(p.t.l, MX + pad + p.x, ty);
+    doc.setFont("helvetica","normal"); doc.setTextColor(30,30,30); doc.text(p.t.v, MX + pad + p.x + p.wl, ty);
+  }));
+  return y + h;
+}
+/* Shared table look: navy header, pale stripes, grey grid. */
+function fefTableBase(extra){
+  return Object.assign({ theme:"grid",
+    styles:{ font:"helvetica", fontSize:9, cellPadding:{ top:5, bottom:5, left:7, right:7 }, textColor:[30,30,30], lineColor:FEF_GREY, lineWidth:0.5, overflow:"linebreak", valign:"top" },
+    headStyles:{ fillColor:FEF_NAVY, textColor:[255,255,255], fontStyle:"bold", fontSize:8.5, lineColor:FEF_NAVY },
+    footStyles:{ fillColor:FEF_STRIPE, textColor:FEF_NAVY, fontStyle:"bold", fontSize:9.5 },
+    alternateRowStyles:{ fillColor:FEF_PALE }, rowPageBreak:"avoid", showFoot:"lastPage" }, extra);
+}
+/* Key / value table (like the Gate Pass "Pass Details"): a pale key column with a blue edge. rows: [k,v] full width, or [k1,v1,k2,v2]. */
+function fefKvTable(doc, y, rows, TOP){
+  const S = fefPdfSafe, W = doc.internal.pageSize.getWidth(), MX = 36, CW = W - MX * 2;
+  const key = t => ({ content:S(t), key:true, styles:{ fontStyle:"bold", textColor:FEF_NAVY, fillColor:FEF_PALE } });
+  const L = fefPdfLines;
+  const body = rows.map(r => r.length === 2 ? [key(r[0]), { content:L(r[1] === "" || r[1] == null ? "-" : r[1]), colSpan:3 }]
+                                            : [key(r[0]), { content:L(r[1] === "" || r[1] == null ? "-" : r[1]) }, key(r[2]), { content:L(r[3] === "" || r[3] == null ? "-" : r[3]) }]);
+  doc.autoTable(fefTableBase({ startY:y, body, theme:"grid", alternateRowStyles:{ fillColor:[255,255,255] },
+    columnStyles:{ 0:{ cellWidth:CW * 0.19 }, 1:{ cellWidth:CW * 0.31 }, 2:{ cellWidth:CW * 0.19 }, 3:{ cellWidth:CW * 0.31 } },
+    margin:{ top:TOP, left:MX, right:MX, bottom:48 },
+    didDrawCell:d => { if(d.section === "body" && d.cell.raw && d.cell.raw.key){ doc.setDrawColor(...FEF_BLUE); doc.setLineWidth(1.6); doc.line(d.cell.x + d.cell.width, d.cell.y, d.cell.x + d.cell.width, d.cell.y + d.cell.height); } } }));
+  return doc.lastAutoTable.finalY;
+}
+/* The slim header on pages after the first, and the footer on every page. */
+function fefFrame(doc, o){
+  const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), MX = 36, S = fefPdfSafe, pages = doc.internal.getNumberOfPages();
+  for(let i = 1; i <= pages; i++){
+    doc.setPage(i);
+    if(i > 1){
+      fefGradient(doc, 0, 0, W, 30, FEF_NAVY, FEF_BLUE);
+      fefLogoBox(doc, o.logo, MX, 5, 20, 3);
+      doc.setTextColor(255,255,255); doc.setFont("helvetica","bold"); doc.setFontSize(9.5); doc.text(S(FEF_COMPANY), MX + 28, 19);
+      doc.setFont("helvetica","normal"); doc.setFontSize(8.5); doc.setTextColor(225,233,245); doc.text(S(o.title), W - MX, 19, { align:"right" });
+    }
+    doc.setDrawColor(200,208,220); doc.setLineWidth(0.5); doc.line(MX, H - 34, W - MX, H - 34);
+    doc.setFont("helvetica","normal"); doc.setFontSize(8); doc.setTextColor(110,110,110);
+    doc.text("CONFIDENTIAL", MX, H - 22); doc.text(S(o.title), W / 2, H - 22, { align:"center" }); doc.text("Page " + i + " of " + pages, W - MX, H - 22, { align:"right" });
+  }
+}
+
 async function fefShrinkImage(dataUrl, maxPx){
   try{
     if(typeof document === "undefined" || typeof Image === "undefined") return dataUrl;
@@ -204,118 +320,86 @@ async function fefImageData(url){
 /* only JPEG and PNG can be placed inside the PDF; every other file is listed with its link */
 function fefIsImage(f){ return /^image\/(jpeg|png)$/.test(f.type || "") || (!f.type && /\.(jpe?g|png)$/i.test(f.name || "")); }
 
-/* ---- the whole process, in the layout of the KissFlow report ---- */
-/* ctx = { form, owners:{step:[names]}, comments:[{author_name,created_at,comment,step}], printedBy } */
+/* ---- the whole process: letterhead, fact box, key/value sections, the weight reconciliation (Step 6 style), progress, comments, attachments ---- */
+/* ctx = { form, owners:{step:[names]}, comments:[{author_name,created_at,comment,step}] } */
 async function fefBuildFormPdf(ctx){
-  const { jsPDF } = window.jspdf;
-  const form = ctx.form, doc = new jsPDF({ orientation:"portrait", unit:"pt", format:"a4" });
-  const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), MX = 40, CW = W - MX*2, TOP = 56, BOTTOM = H - 48;
-  const S = fefPdfSafe;
-  let y = TOP + 14;
-  const need = h => { if(y + h > BOTTOM){ doc.addPage(); y = TOP + 14; } };
+  const { jsPDF } = window.jspdf, S = fefPdfSafe, form = ctx.form;
+  const doc = new jsPDF({ orientation:"portrait", unit:"pt", format:"a4", compress:true });
+  const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight(), MX = 36, CW = W - MX * 2, TOP = 46, BOTTOM = H - 48;
+  const logo = await fefLogoData();
+  const completed = form.status === "completed", prog = fefProgress(form);
   const starter = form.created_by_name || (form.steps_done && form.steps_done.details && form.steps_done.details.by) || "";
-
-  doc.setFont("helvetica","bold"); doc.setFontSize(16); doc.setTextColor(...FEF_NAVY);
-  doc.text(S("Flakes Export Form: " + form.form_no), MX, y); y += 18;
-  doc.setFont("helvetica","normal"); doc.setFontSize(10); doc.setTextColor(90,90,90);
-  doc.text(S("Started by " + (starter || "-") + (form.created_at ? " on " + fefFmtDT(form.created_at) : "")), MX, y); y += 16;
-
-  // summary strip
-  const prog = fefProgress(form), completed = form.status === "completed";
-  const stepNow = completed ? "Completed" : fefStepLabel(form.current_step);
-  doc.setFillColor(242,246,251); doc.setDrawColor(200,208,220); doc.roundedRect(MX, y, CW, 44, 4, 4, "FD");
-  const cells = [["CURRENT STEP", stepNow, null], ["STATUS", completed ? "Completed" : "In progress", completed ? [30,122,52] : [180,95,6]], ["PROGRESS", prog.text, null], ["PRINTED ON", fefStamp(), null]];
-  cells.forEach((c, i) => {
-    const x = MX + 12 + i * (CW / 4);
-    doc.setFont("helvetica","normal"); doc.setFontSize(7.5); doc.setTextColor(110,110,110); doc.text(c[0], x, y + 16);
-    doc.setFont("helvetica","bold"); doc.setFontSize(10); doc.setTextColor(...(c[2] || [30,30,30])); doc.text(S(c[1]), x, y + 32);
-  });
-  y += 62;
-
-  const section = (title) => {
-    need(76); if(y > TOP + 20) y += 12;
-    doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.setTextColor(...FEF_NAVY); doc.text(title, MX, y);
-    doc.setDrawColor(...FEF_BLUE); doc.setLineWidth(0.8); doc.line(MX, y + 4, W - MX, y + 4); y += 20;
-  };
-  // label above value, two columns; items with wide:true take the full width
-  const kv = (items) => {
-    let col = 0, rowH = 0, rowY = y;
-    const flush = () => { y = rowY + rowH + 12; col = 0; rowH = 0; rowY = y; };
-    for(const it of items){
-      const wide = !!it.wide, w = wide ? CW : CW/2 - 10;
-      doc.setFont("helvetica","normal"); doc.setFontSize(10);
-      const raw = (it.value === "" || it.value == null) ? "-" : String(it.value);
-      const lines = raw.split("\n").reduce((acc, part) => acc.concat(doc.splitTextToSize(S(part), w)), []);
-      const h = 12 + lines.length * 12.5;
-      if(wide && col === 1) flush();
-      if(rowY + h > BOTTOM){ doc.addPage(); y = TOP + 14; rowY = y; col = 0; rowH = 0; }
-      const x = MX + (wide ? 0 : col * (CW/2 + 10));
-      doc.setFontSize(7.5); doc.setTextColor(110,110,110); doc.text(S(it.label).toUpperCase(), x, rowY + 8);
-      doc.setFontSize(10); doc.setTextColor(30,30,30); doc.setFont("helvetica", it.bold ? "bold" : "normal"); doc.text(lines, x, rowY + 21);
-      rowH = Math.max(rowH, h);
-      if(wide || col === 1) flush(); else col = 1;
-    }
-    if(col === 1) flush();
-  };
+  let y = fefBand(doc, { logo, subtitle:"Flakes Export Form", badge:"Export Form", docNo:form.form_no });
+  y = fefStrip(doc, y, form.form_no, "Form date: " + fefFmtDate(form.form_date) + "      Status: " + (completed ? "Completed" : "In progress"));
+  y = fefInfoBox(doc, y + 12, [["Client", form.client_name], ["Picking slip", form.picking_slip_no], ["Vehicle", form.vehicle_number], ["Container", form.container_number],
+    ["Current step", completed ? "Completed" : fefStepLabel(form.current_step)], ["Progress", prog.text], ["Started by", starter], ["Printed", fefStamp()]]) + 16;
+  const need = h => { if(y + h > BOTTOM){ doc.addPage(); y = TOP; } };
+  const section = t => { need(96); y = fefSection(doc, y, t); };
+  const after = () => { y = doc.lastAutoTable.finalY + 16; };
   const files = arr => (arr && arr.length) ? arr.map(f => f.name + " (" + fefSize(f.size) + ")").join("\n") : "-";
 
-  section("DETAILS");
-  kv([{ label:"Date", value:fefFmtDate(form.form_date) }, { label:"Form No", value:form.form_no, bold:true },
-      { label:"Client Name", value:form.client_name }, { label:"Picking Slip No", value:form.picking_slip_no },
-      { label:"Odoo Delivery, Picking & Packages Slip", value:files(form.odoo_slips), wide:true }]);
-  section("DELIVERY DETAILS");
-  kv([{ label:"Delivery Slip Weight (Net), kg", value:fefNum(form.delivery_slip_weight_net) }, { label:"Bag(s) Quantity", value:fefNum(form.bags_quantity) },
-      { label:"Vehicle Number", value:form.vehicle_number }, { label:"Container Number", value:form.container_number },
-      { label:"Rumbu Weighbridge Weight, kg", value:fefNum(form.rumbu_weighbridge_weight) },
-      { label:"Weighbridge Attachment", value:files(form.weighbridge_attachments) }]);
-  section("SHIPPING INFO");
-  const diffTxt = form.weight_diff == null ? "-" : fefNum(form.weight_diff) + " kg";
-  kv([{ label:"Bill of Lading Number", value:form.bill_of_lading_number }, { label:"Shipping Line Name", value:form.shipping_line_name },
-      { label:"Difference between delivery slip weight and Rumbu weighbridge weight", value:diffTxt, wide:true, bold:true },
-      { label:"Shipping Documents", value:files(form.shipping_attachments), wide:true }]);
+  section("Details");
+  y = fefKvTable(doc, y, [["Date", fefFmtDate(form.form_date), "Form No", form.form_no], ["Client Name", form.client_name, "Picking Slip No", form.picking_slip_no],
+    ["Odoo Delivery, Picking & Packages Slip", files(form.odoo_slips)]], TOP) + 16;
+
+  section("Delivery Details");
+  y = fefKvTable(doc, y, [["Vehicle Number", form.vehicle_number, "Container Number", form.container_number], ["Bag(s) Quantity", fefNum(form.bags_quantity), "Weighbridge Attachment", files(form.weighbridge_attachments)]], TOP) + 16;
+
+  // the breakdown table, laid out like "Cost by Department & Unit" on Step 6, with a bold total underneath
+  section("Weight Reconciliation");
+  const diff = form.weight_diff != null ? form.weight_diff : fefDiff(form.delivery_slip_weight_net, form.rumbu_weighbridge_weight);
+  const differs = fefWeightsDiffer(diff), tone = diff == null ? FEF_NAVY : (differs ? [153,27,27] : [30,122,52]);
+  doc.autoTable(fefTableBase({ startY:y,
+    head:[["Item", "Source", "Weight / Quantity"]],
+    body:[["Delivery slip weight (net)", "Odoo delivery slip", fefNum(form.delivery_slip_weight_net) === "" ? "-" : fefNum(form.delivery_slip_weight_net) + " kg"],
+          ["Rumbu weighbridge weight", "Weighbridge ticket", fefNum(form.rumbu_weighbridge_weight) === "" ? "-" : fefNum(form.rumbu_weighbridge_weight) + " kg"],
+          ["Bag(s)", "Delivery details", fefNum(form.bags_quantity) === "" ? "-" : fefNum(form.bags_quantity)]].map(r => r.map(S)),
+    foot:[[{ content:"DIFFERENCE", colSpan:2, styles:{ halign:"right" } }, { content:diff == null ? "-" : (diff > 0 ? "+" : "") + fefNum(diff) + " kg", styles:{ halign:"right", textColor:tone } }]],
+    columnStyles:{ 0:{ cellWidth:CW * 0.42 }, 1:{ cellWidth:CW * 0.33 }, 2:{ cellWidth:CW * 0.25, halign:"right" } },
+    margin:{ top:TOP, left:MX, right:MX, bottom:48 },
+    didDrawCell:d => { if(d.section === "foot"){ doc.setDrawColor(...FEF_BLUE); doc.setLineWidth(1.6); doc.line(d.cell.x, d.cell.y, d.cell.x + d.cell.width, d.cell.y); } } }));
+  y = doc.lastAutoTable.finalY;
+  doc.setFont("helvetica","italic"); doc.setFontSize(8); doc.setTextColor(110,110,110);
+  doc.text(S("Difference = Rumbu weighbridge weight minus delivery slip weight (net). " + (diff == null ? "Not yet known." : (differs ? "The weights differ, so the Weight Issue step applies." : "The weights match."))), MX, y + 11);
+  y += 28;
+
+  section("Shipping Info");
+  y = fefKvTable(doc, y, [["Bill of Lading Number", form.bill_of_lading_number, "Shipping Line Name", form.shipping_line_name], ["Shipping Documents", files(form.shipping_attachments)]], TOP) + 16;
+
   if(form.weight_issue_required){
-    section("WEIGHT ISSUE");
-    kv([{ label:"Remark", value:form.weight_issue_remark, wide:true }, { label:"Attachments", value:files(form.weight_issue_attachments), wide:true }]);
+    section("Weight Issue");
+    y = fefKvTable(doc, y, [["Remark", form.weight_issue_remark], ["Attachments", files(form.weight_issue_attachments)]], TOP) + 16;
   }else if(form.weight_issue_required === false){
-    section("WEIGHT ISSUE");
-    kv([{ label:"Result", value:"Not required. The delivery slip weight and the Rumbu weighbridge weight match.", wide:true }]);
+    section("Weight Issue");
+    y = fefKvTable(doc, y, [["Result", "Not required. The delivery slip weight and the Rumbu weighbridge weight match."]], TOP) + 16;
   }
 
-  // progress table, like the KissFlow report; heading and all five rows stay together
-  need(175);
-  section("PROGRESS");
-  const rows = FEF_STEPS.map(s => {
-    const st = fefStepStatus(form, s.key), d = (form.steps_done || {})[s.key];
-    const person = d ? d.by : ((ctx.owners && ctx.owners[s.key] && ctx.owners[s.key].length) ? ctx.owners[s.key].join(", ") : "Not assigned");
-    return [s.label, person, d ? fefFmtDT(d.at) : "", fefStatusLabel(st)];
-  });
-  doc.autoTable({ startY:y, head:[["Step","Person","Date and time","Status"]], body:rows.map(r => r.map(S)), theme:"grid",
-    styles:{ font:"helvetica", fontSize:9, cellPadding:5, textColor:[30,30,30], lineColor:[200,208,220], lineWidth:0.4, overflow:"linebreak", valign:"top" },
-    headStyles:{ fillColor:FEF_NAVY, textColor:[255,255,255], fontStyle:"bold" }, alternateRowStyles:{ fillColor:[242,246,251] },
-    columnStyles:{ 0:{ cellWidth:110, fontStyle:"bold" }, 2:{ cellWidth:105 }, 3:{ cellWidth:90 } },
-    margin:{ top:TOP, left:MX, right:MX, bottom:52 }, rowPageBreak:"avoid" });
-  y = doc.lastAutoTable.finalY + 22;
+  need(190); y = fefSection(doc, y, "Progress");
+  doc.autoTable(fefTableBase({ startY:y, head:[["Step", "Person", "Date and time", "Status"]],
+    body:FEF_STEPS.map(s => { const st = fefStepStatus(form, s.key), d = (form.steps_done || {})[s.key];
+      return [s.label, d ? d.by : ((ctx.owners && ctx.owners[s.key] && ctx.owners[s.key].length) ? ctx.owners[s.key].join(", ") : "Not assigned"), d ? fefFmtDT(d.at) : "", fefStatusLabel(st)].map(S); }),
+    columnStyles:{ 0:{ cellWidth:CW * 0.2, fontStyle:"bold", textColor:FEF_NAVY }, 1:{ cellWidth:CW * 0.34 }, 2:{ cellWidth:CW * 0.24 }, 3:{ cellWidth:CW * 0.22 } },
+    margin:{ top:TOP, left:MX, right:MX, bottom:48 } }));
+  after();
 
-  section("COMMENTS");
   const comments = ctx.comments || [];
-  if(!comments.length){ doc.setFont("helvetica","normal"); doc.setFontSize(10); doc.setTextColor(110,110,110); doc.text("No comments", MX, y); y += 16; }
-  for(const c of comments){
-    doc.setFont("helvetica","normal"); doc.setFontSize(10);
-    const lines = doc.splitTextToSize(S(c.comment), CW);
-    need(28 + lines.length * 12.5);
-    doc.setFont("helvetica","bold"); doc.setFontSize(8.5); doc.setTextColor(...FEF_NAVY);
-    doc.text(S((c.author_name || "") + "  |  " + fefFmtDT(c.created_at) + (c.step ? "  |  " + fefStepLabel(c.step) : "")), MX, y); y += 13;
-    doc.setFont("helvetica","normal"); doc.setFontSize(10); doc.setTextColor(30,30,30); doc.text(lines, MX, y); y += lines.length * 12.5 + 10;
+  need(80); y = fefSection(doc, y, "Comments");
+  if(!comments.length){ doc.setFont("helvetica","italic"); doc.setFontSize(9.5); doc.setTextColor(110,110,110); doc.text("No comments", MX, y + 6); y += 26; }
+  else{
+    doc.autoTable(fefTableBase({ startY:y, head:[["From", "Date and time", "Step", "Comment"]],
+      body:comments.map(c => [S(c.author_name || ""), S(fefFmtDT(c.created_at)), S(c.step ? fefStepLabel(c.step) : ""), fefPdfLines(c.comment || "")]),
+      columnStyles:{ 0:{ cellWidth:CW * 0.2 }, 1:{ cellWidth:CW * 0.19 }, 2:{ cellWidth:CW * 0.14 }, 3:{ cellWidth:CW * 0.47 } }, margin:{ top:TOP, left:MX, right:MX, bottom:48 } }));
+    after();
   }
 
-  // attachments: images are embedded when they can be fetched; every file is listed with its link
+  // attachments: pictures (JPEG, PNG) are embedded; every file is listed with its link
   const att = [];
   [["Odoo slip", form.odoo_slips], ["Weighbridge", form.weighbridge_attachments], ["Shipping", form.shipping_attachments], ["Weight issue", form.weight_issue_attachments]].forEach(([label, arr]) => (arr || []).forEach(f => att.push({ label, f })));
   if(att.length){
-    section("ATTACHMENTS");
+    need(120); y = fefSection(doc, y, "Attachments");
     for(const a of att){
-      need(34);
-      doc.setFont("helvetica","bold"); doc.setFontSize(9); doc.setTextColor(...FEF_NAVY); doc.text(S(a.label + ": " + a.f.name), MX, y); y += 12;
+      need(36);
+      doc.setFont("helvetica","bold"); doc.setFontSize(9); doc.setTextColor(...FEF_NAVY); doc.text(S(a.label + ": " + a.f.name), MX, y + 4); y += 15;
       doc.setFont("helvetica","normal"); doc.setFontSize(8); doc.setTextColor(...FEF_BLUE); doc.textWithLink(S(a.f.url), MX, y, { url:a.f.url }); y += 12;
       if(fefIsImage(a.f)){
         const data = await fefImageData(a.f.url);
@@ -323,7 +407,7 @@ async function fefBuildFormPdf(ctx){
           try{
             const fmt = /^data:image\/png/.test(data) ? "PNG" : "JPEG", p = doc.getImageProperties(data);
             let w = Math.min(CW, 360), h = w * p.height / p.width; if(h > 330){ h = 330; w = h * p.width / p.height; }
-            need(h + 14); doc.addImage(data, fmt, MX, y, w, h); y += h + 14; continue;
+            need(h + 14); doc.setDrawColor(...FEF_GREY); doc.setLineWidth(0.6); doc.rect(MX - 2, y - 2, w + 4, h + 4, "S"); doc.addImage(data, fmt, MX, y, w, h); y += h + 18; continue;
           }catch(e){ /* fall through to the note below */ }
         }
         doc.setFontSize(8); doc.setTextColor(150,60,60); doc.text("Image could not be embedded. Open the link above to view it.", MX, y); y += 14;
@@ -331,30 +415,42 @@ async function fefBuildFormPdf(ctx){
       y += 6;
     }
   }
-  fefRunningFrame(doc, "Flakes Export Form: " + form.form_no);
+  fefFrame(doc, { logo, title:"Flakes Export Form: " + form.form_no });
   return doc;
 }
 
-/* ---- activity log report (landscape, same Rumbu style as the IT Inventory reports) ---- */
-/* opts = { title, periodText, filtersText, rows:[[date,form,step,action,detail,person]], generatedBy } */
-function fefBuildActivityPdf(opts){
+/* ---- activity log report: letterhead, fact box, "Activity by Person and Step" with a grand total, then every action ---- */
+/* opts = { title, periodText, filtersText, rows:[[date,form,step,action,detail,person]], records:[{person,step,at}], generatedBy } */
+async function fefBuildActivityPdf(opts){
   const { jsPDF } = window.jspdf, S = fefPdfSafe;
-  const doc = new jsPDF({ orientation:"landscape", unit:"pt", format:"a4" });
-  const W = doc.internal.pageSize.getWidth(), MX = 36, n = opts.rows.length;
-  let y = 72;
-  doc.setFont("helvetica","bold"); doc.setFontSize(16); doc.setTextColor(...FEF_NAVY); doc.text(S(opts.title), MX, y);
-  y += 19; doc.setFontSize(11); doc.setTextColor(...FEF_BLUE); doc.text(S(opts.periodText), MX, y);
-  y += 15; doc.setFont("helvetica","normal"); doc.setFontSize(9); doc.setTextColor(80,80,80); doc.text(S(opts.filtersText), MX, y);
-  y += 12; doc.text(S("Generated " + fefStamp() + (opts.generatedBy ? " by " + opts.generatedBy : "") + "   |   " + n + " record(s)"), MX, y);
-  if(n){
-    doc.autoTable({ startY:y + 14, head:[["Date and time","Form","Step","Action","Detail","Person"]], body:opts.rows.map(r => r.map(S)), theme:"grid",
-      styles:{ font:"helvetica", fontSize:9, cellPadding:4, textColor:[30,30,30], lineColor:[200,208,220], lineWidth:0.4, overflow:"linebreak", valign:"top" },
-      headStyles:{ fillColor:FEF_NAVY, textColor:[255,255,255], fontStyle:"bold", lineColor:FEF_NAVY }, alternateRowStyles:{ fillColor:[242,246,251] },
-      columnStyles:{ 0:{ cellWidth:92 }, 1:{ cellWidth:76 }, 2:{ cellWidth:92 }, 3:{ cellWidth:92 }, 5:{ cellWidth:140 } },
-      margin:{ top:58, left:MX, right:MX, bottom:46 }, rowPageBreak:"avoid", showHead:"everyPage" });
+  const doc = new jsPDF({ orientation:"landscape", unit:"pt", format:"a4", compress:true });
+  const W = doc.internal.pageSize.getWidth(), MX = 36, CW = W - MX * 2, TOP = 46, n = opts.rows.length;
+  const logo = await fefLogoData();
+  let y = fefBand(doc, { logo, subtitle:"Flakes Export Form", badge:"Activity Log", docNo:opts.periodText });
+  y = fefStrip(doc, y, opts.title.replace(/^Flakes Export Form:\s*/, ""), "Generated " + fefStamp() + (opts.generatedBy ? " by " + opts.generatedBy : "") + "      " + n + " record(s)");
+  y = fefInfoBox(doc, y + 12, (opts.filters || []).concat([])) + 16;
+  if(!n){
+    doc.setFont("helvetica","normal"); doc.setFontSize(10); doc.setTextColor(30,30,30); doc.text("No activity matches these filters.", MX, y + 8);
   }else{
-    doc.setFontSize(10); doc.setTextColor(30,30,30); doc.text("No activity matches these filters.", MX, y + 30);
+    // breakdown: who did how much, at which step (like Department & Unit on Step 6)
+    const order = {}; FEF_STEPS.forEach((s, i) => { order[s.label] = i; });
+    const groups = {};
+    (opts.records || []).forEach(r => { const k = (r.person || "") + "||" + (r.step || "-"); const g = groups[k] || (groups[k] = { person:r.person || "", step:r.step || "-", count:0, last:null }); g.count++; if(!g.last || new Date(r.at) > new Date(g.last)) g.last = r.at; });
+    const list = Object.values(groups).sort((a, b) => a.person.localeCompare(b.person) || ((order[a.step] === undefined ? 99 : order[a.step]) - (order[b.step] === undefined ? 99 : order[b.step])));
+    y = fefSection(doc, y, "Activity by Person and Step");
+    doc.autoTable(fefTableBase({ startY:y, head:[["Person", "Step", "Actions", "Last activity"]],
+      body:list.map(g => [g.person, g.step, String(g.count), fefFmtDT(g.last)].map(S)),
+      foot:[[{ content:"GRAND TOTAL", colSpan:2, styles:{ halign:"right" } }, { content:String(list.reduce((t, g) => t + g.count, 0)), styles:{ halign:"right" } }, ""]],
+      columnStyles:{ 0:{ cellWidth:CW * 0.34 }, 1:{ cellWidth:CW * 0.26 }, 2:{ cellWidth:CW * 0.12, halign:"right" }, 3:{ cellWidth:CW * 0.28 } },
+      margin:{ top:TOP, left:MX, right:MX, bottom:48 },
+      didDrawCell:d => { if(d.section === "foot"){ doc.setDrawColor(...FEF_BLUE); doc.setLineWidth(1.6); doc.line(d.cell.x, d.cell.y, d.cell.x + d.cell.width, d.cell.y); } } }));
+    y = doc.lastAutoTable.finalY + 20;
+    if(y > doc.internal.pageSize.getHeight() - 120){ doc.addPage(); y = TOP; }
+    y = fefSection(doc, y, "Activity Detail");
+    doc.autoTable(fefTableBase({ startY:y, head:[["Date and time", "Form", "Step", "Action", "Detail", "Person"]], body:opts.rows.map(r => r.map(S)), showHead:"everyPage",
+      columnStyles:{ 0:{ cellWidth:94 }, 1:{ cellWidth:76 }, 2:{ cellWidth:94 }, 3:{ cellWidth:92 }, 5:{ cellWidth:140 } },
+      margin:{ top:TOP, left:MX, right:MX, bottom:48 } }));
   }
-  fefRunningFrame(doc, opts.title);
+  fefFrame(doc, { logo, title:opts.title });
   return doc;
 }

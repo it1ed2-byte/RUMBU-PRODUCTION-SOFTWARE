@@ -128,15 +128,20 @@ function draw(){
   $("out").innerHTML = '<div class="table-scroll"><table class="tbl"><thead><tr><th>Date and time</th><th>Form</th><th>Step</th><th>Action</th><th>Detail</th><th>Person</th></tr></thead><tbody>' +
     ROWS.map(r => `<tr><td>${fefEsc(fefFmtDT(r.created_at))}</td><td>${fefEsc(r.form_no || "-")}</td><td>${fefEsc(r.step ? fefStepLabel(r.step) : "-")}</td><td>${fefEsc(FEF_ACTIONS[r.action] || r.action)}</td><td>${fefEsc(r.detail || "")}</td><td>${fefEsc(r.actor_name || "")}</td></tr>`).join("") + "</tbody></table></div>";
 }
-function downloadPdf(){
+async function downloadPdf(){
   if(!LAST) return;
   if(!(window.jspdf && window.jspdf.jsPDF)){ say("The PDF library did not load. Check your connection and reopen this page.", "bad"); return; }
   const f = LAST, title = "Flakes Export Form: " + (ALL ? "Activity Log" : "My Activity Log");
   const personText = ALL ? (f.person ? (PEOPLE[f.person] || "Selected person") : "Everyone") : ACTOR;
-  const doc = fefBuildActivityPdf({ title, periodText:fefFmtDate(f.from) + " to " + fefFmtDate(f.to),
-    filtersText:"Person: " + personText + "   |   Step: " + (f.step ? fefStepLabel(f.step) : "All") + "   |   Action: " + (f.action ? FEF_ACTIONS[f.action] : "All") + (f.form ? "   |   Form: " + f.form : ""),
-    rows:ROWS.map(r => [fefFmtDT(r.created_at), r.form_no || "-", r.step ? fefStepLabel(r.step) : "-", FEF_ACTIONS[r.action] || r.action, r.detail || "", r.actor_name || ""]), generatedBy:ACTOR });
-  doc.save(fefFileName([title, fefFmtDate(f.from).replace(/ /g, ""), "To", fefFmtDate(f.to).replace(/ /g, "")]));
+  $("btnPdf").disabled = true;
+  try{
+    const doc = await fefBuildActivityPdf({ title, periodText:fefFmtDate(f.from) + " to " + fefFmtDate(f.to),
+      filters:[["Period", fefFmtDate(f.from) + " to " + fefFmtDate(f.to)], ["Person", personText], ["Step", f.step ? fefStepLabel(f.step) : "All"], ["Action", f.action ? FEF_ACTIONS[f.action] : "All"]].concat(f.form ? [["Form", f.form]] : []),
+      rows:ROWS.map(r => [fefFmtDT(r.created_at), r.form_no || "-", r.step ? fefStepLabel(r.step) : "-", FEF_ACTIONS[r.action] || r.action, r.detail || "", r.actor_name || ""]),
+      records:ROWS.map(r => ({ person:r.actor_name || "", step:r.step ? fefStepLabel(r.step) : "-", at:r.created_at })), generatedBy:ACTOR });
+    doc.save(fefFileName([title, fefFmtDate(f.from).replace(/ /g, ""), "To", fefFmtDate(f.to).replace(/ /g, "")]));
+  }catch(e){ say("Could not create the PDF: " + e.message, "bad"); }
+  finally{ $("btnPdf").disabled = false; }
 }
 
 init();
