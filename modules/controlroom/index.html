@@ -1,0 +1,2253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>RumbuApp</title>
+<link rel="manifest" href="manifest.json?v=3">
+<script src="pwa-install.js" defer></script>
+<meta name="theme-color" content="#1F3864">
+<link rel="icon" href="favicon.ico?v=3" sizes="any">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png?v=3">
+<link rel="apple-touch-icon" href="apple-touch-icon.png?v=3">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="RumbuApp">
+<link rel="stylesheet" href="styles.css">
+<script>
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    });
+  }
+</script>
+<script>
+  // ---- Theme: Light (the Navy and Gold look) or Dark, or follow the device ----
+  // The choice is kept per device in rumbu_theme_pref ("light", "dark" or "device").
+  // rumbu_theme keeps the theme actually shown ("navy" or "dark"), because every page reads it.
+  // Anyone who had picked one of the four retired themes is moved to the closest of the two.
+  var THEME_LIGHT = "navy", THEME_DARK = "dark";
+  function themePref(){
+    try{
+      var p = localStorage.getItem("rumbu_theme_pref");
+      if(p === "light" || p === "dark" || p === "device") return p;
+      var old = localStorage.getItem("rumbu_theme");
+      return (old === "dark" || old === "ocean" || old === "graphite") ? "dark" : "light";
+    }catch(e){ return "light"; }
+  }
+  function deviceIsDark(){ try{ return window.matchMedia("(prefers-color-scheme: dark)").matches; }catch(e){ return false; } }
+  function resolvedTheme(){ var p = themePref(); return p === "dark" || (p === "device" && deviceIsDark()) ? THEME_DARK : THEME_LIGHT; }
+  function applyTheme(){
+    var t = resolvedTheme();
+    document.documentElement.setAttribute("data-theme", t);
+    try{ localStorage.setItem("rumbu_theme", t); }catch(e){}
+    ["moduleFrame", "dashFrame"].forEach(function(id){
+      var f = document.getElementById(id);
+      if(f && f.contentWindow){ try{ f.contentWindow.postMessage({ rumbuTheme: t }, "*"); }catch(e){} }
+    });
+    document.querySelectorAll("[data-theme-pref]").forEach(function(b){
+      var on = b.getAttribute("data-theme-pref") === themePref();
+      b.classList.toggle("on", on); b.setAttribute("aria-checked", on ? "true" : "false");
+    });
+  }
+  function setThemePref(p){ try{ localStorage.setItem("rumbu_theme_pref", p); }catch(e){} applyTheme(); }
+  // Older calls (setTheme('navy') and so on) still work.
+  function setTheme(t){ setThemePref(t === "dark" || t === "ocean" || t === "graphite" ? "dark" : "light"); }
+  function toggleThemePopover(){} function closeThemePopover(){}
+  applyTheme();
+  try{ window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", function(){ if(themePref() === "device") applyTheme(); }); }catch(e){}
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="auth.js"></script>
+<style>
+  /* Auth gate — hide the dashboard until the session is confirmed, so it
+     never flashes on screen before redirecting to login. */
+  #authGate{
+    position:fixed; inset:0; z-index:99999;
+    display:flex; align-items:center; justify-content:center;
+    background:var(--bg); color:var(--muted);
+    font-size:14px; font-weight:600; text-align:center; padding:20px;
+  }
+  #authGate.err{ color:var(--bad); }
+  #authGate .rs-card{ max-width:440px; }
+  .side-brand .logo.rs-tile{ background:#fff; color:transparent; padding:4px; }   /* the logo always sits on white */
+  /* ---- Header: one bar ---- */
+  .app-header{ gap:10px; padding:0 14px; }
+  .hdr-brand{ display:flex; align-items:center; gap:10px; min-width:0; }
+  .hdr-logo{ width:34px; height:34px; flex:0 0 34px; padding:4px; border:1px solid var(--line); box-shadow:none; }
+  .hdr-logo svg{ width:100%; height:100%; }
+  .app-header .titles{ flex:0 1 auto; }
+  .app-header .titles p{ text-transform:none; letter-spacing:0; }
+  .hdr-crumb{ display:flex; align-items:center; gap:6px; min-width:0; flex:1 1 auto; }
+  .hdr-crumb[hidden]{ display:none; }
+  .crumb-mod{ font-size:13px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:30vw; }
+  .crumb-sep{ color:var(--muted); font-size:15px; }
+  .crumb-page{ margin:0; font-size:15px; font-weight:700; color:var(--heading); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+  .hdr-spacer{ flex:1 1 auto; }
+  #appShell.module-open .hdr-spacer{ flex:0 0 0; }
+  .hdr-icon{ display:inline-flex; align-items:center; justify-content:center; width:38px; height:38px; min-height:38px!important; padding:0!important; border:1px solid var(--line)!important; border-radius:10px!important; background:var(--card)!important; color:var(--heading)!important; cursor:pointer; flex:0 0 auto; }
+  .hdr-icon:hover{ background:var(--bg)!important; border-color:var(--accent)!important; }
+  .hdr-icon[hidden]{ display:none; }
+  #appShell.module-open .hdr-brand .titles{ display:none; }
+  #appShell.module-open .module-host .m-bar{ display:none; }   /* the old second bar: its back, title and refresh are now in the header */
+  .user-menu-wrap{ position:relative; flex:0 0 auto; }
+  .avatar-btn{ width:38px; height:38px; min-height:38px!important; padding:0!important; border-radius:50%!important; border:2px solid var(--line)!important; background:var(--heading)!important; color:var(--card)!important; font-size:13px!important; font-weight:800!important; letter-spacing:.5px; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; }
+  .avatar-btn:hover, .avatar-btn[aria-expanded="true"]{ border-color:var(--accent)!important; }
+  .user-menu{ position:absolute; right:0; top:calc(100% + 8px); z-index:80; width:280px; max-width:calc(100vw - 20px); background:var(--card); border:1px solid var(--line-2); border-radius:14px; box-shadow:0 14px 38px rgba(15,25,45,.22); padding:6px; }
+  .user-menu[hidden]{ display:none; }
+  .um-who{ display:flex; gap:12px; align-items:center; padding:10px 10px 12px; }
+  .um-avatar{ width:42px; height:42px; flex:0 0 42px; border-radius:50%; background:var(--heading); color:var(--card); display:inline-flex; align-items:center; justify-content:center; font-weight:800; font-size:14px; letter-spacing:.5px; }
+  .um-name{ font-size:14px; font-weight:700; color:var(--heading); line-height:1.25; word-break:break-word; }
+  .um-sub{ font-size:12px; color:var(--muted); line-height:1.4; }
+  .um-sep{ height:1px; background:var(--line); margin:4px 6px; }
+  .um-item{ display:flex!important; align-items:center; gap:10px; width:100%; min-height:40px!important; padding:9px 10px!important; border:0!important; border-radius:9px!important; background:transparent!important; color:var(--heading)!important; font-size:13.5px!important; font-weight:600!important; text-align:left; cursor:pointer; }
+  .um-item:hover, .um-item:focus-visible{ background:var(--bg)!important; outline:none; }
+  .um-item svg{ flex:0 0 18px; color:var(--muted); }
+  .um-item.um-out{ color:var(--bad)!important; }
+  .um-item.um-out svg{ color:var(--bad); }
+  .um-theme{ display:flex; align-items:center; gap:10px; padding:8px 10px; font-size:13.5px; font-weight:600; color:var(--heading); }
+  .um-theme svg{ flex:0 0 18px; color:var(--muted); }
+  .um-seg{ margin-left:auto; display:inline-flex; background:var(--bg); border:1px solid var(--line); border-radius:9px; padding:2px; gap:2px; }
+  .um-seg button{ min-height:28px!important; padding:3px 9px!important; border:0!important; border-radius:7px!important; background:transparent!important; color:var(--muted)!important; font-size:12px!important; font-weight:700!important; cursor:pointer; width:auto!important; }
+  .um-seg button.on{ background:var(--card)!important; color:var(--heading)!important; box-shadow:0 1px 2px rgba(0,0,0,.12); }
+  .side-user{ display:flex; align-items:center; gap:10px; padding:4px 4px 10px; color:var(--side-fg); min-width:0; }
+  .side-user:empty{ display:none; }
+  .side-user .su-av{ width:32px; height:32px; flex:0 0 32px; border-radius:50%; background:rgba(255,255,255,.14); color:#fff; display:inline-flex; align-items:center; justify-content:center; font-size:12px; font-weight:800; letter-spacing:.4px; }
+  .side-user .su-name{ font-size:13px; font-weight:700; color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .side-user .su-role{ font-size:11px; color:var(--side-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  @media (max-width:640px){
+    .hdr-logo{ width:30px; height:30px; flex-basis:30px; }
+    .app-header .titles p{ display:none; }
+    .crumb-mod, .crumb-sep{ display:none; }   /* phones: just the page name */
+    .crumb-page{ font-size:14px; }
+  }
+  .side-brand .logo.rs-tile svg{ width:100%; height:100%; }
+  .module-host .m-loading{ position:absolute; left:0; right:0; bottom:0; display:flex; align-items:center; justify-content:center; background:var(--bg); z-index:5; padding:20px; }
+  .module-host .m-loading[hidden]{ display:none; }
+  .module-host .m-loading .rs-card{ max-width:440px; }
+  body.ready #authGate{ display:none; }
+  body:not(.ready) > *:not(#authGate){ visibility:hidden !important; }
+
+  /* Government Contracts — compact mode: hides the top two bars so the
+     contracts sidebar + content fill the full viewport height.
+     Toggled from within the contracts iframe via cntToggleTopBar().
+     NOTE: both elements use flex:0 0 Xpx so height:0 is overridden by
+     flex-basis — display:none is the only reliable way to collapse them. */
+  #appShell.cnt-top-hidden .app-header{display:none !important;}
+  #appShell.cnt-top-hidden .m-bar{display:none !important;}
+  .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:2000;justify-content:center;align-items:center;padding:20px;}
+  .modal-overlay.open{display:flex;}
+  .modal-box{background:var(--card,#fff);border-radius:14px;padding:26px;max-width:400px;width:100%;box-shadow:0 20px 50px rgba(0,0,0,.3);}
+
+/* ---- PET Collection: numbered stage pills, grouped menu ---- */
+.quick-links .ql-sep{flex:0 0 1px;align-self:stretch;background:var(--line-2);margin:2px 4px;}
+.quick-links .ql-stage{display:inline-flex;align-items:center;gap:6px;padding:5px 12px 5px 6px;}
+.quick-links .ql-num{width:20px;height:20px;border-radius:50%;background:var(--card);color:var(--heading);border:1px solid var(--line-2);font-size:11px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;flex:none;}
+.quick-links .ql-item.active .ql-num{background:var(--logo-fg);color:var(--accent);border-color:transparent;}
+.quick-links .ql-badge{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--accent);color:var(--logo-fg);font-size:11px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;}
+.quick-links .ql-item.active .ql-badge{background:var(--logo-fg);color:var(--accent);}
+.quick-links .ql-badge[hidden]{display:none;}
+.quick-links .ql-locked{opacity:.6;cursor:not-allowed;border-style:dashed;background:transparent;}
+.quick-links .ql-nav{flex:0 0 auto;width:30px;height:30px;border-radius:50%;border:1px solid var(--line-2);background:var(--bg);color:var(--heading);font-size:17px;line-height:1;cursor:pointer;font-family:inherit;}
+.quick-links .ql-nav:hover{border-color:var(--accent);}
+.ql-menu{position:fixed;z-index:60;min-width:220px;max-width:300px;background:var(--card);border:1px solid var(--line-2);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.18);padding:6px;display:flex;flex-direction:column;}
+.ql-menu-head{font-size:10.5px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);padding:8px 12px 4px;}
+.ql-menu-item{text-align:left;background:none;border:0;border-radius:8px;padding:10px 12px;min-height:40px;font-size:13px;font-weight:600;color:var(--heading);cursor:pointer;font-family:inherit;}
+.ql-menu-item:hover{background:var(--bg);}
+.ql-menu-item.active{background:var(--accent);color:var(--logo-fg);}
+.quick-links .ql-count{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--bg);border:1px solid var(--line-2);font-size:10.5px;font-weight:800;color:var(--muted);}
+.quick-links .ql-item.active .ql-count{background:transparent;border-color:currentColor;color:inherit;}
+.quick-links .ql-group b{font-weight:800;}
+/* ---- Module sidebar (the Government Contracts pattern, for every module) ---- */
+#quickLinks{display:none!important;}               /* replaced by the module sidebar */
+.module-host .mod-body{align-self:stretch;flex:1 1 auto;min-height:0;display:flex;position:relative;}
+.module-host .mod-body iframe{flex:1 1 auto;min-width:0;max-width:none;height:100%;}
+.mod-nav{flex:0 0 232px;width:232px;display:flex;flex-direction:column;background:linear-gradient(180deg,var(--side-bg1),var(--side-bg2));color:var(--side-fg);overflow:hidden;transition:width .18s ease,flex-basis .18s ease;z-index:6;}
+.mod-nav[hidden]{display:none;}
+.mod-nav .mn-head{display:flex;align-items:center;gap:8px;height:48px;flex:0 0 48px;padding:0 8px 0 14px;border-bottom:1px solid rgba(255,255,255,.08);}
+.mod-nav .mn-title{flex:1;min-width:0;font-size:10.5px;font-weight:800;letter-spacing:.9px;text-transform:uppercase;color:var(--side-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.mod-nav .mn-fold{flex:0 0 auto;width:30px!important;height:30px;min-height:30px!important;padding:0!important;border:1px solid rgba(255,255,255,.14)!important;border-radius:7px!important;background:rgba(255,255,255,.06)!important;color:var(--side-fg)!important;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;}
+.mod-nav .mn-fold:hover{background:rgba(255,255,255,.14)!important;color:#fff!important;}
+.mod-nav .mn-body{flex:1;overflow-y:auto;overflow-x:hidden;padding:6px 0 24px;scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.15) transparent;}
+.mod-nav .mn-sec{display:flex;align-items:center;gap:9px;padding:12px 14px 5px;font-size:10px;font-weight:800;letter-spacing:.9px;text-transform:uppercase;color:var(--side-muted);white-space:nowrap;}
+.mod-nav .mn-sec svg{flex:0 0 15px;width:15px;height:15px;}
+.mod-nav .mn-item{display:flex!important;align-items:center;gap:8px;width:100%;min-height:36px!important;padding:7px 12px 7px 38px!important;margin:0!important;border:0!important;border-left:3px solid transparent!important;border-radius:0!important;background:transparent!important;color:var(--side-fg)!important;font-size:13.5px!important;font-weight:600!important;text-align:left;cursor:pointer;white-space:nowrap;}
+.mod-nav .mn-item:hover{background:var(--side-hover)!important;color:#fff!important;}
+.mod-nav .mn-item[aria-current="page"]{background:rgba(255,255,255,.12)!important;color:#fff!important;font-weight:800!important;border-left-color:var(--side-active-bg)!important;}
+.mod-nav .mn-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;}
+.mod-nav .mn-num{flex:0 0 20px;width:20px;height:20px;border-radius:50%;background:rgba(255,255,255,.12);color:#fff;font-size:10.5px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;margin-left:-26px;}
+.mod-nav .mn-item[aria-current="page"] .mn-num{background:var(--side-active-bg);color:var(--side-active-fg);}
+.mod-nav .mn-badge{flex:0 0 auto;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--side-active-bg);color:var(--side-active-fg);font-size:10.5px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;}
+.mod-nav .mn-badge[hidden]{display:none;}
+.mod-nav .mn-pin{flex:0 0 auto;width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;border-radius:5px;color:var(--side-muted);font-size:13px;opacity:0;cursor:pointer;}
+.mod-nav .mn-item:hover .mn-pin,.mod-nav .mn-pin.on,.mod-nav .mn-item:focus-visible .mn-pin{opacity:1;}
+.mod-nav .mn-pin.on{color:var(--side-active-bg);}
+.mod-nav .mn-pin:hover{background:rgba(255,255,255,.12);color:#fff;}
+@media (hover:none){ .mod-nav .mn-pin{opacity:.6;} }
+/* folded: a strip of part icons; hovering opens it over the page without moving the page */
+.mod-folded .mod-body{padding-left:52px;}
+.mod-folded .mod-nav{position:absolute;left:0;top:0;bottom:0;width:52px;}
+.mod-folded .mod-nav .mn-title,.mod-folded .mod-nav .mn-sec span,.mod-folded .mod-nav .mn-item{display:none!important;}
+.mod-folded .mod-nav .mn-head{padding:0;justify-content:center;}
+.mod-folded .mod-nav .mn-sec{justify-content:center;padding:12px 0 6px;}
+.mod-folded .mod-nav.mn-peek{width:232px;box-shadow:8px 0 24px rgba(0,0,0,.25);}
+.mod-folded .mod-nav.mn-peek .mn-title,.mod-folded .mod-nav.mn-peek .mn-sec span{display:inline!important;}
+.mod-folded .mod-nav.mn-peek .mn-item{display:flex!important;}
+.mod-folded .mod-nav.mn-peek .mn-head{padding:0 8px 0 14px;justify-content:flex-start;}
+.mod-folded .mod-nav.mn-peek .mn-sec{justify-content:flex-start;padding:12px 14px 5px;}
+.hdr-pages{display:none;align-items:center;gap:6px;flex:0 0 auto;min-height:34px!important;padding:6px 10px!important;border:1px solid var(--line)!important;border-radius:9px!important;background:var(--card)!important;color:var(--heading)!important;font-size:12.5px!important;font-weight:700!important;cursor:pointer;margin-left:4px;}
+.mod-nav-backdrop{position:fixed;inset:0;background:rgba(8,15,30,.45);z-index:58;}
+.mod-nav-backdrop[hidden]{display:none;}
+@media (max-width:900px){
+  .module-host .mod-body{padding-left:0!important;}
+  .mod-nav{position:fixed!important;left:0;top:0;bottom:0;width:min(300px,86vw)!important;z-index:59;transform:translateX(-105%);transition:transform .2s ease;box-shadow:8px 0 24px rgba(0,0,0,.3);}
+  .mod-nav.mn-mobile-open{transform:none;}
+  .mod-nav .mn-title,.mod-nav .mn-sec span{display:inline!important;}
+  .mod-nav .mn-item{display:flex!important;}
+  .mod-nav .mn-head{padding:0 8px 0 14px!important;justify-content:flex-start!important;}
+  .mod-nav .mn-sec{justify-content:flex-start!important;padding:12px 14px 5px!important;}
+  .hdr-pages:not([hidden]){display:inline-flex;}
+}
+.side-flyout .fly-sec{font-size:10.5px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);padding:10px 11px 4px;}
+.fly-numlabel{display:inline-flex;align-items:center;gap:9px;}
+.fly-num{width:20px;height:20px;border-radius:50%;background:var(--accent);color:var(--logo-fg);font-size:11px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;flex:none;}
+.fly-det summary{cursor:pointer;list-style:none;font-size:10.5px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);padding:10px 11px;display:flex;justify-content:space-between;border-top:1px solid var(--line);}
+.fly-det summary::-webkit-details-marker{display:none;}
+.fly-count{font-weight:700;letter-spacing:0;}
+
+/* ---- Grouped sidebar: search, pinned and recent pages, folding groups ---- */
+.nav-search{position:relative;margin:2px 0 8px;}
+.nav-search input{width:100%;box-sizing:border-box;height:36px;padding:0 30px 0 32px;border-radius:8px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.07);color:#fff;font-size:13px;font-family:inherit;outline:none;}
+.nav-search input::placeholder{color:var(--side-muted);}
+.nav-search input:focus{border-color:var(--side-active-bg);background:rgba(255,255,255,.1);}
+.nav-search .ns-ico{position:absolute;left:10px;top:10px;width:16px;height:16px;color:var(--side-muted);pointer-events:none;}
+.nav-search .ns-clear{position:absolute;right:4px;top:4px;width:28px;height:28px;border:0;background:transparent;color:var(--side-muted);font-size:17px;cursor:pointer;border-radius:6px;padding:0;}
+.nav-search .ns-clear:hover{color:#fff;background:var(--side-hover);}
+.nav-sec{font-size:10px;font-weight:800;letter-spacing:.9px;text-transform:uppercase;color:var(--side-muted);padding:10px 12px 4px;display:flex;align-items:center;gap:8px;}
+.nav-sec .ns-line{flex:1;height:1px;background:rgba(255,255,255,.08);}
+.nav-hit{display:flex;align-items:center;gap:8px;width:100%;padding:8px 8px 8px 12px;margin:1px 0;background:transparent;border:0;border-radius:8px;color:var(--side-fg);font-size:13px;font-weight:600;font-family:inherit;text-align:left;cursor:pointer;}
+.nav-hit:hover,.nav-hit.kb{background:var(--side-hover);color:#fff;}
+.nav-hit .nh-text{flex:1;min-width:0;}
+.nav-hit .nh-name{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.nav-hit .nh-mod{display:block;font-size:11px;font-weight:600;color:var(--side-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.nav-hit mark{background:transparent;color:var(--side-active-bg);font-weight:800;}
+.nav-pin{flex:0 0 auto;width:26px;height:26px;border:0;border-radius:6px;background:transparent;color:var(--side-muted);font-size:14px;line-height:1;cursor:pointer;padding:0;opacity:.0;}
+.nav-hit:hover .nav-pin,.nav-pin.on,.nav-hit.kb .nav-pin{opacity:1;}
+.nav-pin.on{color:var(--side-active-bg);}
+.nav-pin:hover{background:rgba(255,255,255,.1);color:#fff;}
+.nav-empty{padding:10px 12px;font-size:12.5px;color:var(--side-muted);line-height:1.5;}
+.nav-group{margin:2px 0;}
+.nav-gh{display:flex;align-items:center;gap:9px;width:100%;padding:9px 10px 7px 12px;background:transparent;border:0;border-radius:8px;color:var(--side-muted);font-size:10.5px;font-weight:800;letter-spacing:.9px;text-transform:uppercase;font-family:inherit;text-align:left;cursor:pointer;}
+.nav-gh:hover{color:#fff;background:var(--side-hover);}
+.nav-gh .ng-ico{width:15px;height:15px;flex:0 0 15px;display:inline-flex;}
+.nav-gh .ng-ico svg{width:100%;height:100%;}
+.nav-gh .ng-name{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.nav-gh .ng-chev{flex:0 0 auto;font-size:13px;transition:transform .15s ease;}
+.nav-group.closed .nav-gh .ng-chev{transform:rotate(-90deg);}
+.nav-group.closed .nav-gb{display:none;}
+.nav-group.searching .nav-gh{display:none;}
+.nav-gb{padding:0 0 4px 14px;margin-left:12px;border-left:1px solid rgba(255,255,255,.08);}
+.nav-gb .menu-flat{text-transform:none;letter-spacing:0;font-size:13px;font-weight:600;padding:8px 10px;}
+.nav-gb .menu-flat .m-icon{width:15px;height:15px;flex:0 0 15px;}
+.nav-badge{min-width:18px;height:18px;padding:0 6px;border-radius:9px;background:var(--side-active-bg);color:var(--side-active-fg);font-size:10.5px;font-weight:800;letter-spacing:0;display:inline-flex;align-items:center;justify-content:center;margin-left:auto;margin-right:4px;flex:0 0 auto;}
+.menu-flat.active .nav-badge{background:var(--side-active-fg);color:var(--side-active-bg);}
+.nav-badge[hidden]{display:none;}
+.nav-group:not(.closed) .nav-gh .nav-badge{display:none;}
+.nav-tools{display:flex;justify-content:flex-end;gap:10px;padding:0 4px 2px;}
+.nav-tools button{background:none;border:0;padding:2px 4px;color:var(--side-muted);font-size:11px;font-weight:700;font-family:inherit;cursor:pointer;border-radius:4px;}
+.nav-tools button:hover{color:#fff;}
+.fly-row{display:flex;align-items:center;gap:2px;}
+.fly-row .flyout-item{flex:1;min-width:0;}
+.fly-pin{flex:0 0 auto;width:30px;height:30px;border:0;border-radius:6px;background:transparent;color:var(--muted);font-size:15px;cursor:pointer;padding:0;}
+.fly-pin:hover{background:var(--bg);color:var(--heading);}
+.fly-pin.on{color:var(--accent);}
+.fly-two{display:flex;flex-direction:column;gap:2px;min-width:0;}
+.fly-two .fly-desc{font-size:11.5px;font-weight:500;color:var(--muted);line-height:1.35;white-space:normal;}
+.side-flyout:has(.fly-desc){width:290px;}
+</style>
+</head>
+<body>
+
+<div id="authGate" role="status" aria-live="polite">Signing you in...</div>
+<script>
+  // The animated Rumbu logo while the app signs you in (auth.js is already loaded above).
+  try{ document.getElementById("authGate").innerHTML = RumbuUI.loaderHtml("Signing you in"); }catch(e){}
+</script>
+
+<div class="modal-overlay" id="emailPromptModal">
+  <div class="modal-box">
+    <h3 style="margin:0 0 4px;color:var(--navy,#1F3864);">Update Your Email</h3>
+    <p style="font-size:12.5px;color:var(--muted);margin:0 0 16px;">Keep your account email up to date so you don't miss anything important.</p>
+    <label style="font-size:12px;font-weight:700;display:block;margin-bottom:4px;">Email Address</label>
+    <input type="email" id="emailPromptInput" placeholder="name@example.com" style="width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:13px;box-sizing:border-box;">
+    <div style="display:flex;gap:10px;margin-top:16px;">
+      <button onclick="saveOwnEmail()" style="flex:1;">Save</button>
+      <button class="btn-ghost" onclick="dismissEmailPrompt()" style="flex:1;">Not Now</button>
+    </div>
+    <div class="status" id="emailPromptStatus" style="margin-top:10px;font-size:12.5px;font-weight:700;min-height:14px;"></div>
+  </div>
+</div>
+
+<div class="overlay" id="overlay" onclick="closeDrawer()"></div>
+
+<!-- Side flyout submenu: a module's pages slide out beside the sidebar -->
+<div class="side-flyout" id="sideFlyout" onmouseenter="cancelHoverClose()" onmouseleave="scheduleHoverClose()"></div>
+
+<div class="app" id="appShell">
+
+<!-- SIDEBAR -->
+<nav class="sidebar" id="side" onmouseleave="scheduleHoverClose()">
+  <div class="side-brand">
+    <div class="logo rs-tile" id="sideLogo" aria-hidden="true">R</div>
+    <div class="b-text"><b>RumbuApp</b><span>RUMBU INDUSTRIES GROUP</span></div>
+    <button class="side-close" onclick="closeDrawer()" aria-label="Close menu">&times;</button>
+  </div>
+  <div class="side-scroll">
+
+  <!-- Search box: finds a menu or a page by name. Enter opens the first match; Esc clears. -->
+  <div class="nav-search">
+    <svg class="ns-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <input type="search" id="navSearch" placeholder="Search menus and pages" autocomplete="off" aria-label="Search menus and pages" oninput="navOnSearch()" onkeydown="navSearchKey(event)">
+    <button class="ns-clear" id="navSearchClear" onclick="navClearSearch(true)" aria-label="Clear search" hidden>&times;</button>
+  </div>
+  <!-- Pinned and recent pages (or the search results while searching) -->
+  <div id="navQuick"></div>
+
+  <!-- Grouped modules, rendered from the nav_groups, modules and pages tables — see renderSidebarModules().
+       Manage Accounts sits in the Administration group. -->
+  <div id="dynamicModules"></div>
+
+  </div><!-- /side-scroll -->
+
+  <!-- Pinned at the bottom, outside the scrollable module list, so it's
+       always reachable without scrolling past every module first. -->
+  <div class="side-footer">
+    <div class="side-user" id="sideUser"></div>
+    <!-- Install button — hidden by default; pwa-install.js shows it when
+         the browser fires beforeinstallprompt (i.e. app is installable) -->
+    <button id="pwa-install-btn" onclick="triggerPWAInstall()"
+            style="display:none;align-items:center;gap:10px;width:100%;
+                   padding:10px 16px;border:none;border-radius:8px;
+                   background:rgba(255,255,255,.08);color:rgba(255,255,255,.75);
+                   cursor:pointer;font-size:13px;font-weight:500;text-align:left;
+                   transition:background .15s"
+            onmouseover="this.style.background='rgba(255,255,255,.15)'"
+            onmouseout="this.style.background='rgba(255,255,255,.08)'">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none"
+           stroke="currentColor" stroke-width="2" style="flex-shrink:0">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="7 10 12 15 17 10"/>
+        <line x1="12" y1="15" x2="12" y2="3"/>
+      </svg>
+      Install App
+    </button>
+    <button class="side-logout" onclick="logout('login.html')">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+      Log Out
+    </button>
+  </div>
+</nav>
+
+<!-- MAIN COLUMN -->
+<div class="main">
+  <header class="app-header">
+    <button class="hamburger" onclick="openDrawer()" aria-label="Open menu">&#9776;</button>
+    <!-- On the dashboards: the logo and app name. With a page open: a back arrow and where you are. -->
+    <div class="hdr-brand" id="hdrBrand">
+      <span class="hdr-logo rs-tile" id="hdrLogo" aria-hidden="true"></span>
+      <div class="titles"><h1>RumbuApp</h1><p>Rumbu Industries Group</p></div>
+    </div>
+    <nav class="hdr-crumb" id="hdrCrumb" aria-label="You are here" hidden>
+      <button class="hdr-icon" onclick="closeModule()" aria-label="Back to dashboards" title="Back to dashboards">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <span class="crumb-mod" id="crumbMod"></span><span class="crumb-sep" id="crumbSep" aria-hidden="true">&rsaquo;</span>
+      <h1 class="crumb-page" id="crumbPage"></h1>
+      <button class="hdr-pages" id="hdrPages" onclick="modNavMobile(true)" aria-controls="modNav" aria-expanded="false" hidden>
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>Pages
+      </button>
+    </nav>
+    <span class="hdr-spacer"></span>
+    <!-- You: initials button and its menu (name, role, branch, password, theme, log out) -->
+    <div class="user-menu-wrap" id="userMenuWrap">
+      <button class="avatar-btn" id="avatarBtn" aria-haspopup="menu" aria-expanded="false" aria-controls="userMenu" onclick="toggleUserMenu()" title="Your account"><span id="avatarInitials">·</span></button>
+      <div class="user-menu" id="userMenu" role="menu" aria-label="Your account" hidden></div>
+    </div>
+    <div class="user-box" id="userBox" hidden></div>
+  </header>
+
+  <div class="content" id="contentRegion">
+    <!-- LANDING (dashboards) -->
+    <div class="content-inner" id="landing">
+      <div id="dashLanding">
+        <div class="dash-toolbar">
+          <div class="dash-filter">
+            <label>Branch</label>
+            <select id="dashBranch" onchange="onDashBranchChange()"></select>
+          </div>
+          <div class="dash-filter">
+            <label>Dashboard</label>
+            <select id="dashPick" onchange="onDashPickChange()"></select>
+          </div>
+          <div class="dash-filter" style="align-self:flex-end;">
+            <button onclick="refreshDashboard()" title="Reload this dashboard's data from the database">⟳ Refresh</button>
+          </div>
+        </div>
+        <div id="dashEmpty" class="card-panel" style="display:none;">
+          <h2>Welcome to the Rumbu Production Reporting System</h2>
+          <p class="sub">No dashboards are available for this Branch yet. Open a module from the sidebar, or pick another Branch above.</p>
+        </div>
+        <iframe id="dashFrame" class="dash-frame" title="Dashboard" style="display:none;"></iframe>
+      </div>
+    </div>
+
+    <!-- MODULE PICKER — clicking a sidebar module opens this fresh full-
+         screen card instead of an inline dropdown; its page-cards then
+         open the actual page normally via openModule(). -->
+    <div class="module-host" id="pickerView">
+      <div class="m-bar">
+        <button class="m-back" onclick="closePicker()">&larr; All Modules</button>
+        <span class="m-title"><span class="m-icon" id="pickerIcon" style="margin-right:8px;"></span><span id="pickerTitleText"></span></span>
+      </div>
+      <div class="picker-scroll">
+        <div class="picker-grid" id="pickerGrid"></div>
+      </div>
+    </div>
+
+    <!-- MODULE (renders here, beside the sidebar) -->
+    <div class="module-host" id="moduleView">
+      <div class="m-bar">
+        <button class="m-back" onclick="closeModule()" id="moduleBackBtn">&larr; Back to Dashboards</button>
+        <span class="m-title" id="moduleName"></span>
+        <button class="m-back" style="margin-left:auto;" onclick="refreshModule()" title="Reload this page's data from the database">⟳ Refresh</button>
+      </div>
+      <!-- Quick links: every page in the current module, for jumping
+           between sibling pages without returning to the sidebar. -->
+      <div class="quick-links" id="quickLinks" style="display:none;"></div>
+      <div class="mod-body" id="modBody">
+        <!-- The module's own menu, beside the page: its pages grouped into parts, the open page highlighted.
+             Folds to icons (remembered); on phones it opens from the Pages button in the header. -->
+        <aside class="mod-nav" id="modNav" aria-label="Pages in this module" hidden></aside>
+        <iframe id="moduleFrame" title="Module"></iframe>
+      </div>
+      <div class="mod-nav-backdrop" id="modNavBackdrop" onclick="modNavMobile(false)" hidden></div>
+      <!-- Shown over the page while it opens (animated logo), or with a plain message if it is slow. -->
+      <div class="m-loading" id="moduleLoading" hidden></div>
+    </div>
+  </div>
+</div><!-- /main -->
+</div><!-- /app -->
+
+<!-- Bottom tab bar — mobile only. Puts the 3 most-reached-for actions
+     within thumb range instead of relying solely on the top-left
+     hamburger for everything. -->
+<nav class="bottom-tabs" id="bottomTabs">
+  <button onclick="closeModule()">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9.5 12 3l9 6.5"/><path d="M5 9.5V21h14V9.5"/></svg>
+    <span>Dashboard</span>
+  </button>
+  <button onclick="openDrawer()">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg>
+    <span>Menu</span>
+  </button>
+  <button onclick="logout('login.html')">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+    <span>Log Out</span>
+  </button>
+</nav>
+
+<script>
+  // (The theme is applied by applyTheme() at the top of the page.)
+</script>
+
+<script>
+  (function(){ try{
+    const l = document.getElementById("sideLogo"); if(l) l.innerHTML = RumbuUI.logoSvg(false);
+    const h = document.getElementById("hdrLogo"); if(h) h.innerHTML = RumbuUI.logoSvg(false);
+  }catch(e){} })();
+
+  // ---- Loading a page into the frame -----------------------------------
+  // The animated logo covers the page area until the page has loaded. If it takes longer than
+  // 15 seconds a plain message offers Try again; a lost connection gets its own message.
+  let MODULE_LOAD_TIMER = null;
+  function showModuleLoading(label){
+    const ov = document.getElementById("moduleLoading"), frame = document.getElementById("moduleFrame");
+    if(!ov || !frame || typeof RumbuUI === "undefined") return;
+    ov.innerHTML = RumbuUI.loaderHtml("Opening " + (label || "page"));
+    ov.hidden = false;
+    placeModuleLoading();
+    clearTimeout(MODULE_LOAD_TIMER);
+    MODULE_LOAD_TIMER = setTimeout(function(){
+      if(ov.hidden) return;
+      ov.innerHTML = navigator.onLine
+        ? RumbuUI.errorCardHtml({ kind:"network", title:"This is taking longer than usual", msg:"The connection may be slow. Wait a little longer, or try again.", raw:"" })
+        : RumbuUI.errorCardHtml("offline");
+    }, 15000);
+  }
+  function hideModuleLoading(){
+    clearTimeout(MODULE_LOAD_TIMER);
+    const ov = document.getElementById("moduleLoading"); if(ov){ ov.hidden = true; ov.innerHTML = ""; }
+  }
+  function placeModuleLoading(){
+    const ov = document.getElementById("moduleLoading"), f = document.getElementById("moduleFrame"), host = document.getElementById("moduleView");
+    if(!ov || !f || !host) return;
+    const hr = host.getBoundingClientRect(), fr = f.getBoundingClientRect();
+    ov.style.top = (fr.top - hr.top) + "px"; ov.style.left = (fr.left - hr.left) + "px"; ov.style.right = Math.max(0, hr.right - fr.right) + "px";
+  }
+  window.addEventListener("resize", function(){ const ov = document.getElementById("moduleLoading"); if(ov && !ov.hidden) placeModuleLoading(); });
+
+  // ---- Header: where you are -------------------------------------------
+  function updateHeaderCrumb(){
+    const open = document.getElementById("appShell").classList.contains("module-open");
+    const crumb = document.getElementById("hdrCrumb");
+    if(!crumb) return;
+    crumb.hidden = !open;
+    const mod = (open && CURRENT_PICKER) ? CURRENT_PICKER.name : "";
+    const page = open ? (document.getElementById("moduleName").textContent || "") : "";
+    document.getElementById("crumbMod").textContent = mod;
+    document.getElementById("crumbSep").style.display = mod ? "" : "none";
+    document.getElementById("crumbPage").textContent = page;
+    document.title = open && page ? page + " · RumbuApp" : "RumbuApp";
+  }
+
+  // ---- You: initials button and its menu -----------------------------------
+  let MY_FULL_NAME = null;
+  function myRoleLabel(){
+    if(!ME) return "";
+    if(ME.role === "super_admin"){
+      if(ME.isHeadOfIt) return "Super Admin · Head of IT";
+      if(ME.isDeveloper) return "Developer · view-only";
+      const t = ME.superAdminType ? String(ME.superAdminType).replace(/_/g, " ") : "";
+      return "Super Admin" + (t ? " · " + t.charAt(0).toUpperCase() + t.slice(1) : "");
+    }
+    return ({ admin: "Admin", user: "User", hr_console: "HR Console" })[ME.role] || String(ME.role || "");
+  }
+  function myBranchLabel(){
+    if(!ME) return "";
+    if(ME.role === "super_admin") return "All branches";
+    const b = ME.sectionNames || [];
+    return b.length ? b.join(", ") : "No branch assigned yet";
+  }
+  function myInitials(){
+    const src = (MY_FULL_NAME || (ME && ME.username) || "").trim();
+    const words = src.split(/[\s._-]+/).filter(w => /[A-Za-z]/.test(w));
+    if(MY_FULL_NAME && words.length >= 2) return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+    const letters = src.replace(/[^A-Za-z0-9]/g, "");
+    return (letters.slice(0, 2) || "?").toUpperCase();
+  }
+  const UM_ICONS = {
+    key: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="4.5"/><path d="M10.7 12.3 21 2M17 6l3 3M15 8l2 2"/></svg>',
+    sun: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
+    out: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/></svg>',
+    back: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>'
+  };
+  function renderUserMenu(){
+    if(!ME) return;
+    const esc = navEsc, ini = myInitials(), name = MY_FULL_NAME || ME.username;
+    document.getElementById("avatarInitials").textContent = ini;
+    document.getElementById("avatarBtn").setAttribute("title", name + " — your account");
+    const pref = themePref();
+    const seg = (p, label) => `<button type="button" role="menuitemradio" data-theme-pref="${p}" aria-checked="${pref === p}" class="${pref === p ? "on" : ""}" onclick="setThemePref('${p}')">${label}</button>`;
+    document.getElementById("userMenu").innerHTML =
+      `<div class="um-who"><span class="um-avatar" aria-hidden="true">${esc(ini)}</span><div style="min-width:0;">` +
+        `<div class="um-name">${esc(name)}</div>` + (MY_FULL_NAME ? `<div class="um-sub">${esc(ME.username)}</div>` : "") +
+        `<div class="um-sub">${esc(myRoleLabel())}</div><div class="um-sub">${esc(myBranchLabel())}</div></div></div>` +
+      `<div class="um-sep"></div>` +
+      (ME.role === "hr_console" ? `<button class="um-item" role="menuitem" onclick="window.location.href='modules/hr/hr-special-console.html'">${UM_ICONS.back}Back to HR Console</button>` : "") +
+      `<button class="um-item" role="menuitem" onclick="closeUserMenu();openModule(null,'admin','manage-accounts','Change My Password','section=change-password')">${UM_ICONS.key}Change my password</button>` +
+      `<div class="um-theme" role="group" aria-label="Theme">${UM_ICONS.sun}Theme<span class="um-seg">${seg("light", "Light")}${seg("dark", "Dark")}${seg("device", "Device")}</span></div>` +
+      `<div class="um-sep"></div>` +
+      `<button class="um-item um-out" role="menuitem" onclick="closeUserMenu();logout('login.html')">${UM_ICONS.out}Log out</button>`;
+    const su = document.getElementById("sideUser");
+    if(su) su.innerHTML = `<span class="su-av" aria-hidden="true">${esc(ini)}</span><span style="min-width:0;"><span class="su-name" style="display:block;">${esc(name)}</span><span class="su-role" style="display:block;">${esc(myRoleLabel())}</span></span>`;
+  }
+  function toggleUserMenu(){
+    const m = document.getElementById("userMenu");
+    if(m.hidden) openUserMenu(); else closeUserMenu();
+  }
+  function openUserMenu(){
+    const m = document.getElementById("userMenu"), b = document.getElementById("avatarBtn");
+    renderUserMenu();
+    m.hidden = false; b.setAttribute("aria-expanded", "true");
+    const first = m.querySelector(".um-item"); if(first) first.focus();
+  }
+  function closeUserMenu(focusBack){
+    const m = document.getElementById("userMenu"), b = document.getElementById("avatarBtn");
+    if(!m || m.hidden) return;
+    m.hidden = true; b.setAttribute("aria-expanded", "false");
+    if(focusBack) b.focus();
+  }
+  document.addEventListener("click", function(e){ if(!(e.target.closest && e.target.closest("#userMenuWrap"))) closeUserMenu(); });
+  document.addEventListener("keydown", function(e){
+    const m = document.getElementById("userMenu"); if(!m || m.hidden) return;
+    if(e.key === "Escape"){ e.preventDefault(); closeUserMenu(true); return; }
+    if(e.key === "ArrowDown" || e.key === "ArrowUp"){
+      const items = [...m.querySelectorAll(".um-item, .um-seg button")]; if(!items.length) return;
+      e.preventDefault();
+      let i = items.indexOf(document.activeElement);
+      i = e.key === "ArrowDown" ? (i + 1) % items.length : (i - 1 + items.length) % items.length;
+      items[i].focus();
+    }
+  });
+  // The full name comes from the person's staff record, if their login is linked to one.
+  async function loadMyFullName(){
+    try{
+      const { data } = await sb.from("employees").select("full_name").eq("linked_profile_id", ME.id).maybeSingle();
+      if(data && data.full_name){ MY_FULL_NAME = String(data.full_name).trim(); renderUserMenu(); }
+    }catch(e){ /* the username is shown instead */ }
+  }
+
+  function openDrawer(){
+    document.getElementById("side").classList.add("open");
+    document.getElementById("overlay").classList.add("show");
+    document.body.classList.add("drawer-open");
+    try{ navRenderQuick(); navRefreshBadges(); }catch(e){}
+  }
+  function closeDrawer(){
+    document.getElementById("side").classList.remove("open");
+    document.getElementById("overlay").classList.remove("show");
+    document.body.classList.remove("drawer-open");
+    hideFlyout();
+  }
+  function toggleGroup(id) {
+    // Kept as a harmless no-op for backward compatibility — the sidebar
+    // no longer uses inline accordions (see openPagePicker / openAccountPicker).
+  }
+
+  // Modules that are actually built and ready to open.
+  // Add a line here each time a new module is wired in.
+  // Sidebar modules are now built dynamically from the modules + pages
+  // tables (see renderSidebarModules() below) — no hardcoded module list
+  // to maintain here anymore. Adding a new module going forward is a
+  // pure SQL operation: insert into pages (and modules, if it's a brand
+  // new category), and it appears automatically, same look and behavior
+  // as every existing module.
+
+  let MODULE_PAGES_BY_MODULE = {}; // { moduleName: [ {name, module_path}, ... ] }
+
+  // ---- Sidebar module icons (inline SVG, currentColor — matches theme
+  // automatically, no icon font / external request needed). Matched by
+  // module name, case-insensitive, with sensible keyword fallbacks so a
+  // newly-created module (via Manage Accounts) still gets a reasonable
+  // icon instead of nothing. ----
+  const ICONS = {
+    default:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>',
+    accounts: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.2"/><path d="M5 20c0-3.3 3.1-6 7-6s7 2.7 7 6"/></svg>',
+    weavingProduction: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/><circle cx="19" cy="18" r="2"/></svg>',
+    manageWeaving: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/><circle cx="12" cy="12" r="3.6"/></svg>',
+    weaving:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="17" height="17" rx="1.5"/><path d="M3.5 9h17M3.5 15h17M9 3.5v17M15 3.5v17"/></svg>',
+    technical: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 0 0 5.4-5.4l-2.3 2.3-2-2 2.3-2.3Z"/></svg>',
+    extruder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21V9l4-4h6l4 4v2h4v10H3Z"/><path d="M9 21v-6h4v6"/></svg>',
+    workshop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18v3H3zM5 10v10h14V10"/><path d="M9 14h6"/></svg>',
+    controlRoom: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M8 20h8M12 16v4"/></svg>',
+    overtime: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>',
+    gatepass: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2"/><circle cx="8.5" cy="12" r="1.8"/><path d="M13 10h5M13 14h5"/></svg>',
+    hr:       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8.5" cy="8" r="3"/><path d="M2.5 20c0-3 2.7-5.4 6-5.4s6 2.4 6 5.4"/><path d="M17 8.2a3 3 0 1 1 3.3 3M15.5 14.8c2.6.4 5 2.4 5 5.2"/></svg>',
+    inventory: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8 12 3l9 5-9 5-9-5Z"/><path d="M3 8v9l9 5 9-5V8M12 13v9"/></svg>',
+    todo:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3.5" width="16" height="17" rx="1.5"/><path d="M8 8.5h8M8 12.5h8M8 16.5h5"/></svg>',
+    training: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8 12 4l10 4-10 4-10-4Z"/><path d="M6 10.5v4.7c0 1.6 2.7 2.8 6 2.8s6-1.2 6-2.8v-4.7"/></svg>',
+    twine:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5c3 3 3 13.5 0 17M12 3.5c-3 3-3 13.5 0 17"/></svg>',
+    waste:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4.5h6V7M6 7l1 13h10l1-13"/><path d="M10 11v6M14 11v6"/></svg>',
+    assets:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="7" width="17" height="13" rx="1.5"/><path d="M8 7V5.5A2 2 0 0 1 10 3.5h4A2 2 0 0 1 16 5.5V7"/></svg>',
+    visitors: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.2"/><path d="M5 20c0-3.3 3.1-6 7-6s7 2.7 7 6"/><path d="m15.5 8 1.6 1.6L20 6.5"/></svg>',
+    admin:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 5-3.2 8-7 10-3.8-2-7-5-7-10V6l7-3Z"/></svg>'
+  };
+  // Keyword → icon key, checked against the module name (case-insensitive)
+  // in this order; first match wins. Exact-name matches take priority.
+  const ICON_BY_EXACT_NAME = { "manage accounts": "accounts", "weaving production": "weavingProduction", "manage weaving": "manageWeaving" };
+  const ICON_KEYWORDS = [
+    ["weaving","weaving"], ["technical","technical"], ["extruder","extruder"], ["workshop","workshop"],
+    ["control room","controlRoom"], ["overtime","overtime"], ["gatepass","gatepass"], ["gate pass","gatepass"],
+    ["hr","hr"], ["human resource","hr"], ["item inventory","inventory"], ["inventory","inventory"],
+    ["to do","todo"], ["task","todo"], ["training","training"], ["twine","twine"], ["waste","waste"],
+    ["asset","assets"], ["visitor","visitors"], ["admin","admin"], ["account","accounts"]
+  ];
+  function iconKeyFor(name){
+    const key = (name||"").trim().toLowerCase();
+    if(ICON_BY_EXACT_NAME[key]) return ICON_BY_EXACT_NAME[key];
+    for(const [kw, iconKey] of ICON_KEYWORDS){ if(key.indexOf(kw) !== -1) return iconKey; }
+    return "default";
+  }
+  function iconSvgFor(name){ return ICONS[iconKeyFor(name)] || ICONS.default; }
+
+  (function(){ const el = document.getElementById("iconAccount"); if(el) el.innerHTML = iconSvgFor("Manage Accounts"); })();
+
+  // ---- Grouped sidebar --------------------------------------------------
+  // Modules are shown in groups (Production, People and so on). Which group a module belongs to is
+  // stored in the database (modules.nav_group_id -> nav_groups), so moving a module or adding a new
+  // group is a SQL change only. If that set-up has not been run yet, modules are grouped by the folder
+  // their pages live in (NAV_FOLDER_GROUP below). A module that matches nothing goes under "Other".
+  const NAV_GROUPS_DEFAULT = [
+    { name:"Production",              sort_order:10, icon_key:"production" },
+    { name:"PET and Wash Plants",     sort_order:20, icon_key:"pet" },
+    { name:"Maintenance",             sort_order:30, icon_key:"maintenance" },
+    { name:"Stores and Logistics",    sort_order:40, icon_key:"stores" },
+    { name:"People",                  sort_order:50, icon_key:"people" },
+    { name:"Security and Visitors",   sort_order:60, icon_key:"security" },
+    { name:"Contracts and Follow-up", sort_order:70, icon_key:"contracts" },
+    { name:"Subsidiaries",            sort_order:80, icon_key:"subsidiaries" },
+    { name:"Administration",          sort_order:90, icon_key:"admin" }
+  ];
+  const NAV_FOLDER_GROUP = {
+    weaving:"Production", extruder:"Production", twine:"Production", controlroom:"Production",
+    pet:"PET and Wash Plants", kwp:"PET and Wash Plants", recycling:"PET and Wash Plants", waste:"PET and Wash Plants",
+    technical:"Maintenance", workshop:"Maintenance", pm:"Maintenance",
+    requests:"Stores and Logistics", itinv:"Stores and Logistics", logistics:"Stores and Logistics", iou:"Stores and Logistics", assets:"Stores and Logistics",
+    hr:"People", overtime:"People", training:"People", "staff-evaluation":"People",
+    gatepass:"Security and Visitors", visitors:"Security and Visitors",
+    contracts:"Contracts and Follow-up", "ops-followup":"Contracts and Follow-up", todo:"Contracts and Follow-up",
+    "agriwatts-abuja":"Subsidiaries", "agriwatts-utility":"Subsidiaries", naslina:"Subsidiaries",
+    admin:"Administration"
+  };
+  const NAV_OTHER = "Other";
+  const NAV_GROUP_ICONS = {
+    production:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21V10l5 3V10l5 3V6l8 4v11H3Z"/><path d="M7 17h2M12 17h2M17 17h1"/></svg>',
+    pet:          '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2h4v3l1.5 2.5V20a2 2 0 0 1-2 2h-3a2 2 0 0 1-2-2V7.5L10 5Z"/><path d="M8.5 12h7"/></svg>',
+    maintenance:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 0 0 5.4-5.4l-2.3 2.3-2-2 2.3-2.3Z"/></svg>',
+    stores:       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8 12 3l9 5-9 5-9-5Z"/><path d="M3 8v9l9 5 9-5V8M12 13v9"/></svg>',
+    people:       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8.5" cy="8" r="3"/><path d="M2.5 20c0-3 2.7-5.4 6-5.4s6 2.4 6 5.4"/><path d="M17 8.2a3 3 0 1 1 3.3 3M15.5 14.8c2.6.4 5 2.4 5 5.2"/></svg>',
+    security:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 5-3.2 8-7 10-3.8-2-7-5-7-10V6l7-3Z"/><rect x="9" y="10.5" width="6" height="5" rx="1"/><path d="M10.5 10.5V9a1.5 1.5 0 0 1 3 0v1.5"/></svg>',
+    contracts:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg>',
+    subsidiaries: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="10" width="7" height="11" rx="1"/><rect x="14" y="3" width="7" height="18" rx="1"/><path d="M6 14h1M6 17h1M17 7h1M17 11h1M17 15h1"/></svg>',
+    admin:        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>'
+  };
+  let NAV_GROUP_OF_MODULE = {};   // module name -> group name
+  let NAV_GROUP_LIST = [];        // [{ name, icon_key }] in display order, only groups that have modules
+  const NAV_RECENT_MAX = 6, NAV_PIN_MAX = 12;
+
+  function navEsc(t){ return String(t == null ? "" : t).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+  function navGroupIcon(key){ return NAV_GROUP_ICONS[key] || ICONS.default; }
+  function navFolderOf(pages){
+    const n = {}; (pages || []).forEach(p => { const f = String(p.module_path || "").split("/")[0].toLowerCase(); if(f) n[f] = (n[f] || 0) + 1; });
+    let best = null; Object.keys(n).forEach(f => { if(best === null || n[f] > n[best]) best = f; });
+    return best;
+  }
+  // Which groups are folded away, kept in this browser. New groups start open.
+  function navClosedSet(){ try{ return new Set(JSON.parse(localStorage.getItem("rumbu_nav_closed") || "[]")); }catch(e){ return new Set(); } }
+  function navSaveClosed(set){ try{ localStorage.setItem("rumbu_nav_closed", JSON.stringify([...set])); }catch(e){} }
+  function navToggleGroup(name){
+    const set = navClosedSet();
+    if(set.has(name)) set.delete(name); else set.add(name);
+    navSaveClosed(set);
+    const el = [...document.querySelectorAll(".nav-group")].find(x => x.getAttribute("data-nav-group") === name);
+    if(el){ el.classList.toggle("closed", set.has(name)); const h = el.querySelector(".nav-gh"); if(h) h.setAttribute("aria-expanded", String(!set.has(name))); }
+    hideFlyout();
+  }
+  function navSetAll(open){
+    const set = open ? new Set() : new Set(NAV_GROUP_LIST.map(g => g.name));
+    navSaveClosed(set);
+    document.querySelectorAll(".nav-group").forEach(el => { const c = set.has(el.getAttribute("data-nav-group")); el.classList.toggle("closed", c); const h = el.querySelector(".nav-gh"); if(h) h.setAttribute("aria-expanded", String(!c)); });
+    hideFlyout();
+  }
+  // A group is hidden when none of its modules is visible to this person.
+  function navUpdateGroups(){
+    document.querySelectorAll(".nav-group").forEach(el => {
+      const any = [...el.querySelectorAll(".nav-gb .menu-flat")].some(b => b.style.display !== "none");
+      el.style.display = any ? "" : "none";
+    });
+    const tools = document.getElementById("navTools");
+    if(tools) tools.style.display = [...document.querySelectorAll(".nav-group")].filter(el => el.style.display !== "none").length > 1 ? "" : "none";
+  }
+
+  // Builds the sidebar from the database. Runs once, before buildAccessMap(),
+  // so applySidebarForBranch() has real DOM elements to filter afterward.
+  // Each module is a single button inside its group; hovering or clicking it
+  // slides its pages out beside the sidebar (see openPagePicker()).
+  async function renderSidebarModules(){
+    const wrap = document.getElementById("dynamicModules");
+    try{
+      const [{ data: modules, error: modErr }, { data: pages, error: pgErr }] = await Promise.all([
+        sb.from("modules").select("*").order("sort_order"),
+        sb.from("pages").select("id, name, module_path, module_id").order("name")
+      ]);
+      if(modErr) throw modErr;
+      if(pgErr) throw pgErr;
+      // The groups. If the nav_groups table is not there yet, the built-in list is used.
+      let groups = NAV_GROUPS_DEFAULT.slice(), groupById = {};
+      try{
+        const { data: ng, error: ngErr } = await sb.from("nav_groups").select("id, name, sort_order, icon_key").order("sort_order");
+        if(!ngErr && ng && ng.length){ groups = ng; ng.forEach(g => { groupById[g.id] = g.name; }); }
+      }catch(e){ /* not set up yet: built-in groups */ }
+
+      const pagesByModule = {};
+      (pages||[]).forEach(p=>{
+        if(!p.module_path) return;
+        if(!pagesByModule[p.module_id]) pagesByModule[p.module_id] = [];
+        pagesByModule[p.module_id].push(p);
+      });
+
+      const known = new Set(groups.map(g => g.name));
+      const byGroup = {}; NAV_GROUP_OF_MODULE = {};
+      (modules||[]).forEach(m=>{
+        const modPages = pagesByModule[m.id] || [];
+        if(!modPages.length) return; // skip empty module categories
+        // The Dev Desk is for the IT team only: the Head of IT and the Developers.
+        if(m.name === "Dev Desk" && !(ME && (ME.isHeadOfIt || ME.isDeveloper))) return;
+        MODULE_PAGES_BY_MODULE[m.name] = modPages;
+        let g = (m.nav_group_id != null && groupById[m.nav_group_id]) || NAV_FOLDER_GROUP[navFolderOf(modPages)] || NAV_OTHER;
+        if(g !== NAV_OTHER && !known.has(g)) g = NAV_OTHER;
+        NAV_GROUP_OF_MODULE[m.name] = g;
+        (byGroup[g] = byGroup[g] || []).push(m);
+      });
+      // Manage Accounts is not a database module; it always lives under Administration.
+      const adminGroup = known.has("Administration") ? "Administration" : NAV_OTHER;
+      NAV_GROUP_OF_MODULE["Manage Accounts"] = adminGroup;
+
+      const order = groups.slice().sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0)).map(g => ({ name: g.name, icon_key: g.icon_key }));
+      order.push({ name: NAV_OTHER, icon_key: "default" });
+      const closed = navClosedSet();
+      const moduleBtn = m => {
+        const safeName = m.name.replace(/\\/g,"\\\\").replace(/'/g,"\\'");
+        const badge = m.name === PET_MODULE ? '<span class="nav-badge" id="navBadgePet" hidden></span>' : "";
+        return `<button class="menu-flat" data-group-name="${navEsc(m.name)}" onclick="openPagePicker('${navEsc(safeName)}', event)" onmouseenter="hoverOpenModule('${navEsc(safeName)}', event)">` +
+          `<span class="m-label"><span class="m-icon">${iconSvgFor(m.name)}</span><span>${navEsc(m.name)}</span></span>${badge}</button>`;
+      };
+      const accountBtn = `<button class="menu-flat" data-group-name="Manage Accounts" onclick="openAccountPicker(event)" onmouseenter="hoverOpenAccountPicker(event)">` +
+        `<span class="m-label"><span class="m-icon">${iconSvgFor("Manage Accounts")}</span><span>Manage Accounts</span></span></button>`;
+
+      NAV_GROUP_LIST = [];
+      let html = '<div class="nav-tools" id="navTools"><button onclick="navSetAll(true)">Open all</button><button onclick="navSetAll(false)">Close all</button></div>';
+      order.forEach(g => {
+        const mods = byGroup[g.name] || [];
+        const hasAccount = g.name === adminGroup;
+        if(!mods.length && !hasAccount) return;
+        NAV_GROUP_LIST.push(g);
+        const isClosed = closed.has(g.name);
+        const safeG = g.name.replace(/\\/g,"\\\\").replace(/'/g,"\\'");
+        html += `<div class="nav-group${isClosed ? " closed" : ""}" data-nav-group="${navEsc(g.name)}">` +
+          `<button class="nav-gh" aria-expanded="${!isClosed}" onclick="navToggleGroup('${navEsc(safeG)}')" onmouseenter="scheduleHoverClose()">` +
+          `<span class="ng-ico">${navGroupIcon(g.icon_key)}</span><span class="ng-name">${navEsc(g.name)}</span>` +
+          (mods.some(m => m.name === PET_MODULE) ? '<span class="nav-badge" id="navBadgeGroupPet" hidden></span>' : "") +
+          `<span class="ng-chev">&#9662;</span></button><div class="nav-gb">` +
+          (hasAccount ? accountBtn : "") + mods.map(moduleBtn).join("") + `</div></div>`;
+      });
+
+      wrap.innerHTML = html;
+    }catch(e){
+      wrap.innerHTML = "<p style='color:#c0392b;padding:10px;font-size:12px;'>Could not load sidebar modules: " + navEsc(e.message) + "</p>";
+      console.error(e);
+    }
+  }
+
+  // ---- Pinned and recent pages, kept per person in this browser ----------
+  function navKey(kind){ return "rumbu_nav_" + kind + "_" + (ME && ME.id ? ME.id : "anon"); }
+  function navLoad(kind){ try{ const v = JSON.parse(localStorage.getItem(navKey(kind)) || "[]"); return Array.isArray(v) ? v : []; }catch(e){ return []; } }
+  function navStore(kind, list){ try{ localStorage.setItem(navKey(kind), JSON.stringify(list)); }catch(e){} }
+  function navSame(a, b){ return a && b && a.dept === b.dept && a.module === b.module && (a.query || "") === (b.query || ""); }
+  // Can this person still open the page? Pins and recents for pages that were taken away are not shown.
+  function navAllowed(e){
+    if(!e || !e.dept || !e.module) return false;
+    const acc = ACCOUNT_PAGES.find(p => p.dept === e.dept && p.mod === e.module && (p.query || "") === (e.query || ""));
+    if(acc) return accountPageAllowed(acc);
+    return MY_ALLOWED_PATHS.has(e.dept + "/" + e.module);
+  }
+  function navModuleOf(e){
+    if(ACCOUNT_PAGES.some(p => p.dept === e.dept && p.mod === e.module)) return "Manage Accounts";
+    const path = e.dept + "/" + e.module;
+    for(const name in MODULE_PAGES_BY_MODULE){ if((MODULE_PAGES_BY_MODULE[name] || []).some(p => p.module_path === path)) return name; }
+    return "";
+  }
+  function navRecordRecent(dept, module, label, query){
+    if(!dept || !module) return;
+    const e = { dept, module, label: label || module, query: query || "" };
+    const list = navLoad("recent").filter(x => !navSame(x, e));
+    list.unshift(e);
+    navStore("recent", list.slice(0, 20));
+  }
+  function navIsPinned(e){ return navLoad("pins").some(x => navSame(x, e)); }
+  function navTogglePin(e){
+    let list = navLoad("pins");
+    if(list.some(x => navSame(x, e))) list = list.filter(x => !navSame(x, e));
+    else { list.push({ dept: e.dept, module: e.module, label: e.label, query: e.query || "" }); list = list.slice(-NAV_PIN_MAX); }
+    navStore("pins", list);
+    navRenderQuick();
+    if(document.getElementById("sideFlyout").classList.contains("show")) renderFlyout();
+  }
+
+  // The rows shown above the groups (pinned, recent, or search results). Each row's page is kept in
+  // NAV_ROWS and found again by its position, so no page name ever has to be written inside an onclick.
+  let NAV_ROWS = [], NAV_KB = -1;
+  function navRow(e, i, sub, html){
+    const pinned = navIsPinned(e);
+    return `<button class="nav-hit" data-i="${i}" onclick="navOpenRow(${i})" onmouseenter="scheduleHoverClose()">` +
+      `<span class="nh-text"><span class="nh-name">${html || navEsc(e.label)}</span>${sub ? `<span class="nh-mod">${navEsc(sub)}</span>` : ""}</span>` +
+      `<span class="nav-pin${pinned ? " on" : ""}" role="button" tabindex="-1" title="${pinned ? "Unpin" : "Pin to the top"}" aria-label="${pinned ? "Unpin" : "Pin"} ${navEsc(e.label)}" onclick="event.stopPropagation();navPinRow(${i})">${pinned ? "&#9733;" : "&#9734;"}</span></button>`;
+  }
+  function navOpenRow(i){
+    const e = NAV_ROWS[i]; if(!e) return;
+    navClearSearch(false);
+    openModule(null, e.dept, e.module, e.label, e.query || "");
+  }
+  function navPinRow(i){ const e = NAV_ROWS[i]; if(e) navTogglePin(e); }
+
+  function navRenderQuick(){
+    const box = document.getElementById("navQuick"); if(!box) return;
+    const input = document.getElementById("navSearch");
+    if(input && input.value.trim()) return navRenderSearch();
+    NAV_ROWS = []; NAV_KB = -1;
+    const fresh = e => { const a = ACCOUNT_PAGES.find(p => p.dept === e.dept && p.mod === e.module && (p.query || "") === (e.query || "")); return a ? Object.assign({}, e, { label: a.name }) : e; };
+    const pins = navLoad("pins").filter(navAllowed).map(fresh);
+    const recent = navLoad("recent").filter(e => navAllowed(e) && !pins.some(p => navSame(p, e))).map(fresh).slice(0, NAV_RECENT_MAX);
+    let h = "";
+    const add = (title, list) => {
+      if(!list.length) return;
+      h += `<div class="nav-sec">${title}<span class="ns-line"></span></div>`;
+      list.forEach(e => { const i = NAV_ROWS.push(e) - 1; h += navRow(e, i, navModuleOf(e)); });
+    };
+    add("Pinned", pins);
+    add("Recent", recent);
+    if(h) h += '<div class="nav-sec">All menus<span class="ns-line"></span></div>';
+    box.innerHTML = h;
+  }
+
+  // ---- Search -------------------------------------------------------------
+  // Matches the words typed against page names and module names, ignoring case and order of words.
+  function navAllEntries(){
+    const out = [];
+    ACCOUNT_PAGES.filter(accountPageAllowed).forEach(p => out.push({ dept: p.dept, module: p.mod, query: p.query || "", label: p.name, mod: "Manage Accounts", extra: (p.desc || "") + " " + (p.sec || "") }));
+    Object.keys(MODULE_PAGES_BY_MODULE).forEach(name => {
+      (MODULE_PAGES_BY_MODULE[name] || []).forEach(p => {
+        if(!MY_ALLOWED_PATHS.has(p.module_path)) return;
+        const parts = p.module_path.split("/");
+        out.push({ dept: parts[0], module: parts[1], query: "", label: p.name, mod: name });
+      });
+    });
+    return out;
+  }
+  function navHighlight(text, words){
+    let h = navEsc(text);
+    words.forEach(w => { if(!w) return; const re = new RegExp("(" + navEsc(w).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ")", "ig"); h = h.replace(re, "<mark>$1</mark>"); });
+    return h;
+  }
+  function navRenderSearch(){
+    const box = document.getElementById("navQuick"), input = document.getElementById("navSearch");
+    const q = (input ? input.value : "").trim().toLowerCase();
+    const words = q.split(/\s+/).filter(Boolean);
+    NAV_ROWS = []; NAV_KB = -1;
+    const hits = navAllEntries().filter(e => { const hay = (e.label + " " + e.mod + " " + (e.extra || "")).toLowerCase(); return words.every(w => hay.indexOf(w) >= 0); });
+    hits.sort((a, b) => { const sa = a.label.toLowerCase().indexOf(words[0]) === 0 ? 0 : 1, sb2 = b.label.toLowerCase().indexOf(words[0]) === 0 ? 0 : 1; return sa - sb2 || a.label.localeCompare(b.label); });
+    const shown = hits.slice(0, 40);
+    let h = `<div class="nav-sec">${hits.length} page${hits.length === 1 ? "" : "s"} found<span class="ns-line"></span></div>`;
+    if(!shown.length) h += '<div class="nav-empty">No page matches. Check the spelling, or try one word from the page name.</div>';
+    shown.forEach(e => { const i = NAV_ROWS.push(e) - 1; h += navRow(e, i, e.mod, navHighlight(e.label, words)); });
+    if(hits.length > shown.length) h += `<div class="nav-empty">Showing the first ${shown.length}. Type more to narrow it down.</div>`;
+    box.innerHTML = h;
+    if(NAV_ROWS.length) navSetKb(0);
+  }
+  function navSetKb(i){
+    const rows = [...document.querySelectorAll("#navQuick .nav-hit")];
+    rows.forEach(r => r.classList.remove("kb"));
+    if(!rows.length){ NAV_KB = -1; return; }
+    NAV_KB = Math.max(0, Math.min(rows.length - 1, i));
+    rows[NAV_KB].classList.add("kb");
+    if(rows[NAV_KB].scrollIntoView) rows[NAV_KB].scrollIntoView({ block: "nearest" });
+  }
+  function navOnSearch(){
+    const input = document.getElementById("navSearch"), on = !!input.value.trim();
+    document.getElementById("navSearchClear").hidden = !input.value;
+    document.getElementById("dynamicModules").style.display = on ? "none" : "";
+    hideFlyout();
+    if(on) navRenderSearch(); else navRenderQuick();
+  }
+  function navSearchKey(e){
+    if(e.key === "ArrowDown"){ e.preventDefault(); navSetKb(NAV_KB + 1); }
+    else if(e.key === "ArrowUp"){ e.preventDefault(); navSetKb(NAV_KB - 1); }
+    else if(e.key === "Enter"){ e.preventDefault(); if(NAV_KB >= 0 && document.getElementById("navSearch").value.trim()) navOpenRow(NAV_KB); }
+    else if(e.key === "Escape"){ e.preventDefault(); e.stopPropagation(); navClearSearch(true); }
+  }
+  function navClearSearch(focus){
+    const input = document.getElementById("navSearch"); if(!input) return;
+    input.value = "";
+    navOnSearch();
+    if(focus) input.focus();
+  }
+
+  // ---- Waiting counts on the sidebar ---------------------------------------
+  // PET: the total waiting for this person across the stages (the same numbers as the stage pills).
+  // Shown on the PET Collection button and, while its group is folded, on the group heading.
+  async function navRefreshBadges(){
+    const b = document.getElementById("navBadgePet"), g = document.getElementById("navBadgeGroupPet");
+    if(!b && !g) return;
+    const pets = (MODULE_PAGES_BY_MODULE[PET_MODULE] || []).filter(p => MY_ALLOWED_PATHS.has(p.module_path));
+    if(!pets.length || typeof petLoadCounts !== "function") return;
+    const c = await petLoadCounts(); if(!c) return;
+    let n = 0; Object.keys(c).forEach(k => { n += (c[k] && c[k].waiting) || 0; });
+    [b, g].forEach(el => {
+      if(!el) return;
+      if(n > 0){ el.textContent = n > 99 ? "99+" : String(n); el.hidden = false; el.title = n + " waiting for you"; }
+      else el.hidden = true;
+    });
+  }
+
+  // ---- Manage Accounts: same picker treatment as every other module,
+  // instead of its own separate inline dropdown. Role-gating for
+  // Create User / Manage User / Settings happens at render time below,
+  // same restrictions as before. ----
+  // The Manage Accounts screens, in the order and under the headings the sidebar flyout shows.
+  // "query" opens the matching section of modules/admin/manage-accounts.html. The older
+  // section names (create-user, manage-user, settings ...) still work there, so saved links,
+  // pins and recent pages keep opening the right screen.
+  const ACCOUNT_PAGES = [
+    { name: "Staff Records",           sec: "People and access",   desc: "Find, add or upload staff, update salary and export the list", dept: "admin", mod: "manage-accounts", query: "section=create-user",     roleGate: "adminPlus" },
+    { name: "Password Requests",       sec: "People and access",   desc: "Approve or decline \u201cForgot password?\u201d requests from the login page", dept: "admin", mod: "manage-accounts", query: "section=password-requests", roleGate: "headOfIt" },
+    { name: "User Access",             sec: "People and access",   desc: "Give or remove a login, set role, branch and pages, reset passwords", dept: "admin", mod: "manage-accounts", query: "section=manage-user", roleGate: "superAdmin" },
+    { name: "Branches",                sec: "Organisation set-up", desc: "Add, rename or remove a branch",                       dept: "admin", mod: "manage-accounts", query: "section=branches",        roleGate: "superAdmin" },
+    { name: "Departments and Units",   sec: "Organisation set-up", desc: "The real work structure of each branch",               dept: "admin", mod: "manage-accounts", query: "section=departments",     roleGate: "superAdmin" },
+    { name: "Modules and Menu Groups", sec: "Organisation set-up", desc: "Add, rename or remove a module and choose its sidebar group", dept: "admin", mod: "manage-accounts", query: "section=modules",  roleGate: "superAdmin" },
+    { name: "System Audit Log",        sec: "Records",             desc: "Every sign-in, screen opened and change to data, by every account", dept: "admin", mod: "manage-accounts", query: "section=audit-log", roleGate: "auditViewer" },
+    { name: "Account Activity Log",    sec: "Records",             desc: "Who changed which account or setting, and when",       dept: "admin", mod: "manage-accounts", query: "section=activity-log" },
+    { name: "Change My Password",      sec: "My account",          desc: "Set a new password for your own login",                dept: "admin", mod: "manage-accounts", query: "section=change-password" },
+    { name: "Choose My Menus",         sec: "My account",          desc: "Hide modules you do not use from your own sidebar",    dept: "admin", mod: "manage-accounts", query: "section=settings",        roleGate: "superAdmin" }
+  ];
+  function accountPageAllowed(p){
+    // Developers (IT, view-only) see only their own password and the activity log here.
+    if(ME.isDeveloper) return p.query === "section=change-password" || p.query === "section=activity-log";
+    if(!p.roleGate) return true;
+    if(p.roleGate === "adminPlus") return ME.role === "admin" || ME.role === "super_admin";
+    if(p.roleGate === "superAdmin") return ME.role === "super_admin";
+    if(p.roleGate === "headOfIt") return !!ME.isHeadOfIt;
+    if(p.roleGate === "auditViewer") return !!(ME.isHeadOfIt || ME.isFullSuperAdmin);
+    return true;
+  }
+
+  // ---- Page picker ("fresh card" screen shown instead of an inline
+  // sidebar dropdown) ----
+  let CURRENT_PICKER = null; // { kind:'module'|'account', name }
+  let CURRENT_PAGE = null;   // "dept/module" of the page open in the iframe
+  let CURRENT_QUERY = "";    // its query string (distinguishes account sub-pages)
+
+  // ---- Side flyout submenu ----------------------------------------
+  // Selecting a module no longer opens a full-screen card screen; it
+  // slides that module's pages out in a panel BESIDE the sidebar. A
+  // second click on the same module (or clicking away) closes it.
+  // ---- Clicking a module opens its landing page ---------------------------------
+  // The module's dashboard (or PET Home); if it has none, its first page in working order.
+  // From there the module sidebar beside the page lists every other page.
+  function moduleLandingPage(moduleName){
+    const pages = (MODULE_PAGES_BY_MODULE[moduleName] || []).filter(p => MY_ALLOWED_PATHS.has(p.module_path));
+    if(!pages.length) return null;
+    if(moduleName === PET_MODULE){ const S = petStructure(pages); if(S.home) return S.home; }
+    const parts = navArrangePages(pages), dash = parts.find(g => g.sec === "dash");
+    if(dash){
+      const exact = dash.pages.find(p => /^dashboard$/i.test(String(p.name).trim())) || dash.pages.find(p => /dashboard/i.test(p.name));
+      return exact || dash.pages[0];
+    }
+    return parts[0].pages[0];
+  }
+  function openPagePicker(moduleName, ev){
+    hideFlyout();
+    const p = moduleLandingPage(moduleName);
+    if(!p){ openSideMenu("module", moduleName, ev); return; }   // nothing this person may open: the list explains
+    const parts = p.module_path.split("/");
+    openModule(null, parts[0], parts[1], p.name, "");
+  }
+  function openAccountPicker(ev){
+    hideFlyout();
+    const p = ACCOUNT_PAGES.filter(accountPageAllowed)[0];
+    if(!p){ openSideMenu("account", "Manage Accounts", ev); return; }
+    openModule(null, p.dept, p.mod, p.name, p.query || "");
+  }
+
+  // ---- Hover-to-reveal: placing the cursor on a module opens its page
+  // list immediately, no click needed. Click still works exactly as
+  // before (mainly for touch devices, where hover doesn't apply). A
+  // short close delay, cancelled on re-entering either the sidebar or
+  // the flyout, stops it from closing while the cursor is briefly
+  // between the two during the diagonal mouse movement.
+  let hoverCloseTimer = null;
+  function cancelHoverClose(){ if(hoverCloseTimer){ clearTimeout(hoverCloseTimer); hoverCloseTimer = null; } }
+  function scheduleHoverClose(){ cancelHoverClose(); hoverCloseTimer = setTimeout(hideFlyout, 250); }
+
+  function hoverOpenModule(moduleName, ev){}
+  function hoverOpenAccountPicker(ev){}
+
+  function hoverOpenSideMenu(kind, name, ev){
+    cancelHoverClose();
+    const anchor = ev && (ev.currentTarget || ev.target) ? (ev.currentTarget || ev.target).closest(".menu-flat") : null;
+    const fly = document.getElementById("sideFlyout");
+    CURRENT_PICKER = { kind, name };
+    renderFlyout();
+    fly.classList.add("show");
+    if(anchor) positionFlyout(anchor);
+    document.querySelectorAll(".menu-flat.active").forEach(b=>b.classList.remove("active"));
+    if(anchor) anchor.classList.add("active");
+  }
+
+  function openSideMenu(kind, name, ev){
+    const anchor = ev && (ev.currentTarget || ev.target)
+      ? (ev.currentTarget || ev.target).closest(".menu-flat") : null;
+    const fly = document.getElementById("sideFlyout");
+    // Toggle: clicking the module whose menu is already open closes it.
+    if(fly.classList.contains("show") && CURRENT_PICKER &&
+       CURRENT_PICKER.kind === kind && CURRENT_PICKER.name === name){
+      hideFlyout();
+      return;
+    }
+    CURRENT_PICKER = { kind, name };
+    renderFlyout();
+    fly.classList.add("show");
+    if(anchor) positionFlyout(anchor);
+    document.querySelectorAll(".menu-flat.active").forEach(b=>b.classList.remove("active"));
+    if(anchor) anchor.classList.add("active");
+  }
+
+  // ---- Order of pages inside a module's menu ------------------------------
+  // Pages are shown in the order the work happens: dashboards, daily work, approvals, records,
+  // reports, then set-up. A module with five or more pages also gets a small heading over each part.
+  // The part each page belongs to is listed here by file (module_path); a page not listed (a new one)
+  // is placed by the words in its name. PET Collection keeps its own stage order.
+  const NAV_SECTIONS = [
+    { key:"dash", label:"Dashboards" }, { key:"work", label:"Daily work" }, { key:"approve", label:"Approvals" },
+    { key:"records", label:"Records" }, { key:"reports", label:"Reports" }, { key:"setup", label:"Set-up" }
+  ];
+  const NAV_PAGE_ROLE = {"Visitors/enter-visitor":"work","visitors/enter-visitor":"work","Visitors/visitor-timeout":"work","Visitors/manage-visitors":"records","visitors/manage-visitors":"records","visitors/visitor-history":"records","workshop/enter-visitor":"work","admin/bulk-grant-weaving":"setup","agriwatts-abuja/new-request":"work","agriwatts-abuja/my-requests":"records","agriwatts-abuja/stage-action":"approve","agriwatts-abuja/manage-employee":"setup","agriwatts-utility/new-request":"work","agriwatts-utility/my-requests":"records","agriwatts-utility/stage-action":"approve","agriwatts-utility/manage-employee":"setup","naslina/naslina-express-payment-request":"work","naslina/naslina-express-my-requests":"records","naslina/naslina-express-stage-action":"approve","naslina/naslina-express-manage-employee":"setup","iou/new-request":"work","iou/my-requests":"records","iou/stage-action":"approve","iou/manage-employee":"setup","controlroom/monitoring-room":"dash","controlroom/edit-record":"records","controlroom/tracking-table-viewer":"reports","controlroom/secure-backup":"reports","controlroom/live-board":"dash","controlroom/new-work-order":"work","controlroom/report-stop":"work","controlroom/work-orders":"records","controlroom/cr-reference-data":"setup","extruder/extruder-dashboard":"dash","extruder/enter-production":"work","extruder/shutdown-assets":"work","extruder/recommendation-form":"work","extruder/training-form":"work","extruder/extruder-report":"reports","extruder/production-report":"reports","extruder/extruder-material-report":"reports","extruder/extruder__extruder-material-report":"reports","extruder/weaving__extruder-material-report":"reports","extruder/extruder-unified-report":"reports","gatepass/add-gatepass":"work","gatepass/approve-gatepass":"approve","gatepass/view-gatepass":"records","gatepass/add-gatepass-type":"setup","gatepass/gatepass-settings":"setup","hr/add-gatepass":"work","hr/approve-gatepass":"approve","hr/view-gatepass":"records","hr/hr-special-console":"dash","hr/hr-demo":"work","hr/create-query":"work","hr/manage-query":"records","hr/manage-staff":"setup","itinv/dashboard":"dash","itinv/devices":"records","itinv/assignments":"work","itinv/movement":"work","itinv/maintenance":"work","itinv/repairs":"work","itinv/disposal":"work","itinv/reports":"reports","itinv/reference":"setup","kwp/dashboard":"dash","kwp/production-entry":"work","kwp/attendance":"work","kwp/quality-downtime":"work","kwp/inventory":"work","kwp/reports":"reports","kwp/manage-staff":"setup","logistics/dashboard":"dash","logistics/vehicle-monitor":"dash","logistics/trip-request":"work","logistics/trip-dispatch-closure":"approve","logistics/fuel":"work","logistics/maintenance":"work","logistics/activity-log":"records","logistics/vehicles":"setup","logistics/drivers":"setup","logistics/manage-trip-assignments":"setup","ops-followup/overview":"dash","ops-followup/ceo-desk":"dash","ops-followup/my-actions":"work","ops-followup/register":"records","ops-followup/responses":"records","ops-followup/owners":"setup","ops-followup/settings":"setup","overtime/add-overtime":"work","overtime/fill-overtime":"work","overtime/overtime-step3-approval":"approve","overtime/overtime-step4-review":"approve","overtime/overtime-step5-disbursement":"approve","overtime/overtime-step6-ed1":"approve","overtime/manage-overtime":"records","overtime/overtime-viewer":"records","overtime/overtime-archive":"records","overtime/overtime-approver-setup":"setup","pm/dashboard":"dash","pm/fill-checklist":"work","pm/initiate-policy":"work","pm/due-reassign":"work","pm/view-policy":"records","pm/pm-specialists":"records","pm/pm-report":"reports","pm/add-policy":"setup","recycling/dashboard":"dash","recycling/add-production":"work","recycling/production-report":"reports","recycling/manage-assets":"setup","requests/fill-request":"work","requests/pending-approval":"approve","requests/pending-requests":"approve","requests/process-request":"approve","requests/my-requests":"records","requests/request-records":"records","requests/store-report":"reports","requests/store-setup":"setup","requests/manage-stores":"setup","requests/department-heads":"setup","staff-evaluation/staff-dashboard":"dash","staff-evaluation/my-asset-report":"records","staff-evaluation/manage-query":"records","staff-evaluation/staff-evaluation":"reports","technical/technical-dashboard":"dash","technical/staff-tracking-form":"records","technical/tracking-table-viewer":"reports","technical/downtime-report":"reports","technical/weekly-downtime-report":"reports","technical/downtime-by-assets":"reports","technical/repair-by-assets":"reports","technical/persisting-repair-report":"reports","technical/stop-asset-report":"reports","technical/maintenance-summary":"reports","technical/maintenance-operator-report":"reports","technical/nurse-evaluation-report":"reports","technical/grand-total-report":"reports","technical/smart-asset-summary":"reports","technical/summary-report":"reports","technical/production-report":"reports","technical/secure-backup":"reports","todo/my-tasks":"work","todo/assign-task":"work","todo/view-tasks":"records","todo/view-completed":"records","todo/todo-settings":"setup","training/training-progress-dashboard":"dash","training/training-summary-dashboard":"dash","training/pm-schedule-dashboard":"dash","training/training-form":"work","training/waste-reporting-form":"work","training/waste-dashboard":"dash","training/view-training-code":"records","training/training-report":"reports","training/training-code-manager":"setup","training/staff-management":"setup","training/delete-training-record":"setup","twine/dashboard":"dash","twine/add-production":"work","twine/production-report":"reports","twine/production-summary":"reports","twine/manage-twine":"setup","waste/waste-dashboard":"dash","waste/waste-reporting-form":"work","waste/manage-waste":"records","waste/extruder-unified-report":"reports","waste/extruder__extruder-unified-report":"reports","waste/waste__extruder-unified-report":"reports","waste/weaving__extruder-material-report":"reports","weaving/weaving-dashboard":"dash","weaving/enter-production":"work","weaving/complaint-form":"work","weaving/edit-record":"records","weaving/mat-weaving-editor":"records","weaving/complaint-management":"records","weaving/production-summary-report":"reports","weaving/summary-report":"reports","weaving/operator-production-report":"reports","weaving/operator-report":"reports","weaving/rank-daily-summary":"reports","weaving/bale-report":"reports","weaving/asset-summary":"reports","weaving/smart-asset-summary":"reports","weaving/extruder-material-report":"reports","weaving/manage-operator":"setup","weaving/manage-target":"setup","workshop/checklist-form":"work","workshop/pm-schedule-dashboard":"dash","workshop/parts-store-manager":"setup","workshop/manage-waste":"records","workshop/monitoring-room":"dash"};
+  function navPageRole(p){
+    const r = NAV_PAGE_ROLE[p.module_path]; if(r) return r;
+    const n = String(p.name || "").toLowerCase();
+    if(/dashboard|overview|live board|console|\bhome\b|monitor/.test(n)) return "dash";
+    if(/set-?up|settings|reference|\bcodes?\b|targets?\b|specialists|department heads|\btypes?\b|^stores$|drivers|vehicles|owners|staff list|manage /.test(n)) return "setup";
+    if(/approv|review|pending|process|stage action|dispatch|disbursement|accounting/.test(n)) return "approve";
+    if(/report|summary|analysis|table|backup|evaluation/.test(n)) return "reports";
+    if(/record|history|^my |^view|archive|register|log\b|complaints|queries|responses|^all /.test(n)) return "records";
+    return "work";
+  }
+  // Sorts a module's pages into that order. Returns [{ sec, label, pages }] for the parts that have pages.
+  function navArrangePages(pages){
+    const order = {}; NAV_SECTIONS.forEach((s, i) => { order[s.key] = i; });
+    const groups = NAV_SECTIONS.map(s => ({ sec: s.key, label: s.label, pages: [] }));
+    pages.forEach(p => groups[order[navPageRole(p)]].pages.push(p));
+    groups.forEach(g => g.pages.sort((a, b) => String(a.name).localeCompare(String(b.name))));
+    return groups.filter(g => g.pages.length);
+  }
+
+  let FLY_ENTRIES = [];
+  function renderFlyout(){
+    const fly = document.getElementById("sideFlyout");
+    if(!CURRENT_PICKER){ fly.innerHTML = ""; return; }
+    let items = [];
+    if(CURRENT_PICKER.kind === "account"){
+      items = ACCOUNT_PAGES.filter(accountPageAllowed).map(p=>({
+        label: navEsc(p.name), desc: p.desc || "", sec: p.sec || "",
+        onclick: `openModule(null,'${p.dept}','${p.mod}','${p.name.replace(/'/g,"\\'")}','${p.query||""}')`,
+        entry: { dept: p.dept, module: p.mod, query: p.query || "", label: p.name }
+      }));
+    } else {
+      const pages = (MODULE_PAGES_BY_MODULE[CURRENT_PICKER.name] || []).filter(p => MY_ALLOWED_PATHS.has(p.module_path));
+      if(CURRENT_PICKER.name === PET_MODULE && pages.length > 1){ fly.innerHTML = petFlyoutHtml(pages); return; }
+      const arranged = navArrangePages(pages), headed = pages.length >= 5 && arranged.length >= 2;
+      items = [];
+      arranged.forEach(g => g.pages.forEach(p=>{
+        const parts = p.module_path.split("/");
+        items.push({ label: navEsc(p.name), sec: headed ? g.label : "", onclick: `openModule(null,'${parts[0]}','${parts[1]}','${navEsc(p.name.replace(/\\/g,"\\\\").replace(/'/g,"\\'"))}')`, entry: { dept: parts[0], module: parts[1], query: "", label: p.name } });
+      }));
+    }
+    const head = `<div class="fly-head">${CURRENT_PICKER.name}</div>`;
+    if(!items.length){
+      fly.innerHTML = head + "<div class='flyout-empty'>Nothing available here for your current Branch yet.</div>";
+      return;
+    }
+    FLY_ENTRIES = items.map(it => it.entry);
+    let lastSec = null;
+    fly.innerHTML = head + items.map((it, i)=>{
+      const pinned = it.entry && navIsPinned(it.entry);
+      let secHead = "";
+      if(it.sec && it.sec !== lastSec){ secHead = `<div class="fly-sec">${navEsc(it.sec)}</div>`; lastSec = it.sec; }
+      const text = it.desc ? `<span class="fly-two"><span>${it.label}</span><span class="fly-desc">${navEsc(it.desc)}</span></span>` : `<span>${it.label}</span>`;
+      return secHead + `<div class="fly-row"><button class="flyout-item" onclick="${it.onclick}">${text}<span class="fi-arrow">&rarr;</span></button>` +
+        (it.entry ? `<button class="fly-pin${pinned ? " on" : ""}" title="${pinned ? "Unpin" : "Pin to the top of the menu"}" aria-label="${pinned ? "Unpin" : "Pin"}" onclick="event.stopPropagation();navTogglePin(FLY_ENTRIES[${i}])">${pinned ? "&#9733;" : "&#9734;"}</button>` : "") + `</div>`;
+    }).join("");
+  }
+
+  // Anchor the flyout to the right edge of the sidebar, vertically near
+  // the clicked module button, clamped to stay on-screen.
+  function positionFlyout(anchor){
+    const fly = document.getElementById("sideFlyout");
+    const side = document.getElementById("side");
+    const sr = side.getBoundingClientRect();
+    const ar = anchor.getBoundingClientRect();
+    const fw = fly.offsetWidth, fh = fly.offsetHeight;
+    let left = sr.right + 6;
+    const maxLeft = window.innerWidth - fw - 8;
+    if(left > maxLeft) left = Math.max(8, maxLeft);
+    let top = ar.top;
+    const maxTop = window.innerHeight - fh - 8;
+    if(top > maxTop) top = Math.max(8, maxTop);
+    fly.style.left = left + "px";
+    fly.style.top = top + "px";
+  }
+
+  function hideFlyout(){
+    const fly = document.getElementById("sideFlyout");
+    if(fly) fly.classList.remove("show");
+    document.querySelectorAll(".menu-flat.active").forEach(b=>b.classList.remove("active"));
+  }
+
+  // ---- PET Collection: pages in working order ---------------------------
+  // The PET module has 26 pages. Sorted A to Z, the nine stages land at the very end, so for this
+  // module the pill bar and the menu list them in the order the work happens, with the rest grouped.
+  // Pages are matched by file name (module_path), never by their menu text, so renaming a page changes
+  // nothing. A page that is not listed here still shows, under "Other".
+  const PET_MODULE = "PET Collection";
+  const PET_HOME = "pet/pet-home";
+  const PET_STAGES = [
+    { n:1, path:"pet/initiate",            short:"Initiate",   full:"Initiate Collection" },
+    { n:2, path:"pet/bottle-inspection",   short:"Inspection", full:"Bottle Inspection" },
+    { n:3, path:"pet/rumbu-weight",        short:"Weight",     full:"Rumbu Weight Details" },
+    { n:4, path:"pet/bottle-offloading",   short:"Offloading", full:"Bottle Offloading" },
+    { n:5, path:"pet/payment-stage",       short:"Payment",    full:"Payment" },
+    { n:6, path:"pet/qc-stage",            short:"Quality",    full:"Quality Control" },
+    { n:7, path:"pet/production-approval", short:"Approval",   full:"Production Approval" },
+    { n:8, path:"pet/production-stage",    short:"Production", full:"Production" },
+    { n:9, path:"pet/lab-testing",         short:"Lab",        full:"Lab Testing" },
+    { n:10, path:"pet/odoo-packaging",     short:"Odoo",       full:"Odoo Packaging" }
+  ];
+  const PET_GROUPS = [
+    { key:"monitor", label:"Monitor and reports", short:"Reports", paths:["pet/dashboard","pet/collections","pet/production-report","pet/activity-log","pet/lot-map","pet/flake-lots","pet/flake-scan-upload"] },
+    { key:"export",  label:"Export and external", short:"Export", collapsed:true, paths:["pet/export-delivery","pet/external-material-intake","pet/external-material-monitor","pet/kano-material-intake","pet/kano-lot-monitor"] },
+    { key:"setup",   label:"Setup",               short:"Setup", collapsed:true, paths:["pet/manage-agents","pet/manage-assignments","pet/manage-companies","pet/manage-export-assignments","pet/manage-export-clients","pet/manage-lots","pet/manage-qr-password"] }
+  ];
+  function petEsc(t){ return String(t).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+  function petOpen(path, label){
+    const parts = path.split("/");
+    return "openModule(null,'" + parts[0] + "','" + parts[1] + "','" + String(label).replace(/\\/g,"\\\\").replace(/'/g,"\\'") + "')";
+  }
+  // pages = the pages this person may open. Returns them sorted into home, stages, groups and the rest.
+  function petStructure(pages){
+    const byPath = {}; pages.forEach(p => { byPath[p.module_path] = p; });
+    const used = new Set();
+    const take = path => { const p = byPath[path]; if(p) used.add(path); return p || null; };
+    const home = take(PET_HOME);
+    const stages = PET_STAGES.map(s => Object.assign({}, s, { page: take(s.path) }));
+    const groups = PET_GROUPS.map(g => ({ key:g.key, label:g.label, short:g.short, collapsed:!!g.collapsed, pages: g.paths.map(take).filter(Boolean) }));
+    const other = pages.filter(p => !used.has(p.module_path));
+    return { home, stages, groups, other };
+  }
+
+  // What is waiting FOR THIS PERSON at each stage: collections to fill (or send back for correction) in the branches where they
+  // are a filler for that stage, plus collections to review in the branches where they are an approver. A Super Admin sees every
+  // branch. Stages 1, 8 and 9 show no number (initiating and production are not queue based, lab work is counted per batch). Stage 10 is counted separately below.
+  // Same status lists the stage pages use for their own queues. Cached for 20 seconds. If it cannot be read, no number shows.
+  const PET_COUNT_RULES = [
+    { n:2, code:"stage2",   fill:["submitted","rejected_to_stage2"],                       appr:["stage2_approval"] },
+    { n:3, code:"stage4b",  fill:["stage4b_weight_filling","rejected_to_stage4b"],         appr:["stage4b_weight_approval"] },
+    { n:4, code:"stage4a",  fill:["stage4a_offloading_filling","rejected_to_stage4a"],     appr:["stage4a_offloading_approval"] },
+    { n:5, code:"stage3p1", fill:["stage3p1_filling","rejected_to_stage3p1"],              appr:["stage3p1_approval"] },
+    { n:5, code:"stage3p2", fill:["stage3p2_filling"],                                     appr:["stage3p2_approval"] },
+    { n:6, code:"stage4c",  fill:["stage4c_qc_filling","rejected_to_stage4c"],             appr:["stage4c_qc_approval"] },
+    { n:7, code:"stage4d",  fill:[],                                                       appr:["stage4d_production_approval","rejected_to_stage4d"] }
+  ];
+  let PET_COUNTS = null, PET_COUNTS_AT = 0;
+  // Returns { 2:{waiting, returned, oldest}, 3:{...}, ... } where oldest is the oldest updated_at (ms) waiting, or null.
+  async function petLoadCounts(){
+    if(PET_COUNTS && Date.now() - PET_COUNTS_AT < 20000) return PET_COUNTS;
+    try{
+      const isSuper = ME && ME.role === "super_admin";
+      const wanted = []; PET_COUNT_RULES.forEach(r => r.fill.concat(r.appr).forEach(x => wanted.push(x)));
+      const [cols, fil, apr] = await Promise.all([
+        sb.from("pet_collections").select("status,section,updated_at").in("status", wanted).limit(5000),
+        isSuper ? { data: [] } : sb.from("pet_stage_fillers").select("stage,section").eq("profile_id", ME.id),
+        isSuper ? { data: [] } : sb.from("pet_stage_approvers").select("stage,section").eq("profile_id", ME.id)
+      ]);
+      if(cols.error) throw cols.error;
+      if(fil.error) throw fil.error;
+      if(apr.error) throw apr.error;
+      const secs = (rows, code) => (rows || []).filter(r => r.stage === code).map(r => r.section);
+      const out = {};
+      PET_COUNT_RULES.forEach(r => { if(!out[r.n]) out[r.n] = { waiting:0, returned:0, oldest:null }; });
+      PET_COUNT_RULES.forEach(r => {
+        const mine = { fill: isSuper ? null : secs(fil.data, r.code), appr: isSuper ? null : secs(apr.data, r.code) };
+        (cols.data || []).forEach(c => {
+          const isFill = r.fill.indexOf(c.status) >= 0, isAppr = r.appr.indexOf(c.status) >= 0;
+          if(!isFill && !isAppr) return;
+          const allowed = isFill ? mine.fill : mine.appr;
+          if(allowed && allowed.indexOf(c.section) < 0) return;
+          const o = out[r.n]; o.waiting++;
+          if(String(c.status).indexOf("rejected_to_") === 0) o.returned++;
+          const t = c.updated_at ? Date.parse(c.updated_at) : NaN;
+          if(!isNaN(t) && (o.oldest === null || t < o.oldest)) o.oldest = t;
+        });
+      });
+      // Stage 10: approved batches still waiting to be packed in Odoo, in the branches where this person is assigned to Stage 10 (Super Admin: all).
+      // Kept apart so that, if Stage 10 is not set up yet, only its own number is missing and the other stages still count.
+      try{
+        const [bt, f10] = await Promise.all([
+          sb.from("pet_lab_batches").select("id,collection_id,decision_at").eq("batch_status", "approved").is("odoo_packed_at", null).limit(5000),
+          isSuper ? { data: [] } : sb.from("pet_stage_fillers").select("section").eq("profile_id", ME.id).eq("stage", "stage10")
+        ]);
+        if(bt.error) throw bt.error;
+        if(f10.error) throw f10.error;
+        const mySecs = isSuper ? null : (f10.data || []).map(r => r.section);
+        const o10 = { waiting:0, returned:0, oldest:null };
+        if((bt.data || []).length && (isSuper || mySecs.length)){
+          const ids = [...new Set(bt.data.map(b => b.collection_id))], secOf = {};
+          for(let i = 0; i < ids.length; i += 150){
+            const r = await sb.from("pet_collections").select("id,section").in("id", ids.slice(i, i + 150));
+            if(r.error) throw r.error;
+            (r.data || []).forEach(c => { secOf[c.id] = c.section; });
+          }
+          bt.data.forEach(b => {
+            if(mySecs && mySecs.indexOf(secOf[b.collection_id]) < 0) return;
+            o10.waiting++;
+            const t = b.decision_at ? Date.parse(b.decision_at) : NaN;
+            if(!isNaN(t) && (o10.oldest === null || t < o10.oldest)) o10.oldest = t;
+          });
+        }
+        out[10] = o10;
+      }catch(e){ /* Stage 10 is not set up yet: its pill simply shows no number */ }
+      PET_COUNTS = out; PET_COUNTS_AT = Date.now();
+    }catch(e){ PET_COUNTS = null; }
+    return PET_COUNTS;
+  }
+  async function petApplyCounts(){
+    const c = await petLoadCounts(); if(!c) return;
+    PET_STAGES.forEach(s => {
+      const b = document.getElementById("qlb" + s.n); if(!b) return;
+      const n = c[s.n] ? c[s.n].waiting : 0;
+      if(n > 0){ b.textContent = n; b.hidden = false; b.setAttribute("aria-label", n + " waiting for you"); } else { b.hidden = true; }
+    });
+  }
+
+  function petCloseGroupMenu(){
+    const m = document.getElementById("qlMenu"); if(m) m.remove();
+    document.removeEventListener("click", petOutsideClose, true);
+  }
+  function petOutsideClose(e){
+    const m = document.getElementById("qlMenu");
+    if(m && !m.contains(e.target) && !(e.target.closest && e.target.closest(".ql-group"))) petCloseGroupMenu();
+  }
+  function petToggleGroupMenu(btn, key){
+    const existing = document.getElementById("qlMenu");
+    const same = existing && existing.getAttribute("data-key") === key;
+    petCloseGroupMenu();
+    if(same) return;
+    const pages = (MODULE_PAGES_BY_MODULE[PET_MODULE] || []).filter(p => MY_ALLOWED_PATHS.has(p.module_path));
+    const S = petStructure(pages);
+    const list = key === "other" ? S.other : ((S.groups.find(g => g.key === key) || { pages: [] }).pages);
+    const m = document.createElement("div");
+    m.id = "qlMenu"; m.className = "ql-menu"; m.setAttribute("data-key", key); m.setAttribute("role", "menu");
+    const full = key === "other" ? "Other" : ((PET_GROUPS.find(g => g.key === key) || {}).label || "");
+    m.innerHTML = '<div class="ql-menu-head">' + petEsc(full) + '</div>' + list.map(p => '<button role="menuitem" class="ql-menu-item' + (p.module_path === CURRENT_PAGE ? " active" : "") + '" onclick="petCloseGroupMenu();' + petEsc(petOpen(p.module_path, p.name)) + '">' + petEsc(p.name) + '</button>').join("");
+    document.body.appendChild(m);
+    const r = btn.getBoundingClientRect();
+    m.style.top = (r.bottom + 6) + "px";
+    m.style.left = Math.max(8, Math.min(r.left, window.innerWidth - m.offsetWidth - 8)) + "px";
+    setTimeout(function(){ document.addEventListener("click", petOutsideClose, true); }, 0);
+  }
+
+  // The pill bar above an open PET page: Home, the nine stages in order (a number on each stage that has
+  // collections waiting), then the other pages grouped. Stages this person has not been given are shown
+  // greyed with a lock. When the open page is a stage, small arrows step to the stage before and after.
+  function renderPetQuickLinks(bar, pages){
+    const S = petStructure(pages), cur = CURRENT_PAGE || "";
+    const myStages = S.stages.filter(s => s.page);
+    let h = '<span class="ql-label">' + PET_MODULE + '</span>';
+    if(S.home) h += '<button class="ql-item ql-home' + (cur === PET_HOME ? " active" : "") + '" onclick="' + petEsc(petOpen(S.home.module_path, S.home.name)) + '">Home</button>';
+    const idx = myStages.findIndex(s => s.path === cur);
+    if(idx >= 0){
+      const prev = myStages[idx - 1], next = myStages[idx + 1];
+      if(prev) h += '<button class="ql-nav" aria-label="Previous stage: ' + petEsc(prev.full) + '" title="' + petEsc(prev.full) + '" onclick="' + petEsc(petOpen(prev.path, prev.page.name)) + '">&lsaquo;</button>';
+      if(next) h += '<button class="ql-nav" aria-label="Next stage: ' + petEsc(next.full) + '" title="' + petEsc(next.full) + '" onclick="' + petEsc(petOpen(next.path, next.page.name)) + '">&rsaquo;</button>';
+    }
+    if(myStages.length){
+      h += '<span class="ql-sep" aria-hidden="true"></span>';
+      S.stages.forEach(s => {
+        if(s.page){
+          h += '<button class="ql-item ql-stage' + (cur === s.path ? " active" : "") + '" data-stage="' + s.n + '" onclick="' + petEsc(petOpen(s.path, s.page.name)) + '"><span class="ql-num">' + s.n + '</span>' + s.short + '<span class="ql-badge" id="qlb' + s.n + '" hidden></span></button>';
+        } else {
+          h += '<span class="ql-item ql-stage ql-locked" title="Not assigned to you" aria-disabled="true"><span class="ql-num">' + s.n + '</span>' + s.short + '</span>';
+        }
+      });
+    }
+    const groups = S.groups.filter(g => g.pages.length).map(g => ({ key:g.key, label:g.label, short:g.short, pages:g.pages }));
+    if(S.other.length) groups.push({ key:"other", label:"Other", short:"Other", pages:S.other });
+    if(groups.length){
+      h += '<span class="ql-sep" aria-hidden="true"></span>';
+      groups.forEach(g => {
+        const active = g.pages.some(p => p.module_path === cur);
+        h += '<button class="ql-item ql-group' + (active ? " active" : "") + '" aria-haspopup="true" title="' + petEsc(g.label) + '" aria-label="' + petEsc(g.label) + '" onclick="petToggleGroupMenu(this,\'' + g.key + '\')">' + petEsc(g.short) + ' <span aria-hidden="true">&#9662;</span></button>';
+      });
+    }
+    bar.innerHTML = h;
+    const act = bar.querySelector(".ql-item.active");   // only scrolls when the open page's pill is hidden (phones); a pill already in view leaves the bar where it is
+    if(act && act.scrollIntoView) act.scrollIntoView({ inline:"nearest", block:"nearest" });
+    if(myStages.length) petApplyCounts();
+  }
+
+  // The same order and grouping in the sidebar flyout: Home, Workflow 1 to 9, then the groups
+  // (Export and Setup folded away until opened).
+  function petFlyoutHtml(pages){
+    const S = petStructure(pages);
+    let h = '<div class="fly-head">' + PET_MODULE + '</div>';
+    const row = (path, name, inner) => '<button class="flyout-item" onclick="' + petEsc(petOpen(path, name)) + '">' + inner + '<span class="fi-arrow">&rarr;</span></button>';
+    if(S.home) h += row(S.home.module_path, S.home.name, '<span><b>Home</b></span>');
+    const mine = S.stages.filter(s => s.page);
+    if(mine.length){
+      h += '<div class="fly-sec">Workflow</div>';
+      mine.forEach(s => { h += row(s.path, s.page.name, '<span class="fly-numlabel"><span class="fly-num">' + s.n + '</span>' + petEsc(s.full) + '</span>'); });
+    }
+    const section = (label, list, collapsed) => {
+      if(!list.length) return "";
+      const items = list.map(p => row(p.module_path, p.name, '<span>' + petEsc(p.name) + '</span>')).join("");
+      return collapsed
+        ? '<details class="fly-det"><summary>' + petEsc(label) + ' <span class="fly-count">' + list.length + '</span></summary>' + items + '</details>'
+        : '<div class="fly-sec">' + petEsc(label) + '</div>' + items;
+    };
+    S.groups.forEach(g => { h += section(g.label, g.pages, g.collapsed); });
+    h += section("Other", S.other, true);
+    return h;
+  }
+
+  // ---- Quick links inside an open module ----------------------------
+  // When a page is open, show every page in that same module as a pill
+  // bar so the user can jump between sibling pages in place. The active
+  // page's pill is highlighted. Hidden when a module has only one page.
+  // ---- Page bar for a long module: a button per part, each with its pages in a short list ----
+  const QL_MAX_TABS = 6;
+  let QL_SECTIONS = [];
+  function qlOpenCall(p){ const parts = p.module_path.split("/"); return "openModule(null,'" + parts[0] + "','" + parts[1] + "','" + navEsc(String(p.name).replace(/\\/g, "\\\\").replace(/'/g, "\\'")) + "')"; }
+  function renderSectionLinks(bar, pages){
+    QL_SECTIONS = navArrangePages(pages);
+    const cur = CURRENT_PAGE || "";
+    bar.innerHTML = QL_SECTIONS.map((g, i) => {
+      const here = g.pages.find(p => p.module_path === cur);
+      if(g.pages.length === 1){   // a part with one page is a plain tab with that page's name
+        const p = g.pages[0];
+        return `<button class="ql-item${here ? " active" : ""}" onclick="${qlOpenCall(p)}">${navEsc(p.name)}</button>`;
+      }
+      // the part you are in shows the page you are on, so the bar always says where you are
+      const label = here ? `${navEsc(g.label)}: <b>${navEsc(here.name)}</b>` : navEsc(g.label);
+      return `<button class="ql-item ql-group${here ? " active" : ""}" aria-haspopup="true" aria-expanded="false" data-sec="${i}" onclick="qlToggleSection(this, ${i})">${label} <span class="ql-count">${g.pages.length}</span> <span aria-hidden="true">&#9662;</span></button>`;
+    }).join("");
+    const act = bar.querySelector(".ql-item.active");
+    if(act && act.scrollIntoView) act.scrollIntoView({ inline:"nearest", block:"nearest" });
+  }
+  function qlToggleSection(btn, i){
+    const key = "sec" + i, existing = document.getElementById("qlMenu");
+    const same = existing && existing.getAttribute("data-key") === key;
+    petCloseGroupMenu();
+    document.querySelectorAll("#quickLinks .ql-group").forEach(b => b.setAttribute("aria-expanded", "false"));
+    if(same) return;
+    const g = QL_SECTIONS[i]; if(!g) return;
+    const m = document.createElement("div");
+    m.id = "qlMenu"; m.className = "ql-menu"; m.setAttribute("data-key", key); m.setAttribute("role", "menu");
+    m.innerHTML = '<div class="ql-menu-head">' + navEsc(g.label) + '</div>' + g.pages.map(p =>
+      '<button role="menuitem" class="ql-menu-item' + (p.module_path === CURRENT_PAGE ? " active" : "") + '" onclick="petCloseGroupMenu();' + qlOpenCall(p) + '">' + navEsc(p.name) + '</button>').join("");
+    document.body.appendChild(m);
+    const r = btn.getBoundingClientRect();
+    m.style.top = (r.bottom + 6) + "px";
+    m.style.left = Math.max(8, Math.min(r.left, window.innerWidth - m.offsetWidth - 8)) + "px";
+    btn.setAttribute("aria-expanded", "true");
+    const first = m.querySelector(".ql-menu-item"); if(first) first.focus();
+    setTimeout(function(){ document.addEventListener("click", petOutsideClose, true); }, 0);
+  }
+
+  // ---- Module sidebar ---------------------------------------------------------
+  // Every module (except Government Contracts and Manage Accounts, which have their own menu inside
+  // the page) gets the same sidebar as Government Contracts: its pages in parts, the open page highlighted.
+  const MN_ICONS = {
+    dash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>',
+    work: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
+    approve: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
+    records: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>',
+    reports: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>',
+    setup: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg>',
+    home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>',
+    flow: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1.5"/><circle cx="4.5" cy="12" r="1.5"/><circle cx="4.5" cy="18" r="1.5"/></svg>',
+    fold: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>'
+  };
+  let MN_ITEMS = [];
+  function modNavFolded(){ try{ return localStorage.getItem("rumbu_modnav_folded") === "1"; }catch(e){ return false; } }
+  function modNavFold(){
+    const host = document.getElementById("moduleView"), folded = !host.classList.contains("mod-folded");
+    host.classList.toggle("mod-folded", folded);
+    try{ localStorage.setItem("rumbu_modnav_folded", folded ? "1" : "0"); }catch(e){}
+    const b = document.querySelector("#modNav .mn-fold"); if(b){ b.setAttribute("aria-label", folded ? "Open the page list" : "Fold the page list"); b.title = b.getAttribute("aria-label"); }
+    document.getElementById("modNav").classList.remove("mn-peek");
+    setTimeout(function(){ const ov = document.getElementById("moduleLoading"); if(ov && !ov.hidden) placeModuleLoading(); }, 220);
+  }
+  function modNavMobile(open){
+    const nav = document.getElementById("modNav"), bd = document.getElementById("modNavBackdrop"), btn = document.getElementById("hdrPages");
+    if(!nav) return;
+    nav.classList.toggle("mn-mobile-open", !!open); bd.hidden = !open;
+    if(btn) btn.setAttribute("aria-expanded", open ? "true" : "false");
+    if(open){ const cur = nav.querySelector('[aria-current="page"]') || nav.querySelector(".mn-item"); if(cur) cur.focus(); }
+  }
+  function mnPin(i){ const it = MN_ITEMS[i]; if(!it) return; navTogglePin({ dept: it.dept, module: it.mod, query: "", label: it.label }); renderModNav(); }
+  function mnOpen(i){ const it = MN_ITEMS[i]; if(!it) return; modNavMobile(false); openModule(null, it.dept, it.mod, it.label, it.query || ""); }
+  // Works out the parts and their pages for the module that is open. Returns [{ key, label, icon, items:[{label, path, num, stage}] }].
+  function modNavParts(){
+    if(!CURRENT_PICKER || CURRENT_PICKER.kind !== "module") return [];
+    const pages = (MODULE_PAGES_BY_MODULE[CURRENT_PICKER.name] || []).filter(p => MY_ALLOWED_PATHS.has(p.module_path));
+    if(CURRENT_PICKER.name === PET_MODULE){
+      const S = petStructure(pages), out = [];
+      if(S.home) out.push({ key:"home", label:"Home", icon:"home", items:[{ label:S.home.name, path:S.home.module_path }] });
+      const st = S.stages.filter(s => s.page);
+      if(st.length) out.push({ key:"flow", label:"Workflow", icon:"flow", items: st.map(s => ({ label: s.full, path: s.path, num: s.n, stage: s.n, pageName: s.page.name })) });
+      S.groups.forEach(g => { if(g.pages.length) out.push({ key:g.key, label:g.label, icon: /report|monitor/i.test(g.label) ? "reports" : /setup/i.test(g.label) ? "setup" : "records", items: g.pages.map(p => ({ label:p.name, path:p.module_path })) }); });
+      if(S.other.length) out.push({ key:"other", label:"Other", icon:"records", items: S.other.map(p => ({ label:p.name, path:p.module_path })) });
+      return out;
+    }
+    const icon = { dash:"dash", work:"work", approve:"approve", records:"records", reports:"reports", setup:"setup" };
+    return navArrangePages(pages).map(g => ({ key:g.sec, label:g.label, icon: icon[g.sec], items: g.pages.map(p => ({ label:p.name, path:p.module_path })) }));
+  }
+  function renderModNav(){
+    const nav = document.getElementById("modNav"), host = document.getElementById("moduleView"), pagesBtn = document.getElementById("hdrPages");
+    if(!nav) return;
+    const cur = CURRENT_PAGE || "";
+    const own = cur.startsWith("contracts/") || cur === "admin/manage-accounts";   // these pages have their own menu inside
+    const parts = own ? [] : modNavParts();
+    const count = parts.reduce((n, g) => n + g.items.length, 0);
+    if(!count || count < 2){ nav.hidden = true; nav.innerHTML = ""; if(pagesBtn) pagesBtn.hidden = true; host.classList.remove("mod-folded"); return; }
+    MN_ITEMS = [];
+    const folded = modNavFolded();
+    host.classList.toggle("mod-folded", folded);
+    let h = '<div class="mn-head"><span class="mn-title">' + navEsc(CURRENT_PICKER.name) + '</span>' +
+      '<button class="mn-fold" onclick="modNavFold()" aria-label="' + (folded ? "Open the page list" : "Fold the page list") + '" title="' + (folded ? "Open the page list" : "Fold the page list") + '">' + MN_ICONS.fold + '</button></div><div class="mn-body">';
+    parts.forEach(g => {
+      h += '<div class="mn-sec" title="' + navEsc(g.label) + '">' + (MN_ICONS[g.icon] || MN_ICONS.records) + '<span>' + navEsc(g.label) + '</span></div>';
+      g.items.forEach(it => {
+        const parts2 = it.path.split("/"), i = MN_ITEMS.push({ dept: parts2[0], mod: parts2[1], label: it.pageName || it.label }) - 1;
+        const here = it.path === cur;
+        const pinE = { dept: parts2[0], module: parts2[1], query: "", label: it.pageName || it.label }, pinned = navIsPinned(pinE);
+        h += '<button class="mn-item" onclick="mnOpen(' + i + ')"' + (here ? ' aria-current="page"' : '') + ' title="' + navEsc(it.label) + '">' +
+          (it.num ? '<span class="mn-num">' + it.num + '</span>' : '') + '<span class="mn-name">' + navEsc(it.label) + '</span>' +
+          (it.stage ? '<span class="mn-badge" id="mnb' + it.stage + '" hidden></span>' : '') +
+          '<span class="mn-pin' + (pinned ? ' on' : '') + '" role="button" tabindex="-1" title="' + (pinned ? 'Unpin' : 'Pin to the top of the main menu') + '" aria-label="' + (pinned ? 'Unpin ' : 'Pin ') + navEsc(it.label) + '" onclick="event.stopPropagation();mnPin(' + i + ')">' + (pinned ? '&#9733;' : '&#9734;') + '</span></button>';
+      });
+    });
+    nav.innerHTML = h + '</div>';
+    nav.hidden = false;
+    if(pagesBtn) pagesBtn.hidden = false;
+    const act = nav.querySelector('[aria-current="page"]'); if(act && act.scrollIntoView) act.scrollIntoView({ block:"nearest" });
+    if(CURRENT_PICKER.name === PET_MODULE) mnPetCounts();
+  }
+  // PET: what is waiting for you at each stage, beside the stage (the same numbers as before).
+  async function mnPetCounts(){
+    const c = await petLoadCounts(); if(!c) return;
+    Object.keys(c).forEach(n => {
+      const b = document.getElementById("mnb" + n); if(!b) return;
+      const w = c[n] ? c[n].waiting : 0;
+      if(w > 0){ b.textContent = w > 99 ? "99+" : String(w); b.hidden = false; b.title = w + " waiting for you"; b.setAttribute("aria-label", w + " waiting for you"); } else b.hidden = true;
+    });
+  }
+  // Folded: hovering the strip opens the list over the page (the page does not move).
+  (function(){
+    const nav = document.getElementById("modNav"); if(!nav) return;
+    nav.addEventListener("mouseenter", function(){ if(document.getElementById("moduleView").classList.contains("mod-folded")) nav.classList.add("mn-peek"); });
+    nav.addEventListener("mouseleave", function(){ nav.classList.remove("mn-peek"); });
+  })();
+  document.addEventListener("keydown", function(e){ if(e.key === "Escape") modNavMobile(false); });
+
+  function renderQuickLinks(){
+    renderModNav();
+    const bar = document.getElementById("quickLinks");
+    if(!bar) return;
+
+    // Contracts module uses its own sidebar — suppress the quickLinks tab bar
+    if((CURRENT_PAGE || "").startsWith("contracts/") || CURRENT_PAGE === "admin/manage-accounts"){
+      bar.innerHTML = "";
+      bar.style.display = "none";
+      return;
+    }
+
+    let items = [];
+    if(CURRENT_PICKER && CURRENT_PICKER.kind === "account"){
+      items = ACCOUNT_PAGES.filter(accountPageAllowed).map(p=>({
+        label: p.name, dept: p.dept, mod: p.mod, query: p.query || ""
+      }));
+    } else if(CURRENT_PICKER){
+      const pages = (MODULE_PAGES_BY_MODULE[CURRENT_PICKER.name] || []).filter(p => MY_ALLOWED_PATHS.has(p.module_path));
+      if(CURRENT_PICKER.name === PET_MODULE && pages.length > 1){ bar.style.display = ""; renderPetQuickLinks(bar, pages); return; }
+      items = [];
+      navArrangePages(pages).forEach(g => g.pages.forEach(p=>{ const parts = p.module_path.split("/"); items.push({ label: p.name, dept: parts[0], mod: parts[1], query: "" }); }));
+      // A long module (more than six pages): one button per part (Dashboards, Daily work, Reports...),
+      // each opening a short list, instead of a long row of tabs.
+      if(items.length > QL_MAX_TABS){ bar.style.display = ""; renderSectionLinks(bar, pages); return; }
+    }
+    if(items.length <= 1){ bar.innerHTML = ""; bar.style.display = "none"; return; }
+    bar.style.display = "";
+    const head = "";   // the header already says which module this is
+    bar.innerHTML = head + items.map(it=>{
+      const active = ((it.dept + "/" + it.mod) === CURRENT_PAGE) && ((it.query || "") === (CURRENT_QUERY || ""));
+      const oc = `openModule(null,'${it.dept}','${it.mod}','${it.label.replace(/'/g,"\\'")}','${it.query || ""}')`;
+      return `<button class="ql-item${active ? " active" : ""}" onclick="${oc}">${it.label}</button>`;
+    }).join("");
+    // Keep the active pill in view.
+    const act = bar.querySelector(".ql-item.active");
+    if(act && act.scrollIntoView) act.scrollIntoView({inline:"nearest", block:"nearest"});
+  }
+
+  // Close on Escape; re-anchor on resize so it never drifts off-screen.
+  document.addEventListener("keydown", function(e){ if(e.key === "Escape"){ hideFlyout(); petCloseGroupMenu(); } });
+  // "/" jumps to the sidebar search while the menu is open (not while typing in a box).
+  document.addEventListener("keydown", function(e){
+    if(e.key !== "/" || !document.body.classList.contains("drawer-open")) return;
+    const t = e.target, tag = t && t.tagName;
+    if(tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || (t && t.isContentEditable)) return;
+    const s = document.getElementById("navSearch"); if(s){ e.preventDefault(); s.focus(); }
+  });
+  window.addEventListener("resize", function(){
+    const fly = document.getElementById("sideFlyout");
+    if(fly && fly.classList.contains("show")){
+      const active = document.querySelector(".menu-flat.active");
+      if(active) positionFlyout(active); else hideFlyout();
+    }
+  });
+
+  function openModule(btn, dept, module, label, query) {
+    const view = document.getElementById("moduleView");
+    const frame = document.getElementById("moduleFrame");
+    const name = document.getElementById("moduleName");
+
+    // If a button exists at all, it came from the pages table via
+    // renderSidebarModules() — meaning it's registered and ready, no
+    // separate READY_MODULES whitelist needed anymore.
+    hideFlyout();
+    frame.src = "modules/" + dept + "/" + module + ".html" + (query ? ("?" + query) : "");
+    name.textContent = label || "";
+    document.getElementById("moduleBackBtn").textContent = "← Back to Dashboards";
+    // Remember which page is open so the quick-links bar can highlight it.
+    CURRENT_PAGE = dept + "/" + module;
+    CURRENT_QUERY = query || "";
+    navRecordRecent(dept, module, label, query);
+    // Also persist it to localStorage — a browser refresh destroys this
+    // whole document (including CURRENT_PAGE), so without this a refresh
+    // always dumps the person back on the dashboard landing, mid-task.
+    // See restoreOpenModule(), called once at the end of initAuth().
+    try{
+      localStorage.setItem("rumbu_open_module", JSON.stringify({ dept, module, label: label||"", query: query||"" }));
+    }catch(e){}
+    // Also persist it to the person's own profile row — localStorage is
+    // scoped to this one browser, which means on a shared/kiosk device a
+    // different person logging in afterward could see whatever the last
+    // person had open. Saving it against the account instead means each
+    // person is always restored to their OWN last page, regardless of
+    // which device they log in from, and never sees someone else's.
+    // Fire-and-forget: this must never block or fail navigation.
+    if(ME && ME.id){
+      sb.from("profiles").update({
+        last_open_module: { dept, module, label: label||"", query: query||"" }
+      }).eq("id", ME.id).then(()=>{}, ()=>{});
+    }
+    // Government Contracts provides its own full-width sidebar layout —
+    // remove the iframe's max-width cap so it fills the available viewport.
+    // All other modules keep the existing 1320 px constraint (stylesheet default).
+    frame.style.maxWidth = (dept === "contracts") ? "none" : "";
+
+    syncPickerToPage(dept, module);
+    renderQuickLinks();
+    document.getElementById("pickerView").classList.remove("show");
+    view.classList.add("show");
+    document.getElementById("landing").style.display = "none";
+    // Full-screen navigation: hide the sidebar entirely and let this
+    // page's "card" take the whole viewport — same behavior on desktop
+    // and mobile.
+    document.getElementById("appShell").classList.add("module-open");
+    // push current theme into the module once it loads
+    var t = document.documentElement.getAttribute("data-theme") || "navy";
+    frame.onload = function(){ hideModuleLoading(); try{ frame.contentWindow.postMessage({rumbuTheme:t}, "*"); }catch(e){} };
+    showModuleLoading(label);
+    closeDrawer();
+    updateHeaderCrumb();
+  }
+
+  // The tab row above a page (renderQuickLinks) is built from CURRENT_PICKER,
+  // which is only set when a module is chosen in the sidebar. After a browser
+  // refresh the last page is reopened directly, so CURRENT_PICKER is empty and
+  // no tabs appear. This works out which module the open page belongs to,
+  // so the tabs are always rebuilt. It leaves CURRENT_PICKER alone when it
+  // already matches the page.
+  function syncPickerToPage(dept, module){
+    const path = dept + "/" + module;
+    const isAccountPage = ACCOUNT_PAGES.some(p => p.dept === dept && p.mod === module);
+    if(CURRENT_PICKER){
+      if(CURRENT_PICKER.kind === "account" && isAccountPage) return;
+      if(CURRENT_PICKER.kind === "module" &&
+         (MODULE_PAGES_BY_MODULE[CURRENT_PICKER.name] || []).some(p => p.module_path === path)) return;
+    }
+    if(isAccountPage){ CURRENT_PICKER = { kind:"account", name:"Manage Accounts" }; return; }
+    for(const name in MODULE_PAGES_BY_MODULE){
+      if((MODULE_PAGES_BY_MODULE[name] || []).some(p => p.module_path === path)){
+        CURRENT_PICKER = { kind:"module", name };
+        return;
+      }
+    }
+  }
+
+  function closeModule(){
+    hideModuleLoading();
+    setTimeout(updateHeaderCrumb, 0);
+    document.getElementById("moduleView").classList.remove("show");
+    document.getElementById("moduleFrame").style.maxWidth = ""; // restore CSS default
+    document.getElementById("appShell").classList.remove("cnt-top-hidden"); // restore top bar
+    document.getElementById("moduleFrame").src = "about:blank";
+    document.getElementById("landing").style.display = "";
+    document.getElementById("appShell").classList.remove("module-open");
+    hideFlyout();
+    try{ localStorage.removeItem("rumbu_open_module"); }catch(e){}
+    if(ME && ME.id){
+      sb.from("profiles").update({ last_open_module: null }).eq("id", ME.id).then(()=>{}, ()=>{});
+    }
+  }
+
+  // Re-fetch fresh data for whatever is currently on screen, without a
+  // full logout/login round trip. Reloading the iframe re-runs the
+  // page's own init() from scratch, which re-queries the database —
+  // simplest possible "get current data" that works identically across
+  // every module page with zero per-page changes needed.
+  function refreshModule(){
+    const frame = document.getElementById("moduleFrame");
+    showModuleLoading(document.getElementById("moduleName").textContent || "page");
+    try{ frame.contentWindow.location.reload(); }
+    catch(e){ frame.src = frame.src; }
+  }
+  function refreshDashboard(){
+    const frame = document.getElementById("dashFrame");
+    try{ frame.contentWindow.location.reload(); }
+    catch(e){ frame.src = frame.src; }
+  }
+
+  // Called once, after a successful initAuth(), to reopen whatever module
+  // was on screen before a browser refresh — or, now, whatever this
+  // PERSON last had open, on any device, since their own account (not
+  // just this browser) is where it's actually remembered. The account's
+  // own value (ME.lastOpenModule, loaded by requireAuth()) is always
+  // preferred; localStorage is kept only as a fallback for accounts that
+  // predate this column ever being set. The module page itself still
+  // re-checks access via requireAuth() on load, so a saved entry for a
+  // module the person no longer has access to just fails there safely,
+  // same as clicking a stale sidebar link would.
+  function restoreOpenModule(){
+    // Prefer the per-account value from the DB (works across devices / browsers).
+    // Fall back to localStorage for browsers that pre-date the DB column.
+    const fromAccount = ME && ME.lastOpenModule;
+    let saved = fromAccount && fromAccount.dept && fromAccount.module
+      ? fromAccount
+      : null;
+    if(!saved){
+      try{ saved = JSON.parse(localStorage.getItem("rumbu_open_module") || "null"); }catch(e){}
+    }
+    if(!saved || !saved.dept) return;
+
+    // If the contracts module has no specific sub-page recorded yet, land on
+    // the Management Dashboard rather than leaving the person on the landing screen.
+    const dept   = saved.dept;
+    const module = saved.module || (dept === 'contracts' ? 'management-dashboard' : '');
+    if(!module) return;
+
+    openModule(null, dept, module, saved.label || module, saved.query || '');
+  }
+
+  // ---- Sidebar modules are rendered dynamically; ME holds the logged-in profile ----
+  let ME = null;
+
+  async function initAuth(){
+    const gate = document.getElementById("authGate");
+    try{
+      ME = await requireAuth("login.html");
+      if(!ME) return; // requireAuth already redirected to login
+
+      // HR Special Console is a distinct login experience by default — it
+      // skips the standard dashboard/sidebar shell and goes straight to
+      // its own dedicated page. The one exception: the console's own
+      // "Other Modules" button sets this one-time flag right before
+      // navigating here, specifically so someone with extra pages granted
+      // via Manage Role can actually reach them — otherwise they'd have
+      // no path to anything ever assigned to them beyond the console.
+      // The flag is consumed (removed) the instant it's read, so it only
+      // ever bypasses the redirect for that one navigation, never
+      // persists, and a fresh login always lands on the console again.
+      if(ME.role === "hr_console"){
+        let bypass = false;
+        try{ bypass = sessionStorage.getItem("hr_console_bypass_redirect") === "1"; sessionStorage.removeItem("hr_console_bypass_redirect"); }catch(e){}
+        if(!bypass){
+          window.location.href = "modules/hr/hr-special-console.html";
+          return;
+        }
+      }
+
+      renderUserBox();
+      await renderSidebarModules(); // build the sidebar DOM before filtering it by branch
+      await buildAccessMap();
+      initDashboardLanding();
+      restoreOpenModule();
+
+      document.body.classList.add("ready");
+      checkOwnEmailPrompt(); // fire-and-forget — never blocks the app loading
+    }catch(e){
+      gate.classList.add("err");
+      // A plain explanation (no connection, session ended, no access, or other) with Try again.
+      try{ gate.innerHTML = RumbuUI.errorCardHtml(e, { title: navigator.onLine ? null : "No internet connection" }); }
+      catch(_){ gate.textContent = "❌ " + e.message; }
+      console.error(e);
+    }
+  }
+
+  // Who is signed in: the initials button in the header, its menu, and the name line in the sidebar.
+  function renderUserBox(){
+    renderUserMenu();
+    loadMyFullName();
+  }
+
+  // ============================================================
+  // EMAIL UPDATE PROMPT — a dismissible reminder, not a hard block. Shown
+  // once per fresh login (tracked in sessionStorage so it doesn't nag
+  // repeatedly while someone is actively using the app), and comes back
+  // on the next login until an email is actually saved.
+  // ============================================================
+  let OWN_CURRENT_EMAIL = null;
+
+  async function checkOwnEmailPrompt(){
+    try{
+      let already = false;
+      try{ already = sessionStorage.getItem("rumbu_email_prompt_shown") === "1"; }catch(e){}
+      if(already) return;
+
+      const { data: email, error } = await sb.rpc("get_own_employee_email");
+      if(error){ console.warn("Could not check own email:", error.message); return; }
+      OWN_CURRENT_EMAIL = email || null;
+
+      // Only show popup when no email is set yet.
+      // Once saved, this will never trigger again.
+      if(OWN_CURRENT_EMAIL) return;
+
+      document.getElementById("emailPromptInput").value = "";
+      document.getElementById("emailPromptModal").classList.add("open");
+      try{ sessionStorage.setItem("rumbu_email_prompt_shown", "1"); }catch(e){}
+    }catch(e){
+      console.warn("Email prompt check failed (non-fatal):", e);
+    }
+  }
+  window.checkOwnEmailPrompt = checkOwnEmailPrompt;
+
+  function dismissEmailPrompt(){
+    document.getElementById("emailPromptModal").classList.remove("open");
+  }
+  window.dismissEmailPrompt = dismissEmailPrompt;
+
+  async function saveOwnEmail(){
+    const input = document.getElementById("emailPromptInput");
+    const status = document.getElementById("emailPromptStatus");
+    const val = input.value.trim();
+    if(!val || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)){
+      status.style.color = "var(--bad,#c0392b)"; status.textContent = "Enter a valid email address.";
+      return;
+    }
+    status.style.color = "var(--muted,#6b7280)"; status.textContent = "Saving...";
+    try{
+      const { error } = await sb.rpc("update_own_email", { p_email: val });
+      if(error) throw error;
+      status.style.color = "#1d8a4e"; status.textContent = "✅ Saved.";
+      setTimeout(dismissEmailPrompt, 900);
+    }catch(e){
+      status.style.color = "var(--bad,#c0392b)"; status.textContent = "❌ " + e.message;
+    }
+  }
+  window.saveOwnEmail = saveOwnEmail;
+
+  // ============================================================
+  // ACCESS MODEL
+  //   Sidebar modules are PERSON-BASED: whatever pages are ticked for
+  //   someone in Manage Role (assigned_pages) is what they get, and it
+  //   follows their account everywhere — the Branch dropdown no longer
+  //   hides or shows sidebar modules. See MY_ALLOWED_PATHS below.
+  //
+  //   Dashboards stay BRANCH-BASED on purpose: a dashboard's whole job
+  //   is "show me this Branch's numbers", so switching the Branch
+  //   dropdown still changes which dashboard is offered. That mapping
+  //   (page_sections, intersected with assigned_pages) lives in
+  //   BRANCH_PATHS, used only by dashboardsForBranch() now.
+  // ============================================================
+  let BRANCH_PATHS = {};        // { branchName: Set(module_path) } — DASHBOARDS ONLY, see dashboardsForBranch()
+  let MY_ALLOWED_PATHS = new Set(); // every module_path this person may use, branch-independent — drives the sidebar
+  let MY_BRANCHES = [];      // [{id, name}] the person's branches (still used for the Dashboard Branch dropdown)
+  let ALL_DASHBOARDS = [];   // [{module_path, display_name, department}]
+  let CURRENT_BRANCH = null; // selected branch name (Dashboard landing only now)
+  const TASK_PATHS_ADMIN = ["todo/assign-task","todo/view-tasks","todo/todo-settings"];
+
+  async function buildAccessMap(){
+    // 1) Which pages may this person use?
+    let allowedPaths = null; // null = unrestricted (super admin, uncustomized)
+    if(ME.role === "super_admin"){
+      const { data } = await sb.from("assigned_pages").select("pages(module_path)").eq("profile_id", ME.id);
+      const customized = (data || []).map(r => r.pages ? r.pages.module_path : null).filter(Boolean);
+      allowedPaths = customized.length ? new Set(customized) : null;
+    } else {
+      const { data } = await sb.from("assigned_pages").select("pages(module_path)").eq("profile_id", ME.id);
+      allowedPaths = new Set((data || []).map(r => r.pages ? r.pages.module_path : null).filter(Boolean));
+    }
+
+    // 2) The person's branches.
+    if(ME.role === "super_admin"){
+      const { data } = await sb.from("app_sections").select("id,name").order("name");
+      MY_BRANCHES = data || [];
+    } else {
+      const ids = ME.sectionIds || [];
+      if(ids.length){
+        const { data } = await sb.from("app_sections").select("id,name").in("id", ids).order("name");
+        MY_BRANCHES = data || [];
+      } else {
+        MY_BRANCHES = [];
+      }
+    }
+
+    // 3) Map pages to branches (page_sections) for the person's branches.
+    BRANCH_PATHS = {};
+    MY_BRANCHES.forEach(b => BRANCH_PATHS[b.name] = new Set());
+
+    if(ME.role === "super_admin"){
+      // Super Admin is never constrained by branch mapping. Normally they see
+      // every module. BUT if they customized their own sidebar in Settings
+      // (assigned_pages present), honor that selection instead of showing all.
+      const allPaths = Object.values(MODULE_PAGES_BY_MODULE).flat().map(p => p.module_path);
+      const everySet = (allowedPaths && allowedPaths.size)
+        ? new Set(allPaths.filter(p => allowedPaths.has(p)))   // only chosen modules
+        : new Set(allPaths);                                    // no customization = show all
+      MY_BRANCHES.forEach(b=>{ BRANCH_PATHS[b.name] = new Set(everySet); });
+      // Prepend an "All Branches" pseudo-branch.
+      MY_BRANCHES = [{ id: 0, name: "All Branches" }].concat(MY_BRANCHES);
+      BRANCH_PATHS["All Branches"] = new Set(everySet);
+    } else if(MY_BRANCHES.length){
+      const branchIds = MY_BRANCHES.map(b=>b.id);
+      const { data } = await sb
+        .from("page_sections")
+        .select("section_id, app_sections(name), pages(module_path)")
+        .in("section_id", branchIds);
+      (data||[]).forEach(r=>{
+        const bn = r.app_sections ? r.app_sections.name : null;
+        const mp = r.pages ? r.pages.module_path : null;
+        if(!bn || !mp) return;
+        if(allowedPaths && !allowedPaths.has(mp)) return;
+        if(!BRANCH_PATHS[bn]) BRANCH_PATHS[bn] = new Set();
+        BRANCH_PATHS[bn].add(mp);
+      });
+    }
+
+    // 4) Person-level allowed set — this is what the sidebar now runs on.
+    // Super Admin: every registered module_path, unless they've
+    // customized their own sidebar (same rule as before, just no longer
+    // duplicated per branch).
+    if(ME.role === "super_admin"){
+      const allPaths = Object.values(MODULE_PAGES_BY_MODULE).flat().map(p => p.module_path);
+      MY_ALLOWED_PATHS = (allowedPaths && allowedPaths.size)
+        ? new Set(allPaths.filter(p => allowedPaths.has(p)))
+        : new Set(allPaths);
+    } else {
+      MY_ALLOWED_PATHS = new Set(allowedPaths || []);
+    }
+
+    // Task Management is compulsory for everyone, on every branch tab.
+    if(ME.role === "user"){ MY_ALLOWED_PATHS.add("todo/my-tasks"); }
+    else { TASK_PATHS_ADMIN.forEach(p=>MY_ALLOWED_PATHS.add(p)); }
+
+    // 4b) Overtime auto-detect: Fill Overtime and Step-N Approval screens
+    // are useless to anyone who isn't specifically assigned an overtime
+    // role — there's no scenario where seeing them without an actual
+    // assignment helps. So these become visible automatically based on
+    // the overtime_step2_fillers / overtime_initiators /
+    // overtime_step_approvers tables, independent of whatever Manage
+    // Role has (or hasn't) ticked. Now person-level like everything
+    // else here, so it no longer matters which Branch tab is open, or
+    // whether the person's own Branches even include the section named
+    // in their overtime scope row. "Initiate Overtime" and "Approver
+    // Setup" are NOT auto-detected — those stay on the normal ticked
+    // cascade, same as every Gatepass screen, since anyone with page
+    // access might legitimately use them.
+    if(ME.role !== "super_admin"){
+      try{
+        const { data: emp } = await sb.from("employees").select("id").eq("linked_profile_id", ME.id).maybeSingle();
+        if(emp){
+          const { data: fillerScopes } = await sb.from("overtime_step2_fillers").select("section").eq("employee_id", emp.id);
+          if((fillerScopes||[]).length) MY_ALLOWED_PATHS.add("overtime/fill-overtime");
+
+          const { data: initScopes } = await sb.from("overtime_initiators").select("section").eq("employee_id", emp.id);
+          if((initScopes||[]).length){
+            MY_ALLOWED_PATHS.add("overtime/add-overtime");
+            // Anyone who can initiate will eventually need to review their
+            // own Step 4 submissions — no separate assignment needed for this.
+            MY_ALLOWED_PATHS.add("overtime/overtime-step4-review");
+          }
+
+          const { data: approverScopes } = await sb.from("overtime_step_approvers").select("section, step").eq("employee_id", emp.id);
+          (approverScopes||[]).forEach(s=>{
+            if(s.step === 3) MY_ALLOWED_PATHS.add("overtime/overtime-step3-approval");
+            // Step 4 was previously only ever granted via initiator status
+            // (see above) — an explicit Step 4 assignment made in Approver
+            // Setup was silently never checked here, so it had no effect.
+            if(s.step === 4) MY_ALLOWED_PATHS.add("overtime/overtime-step4-review");
+            if(s.step === 5) MY_ALLOWED_PATHS.add("overtime/overtime-step5-disbursement");
+            if(s.step === 6) MY_ALLOWED_PATHS.add("overtime/overtime-step6-ed1");
+          });
+        }
+      }catch(e){ console.warn("Overtime auto-detect failed (non-fatal):", e); }
+    }
+
+    // 5) Load dashboard registry.
+    try{
+      const { data } = await sb.from("dashboards").select("module_path, display_name, department, sort_order").order("sort_order");
+      ALL_DASHBOARDS = data || [];
+    }catch(e){ ALL_DASHBOARDS = []; }
+  }
+
+  // Sidebar module visibility is person-based now (MY_ALLOWED_PATHS) —
+  // the branchName argument is kept only so this can still be called from
+  // onDashBranchChange() to track CURRENT_BRANCH for the Dashboard picker
+  // and to refresh an open flyout; it no longer changes which sidebar
+  // modules are shown.
+  function applySidebarForBranch(branchName){
+    CURRENT_BRANCH = branchName;
+    document.querySelectorAll("[data-group-name]").forEach(btn=>{
+      const groupName = btn.getAttribute("data-group-name");
+      if(groupName === "Manage Accounts"){ btn.style.display = ""; return; } // role-gated per page inside its own picker, not hidden as a group
+      const pages = MODULE_PAGES_BY_MODULE[groupName] || [];
+      const anyAllowed = pages.some(p => MY_ALLOWED_PATHS.has(p.module_path));
+      btn.style.display = anyAllowed ? "" : "none";
+    });
+    navUpdateGroups();
+    navRenderQuick();
+    // If a module's flyout is open right now, refresh its contents for
+    // the newly selected Branch instead of showing stale pages.
+    const fly = document.getElementById("sideFlyout");
+    if(fly && fly.classList.contains("show") && CURRENT_PICKER && CURRENT_PICKER.kind === "module"){
+      renderFlyout();
+      const active = document.querySelector(".menu-flat.active");
+      if(active) positionFlyout(active);
+    }
+  }
+
+  // ---- Dashboard landing ----
+  // UPDATED: Dashboards used to be Admin/Super Admin only, regardless of
+  // what Manage Role had ticked for a "user" account — a deliberate role
+  // check, separate from page assignment. That's been removed: a "user"
+  // now sees exactly the dashboards actually assigned to them via
+  // assigned_pages, the same as every other role, using the exact same
+  // Branch/Dashboard toolbar. Someone with zero dashboards assigned still
+  // correctly falls through to the "no dashboards" empty state below —
+  // nothing changes for them.
+  //
+  // ROLLBACK: to restore the old "user accounts never see dashboards"
+  // behavior, reinstate this block at the top of the function:
+  //   if(ME.role === "user"){
+  //     document.querySelector("#dashLanding .dash-toolbar").style.display = "none";
+  //     document.getElementById("dashFrame").style.display = "none";
+  //     const empty = document.getElementById("dashEmpty");
+  //     empty.style.display = "block";
+  //     empty.querySelector("h2").textContent = "Welcome to the Rumbu Production Reporting System";
+  //     empty.querySelector("p").textContent = "Open a module from the sidebar to get started.";
+  //     applySidebarForBranch(null);
+  //     return;
+  //   }
+  function initDashboardLanding(){
+    const branchSel = document.getElementById("dashBranch");
+    branchSel.innerHTML = MY_BRANCHES.map(b=>`<option value="${b.name}">${b.name}</option>`).join("");
+    if(!MY_BRANCHES.length){
+      document.getElementById("dashEmpty").style.display = "block";
+      document.getElementById("dashEmpty").querySelector("p").textContent = "No Branch is assigned to your account yet. Ask a Super Admin to set this up.";
+      // Still filter the sidebar by MY_ALLOWED_PATHS even with no Branch
+      // assigned — otherwise every module stays visible in its default
+      // unfiltered state, showing things this person was never granted.
+      applySidebarForBranch(null);
+      return;
+    }
+    branchSel.value = MY_BRANCHES[0].name;
+    applySidebarForBranch(branchSel.value);
+    initDashboardPicker();
+  }
+
+  // Populates the Dashboard picker ONCE. Dashboards are person-granted and
+  // branch-independent now (see dashboardsForBranch above), so this no
+  // longer needs to re-run on every branch tab switch — only sidebar
+  // module visibility does that (see onDashBranchChange below).
+  function initDashboardPicker(){
+    const dashes = dashboardsForBranch(null); // branchName is unused now
+    const pick = document.getElementById("dashPick");
+    pick.innerHTML = dashes.map(d=>`<option value="${d.module_path}">${d.display_name}</option>`).join("");
+    if(dashes.length){
+      pick.parentElement.style.display = "";
+      document.getElementById("dashEmpty").style.display = "none";
+      pick.value = dashes[0].module_path;
+      showDashboard(dashes[0].module_path);
+    }else{
+      pick.parentElement.style.display = "none";
+      document.getElementById("dashFrame").style.display = "none";
+      document.getElementById("dashEmpty").style.display = "block";
+    }
+  }
+
+  // Dashboards are now granted per-PERSON via assigned_pages, exactly like
+  // every other module — consistent with the rest of the system, and
+  // collapses "grant + branch-map" down to one step (just grant it).
+  // The branchName argument is kept purely so existing callers (the
+  // Dashboard picker's branch dropdown) don't need touching — it's just no
+  // longer used to filter which Dashboards appear.
+  //
+  // ROLLBACK: if this ever needs undoing, no database change is required —
+  // just swap this function's body for dashboardsForBranch_LEGACY's body
+  // below (or rename the calls), and branch-gated Dashboards return exactly
+  // as they were. BRANCH_PATHS/page_sections are still computed above,
+  // untouched, so the legacy path keeps working immediately.
+  // UPDATED: no longer excludes "user" role — see initDashboardLanding()
+  // above for the full explanation. Dashboard visibility is purely
+  // MY_ALLOWED_PATHS now, for every role including "user".
+  // ROLLBACK: reinstate `if(ME.role === "user") return [];` as the first
+  // line of this function to restore the old behavior.
+  function dashboardsForBranch(branchName){
+    return ALL_DASHBOARDS.filter(d => MY_ALLOWED_PATHS.has(d.module_path));
+  }
+
+  // Preserved, currently unused — the original per-branch gating logic,
+  // kept intact for a one-line rollback if the change above ever needs
+  // reverting. Do not delete.
+  function dashboardsForBranch_LEGACY(branchName){
+    if(ME.role === "user") return [];
+    const allowed = BRANCH_PATHS[branchName] || new Set();
+    return ALL_DASHBOARDS.filter(d => allowed.has(d.module_path));
+  }
+
+  // Branch switching now ONLY affects sidebar module visibility — the
+  // Dashboard picker (populated once in initDashboardPicker() above) is
+  // deliberately left alone across branch changes, since Dashboards no
+  // longer depend on branch.
+  //
+  // ROLLBACK: if branch-gated Dashboards are ever restored via
+  // dashboardsForBranch_LEGACY, restore this function's old behavior too
+  // — preserved intact as onDashBranchChange_LEGACY right below — so
+  // switching branches goes back to re-filtering the Dashboard picker.
+  window.onDashBranchChange = function(){
+    const branchName = document.getElementById("dashBranch").value;
+    applySidebarForBranch(branchName);
+  };
+
+  // Preserved, currently unused — the original behavior where changing
+  // Branch also re-filtered and reset the Dashboard picker. Kept intact
+  // for a one-line rollback alongside dashboardsForBranch_LEGACY. Do not
+  // delete.
+  function onDashBranchChange_LEGACY(){
+    const branchName = document.getElementById("dashBranch").value;
+    applySidebarForBranch(branchName);
+    const dashes = dashboardsForBranch_LEGACY(branchName);
+    const pick = document.getElementById("dashPick");
+    pick.innerHTML = dashes.map(d=>`<option value="${d.module_path}">${d.display_name}</option>`).join("");
+    if(dashes.length){
+      pick.parentElement.style.display = "";
+      document.getElementById("dashEmpty").style.display = "none";
+      pick.value = dashes[0].module_path;
+      showDashboard(dashes[0].module_path);
+    }else{
+      pick.parentElement.style.display = "none";
+      document.getElementById("dashFrame").style.display = "none";
+      document.getElementById("dashEmpty").style.display = "block";
+    }
+  }
+
+  window.onDashPickChange = function(){
+    showDashboard(document.getElementById("dashPick").value);
+  };
+
+  function showDashboard(modulePath){
+    const frame = document.getElementById("dashFrame");
+    frame.src = "modules/" + modulePath + ".html";
+    frame.style.display = "block";
+    document.getElementById("dashEmpty").style.display = "none";
+  }
+
+  initAuth();
+</script>
+
+<!-- ── Inactivity Warning Modal ──────────────────────────────────────────── -->
+<div id="inactivity-modal"
+     style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);
+            z-index:9999;align-items:center;justify-content:center">
+  <div style="background:var(--card);border-radius:14px;padding:36px 32px;max-width:380px;
+              width:90%;text-align:center;box-shadow:0 24px 64px rgba(0,0,0,.3)">
+    <div style="font-size:42px;margin-bottom:14px">⏱️</div>
+    <h3 style="color:var(--heading);font-size:17px;font-weight:700;margin:0 0 10px">
+      Still there?
+    </h3>
+    <p style="color:var(--muted);font-size:13px;line-height:1.7;margin:0 0 22px">
+      You have been inactive for <strong>14 minutes</strong>.<br>
+      You will be logged out automatically in <strong id="inactivity-countdown">60</strong> seconds.
+    </p>
+    <div style="display:flex;gap:10px;justify-content:center">
+      <button onclick="resetInactivityTimer()"
+              style="padding:10px 26px;border:none;border-radius:8px;
+                     background:#1F3864;color:#fff;cursor:pointer;
+                     font-size:13px;font-weight:700">
+        Stay Logged In
+      </button>
+      <button onclick="logout('login.html')"
+              style="padding:10px 20px;border:1px solid var(--line);border-radius:8px;
+                     background:var(--card);color:var(--text);cursor:pointer;font-size:13px;font-weight:600">
+        Log Out Now
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Auto-logout after 15 minutes of inactivity ────────────────────────── -->
+<script>
+(function () {
+  var INACTIVE_MS = 15 * 60 * 1000;   // 15 minutes total
+  var WARN_MS     = 14 * 60 * 1000;   // warn at 14 minutes
+  var COUNTDOWN_S = 60;               // 1-minute countdown in the modal
+
+  var _warnTimer     = null;
+  var _logoutTimer   = null;
+  var _countdownInterval = null;
+
+  function resetInactivityTimer() {
+    // Clear existing timers
+    clearTimeout(_warnTimer);
+    clearTimeout(_logoutTimer);
+    clearInterval(_countdownInterval);
+
+    // Hide warning modal if visible
+    var modal = document.getElementById('inactivity-modal');
+    if (modal) modal.style.display = 'none';
+
+    // Restart
+    _warnTimer   = setTimeout(showWarning, WARN_MS);
+    _logoutTimer = setTimeout(forceLogout, INACTIVE_MS);
+  }
+
+  function showWarning() {
+    var modal = document.getElementById('inactivity-modal');
+    if (!modal) return;
+    modal.style.display = 'flex';
+
+    // Start countdown display
+    var cd = document.getElementById('inactivity-countdown');
+    var remaining = COUNTDOWN_S;
+    if (cd) cd.textContent = remaining;
+
+    clearInterval(_countdownInterval);
+    _countdownInterval = setInterval(function () {
+      remaining -= 1;
+      if (cd) cd.textContent = remaining;
+      if (remaining <= 0) clearInterval(_countdownInterval);
+    }, 1000);
+  }
+
+  function forceLogout() {
+    clearInterval(_countdownInterval);
+    var modal = document.getElementById('inactivity-modal');
+    if (modal) modal.style.display = 'none';
+    if (typeof logout === 'function') logout('login.html');
+  }
+
+  // Expose so the "Stay Logged In" button can call it
+  window.resetInactivityTimer = resetInactivityTimer;
+
+  // Reset on any user interaction
+  var EVENTS = ['mousedown', 'mousemove', 'keydown', 'scroll', 'touchstart', 'click', 'wheel'];
+  EVENTS.forEach(function (evt) {
+    document.addEventListener(evt, resetInactivityTimer, { passive: true, capture: true });
+  });
+
+  // Start the clock
+  resetInactivityTimer();
+})();
+</script>
+
+</body>
+</html>
