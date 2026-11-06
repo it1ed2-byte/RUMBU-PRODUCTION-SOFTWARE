@@ -1,226 +1,345 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Maintenance Tracking — Monitoring Room reports</title>
 <link rel="stylesheet" href="../../styles.css">
 <script>
-  (function(){
-    function apply(t){ if(t) document.documentElement.setAttribute("data-theme", t); }
-    window.addEventListener("message", function(e){ if(e.data && e.data.rumbuTheme) apply(e.data.rumbuTheme); });
-    try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
-  })();
+(function(){
+  function apply(t){ if(t) document.documentElement.setAttribute("data-theme",t); }
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+  try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+})();
 </script>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
 <style>
-  body{font-family:var(--sans);margin:0;padding:20px;background:var(--bg);color:var(--text);}
-  h2{text-align:center;color:var(--heading);margin-bottom:20px;}
-  .card{background:var(--card);padding:20px;border-radius:12px;box-shadow:0 3px 8px rgba(0,0,0,.1);margin-bottom:20px;max-width:520px;margin-left:auto;margin-right:auto;}
-  .controls label{font-weight:600;display:block;margin-top:10px;}
-  .controls input,.controls select{padding:6px 10px;border-radius:6px;border:1px solid var(--line);width:100%;margin-top:5px;box-sizing:border-box;}
-  .controls .button-group{display:flex;gap:10px;margin-top:15px;}
-  .controls button{flex:1;padding:10px 16px;border:none;border-radius:6px;background:var(--accent);color:#fff;font-weight:600;cursor:pointer;transition:.2s;}
-  .controls button:hover{background:#2980b9;}
-  #reportContainer{max-width:1000px;margin:20px auto 0;background:var(--card);padding:20px;border-radius:12px;box-shadow:0 3px 8px rgba(0,0,0,.1);overflow-x:auto;}
-  .dropdown-list{position:absolute;background:var(--card);border:1px solid var(--line);max-height:150px;overflow-y:auto;z-index:10;width:100%;max-width:480px;display:none;border-radius:6px;}
-  .dropdown-item{padding:5px 10px;cursor:pointer;}
-  .dropdown-item:hover,.dropdown-item.active{background:#ecf0f1;}
-  #status{text-align:center;font-size:12px;font-weight:bold;margin-bottom:10px;}
-  table{width:100%;border-collapse:collapse;margin-top:15px;font-size:13px;}
-  th,td{border:1px solid var(--line);padding:8px 12px;text-align:center;}
-  th{background:#ecf0f1;font-weight:600;}
-  tr.total{background:#d6eaf8;font-weight:bold;}
-  tr.avg{background:#f7f7f7;font-weight:bold;}
-  @media print{ .no-print{display:none !important;} }
+  [hidden] { display: none !important; }
+  body { padding: 18px; }
+  .wrap { max-width: 1400px; margin: 0 auto; }
+  .hdr h2 { margin: 0 0 2px; font-size: 17px; color: var(--heading); }
+  .hdr p  { margin: 0 0 12px; font-size: 12px; color: var(--muted); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-bottom: 12px; }
+  .filters { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 10px; align-items: end; }
+  @media (max-width: 1100px) { .filters { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+  @media (max-width: 600px)  { .filters { grid-template-columns: 1fr 1fr; } }
+  .ctl { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .ctl label { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); }
+  .ctl input, .ctl select { width: 100%; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px;
+                            background: var(--bg); color: var(--text); font-family: inherit; box-sizing: border-box; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; align-items: center; }
+  .btn { padding: 8px 14px; border: none; border-radius: 8px; font-size: 13px; font-weight: 700; cursor: pointer; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-ghost { background: transparent; border: 1px solid var(--line); color: var(--text); }
+  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+  .status { font-size: 12px; color: var(--muted); margin-left: auto; }
+  .status.err { color: var(--bad, #dc2626); font-weight: 700; }
+
+  .stats { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+  @media (max-width: 900px) { .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  .stat { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 11px 13px; }
+  .stat .k { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); }
+  .stat .v { font-size: 22px; font-weight: 800; color: var(--heading); }
+
+  .tabs { display: flex; gap: 6px; border-bottom: 2px solid var(--line); margin-bottom: 12px; flex-wrap: wrap; }
+  .tab { padding: 9px 16px; border: none; background: none; font-size: 13px; font-weight: 700; color: var(--muted);
+         cursor: pointer; border-bottom: 3px solid transparent; margin-bottom: -2px; }
+  .tab.on { color: var(--accent); border-bottom-color: var(--accent); }
+
+  .tbl-wrap { overflow: auto; max-height: 64vh; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { padding: 7px 9px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: middle; white-space: nowrap; }
+  th { position: sticky; top: 0; z-index: 1; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px;
+       color: var(--muted); background: var(--bg); cursor: pointer; user-select: none; }
+  th.num, td.num { text-align: right; }
+  td.desc { white-space: normal; min-width: 180px; color: var(--muted); }
+  .asset { font-weight: 800; color: var(--heading); }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 800; }
+  .p-tl { background: #fee2e2; color: #991b1b; } .p-nr { background: #fef3c7; color: #92400e; }
+  .p-ot { background: var(--bg); border: 1px solid var(--line); color: var(--muted); }
+  .p-app { background: #dbeafe; color: #1e40af; } .p-sheet { background: var(--bg); border: 1px solid var(--line); color: var(--muted); }
+  .p-ok { background: #dcfce7; color: #15803d; } .p-wait { background: #fef3c7; color: #92400e; }
+  [data-theme="dark"] .p-tl { background: #450a0a; color: #fca5a5; }
+  [data-theme="dark"] .p-nr, [data-theme="dark"] .p-wait { background: #451a03; color: #fcd34d; }
+  [data-theme="dark"] .p-app { background: #172554; color: #93c5fd; }
+  [data-theme="dark"] .p-ok { background: #052e16; color: #4ade80; }
+  tr.hf td { background: rgba(220,38,38,.07); }
+  .hf-flag { color: var(--bad, #dc2626); font-weight: 800; }
+  .muted { color: var(--muted); }
+  .empty { text-align: center; padding: 34px 10px; color: var(--muted); font-size: 13px; }
+  .note { font-size: 11.5px; color: var(--muted); margin-top: 8px; }
+
+  @media print {
+    body { padding: 0; } .no-print { display: none !important; }
+    .tbl-wrap { max-height: none; overflow: visible; } .card { border: 0; padding: 0; }
+    table { font-size: 9.5px; } th { position: static; }
+  }
 </style>
 </head>
 <body>
-
-<h2 class="no-print">🛠️ Stop Asset Report</h2>
-<div id="status" class="no-print">Connecting to Supabase...</div>
-
-<div class="card controls no-print">
-  <label>Start Date</label><input type="date" id="start" onchange="clearReport()">
-  <label>End Date</label><input type="date" id="end" onchange="clearReport()">
-
-  <label>Staff ID (Asset ID)</label>
-  <input type="text" id="staff" placeholder="Type Staff/Asset ID" oninput="filterStaff()" autocomplete="off" onkeydown="navigateDropdown(event,'staffList','staff')">
-  <div id="staffList" class="dropdown-list"></div>
-
-  <label>Job Code</label>
-  <select id="job" onchange="clearReport()">
-    <option>All</option>
-    <option>No Repair</option>
-    <option>No Repair (Bad Loading)</option>
-    <option>Short Stop</option>
-    <option>No Operator</option>
-    <option>No Repair (Bad Pipe)</option>
-  </select>
-
-  <label>Asset</label>
-  <input type="text" id="asset" placeholder="Type Asset" oninput="filterAsset()" autocomplete="off" onkeydown="navigateDropdown(event,'assetList','asset')">
-  <div id="assetList" class="dropdown-list"></div>
-
-  <label>Shift</label>
-  <select id="shift" onchange="clearReport()"><option>All</option><option>Morning</option><option>Night</option></select>
-
-  <div class="button-group">
-    <button onclick="run()">VIEW REPORT</button>
-    <button onclick="window.print()">🖨️ PRINT</button>
+<div class="wrap">
+  <div class="hdr">
+    <h2>Maintenance Tracking</h2>
+    <p>Machine stops reported by the Monitoring Room (from the sheet and from Report Stop), with treatment status. Times in Nigeria time.</p>
   </div>
+
+  <div class="card no-print">
+    <div class="filters">
+      <div class="ctl"><label>From</label><input type="date" id="f-from"></div>
+      <div class="ctl"><label>To</label><input type="date" id="f-to"></div>
+      <div class="ctl"><label>Shift</label>
+        <select id="f-shift"><option value="">All</option><option>Morning</option><option>Night</option></select></div>
+      <div class="ctl"><label>Shed</label>
+        <select id="f-shed"><option value="">All</option></select></div>
+      <div class="ctl"><label>Stop code</label>
+        <select id="f-code"><option value="">All</option></select></div>
+      <div class="ctl"><label>Operator ID or name</label><input type="text" id="f-op" placeholder="All" list="dl-op"></div>
+      <div class="ctl"><label>Asset</label><input type="text" id="f-asset" placeholder="All" list="dl-asset"></div>
+      <div class="ctl"><label>High frequency from</label>
+        <select id="f-hf"><option>2</option><option selected>3</option><option>4</option><option>5</option></select></div>
+    </div>
+    <datalist id="dl-op"></datalist><datalist id="dl-asset"></datalist>
+    <div class="actions">
+      <button class="btn btn-primary" onclick="run()">Show report</button>
+      <button class="btn btn-ghost" onclick="exportCsv()">⬇ Export CSV</button>
+      <button class="btn btn-ghost" onclick="window.print()">🖨 Print</button>
+      <button class="btn btn-ghost" onclick="clearFilters()">Clear filters</button>
+      <span class="status" id="status">Choose dates and click Show report.</span>
+    </div>
+  </div>
+
+  <div class="stats" id="stats" hidden>
+    <div class="stat"><div class="k">Stops reported</div><div class="v" id="s-total">0</div></div>
+    <div class="stat"><div class="k">Technical loss</div><div class="v" id="s-tl">0</div></div>
+    <div class="stat"><div class="k">TL treated</div><div class="v" id="s-tr">0</div></div>
+    <div class="stat"><div class="k">Avg stop to treated</div><div class="v" id="s-resp">—</div></div>
+    <div class="stat"><div class="k">No repair</div><div class="v" id="s-nr">0</div></div>
+    <div class="stat"><div class="k">High-frequency assets</div><div class="v" id="s-hf">0</div></div>
+  </div>
+
+  <div class="tabs no-print" id="tabs" hidden>
+    <button class="tab on" data-t="detail" onclick="setTab('detail')">Detail</button>
+    <button class="tab" data-t="asset" onclick="setTab('asset')">By asset</button>
+    <button class="tab" data-t="op" onclick="setTab('op')">By operator</button>
+  </div>
+  <div class="card" style="padding:0;"><div class="tbl-wrap" id="out"><div class="empty">No report yet.</div></div></div>
+  <div class="note">Sheet reports carry only the stop time; operator, duration, start and finish times are recorded for reports made in the app.
+    “Stop to treated” applies to Technical Loss only. Click a column heading to sort.</div>
 </div>
 
-<div id="reportContainer"></div>
-
 <script>
-// Which database: live on rumbu.vercel.app, the TEST database on preview links and local copies (see window.RUMBU_DB).
-const SUPABASE_URL = (window.RUMBU_DB = window.RUMBU_DB || (function(){var h = String(location.hostname || "");var test = h !== "rumbu.vercel.app" && (/\.vercel\.app$/.test(h) || h === "localhost" || /^127\./.test(h) || h === "" || location.protocol === "file:");return test ? { env: "test", url: "https://cbityajrnwmdjymzhgzt.supabase.co", key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNiaXR5YWpybndtZGp5bXpoZ3p0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM3ODA5OTcsImV4cCI6MjEwOTM1Njk5N30.ZJWt4-No17YZhmjFOJ8yedGC0TiD4uOeE7arlAu9T_k" } : { env: "live", url: "https://betfhunzmhtdzgvufmfk.supabase.co", key: "sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp" };})()).url;
-const SUPABASE_ANON_KEY = (window.RUMBU_DB = window.RUMBU_DB || (function(){var h = String(location.hostname || "");var test = h !== "rumbu.vercel.app" && (/\.vercel\.app$/.test(h) || h === "localhost" || /^127\./.test(h) || h === "" || location.protocol === "file:");return test ? { env: "test", url: "https://cbityajrnwmdjymzhgzt.supabase.co", key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNiaXR5YWpybndtZGp5bXpoZ3p0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM3ODA5OTcsImV4cCI6MjEwOTM1Njk5N30.ZJWt4-No17YZhmjFOJ8yedGC0TiD4uOeE7arlAu9T_k" } : { env: "live", url: "https://betfhunzmhtdzgvufmfk.supabase.co", key: "sb_publishable_AfDp1FlHghu9TOfqEUj20Q_Pke7GlTp" };})()).key;
-function authHeaders(){ return { "apikey": SUPABASE_ANON_KEY, "Authorization": "Bearer " + SUPABASE_ANON_KEY }; }
-function parseDT(v){ const d=new Date(v); return isNaN(d)?null:d; }
-function minutesBetween(a,b){ return (!a||!b)?0:Math.round((b-a)/60000); }
+const TZ = 'Africa/Lagos';
+const COLS = 'id,date_col,assets,shed,shift,job_code,description,operator_id,operator_name,rank,duration,mc_stoppage_time,starting_time,finish_time,created_by';
+let SESSION_TOKEN = SUPABASE_ANON_KEY;
+let ROWS = [], TAB = 'detail', SORT = { key: null, dir: 1 }, LAST = { cols: [], rows: [] };
 
-let MON_ROWS = [], STAFF_LIST = [], ASSET_LIST = [];
+// ---------- time (tracking_table holds true UTC text: "2026-11-06 13:05:22.481 UTC") ----------
+function wp(d) {
+  const p = {};
+  new Intl.DateTimeFormat('en-GB', { timeZone: TZ, year:'numeric', month:'2-digit', day:'2-digit',
+    hour:'2-digit', minute:'2-digit', hour12:false }).formatToParts(d).forEach(x => p[x.type] = x.value);
+  if (p.hour === '24') p.hour = '00';
+  return p;
+}
+function today() { const p = wp(new Date()); return p.year + '-' + p.month + '-' + p.day; }
+function parseTs(v) {
+  if (!v) return null;
+  const s = String(v).trim();
+  const d = new Date(/Z$|UTC$|[+-]\d\d:?\d\d$/.test(s) ? s.replace(' UTC', 'Z').replace(' ', 'T') : s.replace(' ', 'T') + 'Z');
+  return isNaN(d) ? null : d;
+}
+function hm(d) { if (!d) return ''; const p = wp(d); return p.hour + ':' + p.minute; }
+function dmy(iso) { const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? m[3] + '/' + m[2] + '/' + m[1] : ''; }
+function minsBetween(a, b) { return a && b ? Math.round((b - a) / 60000) : null; }
+function fmtM(m) { if (m == null) return '—'; if (m < 60) return m + ' min'; return Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'm'; }
+const kind = c => { const v = String(c || '').toLowerCase(); return v === 'technical loss' ? 'tl' : v.startsWith('no repair') ? 'nr' : 'ot'; };
 
-// Fetch ALL rows from a table, paginating past Supabase's 1000-row cap.
-// `query` may include extra params like "&order=col.desc" (no leading select).
-async function fetchAllRows(table, query){
-  let all = [], offset = 0; const pageSize = 1000;
-  const q = query || "";
-  for(let guard=0; guard<500; guard++){
-    const headers = Object.assign({}, authHeaders(), { "Range-Unit":"items", "Range": offset + "-" + (offset+pageSize-1) });
-    const res = await fetch(SUPABASE_URL + "/rest/v1/" + table + "?select=*" + q, { headers });
-    if(!res.ok) throw new Error(table + ": HTTP " + res.status);
-    const batch = await res.json();
-    all = all.concat(batch);
-    if(batch.length < pageSize) break;
-    offset += pageSize;
+// ---------- boot ----------
+document.addEventListener('DOMContentLoaded', async () => {
+  try {
+    const me = await requireAuth('../../login.html');
+    if (!me) return;
+    try { const { data: { session } } = await sb.auth.getSession(); SESSION_TOKEN = session?.access_token || SUPABASE_ANON_KEY; } catch (e) {}
+    document.getElementById('f-from').value = today();
+    document.getElementById('f-to').value = today();
+    ['1','2','3','4','5','6','MamaSannu'].forEach(s => document.getElementById('f-shed').insertAdjacentHTML('beforeend',
+      '<option value="' + s + '">' + (/^\d$/.test(s) ? 'Shed ' + s : s) + '</option>'));
+    const [codes, ops] = await Promise.all([
+      apiGet('cr_stop_codes?select=code&is_active=eq.true&order=sort_order.asc').catch(() => []),
+      apiGetAll('cr_operators?select=operator_id,operator_name&is_active=eq.true&order=operator_id.asc').catch(() => [])
+    ]);
+    codes.forEach(c => document.getElementById('f-code').insertAdjacentHTML('beforeend', '<option>' + esc(c.code) + '</option>'));
+    document.getElementById('dl-op').innerHTML = ops.map(o => '<option value="' + esc(o.operator_id) + '">' + esc(o.operator_name) + '</option>').join('');
+    run();
+  } catch (e) { setStatus('❌ ' + (e.message || e), true); }
+});
+
+function clearFilters() {
+  ['f-shift','f-shed','f-code'].forEach(id => document.getElementById(id).value = '');
+  ['f-op','f-asset'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('f-from').value = today(); document.getElementById('f-to').value = today();
+}
+function setStatus(t, err) { const el = document.getElementById('status'); el.textContent = t; el.className = 'status' + (err ? ' err' : ''); }
+
+// ---------- load: every filter is applied in the database ----------
+async function run() {
+  const from = val('f-from'), to = val('f-to');
+  if (!from || !to || from > to) { setStatus('Pick a valid date range.', true); return; }
+  setStatus('Loading…');
+  try {
+    let q = 'tracking_table?select=' + COLS + '&date_col=gte.' + from + '&date_col=lte.' + to + '&order=id.desc';
+    if (val('f-shift')) q += '&shift=eq.' + enc(val('f-shift'));
+    if (val('f-shed'))  q += '&shed=eq.' + enc(val('f-shed'));
+    if (val('f-code'))  q += '&job_code=ilike.' + enc(val('f-code'));
+    if (val('f-asset')) q += '&assets=ilike.*' + enc(val('f-asset').trim()) + '*';
+    const op = val('f-op').trim();
+    if (op) q += '&or=(operator_id.ilike.*' + enc(op) + '*,operator_name.ilike.*' + enc(op) + '*)';
+    const rows = await apiGetAll(q);
+
+    const tlIds = rows.filter(r => kind(r.job_code) === 'tl').map(r => r.id);
+    const treated = {};
+    const batches = [];
+    for (let i = 0; i < tlIds.length; i += 150) batches.push(tlIds.slice(i, i + 150));
+    (await Promise.all(batches.map(b => apiGet('treated_table?select=id_number,treated_time,treated_by&id_number=in.(' + b.join(',') + ')'))))
+      .forEach(list => list.forEach(t => { treated[String(t.id_number)] = t; }));
+
+    ROWS = rows.map(r => {
+      const stop = parseTs(r.mc_stoppage_time), t = treated[String(r.id)], at = t ? parseTs(t.treated_time) : null;
+      return Object.assign(r, {
+        _k: kind(r.job_code), _stop: stop, _at: at, _by: t ? t.treated_by : null,
+        _resp: kind(r.job_code) === 'tl' ? minsBetween(stop, at) : null,
+        _wait: minsBetween(stop, parseTs(r.starting_time)),
+        _src: r.created_by ? 'App' : 'Sheet'
+      });
+    });
+    document.getElementById('dl-asset').innerHTML = Array.from(new Set(ROWS.map(r => r.assets).filter(Boolean))).sort()
+      .map(a => '<option value="' + esc(a) + '"></option>').join('');
+    SORT = { key: null, dir: 1 };
+    render();
+    setStatus(ROWS.length + ' stop(s) · ' + dmy(from) + (from !== to ? ' to ' + dmy(to) : ''));
+  } catch (e) { setStatus('❌ ' + (e.message || e), true); }
+}
+
+// ---------- render ----------
+function setTab(t) {
+  TAB = t; SORT = { key: null, dir: 1 };
+  document.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b.dataset.t === t));
+  render();
+}
+function render() {
+  const hfMin = +val('f-hf');
+  const tl = ROWS.filter(r => r._k === 'tl'), tr = tl.filter(r => r._at), resp = tr.map(r => r._resp).filter(m => m != null && m >= 0);
+  const byAsset = groupBy(ROWS, r => r.assets || '(blank)');
+  document.getElementById('stats').hidden = false;
+  document.getElementById('tabs').hidden = false;
+  document.getElementById('s-total').textContent = ROWS.length;
+  document.getElementById('s-tl').textContent = tl.length;
+  document.getElementById('s-tr').textContent = tr.length + (tl.length ? ' (' + Math.round(tr.length / tl.length * 100) + '%)' : '');
+  document.getElementById('s-resp').textContent = resp.length ? fmtM(Math.round(resp.reduce((a, b) => a + b, 0) / resp.length)) : '—';
+  document.getElementById('s-nr').textContent = ROWS.filter(r => r._k === 'nr').length;
+  document.getElementById('s-hf').textContent = Object.values(byAsset).filter(g => g.length >= hfMin).length;
+
+  if (TAB === 'detail') return table(DETAIL_COLS, ROWS.map(r => ({
+    date: r.date_col, stopped: r._stop, asset: r.assets, shed: r.shed, shift: r.shift, code: r.job_code, _k: r._k,
+    op: [r.operator_id, r.operator_name].filter(Boolean).join(' · '), rank: r.rank, desc: r.description,
+    dur: r.duration, wait: r._wait, status: r._k === 'tl' ? (r._at ? 'Treated' : 'Waiting') : '',
+    at: r._at, resp: r._resp, by: r._by, src: r._src
+  })), hfMin, null);
+
+  const keyFn = TAB === 'asset' ? (r => r.assets || '(blank)') : (r => r.operator_id || r.operator_name || '(not recorded)');
+  const groups = groupBy(ROWS, keyFn);
+  const list = Object.keys(groups).map(k => {
+    const g = groups[k], tl2 = g.filter(r => r._k === 'tl'), tr2 = tl2.filter(r => r._at);
+    const rs = tr2.map(r => r._resp).filter(m => m != null && m >= 0);
+    const first = g[g.length - 1];
+    return {
+      key: k, name: TAB === 'op' ? (first.operator_name || (first.operator_id ? '' : 'Not recorded by the sheet')) : '',
+      shed: TAB === 'asset' ? first.shed : '', stops: g.length, tl: tl2.length, nr: g.filter(r => r._k === 'nr').length,
+      ot: g.filter(r => r._k === 'ot').length, waiting: tl2.length - tr2.length,
+      avg: rs.length ? Math.round(rs.reduce((a, b) => a + b, 0) / rs.length) : null,
+      last: g.reduce((m, r) => (r._stop && (!m || r._stop > m)) ? r._stop : m, null)
+    };
+  }).sort((a, b) => b.stops - a.stops);
+  table(TAB === 'asset' ? ASSET_COLS : OP_COLS, list, hfMin, 'stops');
+}
+
+const DETAIL_COLS = [
+  ['date','Date', r => dmy(r.date)], ['stopped','Stopped', r => hm(r.stopped)], ['asset','Asset', r => '<span class="asset">' + esc(r.asset) + '</span>', true],
+  ['shed','Shed'], ['shift','Shift'], ['code','Stop code', r => '<span class="pill p-' + r._k + '">' + esc(r.code || '—') + '</span>', true],
+  ['op','Operator'], ['rank','Rank'], ['desc','Description', null, false, 'desc'],
+  ['dur','Down before report', r => r.dur == null ? '—' : r.dur + ' min', false, 'num'],
+  ['status','Status', r => r.status ? '<span class="pill ' + (r.status === 'Treated' ? 'p-ok' : 'p-wait') + '">' + r.status + '</span>' : '', true],
+  ['at','Treated at', r => hm(r.at)], ['resp','Stop to treated', r => r.resp == null ? '' : fmtM(r.resp), false, 'num'],
+  ['by','Treated by'], ['src','Source', r => '<span class="pill ' + (r.src === 'App' ? 'p-app' : 'p-sheet') + '">' + r.src + '</span>', true]
+];
+const SUM_TAIL = [
+  ['stops','Stops', r => r.stops, false, 'num'], ['tl','Technical loss', r => r.tl, false, 'num'],
+  ['nr','No repair', r => r.nr, false, 'num'], ['ot','Other', r => r.ot, false, 'num'],
+  ['waiting','TL waiting', r => r.waiting || '', false, 'num'], ['avg','Avg stop to treated', r => fmtM(r.avg), false, 'num'],
+  ['last','Last stop', r => r.last ? dmy(new Date(r.last.getTime() + 3600000).toISOString()) + ' ' + hm(r.last) : '']
+];
+const ASSET_COLS = [['key','Asset', r => '<span class="asset">' + esc(r.key) + '</span>', true], ['shed','Shed']].concat(SUM_TAIL);
+const OP_COLS = [['key','Operator ID'], ['name','Name']].concat(SUM_TAIL);
+
+function table(cols, rows, hfMin, hfKey) {
+  if (SORT.key) {
+    const c = cols.find(x => x[0] === SORT.key);
+    rows = rows.slice().sort((a, b) => {
+      const x = a[SORT.key], y = b[SORT.key];
+      const nx = x instanceof Date ? x.getTime() : x, ny = y instanceof Date ? y.getTime() : y;
+      if (nx == null || nx === '') return 1; if (ny == null || ny === '') return -1;
+      return (typeof nx === 'number' && typeof ny === 'number' ? nx - ny : String(nx).localeCompare(String(ny))) * SORT.dir;
+    });
   }
-  return all;
+  LAST = { cols, rows };
+  const out = document.getElementById('out');
+  if (!rows.length) { out.innerHTML = '<div class="empty">No stops match these filters.</div>'; return; }
+  out.innerHTML = '<table><thead><tr>' + (hfKey ? '<th>#</th>' : '') + cols.map(c =>
+      '<th class="' + (c[4] === 'num' ? 'num' : '') + '" onclick="sortBy(\'' + c[0] + '\')">' + c[1] +
+      (SORT.key === c[0] ? (SORT.dir > 0 ? ' ▲' : ' ▼') : '') + '</th>').join('') + '</tr></thead><tbody>' +
+    rows.map((r, i) => {
+      const hf = hfKey && r[hfKey] >= hfMin;
+      return '<tr' + (hf ? ' class="hf"' : '') + '>' + (hfKey ? '<td class="muted">' + (i + 1) + (hf ? ' <span class="hf-flag" title="High frequency">⚑</span>' : '') + '</td>' : '') +
+        cols.map(c => {
+          const v = c[2] ? c[2](r) : r[c[0]];
+          return '<td class="' + (c[4] || '') + '">' + (c[3] ? v : esc(v == null ? '' : v)) + '</td>';
+        }).join('') + '</tr>';
+    }).join('') + '</tbody></table>';
+}
+function sortBy(k) { SORT = SORT.key === k ? { key: k, dir: -SORT.dir } : { key: k, dir: 1 }; render(); }
+
+// ---------- export ----------
+function exportCsv() {
+  if (!LAST.rows.length) { alert('Show a report first.'); return; }
+  const strip = s => String(s == null ? '' : s).replace(/<[^>]+>/g, '');
+  const lines = [LAST.cols.map(c => c[1])].concat(LAST.rows.map(r => LAST.cols.map(c => strip(c[2] ? c[2](r) : r[c[0]]))));
+  const csv = lines.map(l => l.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',')).join('\r\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['\ufeff' + csv], { type: 'text/csv' }));
+  a.download = 'Maintenance_Tracking_' + ({ detail: 'Detail', asset: 'By_Asset', op: 'By_Operator' })[TAB] + '_' + val('f-from') + '_to_' + val('f-to') + '.csv';
+  document.body.appendChild(a); a.click(); a.remove();
 }
 
-
-
-async function init(){
-  const status = document.getElementById("status");
-  try{
-    MON_ROWS = await fetchAllRows("monitoring", "");
-    STAFF_LIST = ["All", ...new Set(MON_ROWS.map(r=>r.asset_id).filter(Boolean))].sort();
-    ASSET_LIST = ["All", ...new Set(MON_ROWS.map(r=>r.assets).filter(Boolean))].sort();
-    status.style.color = "#1d8a4e";
-    status.textContent = "Connected. monitoring: " + MON_ROWS.length + " rows.";
-  }catch(e){
-    status.style.color = "#c0392b";
-    status.textContent = "Could not read data: " + (e.message||e);
-  }
+// ---------- helpers ----------
+function groupBy(rows, fn) { const g = {}; rows.forEach(r => { const k = fn(r); (g[k] = g[k] || []).push(r); }); return g; }
+function val(id) { return document.getElementById(id).value; }
+function enc(s) { return encodeURIComponent(s); }
+function headers(extra) { return Object.assign({ 'apikey': SUPABASE_ANON_KEY, 'Authorization': 'Bearer ' + SESSION_TOKEN }, extra || {}); }
+function base() { return SUPABASE_URL.replace(/\/+$/, '') + '/rest/v1/'; }
+function apiGet(path) { return fetch(base() + path, { headers: headers() }).then(r => r.ok ? r.json() : r.text().then(t => { throw new Error(t); })); }
+async function apiGetAll(path) {
+  const PAGE = 1000;
+  const resp = await fetch(base() + path, { headers: headers({ 'Prefer': 'count=exact', 'Range': '0-' + (PAGE - 1) }) });
+  if (!resp.ok) throw new Error(await resp.text());
+  const first = await resp.json();
+  const total = parseInt(((resp.headers.get('content-range') || '').split('/')[1] || '0'), 10) || first.length;
+  if (total <= first.length) return first;
+  const rest = [];
+  for (let off = PAGE; off < total; off += PAGE) rest.push(apiGet(path + '&limit=' + PAGE + '&offset=' + off));
+  return first.concat(...(await Promise.all(rest)));
 }
-
-function clearReport(){ document.getElementById("reportContainer").innerHTML = ""; }
-
-function showDropdown(id, list, onClick){
-  const container = document.getElementById(id);
-  if(!list.length){ container.style.display = "none"; return; }
-  container.innerHTML = list.map(v=>`<div class="dropdown-item">${v}</div>`).join("");
-  Array.from(container.children).forEach((el,i)=>{ el.onclick = ()=>{ onClick(list[i]); }; });
-  container.style.display = "block";
-}
-function hideDropdown(id){ document.getElementById(id).style.display = "none"; }
-
-function filterStaff(){
-  const val = document.getElementById("staff").value.toLowerCase();
-  const filtered = STAFF_LIST.filter(i=>String(i).toLowerCase().includes(val));
-  showDropdown("staffList", filtered, v=>{ document.getElementById("staff").value = v; hideDropdown("staffList"); });
-}
-function filterAsset(){
-  const val = document.getElementById("asset").value.toLowerCase();
-  const filtered = ASSET_LIST.filter(i=>String(i).toLowerCase().includes(val));
-  showDropdown("assetList", filtered, v=>{ document.getElementById("asset").value = v; hideDropdown("assetList"); });
-}
-
-function navigateDropdown(event, listId, inputId){
-  const container = document.getElementById(listId);
-  if(container.style.display === "none") return;
-  let items = Array.from(container.children);
-  let activeIndex = items.findIndex(i=>i.classList.contains("active"));
-  if(event.key === "ArrowDown"){
-    event.preventDefault();
-    if(activeIndex>=0) items[activeIndex].classList.remove("active");
-    activeIndex = (activeIndex+1) % items.length;
-    items[activeIndex].classList.add("active");
-  } else if(event.key === "ArrowUp"){
-    event.preventDefault();
-    if(activeIndex>=0) items[activeIndex].classList.remove("active");
-    activeIndex = (activeIndex-1+items.length) % items.length;
-    items[activeIndex].classList.add("active");
-  } else if(event.key === "Enter"){
-    event.preventDefault();
-    if(activeIndex>=0){
-      document.getElementById(inputId).value = items[activeIndex].innerText;
-      hideDropdown(listId);
-    }
-  }
-}
-
-function run(){
-  if(!MON_ROWS.length){ alert("monitoring returned 0 rows — check its read policy."); return; }
-  const start = document.getElementById("start").value;
-  const end = document.getElementById("end").value;
-  const staff = document.getElementById("staff").value || "All";
-  const job = document.getElementById("job").value || "All";
-  const asset = document.getElementById("asset").value || "All";
-  const shift = document.getElementById("shift").value || "All";
-  if(!start || !end){ alert("Please fill Start and End Dates"); return; }
-
-  const rows = MON_ROWS.filter(r=>{
-    if(r.date_col < start || r.date_col > end) return false;
-    if(staff !== "All" && r.asset_id !== staff) return false;
-    if(job !== "All" && r.job_code !== job) return false;
-    if(asset !== "All" && r.assets !== asset) return false;
-    if(shift !== "All" && r.shift !== shift) return false;
-    return true;
-  }).sort((a,b)=>(a.date_col||"").localeCompare(b.date_col||""));
-
-  if(!rows.length){
-    document.getElementById("reportContainer").innerHTML = "<h3 style='text-align:center'>No data found</h3>";
-    return;
-  }
-
-  let totalRepair=0, totalDowntime=0, totalWaiting=0;
-  const dataRows = rows.map(r=>{
-    const stop=parseDT(r.m_c_stoppage_time), start_t=parseDT(r.starting_time), finish=parseDT(r.finish_time);
-    const repair = minutesBetween(start_t, finish);
-    const downtime = minutesBetween(stop, finish);
-    const waiting = minutesBetween(stop, start_t);
-    totalRepair+=repair; totalDowntime+=downtime; totalWaiting+=waiting;
-    return [r.date_col, r.assets, r.asset_id, r.operator_name, repair, downtime, waiting, r.job_code, r.descripttion, r.shift];
-  });
-
-  const n = dataRows.length;
-  const avgRepair = totalRepair/n, avgDowntime = totalDowntime/n, avgWaiting = totalWaiting/n;
-
-  let html = `<table><tr>
-    <th>Date</th><th>Asset</th><th>ID</th><th>Operator Name</th>
-    <th>Repair</th><th>Downtime</th><th>Waiting</th>
-    <th>Job</th><th>Description</th><th>Shift</th></tr>`;
-
-  dataRows.forEach(r=>{
-    html += "<tr>" + r.map(v=>`<td>${v??""}</td>`).join("") + "</tr>";
-  });
-
-  html += `<tr class="total"><td colspan="4">TOTAL</td>
-    <td>${totalRepair}</td><td>${totalDowntime}</td><td>${totalWaiting}</td>
-    <td colspan="3">Jobs: ${n}</td></tr>`;
-
-  html += `<tr class="avg"><td colspan="4">AVERAGE</td>
-    <td>${avgRepair.toFixed(1)}</td><td>${avgDowntime.toFixed(1)}</td><td>${avgWaiting.toFixed(1)}</td>
-    <td colspan="3"></td></tr>`;
-
-  html += "</table>";
-  document.getElementById("reportContainer").innerHTML = html;
-}
-
-init();
+function esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 </script>
-<script src="../../assets/letterhead.js"></script>
 </body>
 </html>
