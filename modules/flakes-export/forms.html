@@ -237,11 +237,9 @@ function renderPanel(form){
   let body = "";
   const dis = ed ? "" : " disabled";
   if(key === "details"){
-    const cur = form.client_id, opts = CLIENTS.slice();
-    if(form.client_name && !opts.some(c => String(c.id) === String(cur))) opts.unshift({ id:cur || "", client_name:form.client_name });
     body = `<div class="grid2"><div><label>Date</label><input type="date" id="f_date" value="${val(form.form_date)}"${dis}></div>
       <div><label>Form No</label><input id="f_formno" value="${val(form.form_no || "Assigned when you save")}" readonly></div></div>
-      <div class="grid2"><div><label>Client name *</label><select id="f_client"${dis}><option value="">Select client</option>${opts.map(c => `<option value="${val(c.id)}"${String(c.id) === String(cur) ? " selected" : ""}>${val(c.client_name)}</option>`).join("")}</select></div>
+      <div class="grid2"><div><label>Client name *</label><input id="f_client" list="clientList" maxlength="120" autocomplete="off" placeholder="Type the client name, or pick from the list" value="${val(form.client_name)}"${dis}><datalist id="clientList">${CLIENTS.map(c => `<option value="${val(c.client_name)}"></option>`).join("")}</datalist></div>
       <div><label>Picking slip no *</label><input id="f_picking" value="${val(form.picking_slip_no)}"${dis}></div></div>
       <label>Odoo delivery, picking &amp; packages slip</label>${filePicker("odoo", ed)}`;
   }else if(key === "delivery_details"){
@@ -320,9 +318,12 @@ function collect(key){
   const num = id => g(id) === "" ? null : Number(g(id));
   const p = {}, errs = [];
   if(key === "details"){
-    p.form_date = g("f_date") || fefTodayYMD(); p.client_id = g("f_client") || null;
-    const c = CLIENTS.find(x => String(x.id) === String(p.client_id)) || (CUR && String(CUR.client_id) === String(p.client_id) ? { client_name:CUR.client_name } : null);
-    p.client_name = c ? c.client_name : (p.client_id ? (CUR && CUR.client_name) : null);
+    p.form_date = g("f_date") || fefTodayYMD();
+    const typed = g("f_client").replace(/\s+/g, " "), low = typed.toLowerCase();
+    const hit = CLIENTS.find(c => String(c.client_name || "").trim().toLowerCase() === low);
+    if(hit){ p.client_name = hit.client_name; p.client_id = String(hit.id); }                                   // an existing client: use its exact spelling
+    else if(typed && CUR && low === String(CUR.client_name || "").trim().toLowerCase()){ p.client_name = CUR.client_name; p.client_id = CUR.client_id || null; }   // unchanged on an older form
+    else{ p.client_name = typed || null; p.client_id = null; }                                                  // a new name, saved as typed
     p.picking_slip_no = g("f_picking") || null;
   }else if(key === "delivery_details"){
     p.delivery_slip_weight_net = num("f_slip"); p.bags_quantity = num("f_bags"); p.vehicle_number = g("f_vehicle") || null; p.container_number = g("f_container") || null; p.rumbu_weighbridge_weight = num("f_wb");
@@ -337,7 +338,7 @@ function collect(key){
 }
 function requiredMissing(key, p){
   const m = [];
-  if(key === "details"){ if(!p.client_id) m.push("client"); if(!p.picking_slip_no) m.push("picking slip no"); }
+  if(key === "details"){ if(!p.client_name) m.push("client name"); if(!p.picking_slip_no) m.push("picking slip no"); }
   else if(key === "delivery_details"){
     if(!(p.delivery_slip_weight_net > 0)) m.push("delivery slip weight"); if(!(p.bags_quantity >= 1)) m.push("bag(s) quantity");
     if(!p.vehicle_number) m.push("vehicle number"); if(!p.container_number) m.push("container number"); if(!(p.rumbu_weighbridge_weight > 0)) m.push("Rumbu weighbridge weight");
