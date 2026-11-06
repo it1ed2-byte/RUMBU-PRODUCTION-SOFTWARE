@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Report Stop — Monitoring Room</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+(function(){
+  function apply(t){ if(t) document.documentElement.setAttribute("data-theme",t); }
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+  try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+})();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+
+  [hidden] { display: none !important; }
+
+  body { padding: 20px; }
+  .wrap { max-width: 1320px; margin: 0 auto; }
+  .layout { display: grid; grid-template-columns: minmax(0, 600px) minmax(0, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 1050px) { .layout { grid-template-columns: 1fr; } }
+
+  /* Pending panel */
+  .pend-card { padding: 16px 16px 10px; position: sticky; top: 12px; }
+  .pend-hdr { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .pend-hdr h3 { margin: 0; font-size: 14px; color: var(--heading); }
+  .count-pill { display: inline-block; min-width: 22px; padding: 2px 8px; border-radius: 999px;
+    background: #fef3c7; color: #92400e; font-size: 12px; font-weight: 800; text-align: center; margin-left: 6px; }
+  [data-theme="dark"] .count-pill { background: #451a03; color: #fcd34d; }
+  .pend-tools { display: flex; gap: 8px; margin-bottom: 10px; }
+  .pend-tools input { padding: 8px 10px; font-size: 13px; }
+  .mini-btn { padding: 7px 12px; border: 1px solid var(--line); border-radius: 8px; background: transparent;
+    color: var(--text); font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+  .mini-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .pend-list { max-height: calc(100vh - 210px); overflow-y: auto; margin: 0 -4px; padding: 0 4px; }
+  .pend-row { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; padding: 10px 12px;
+    border: 1px solid var(--line); border-radius: 10px; margin-bottom: 8px; cursor: pointer;
+    background: var(--bg); transition: border-color .12s, transform .12s; }
+  .pend-row:hover { border-color: var(--accent); transform: translateX(-2px); }
+  .pend-row .wo { font-family: monospace; font-weight: 800; font-size: 13px; color: var(--accent); }
+  .pend-row .asset { font-weight: 800; font-size: 14px; color: var(--heading); }
+  .pend-row .meta { grid-column: 1 / -1; font-size: 11.5px; color: var(--muted); }
+  .age { font-size: 12px; font-weight: 800; padding: 2px 8px; border-radius: 999px; align-self: start;
+    background: var(--card); border: 1px solid var(--line); white-space: nowrap; }
+  .age.warn { color: #b45309; border-color: #fcd34d; }
+  .age.bad  { color: var(--bad, #dc2626); border-color: #fca5a5; }
+  .pend-empty { text-align: center; padding: 30px 10px; color: var(--muted); font-size: 13px; }
+  .pend-foot { font-size: 11px; color: var(--muted); text-align: right; padding: 4px 2px 0; }
+
+  /* Toast */
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px);
+    background: var(--ok, #16a34a); color: #fff; padding: 12px 20px; border-radius: 10px;
+    font-size: 14px; font-weight: 700; box-shadow: 0 8px 24px rgba(0,0,0,.2); opacity: 0;
+    pointer-events: none; transition: opacity .2s, transform .2s; z-index: 300; }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.err { background: var(--bad, #dc2626); }
+
+  /* Slide-over drawer */
+  .drawer-bg { position: fixed; inset: 0; background: rgba(0,0,0,.35); opacity: 0; pointer-events: none;
+    transition: opacity .2s; z-index: 200; }
+  .drawer-bg.open { opacity: 1; pointer-events: auto; }
+  .drawer { position: fixed; top: 0; right: 0; height: 100%; width: 440px; max-width: 100%;
+    background: var(--card); border-left: 1px solid var(--line); box-shadow: -8px 0 32px rgba(0,0,0,.18);
+    transform: translateX(100%); transition: transform .25s ease; z-index: 210;
+    display: flex; flex-direction: column; }
+  .drawer.open { transform: translateX(0); }
+  .drawer-hdr { display: flex; justify-content: space-between; align-items: center; padding: 16px 20px;
+    border-bottom: 1px solid var(--line); }
+  .drawer-hdr h3 { margin: 0; font-size: 15px; color: var(--heading); }
+  .drawer-x { border: none; background: none; font-size: 22px; line-height: 1; cursor: pointer; color: var(--muted); }
+  .drawer-body { padding: 18px 20px; overflow-y: auto; flex: 1; }
+  .drawer-foot { padding: 14px 20px; border-top: 1px solid var(--line); display: flex; gap: 10px; }
+  .drawer-foot .submit-btn { flex: 1; }
+  .dwo { font-family: monospace; font-size: 22px; font-weight: 800; color: var(--accent); letter-spacing: 1px; }
+  .dgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; margin: 14px 0 18px;
+    padding: 12px 14px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; }
+
+  .page-hdr { margin-bottom: 18px; }
+  .page-hdr h2 { margin: 0 0 2px; font-size: 17px; color: var(--heading); }
+  .page-hdr p  { margin: 0; font-size: 12px; color: var(--muted); }
+
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 12px; padding: 20px 22px; margin-bottom: 14px;
+  }
+
+  .field { margin-bottom: 14px; }
+  .field:last-child { margin-bottom: 0; }
+  label {
+    display: block; font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .4px;
+    color: var(--muted); margin-bottom: 5px;
+  }
+  label .req { color: var(--bad, #dc2626); }
+  input, select {
+    width: 100%; padding: 10px 12px; border: 1px solid var(--line);
+    border-radius: 9px; font-size: 14px; font-family: inherit;
+    background: var(--bg); color: var(--text); box-sizing: border-box;
+    transition: border-color .15s;
+  }
+  input:focus, select:focus {
+    outline: none; border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(37,99,235,.12);
+  }
+
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 480px) { .two-col { grid-template-columns: 1fr; } }
+
+  .warn-box {
+    display: flex; align-items: flex-start; gap: 8px;
+    background: #fff7ed; border: 1px solid #fed7aa; border-radius: 8px;
+    padding: 10px 12px; margin-top: 10px; font-size: 12.5px;
+    color: #92400e; line-height: 1.5;
+  }
+  [data-theme="dark"] .warn-box { background: #431407; border-color: #9a3412; color: #fdba74; }
+
+  .submit-btn {
+    width: 100%; padding: 13px; border: none; border-radius: 10px;
+    background: var(--accent); color: #fff; font-size: 15px; font-weight: 700;
+    cursor: pointer; letter-spacing: .3px; transition: background .15s;
+  }
+  .submit-btn:hover  { background: var(--accent-2, #1d4ed8); }
+  .submit-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+  .status { display: block; margin-top: 10px; font-size: 13px; font-weight: 700;
+            min-height: 16px; text-align: center; }
+  .status.ok  { color: var(--ok, #16a34a); }
+  .status.err { color: var(--bad, #dc2626); }
+
+  /* Loading overlay */
+  #loadingBar {
+    display: flex; align-items: center; gap: 10px; padding: 16px 20px;
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 12px; margin-bottom: 14px; font-size: 13px; color: var(--muted);
+  }
+  .spinner {
+    width: 16px; height: 16px; border: 2px solid var(--line);
+    border-top-color: var(--accent); border-radius: 50%;
+    animation: spin .6s linear infinite; flex: 0 0 16px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Success screen */
+  .success-box {
+    background: var(--card); border: 2px solid var(--ok, #16a34a);
+    border-radius: 14px; padding: 36px 28px; text-align: center;
+  }
+  .success-box h3 { margin: 0 0 6px; font-size: 18px; color: var(--ok, #16a34a); }
+  .success-box p  { margin: 0 0 20px; font-size: 13px; color: var(--muted); }
+  .wo-badge {
+    display: inline-block; background: var(--accent); color: #fff;
+    font-size: 26px; font-weight: 800; letter-spacing: 3px; font-family: monospace;
+    padding: 10px 28px; border-radius: 10px; margin: 10px 0 20px;
+  }
+  .btn-row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .btn-ghost {
+    padding: 10px 20px; border: 1px solid var(--line); border-radius: 9px;
+    background: transparent; color: var(--text); font-size: 13px; font-weight: 700;
+    cursor: pointer; text-decoration: none; display: inline-block;
+  }
+  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+
+  .date-strip {
+    display: flex; justify-content: space-between; align-items: center; gap: 10px;
+    flex-wrap: wrap; padding: 12px 18px;
+  }
+  .date-strip .lbl { font-size: 11px; font-weight: 700; text-transform: uppercase;
+                     letter-spacing: .4px; color: var(--muted); }
+  .date-strip .val { font-size: 16px; font-weight: 800; color: var(--heading); }
+  .clock { font-family: monospace; font-size: 15px; font-weight: 700; color: var(--accent); }
+
+  .step-no {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 18px; height: 18px; border-radius: 50%; background: var(--accent);
+    color: #fff; font-size: 10px; margin-right: 6px; vertical-align: 1px;
+  }
+  input.invalid { border-color: var(--bad, #dc2626) !important; box-shadow: 0 0 0 3px rgba(220,38,38,.12); }
+  input.valid   { border-color: var(--ok, #16a34a); }
+  .field-err { font-size: 11.5px; font-weight: 700; color: var(--bad, #dc2626); margin-top: 5px; min-height: 0; }
+  .hint { font-size: 11.5px; color: var(--muted); margin-top: 5px; }
+  .opt { font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--muted); }
+
+  /* Auto-filled panel */
+  .auto-card h4 {
+    margin: 0 0 12px; font-size: 12px; text-transform: uppercase; letter-spacing: .5px;
+    color: var(--muted);
+  }
+  .auto-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 14px; }
+  @media (max-width: 560px) { .auto-grid { grid-template-columns: 1fr 1fr; } }
+  .auto-item .k { font-size: 10.5px; font-weight: 700; text-transform: uppercase;
+                  letter-spacing: .4px; color: var(--muted); }
+  .auto-item .v { font-size: 13.5px; font-weight: 700; color: var(--text);
+                  min-height: 18px; word-break: break-word; }
+  .auto-item .v.empty { color: var(--muted); font-weight: 400; }
+  .auto-sub { grid-column: 1 / -1; border-top: 1px dashed var(--line); margin: 2px 0; }
+
+  .state-pill {
+    display: inline-block; padding: 3px 10px; border-radius: 999px;
+    font-size: 11px; font-weight: 800; letter-spacing: .3px;
+  }
+  .state-pill.pending { background: #fef3c7; color: #92400e; }
+  .state-pill.closed  { background: #dcfce7; color: #15803d; }
+  [data-theme="dark"] .state-pill.pending { background: #451a03; color: #fcd34d; }
+  [data-theme="dark"] .state-pill.closed  { background: #052e16; color: #4ade80; }
+
+  .tag { display:inline-block; padding:2px 8px; border-radius:999px; font-size:11px; font-weight:800; white-space:nowrap; }
+  .tag.wait { background:#fef3c7; color:#92400e; }
+  .tag.done { background:#dcfce7; color:#15803d; }
+  .tag.info { background:var(--card); border:1px solid var(--line); color:var(--muted); }
+  [data-theme="dark"] .tag.wait { background:#451a03; color:#fcd34d; }
+  [data-theme="dark"] .tag.done { background:#052e16; color:#4ade80; }
+  .seg { display:flex; gap:6px; }
+  .seg button { flex:1; padding:6px 8px; border:1px solid var(--line); border-radius:8px; background:transparent;
+    color:var(--text); font-size:12px; font-weight:700; cursor:pointer; }
+  .seg button.on { background:var(--accent); border-color:var(--accent); color:#fff; }
+  textarea { width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:9px; font-size:14px;
+    font-family:inherit; background:var(--bg); color:var(--text); box-sizing:border-box; resize:vertical; min-height:60px; }
+  textarea:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(37,99,235,.12); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="page-hdr">
+    <h2>Report Machine Stop</h2>
+    <p>Monitoring Room. Record a stop reported by an operator through the shift leader. Technical Loss reports appear on the Live Board until treated.</p>
+  </div>
+
+  <div id="loadingBar"><span class="spinner"></span>Loading reference data…</div>
+
+  <div id="formWrap" hidden>
+   <div class="layout">
+
+   <!-- LEFT: entry form -->
+   <div>
+    <div class="card date-strip">
+      <div>
+        <div class="lbl">Date</div>
+        <div class="val" id="d-date">—</div>
+      </div>
+      <div style="text-align:right;">
+        <div class="lbl">Time now</div>
+        <div class="clock" id="d-clock">--:--:--</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="field">
+        <label><span class="step-no">1</span>Asset <span class="req">*</span></label>
+        <input type="text" id="f-asset" list="dl-assets" autocomplete="off" placeholder="Type or pick asset, e.g. WE-04">
+        <datalist id="dl-assets"></datalist>
+        <div class="field-err" id="err-asset"></div>
+      </div>
+
+      <div class="field">
+        <label><span class="step-no">2</span>Operator ID <span class="req">*</span></label>
+        <input type="text" id="f-operator" list="dl-operators" autocomplete="off" placeholder="Type operator ID or name, e.g. RD1091">
+        <datalist id="dl-operators"></datalist>
+        <div class="field-err" id="err-operator"></div>
+      </div>
+
+      <div class="field">
+        <label><span class="step-no">3</span>Duration (minutes) <span class="req">*</span></label>
+        <input type="number" id="f-duration" min="0" max="1440" step="1" inputmode="numeric"
+               placeholder="How long has the machine been stopped? e.g. 30"
+               oninput="onDurationChange()" onkeydown="blockNonDigit(event)">
+        <div class="field-err" id="err-duration"></div>
+        <div class="hint">Sets stop time (now minus duration), starting time (now) and shift.</div>
+      </div>
+
+      <div class="field">
+        <label><span class="step-no">4</span>Stop Code <span class="req">*</span></label>
+        <input type="text" id="f-code" list="dl-codes" autocomplete="off" placeholder="Technical Loss, No Repair, Short Stop…">
+        <datalist id="dl-codes"></datalist>
+        <div class="field-err" id="err-code"></div>
+        <div class="hint">Selecting a code sets the finish time to now.</div>
+      </div>
+
+      <div class="field">
+        <label><span class="step-no">5</span>Description <span class="opt">(optional)</span></label>
+        <textarea id="f-desc" maxlength="500" placeholder="What the operator or shift leader reported"></textarea>
+      </div>
+
+      <div class="field" style="margin-top:6px;">
+        <button class="submit-btn" id="submitBtn" onclick="submitForm()">Save Report</button>
+        <span class="status" id="form-status"></span>
+      </div>
+    </div>
+
+    <div class="card auto-card">
+      <h4>Filled automatically</h4>
+      <div class="auto-grid">
+        <div class="auto-item"><div class="k">Shed</div><div class="v" id="a-shed"></div></div>
+        <div class="auto-item"><div class="k">Unit</div><div class="v" id="a-unit"></div></div>
+        <div class="auto-item"><div class="k">Section</div><div class="v" id="a-section"></div></div>
+        <div class="auto-sub"></div>
+        <div class="auto-item"><div class="k">Operator name</div><div class="v" id="a-opname"></div></div>
+        <div class="auto-item"><div class="k">Rank</div><div class="v" id="a-rank"></div></div>
+        <div class="auto-item"><div class="k">Shift</div><div class="v" id="a-shift"></div></div>
+        <div class="auto-sub"></div>
+        <div class="auto-item"><div class="k">Machine stop time</div><div class="v" id="a-stop"></div></div>
+        <div class="auto-item"><div class="k">Starting time</div><div class="v" id="a-start"></div></div>
+        <div class="auto-item"><div class="k">Finish time</div><div class="v" id="a-finish"></div></div>
+      </div>
+    </div>
+   </div>
+
+   <!-- RIGHT: this shift's reports -->
+   <div>
+    <div class="card pend-card">
+      <div class="pend-hdr">
+        <h3>Reports this shift<span class="count-pill" id="p-count">0</span></h3>
+        <button class="mini-btn" onclick="loadRecent()">↻ Refresh</button>
+      </div>
+      <div class="pend-tools seg" id="p-seg">
+        <button class="on" data-f="all" onclick="setFilter('all')">All</button>
+        <button data-f="tl" onclick="setFilter('tl')">Technical Loss</button>
+        <button data-f="wait" onclick="setFilter('wait')">Waiting</button>
+      </div>
+      <div class="pend-list" id="p-list"><div class="pend-empty">Loading…</div></div>
+      <div class="pend-foot" id="p-foot"></div>
+    </div>
+   </div>
+
+   </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// =============================================
+// CONFIG
+// =============================================
+const TABLE        = 'tracking_table';
+const TREATED      = 'treated_table';
+const TZ           = 'Africa/Lagos';
+const MAX_DURATION = 1440;
+const REFRESH_MS   = 30000;
+const TECH_LOSS    = 'technical loss';
+
+let SESSION_TOKEN = SUPABASE_ANON_KEY;
+let ME_PROFILE    = null;
+let ASSETS = {}, OPERATORS = {}, OPLABEL = {}, CODES = {};
+let RECENT = [], TREATED_IDS = new Set(), FILTER = 'all';
+
+const AUTO = {};
+function clearAuto(keys) { keys.forEach(k => { AUTO[k] = null; }); }
+clearAuto(['shed','unit','section','opname','rank','opid','stop','start','shift','finish']);
+
+// =============================================
+// TIME
+// tracking_table stores true UTC text: "2026-11-06 13:05:22.481 UTC"
+// =============================================
+function watParts(d) {
+  const p = {};
+  new Intl.DateTimeFormat('en-GB', { timeZone: TZ, year:'numeric', month:'2-digit', day:'2-digit',
+    hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false }).formatToParts(d).forEach(x => p[x.type] = x.value);
+  if (p.hour === '24') p.hour = '00';
+  return p;
+}
+function toDbTs(d)   { return d.toISOString().replace('T', ' ').replace('Z', ' UTC'); }
+function watDate(d)  { const p = watParts(d); return p.year + '-' + p.month + '-' + p.day; }
+function showTs(d)   { const p = watParts(d); return p.hour + ':' + p.minute + ':' + p.second; }
+function showHm(d)   { const p = watParts(d); return p.hour + ':' + p.minute; }
+function showDate(d) { return new Intl.DateTimeFormat('en-GB', { timeZone: TZ, day:'2-digit', month:'short', year:'numeric' }).format(d); }
+function shiftFor(d) { const h = +watParts(d).hour; return (h >= 7 && h < 19) ? 'Morning' : 'Night'; }
+function parseDbTs(v) {
+  if (!v) return null;
+  const d = new Date(String(v).trim().replace(' UTC', 'Z').replace(' ', 'T'));
+  return isNaN(d) ? null : d;
+}
+// Start of the current shift as a Date (07:00 or 19:00 WAT)
+function shiftStart(now) {
+  const p = watParts(now), h = +p.hour;
+  const base = Date.UTC(+p.year, +p.month - 1, +p.day) - 3600000;   // WAT midnight in UTC ms
+  if (h >= 7 && h < 19) return new Date(base + 7 * 3600000);
+  if (h >= 19)          return new Date(base + 19 * 3600000);
+  return new Date(base - 5 * 3600000);                                // 19:00 the day before
+}
+function fmtAge(m) {
+  if (m == null) return '—';
+  if (m < 60) return m + ' min';
+  return Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'm';
+}
+
+// =============================================
+// BOOT
+// =============================================
+document.addEventListener('DOMContentLoaded', async function () {
+  try {
+    const profile = await requireAuth('../../login.html');
+    if (!profile) return;
+    ME_PROFILE = profile;
+    try {
+      const { data: { session } } = await sb.auth.getSession();
+      SESSION_TOKEN = session?.access_token || SUPABASE_ANON_KEY;
+    } catch (e) {}
+
+    tickClock(); setInterval(tickClock, 1000);
+    await loadReferenceData();
+    bindPickers();
+    document.getElementById('loadingBar').style.display = 'none';
+    document.getElementById('formWrap').hidden = false;
+    renderAuto();
+    document.getElementById('f-asset').focus();
+
+    await loadRecent();
+    setInterval(() => { if (!document.hidden) loadRecent(); }, REFRESH_MS);
+  } catch (err) {
+    document.getElementById('loadingBar').innerHTML =
+      '<span style="color:var(--bad)">❌ ' + esc(err.message || err) + '</span>';
+  }
+});
+
+function tickClock() {
+  const now = new Date();
+  document.getElementById('d-date').textContent  = showDate(now);
+  document.getElementById('d-clock').textContent = showTs(now);
+}
+
+// =============================================
+// REFERENCE DATA
+// =============================================
+async function loadReferenceData() {
+  const [assets, ops, codes] = await Promise.all([
+    cachedGetAll('assets', 'cr_assets?select=asset,shed,grp,section&is_active=eq.true&order=asset.asc'),
+    cachedGetAll('operators', 'cr_operators?select=operator_id,operator_name,rank&is_active=eq.true&order=operator_id.asc'),
+    cachedGetAll('stopcodes', 'cr_stop_codes?select=code,sort_order&is_active=eq.true&order=sort_order.asc')
+  ]);
+  const fill = (id, list) => {
+    document.getElementById(id).innerHTML = list.map(v => '<option value="' + esc(v) + '"></option>').join('');
+  };
+
+  assets.forEach(a => { if (a.asset) ASSETS[norm(a.asset)] = a; });
+  codes.forEach(c => { if (c.code) CODES[norm(c.code)] = c.code; });
+
+  // Operators are picked as "ID · NAME"; typing the ID alone also works when it is unique
+  const idCount = {};
+  ops.forEach(o => { const k = norm(o.operator_id); idCount[k] = (idCount[k] || 0) + 1; });
+  const labels = [];
+  ops.forEach(o => {
+    const label = o.operator_id + ' · ' + o.operator_name;
+    OPLABEL[norm(label)] = o;
+    if (idCount[norm(o.operator_id)] === 1) OPERATORS[norm(o.operator_id)] = o;
+    labels.push(label);
+  });
+
+  fill('dl-assets', assets.map(a => a.asset).filter(Boolean));
+  fill('dl-operators', labels);
+  fill('dl-codes', codes.map(c => c.code));
+}
+
+// =============================================
+// STRICT PICKERS: only database values are accepted
+// =============================================
+const PICKERS = {
+  'f-asset':    { err: 'err-asset',    label: 'asset',    find: v => ASSETS[norm(v)] || null,
+                  text: m => m.asset, after: m => onAsset(m) },
+  'f-operator': { err: 'err-operator', label: 'operator', find: v => OPLABEL[norm(v)] || OPERATORS[norm(v)] || null,
+                  text: m => m.operator_id + ' · ' + m.operator_name, after: m => onOperator(m) },
+  'f-code':     { err: 'err-code',     label: 'stop code', find: v => CODES[norm(v)] || null,
+                  text: m => m, after: m => onCode(m) }
+};
+function bindPickers() {
+  Object.keys(PICKERS).forEach(id => {
+    const el = document.getElementById(id);
+    el.addEventListener('change', () => enforcePicker(id));
+    el.addEventListener('blur',   () => enforcePicker(id));
+    el.addEventListener('input',  () => { const m = PICKERS[id].find(el.value); PICKERS[id].after(m); });
+  });
+}
+function enforcePicker(id) {
+  const p = PICKERS[id], el = document.getElementById(id), er = document.getElementById(p.err);
+  const raw = el.value.trim();
+  if (!raw) { el.classList.remove('valid', 'invalid'); er.textContent = ''; p.after(null); return false; }
+  const m = p.find(raw);
+  if (m) {
+    el.value = p.text(m);
+    el.classList.remove('invalid'); el.classList.add('valid'); er.textContent = '';
+    p.after(m); return true;
+  }
+  const dup = id === 'f-operator' && Object.keys(OPLABEL).some(k => k.startsWith(norm(raw) + ' · '));
+  el.value = ''; el.classList.remove('valid'); el.classList.add('invalid');
+  er.textContent = dup
+    ? 'Operator ID ' + raw + ' belongs to more than one person. Pick the right name from the list.'
+    : '"' + raw + '" is not in the ' + p.label + ' list. Pick one from the list.';
+  p.after(null); return false;
+}
+
+// =============================================
+// TRIGGERS
+// =============================================
+function onAsset(a) {
+  AUTO.shed = a ? (a.shed || null) : null;
+  AUTO.unit = a ? (a.grp || null) : null;
+  AUTO.section = a ? (a.section || null) : null;
+  renderAuto();
+}
+function onOperator(o) {
+  AUTO.opid   = o ? o.operator_id : null;
+  AUTO.opname = o ? o.operator_name : null;
+  AUTO.rank   = o ? (o.rank || null) : null;
+  renderAuto();
+}
+function onCode(c) {
+  AUTO.finish = c ? new Date() : null;
+  renderAuto();
+}
+function blockNonDigit(e) { if (['e','E','+','-','.',','].includes(e.key)) e.preventDefault(); }
+function durationError() {
+  const v = document.getElementById('f-duration').value;
+  if (v === '') return 'Enter the duration in minutes.';
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 0) return 'Duration must be a whole number of minutes.';
+  if (n > MAX_DURATION) return 'Duration cannot be more than ' + MAX_DURATION + ' minutes (24 hours).';
+  return '';
+}
+function onDurationChange() {
+  clearAuto(['stop','start','shift']);
+  const el = document.getElementById('f-duration');
+  const err = durationError();
+  document.getElementById('err-duration').textContent = el.value === '' ? '' : err;
+  el.classList.toggle('invalid', el.value !== '' && !!err);
+  el.classList.toggle('valid', el.value !== '' && !err);
+  if (!err) {
+    const now = new Date();
+    AUTO.start = now;
+    AUTO.stop  = new Date(now.getTime() - Number(el.value) * 60000);
+    AUTO.shift = shiftFor(now);
+  }
+  renderAuto();
+}
+function renderAuto() {
+  const set = (id, v) => {
+    const el = document.getElementById(id);
+    const empty = v === null || v === undefined || v === '';
+    el.textContent = empty ? '—' : v; el.className = 'v' + (empty ? ' empty' : '');
+  };
+  set('a-shed', AUTO.shed); set('a-unit', AUTO.unit); set('a-section', AUTO.section);
+  set('a-opname', AUTO.opname); set('a-rank', AUTO.rank); set('a-shift', AUTO.shift);
+  set('a-stop',   AUTO.stop   ? showTs(AUTO.stop)   : null);
+  set('a-start',  AUTO.start  ? showTs(AUTO.start)  : null);
+  set('a-finish', AUTO.finish ? showTs(AUTO.finish) : null);
+}
+
+// =============================================
+// SUBMIT
+// =============================================
+async function submitForm() {
+  const okA = enforcePicker('f-asset'), okO = enforcePicker('f-operator'), okC = enforcePicker('f-code');
+  const dErr = durationError();
+  if (dErr) {
+    document.getElementById('err-duration').textContent = dErr;
+    document.getElementById('f-duration').classList.add('invalid');
+  }
+  if (!okA || !okO || !okC || dErr || !AUTO.start) {
+    return setStatus('Fix the fields marked in red. Asset, operator and stop code must be picked from the list.', 'err');
+  }
+  const a = ASSETS[norm(document.getElementById('f-asset').value)];
+  const code = CODES[norm(document.getElementById('f-code').value)];
+  const username = ME_PROFILE ? (ME_PROFILE.username || ME_PROFILE.email || null) : null;
+  const desc = document.getElementById('f-desc').value.trim();
+
+  const payload = {
+    date_col:         watDate(AUTO.stop),
+    assets:           a.asset,
+    operator_id:      AUTO.opid,
+    operator_name:    AUTO.opname,
+    rank:             AUTO.rank,
+    duration:         Number(document.getElementById('f-duration').value),
+    job_code:         code,
+    mc_stoppage_time: toDbTs(AUTO.stop),
+    starting_time:    toDbTs(AUTO.start),
+    finish_time:      toDbTs(AUTO.finish || new Date()),
+    description:      desc || null,
+    shift:            AUTO.shift,
+    shed:             a.shed != null ? String(a.shed) : null,
+    created_by:       username
+  };
+
+  const btn = document.getElementById('submitBtn');
+  btn.disabled = true; setStatus('Saving…', '');
+  try {
+    await apiPost(TABLE, payload);
+    resetForm();
+    showToast('✓ ' + payload.assets + ' reported as ' + code);
+    loadRecent();
+  } catch (e) {
+    setStatus('Error: ' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+function resetForm() {
+  ['f-asset','f-operator','f-duration','f-code','f-desc'].forEach(id => {
+    const el = document.getElementById(id); el.value = ''; el.classList.remove('valid', 'invalid');
+  });
+  ['err-asset','err-operator','err-duration','err-code'].forEach(id => { document.getElementById(id).textContent = ''; });
+  clearAuto(Object.keys(AUTO));
+  setStatus('', ''); renderAuto();
+  document.getElementById('f-asset').focus();
+}
+
+// =============================================
+// REPORTS THIS SHIFT (right panel)
+// =============================================
+async function loadRecent() {
+  try {
+    const now = new Date();
+    const from = shiftStart(now);
+    // The stop date can be the day before for a night shift, so read both days and filter by time
+    const days = Array.from(new Set([watDate(from), watDate(now)]));
+    const rows = await apiGetAll(TABLE +
+      '?select=id,assets,shed,job_code,operator_name,operator_id,mc_stoppage_time,description,shift' +
+      '&date_col=in.(' + days.join(',') + ')&order=id.desc');
+    RECENT = rows.filter(r => { const t = parseDbTs(r.mc_stoppage_time); return t && t >= from; });
+
+    TREATED_IDS = new Set();
+    const ids = RECENT.filter(r => isTL(r)).map(r => r.id);
+    for (let i = 0; i < ids.length; i += 150) {
+      const t = await apiGet(TREATED + '?select=id_number&id_number=in.(' + ids.slice(i, i + 150).join(',') + ')');
+      t.forEach(x => TREATED_IDS.add(String(x.id_number)));
+    }
+    renderRecent();
+    const p = watParts(new Date());
+    document.getElementById('p-foot').textContent =
+      shiftFor(now) + ' shift since ' + showHm(from) + ' · updated ' + p.hour + ':' + p.minute;
+  } catch (e) {
+    document.getElementById('p-list').innerHTML =
+      '<div class="pend-empty" style="color:var(--bad)">❌ ' + esc(e.message) + '</div>';
+  }
+}
+function isTL(r) { return String(r.job_code || '').trim().toLowerCase() === TECH_LOSS; }
+function setFilter(f) {
+  FILTER = f;
+  document.querySelectorAll('#p-seg button').forEach(b => b.classList.toggle('on', b.dataset.f === f));
+  renderRecent();
+}
+function renderRecent() {
+  document.getElementById('p-count').textContent = RECENT.length;
+  let list = RECENT;
+  if (FILTER === 'tl')   list = list.filter(isTL);
+  if (FILTER === 'wait') list = list.filter(r => isTL(r) && !TREATED_IDS.has(String(r.id)));
+  const box = document.getElementById('p-list');
+  if (!list.length) { box.innerHTML = '<div class="pend-empty">No reports yet this shift.</div>'; return; }
+  const now = Date.now();
+  box.innerHTML = list.map(r => {
+    const t = parseDbTs(r.mc_stoppage_time);
+    let tag;
+    if (isTL(r)) {
+      tag = TREATED_IDS.has(String(r.id))
+        ? '<span class="tag done">Treated</span>'
+        : '<span class="tag wait">Waiting · ' + fmtAge(t ? Math.round((now - t) / 60000) : null) + '</span>';
+    } else {
+      tag = '<span class="tag info">' + esc(r.job_code || '') + '</span>';
+    }
+    return '<div class="pend-row" style="cursor:default">' +
+      '<div><span class="asset">' + esc(r.assets) + '</span> · <span class="wo">Shed ' + esc(r.shed || '—') + '</span></div>' + tag +
+      '<div class="meta">' + (t ? showHm(t) : '—') + ' · ' + esc(r.operator_name || r.operator_id || '') +
+        (isTL(r) ? ' · Technical Loss' : '') + (r.description ? ' · ' + esc(r.description) : '') + '</div>' +
+    '</div>';
+  }).join('');
+}
+
+// =============================================
+// API
+// =============================================
+function authHeaders(extra) {
+  return Object.assign({ 'apikey': SUPABASE_ANON_KEY, 'Authorization': 'Bearer ' + SESSION_TOKEN,
+    'Content-Type': 'application/json' }, extra || {});
+}
+function base() { return SUPABASE_URL.replace(/\/+$/, '') + '/rest/v1/'; }
+function apiGet(path) {
+  return fetch(base() + path, { headers: authHeaders() })
+    .then(r => r.ok ? r.json() : r.text().then(t => { throw new Error(t); }));
+}
+async function apiGetAll(path) {
+  const PAGE = 1000, sep = path.includes('?') ? '&' : '?';
+  const resp = await fetch(base() + path, { headers: authHeaders({ 'Prefer': 'count=exact', 'Range': '0-' + (PAGE - 1) }) });
+  if (!resp.ok) throw new Error(await resp.text());
+  const first = await resp.json();
+  const total = parseInt(((resp.headers.get('content-range') || '').split('/')[1] || '0'), 10) || first.length;
+  if (total <= first.length) return first;
+  const rest = [];
+  for (let off = PAGE; off < total; off += PAGE) rest.push(apiGet(path + sep + 'limit=' + PAGE + '&offset=' + off));
+  return first.concat(...(await Promise.all(rest)));
+}
+const REF_TTL_MS = 30 * 60 * 1000;
+async function cachedGetAll(key, path) {
+  try {
+    const c = JSON.parse(sessionStorage.getItem('cr_ref_' + key) || 'null');
+    if (c && Date.now() - c.t < REF_TTL_MS) return c.rows;
+  } catch (e) {}
+  const rows = await apiGetAll(path);
+  try { sessionStorage.setItem('cr_ref_' + key, JSON.stringify({ t: Date.now(), rows })); } catch (e) {}
+  return rows;
+}
+function apiPost(path, body) {
+  return fetch(base() + path, { method: 'POST', headers: authHeaders({ 'Prefer': 'return=minimal' }), body: JSON.stringify(body) })
+    .then(r => r.ok ? null : r.text().then(t => { throw new Error(t); }));
+}
+
+function setStatus(msg, cls) { const el = document.getElementById('form-status'); el.textContent = msg; el.className = 'status' + (cls ? ' ' + cls : ''); }
+let _tt = null;
+function showToast(msg, isErr) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.className = 'toast show' + (isErr ? ' err' : '');
+  clearTimeout(_tt); _tt = setTimeout(() => { t.className = 'toast'; }, 3500);
+}
+function norm(s) { return String(s == null ? '' : s).trim().replace(/\s+/g, ' ').toUpperCase(); }
+function esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+</script>
+</body>
+</html>
