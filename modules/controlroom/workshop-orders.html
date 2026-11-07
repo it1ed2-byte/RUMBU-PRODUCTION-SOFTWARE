@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Workshop Orders — Control Room</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+(function(){
+  function apply(t){ if(t) document.documentElement.setAttribute("data-theme",t); }
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+  try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+})();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  [hidden] { display: none !important; }
+  body { padding: 18px; }
+  .split { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 16px; max-width: 1400px; margin: 0 auto; align-items: start; }
+  @media (max-width: 980px) { .split { grid-template-columns: 1fr; } }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; margin-bottom: 12px; }
+  .hdr h2 { margin: 0 0 2px; font-size: 17px; color: var(--heading); }
+  .hdr p { margin: 0 0 12px; font-size: 12px; color: var(--muted); }
+  .top { display: flex; justify-content: space-between; align-items: center; }
+  .top .k { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); }
+  .top .v { font-size: 17px; font-weight: 800; color: var(--heading); }
+  .clock { font-family: 'JetBrains Mono', Consolas, monospace; color: var(--accent); }
+  .step { margin-bottom: 14px; }
+  .step label { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 800; color: var(--heading); margin-bottom: 6px; }
+  .num { width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 11px; display: inline-flex; align-items: center; justify-content: center; }
+  .req { color: var(--bad, #dc2626); }
+  input[type=text], textarea, select { width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; font-size: 14px;
+    background: var(--bg); color: var(--text); font-family: inherit; box-sizing: border-box; }
+  input.invalid { border-color: var(--bad, #dc2626); }
+  .err { color: var(--bad, #dc2626); font-size: 11.5px; min-height: 14px; margin-top: 3px; }
+  .hint { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+  .dest { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .dest button { padding: 11px; border: 2px solid var(--line); border-radius: 9px; background: var(--bg); color: var(--text);
+                 font-size: 14px; font-weight: 800; cursor: pointer; }
+  .dest button.on { border-color: var(--accent); background: var(--accent); color: #fff; }
+  .auto { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 4px 0 14px; }
+  .auto div { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; min-width: 0; }
+  .auto .k { font-size: 10px; font-weight: 700; text-transform: uppercase; color: var(--muted); }
+  .auto .v { font-size: 13px; font-weight: 700; color: var(--heading); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .btn { padding: 11px 16px; border: none; border-radius: 9px; font-size: 14px; font-weight: 800; cursor: pointer; }
+  .btn-primary { background: var(--accent); color: #fff; width: 100%; }
+  .btn-ghost { background: transparent; border: 1px solid var(--line); color: var(--text); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .warn { background: #fef3c7; color: #92400e; border-radius: 8px; padding: 8px 10px; font-size: 12px; margin-top: 6px; }
+  [data-theme="dark"] .warn { background: #451a03; color: #fcd34d; }
+  .status { font-size: 12.5px; font-weight: 700; margin-top: 8px; min-height: 16px; }
+  .status.ok { color: #16a34a; } .status.err { color: var(--bad, #dc2626); }
+
+  .list-hdr { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+  .list-hdr h3 { margin: 0; font-size: 14px; color: var(--heading); }
+  .cnt { background: var(--accent); color: #fff; border-radius: 999px; padding: 1px 8px; font-size: 11.5px; margin-left: 4px; }
+  .seg { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 10px; }
+  .seg button { padding: 7px 4px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text);
+                font-size: 12px; font-weight: 700; cursor: pointer; }
+  .seg button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .items { max-height: 68vh; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+  .item { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; cursor: pointer; background: var(--bg); }
+  .item:hover { border-color: var(--accent); }
+  .item .l1 { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+  .item .wo { font-weight: 800; color: var(--heading); }
+  .item .l2 { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .item .part { font-weight: 700; color: var(--text); }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 800; white-space: nowrap; }
+  .p-store { background: #dbeafe; color: #1e40af; } .p-shop { background: #ede9fe; color: #5b21b6; }
+  .p-mech { background: #dcfce7; color: #15803d; } .p-old { background: #fee2e2; color: #991b1b; }
+  [data-theme="dark"] .p-store { background: #172554; color: #93c5fd; } [data-theme="dark"] .p-shop { background: #2e1065; color: #c4b5fd; }
+  [data-theme="dark"] .p-mech { background: #052e16; color: #4ade80; } [data-theme="dark"] .p-old { background: #450a0a; color: #fca5a5; }
+  .empty { text-align: center; color: var(--muted); padding: 30px 10px; font-size: 13px; }
+
+  .drawer-bg { position: fixed; inset: 0; background: rgba(10,18,35,.45); z-index: 200; opacity: 0; pointer-events: none; transition: opacity .2s; }
+  .drawer-bg.open { opacity: 1; pointer-events: auto; }
+  .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(440px, 100vw); background: var(--card); z-index: 201;
+            transform: translateX(100%); transition: transform .22s; box-shadow: -10px 0 30px rgba(0,0,0,.2); display: flex; flex-direction: column; }
+  .drawer.open { transform: none; }
+  .drawer .dh { padding: 16px 18px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; }
+  .drawer .dh h3 { margin: 0; font-size: 16px; color: var(--heading); }
+  .drawer .db { padding: 16px 18px; overflow: auto; flex: 1; }
+  .facts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 16px; }
+  .facts div { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; }
+  .facts .k { font-size: 10px; font-weight: 700; text-transform: uppercase; color: var(--muted); }
+  .facts .v { font-size: 13px; font-weight: 700; color: var(--heading); word-break: break-word; }
+  .stage { border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-bottom: 12px; }
+  .stage h4 { margin: 0 0 8px; font-size: 13px; color: var(--heading); }
+  .stage.done { opacity: .75; }
+  .x { background: none; border: 0; font-size: 22px; cursor: pointer; color: var(--muted); }
+
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px); background: #16a34a; color: #fff;
+    padding: 12px 20px; border-radius: 10px; font-size: 14px; font-weight: 700; opacity: 0; pointer-events: none;
+    transition: opacity .2s, transform .2s; z-index: 300; box-shadow: 0 8px 24px rgba(0,0,0,.2); }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); } .toast.err { background: #dc2626; }
+</style>
+</head>
+<body>
+<div class="split">
+  <!-- ============ LEFT: RAISE ============ -->
+  <div>
+    <div class="hdr">
+      <h2>Workshop Orders</h2>
+      <p>Record a part sent to the Store or the Workshop for an asset. It stays open until the part is handed to a mechanic and the completion job code is recorded.</p>
+    </div>
+    <div class="card top">
+      <div><div class="k">Date</div><div class="v" id="d-date">—</div></div>
+      <div style="text-align:right;"><div class="k">Time now</div><div class="v clock" id="d-clock">—</div></div>
+    </div>
+    <div class="card" id="loadingBar">Loading reference data…</div>
+    <div class="card" id="formWrap" hidden>
+      <div class="step">
+        <label><span class="num">1</span> Asset <span class="req">*</span></label>
+        <input type="text" id="f-asset" list="dl-assets" placeholder="Type or pick asset, e.g. MX-49" autocomplete="off" oninput="onAsset()">
+        <datalist id="dl-assets"></datalist>
+        <div class="err" id="e-asset"></div>
+        <div class="warn" id="dupWarn" hidden></div>
+      </div>
+      <div class="step">
+        <label><span class="num">2</span> Sent to <span class="req">*</span></label>
+        <div class="dest">
+          <button type="button" data-d="STORE" onclick="setDest('STORE')">Store</button>
+          <button type="button" data-d="WORKSHOP" onclick="setDest('WORKSHOP')">Workshop</button>
+        </div>
+        <div class="err" id="e-dest"></div>
+      </div>
+      <div class="step">
+        <label><span class="num">3</span> Part needed <span class="req">*</span></label>
+        <input type="text" id="f-part" list="dl-parts" placeholder="Pick from the parts list, e.g. MOTOR" autocomplete="off" oninput="onPart()">
+        <datalist id="dl-parts"></datalist>
+        <div class="err" id="e-part"></div>
+        <div class="hint">Only parts in the list are accepted. A missing part is added in Reference Data → Parts.</div>
+      </div>
+      <div class="step">
+        <label><span class="num">4</span> Description <span class="muted" style="font-weight:500;color:var(--muted);">(optional)</span></label>
+        <textarea id="f-desc" rows="2" placeholder="Anything the Store or Workshop should know"></textarea>
+      </div>
+      <div class="auto">
+        <div><div class="k">Shift</div><div class="v" id="a-shift">—</div></div>
+        <div><div class="k">Shed</div><div class="v" id="a-shed">—</div></div>
+        <div><div class="k">Unit</div><div class="v" id="a-unit">—</div></div>
+        <div><div class="k">Section</div><div class="v" id="a-section">—</div></div>
+        <div><div class="k">Sent at</div><div class="v" id="a-time">on save</div></div>
+        <div><div class="k">Order no.</div><div class="v">on save</div></div>
+      </div>
+      <button class="btn btn-primary" id="saveBtn" onclick="saveOrder()">Save Workshop Order</button>
+      <div class="status" id="form-status"></div>
+    </div>
+  </div>
+
+  <!-- ============ RIGHT: OPEN ORDERS ============ -->
+  <div class="card">
+    <div class="list-hdr">
+      <h3>Open workshop orders <span class="cnt" id="openCount">0</span></h3>
+      <button class="btn btn-ghost" style="padding:6px 12px;font-size:12.5px;" onclick="loadOpen()">↻ Refresh</button>
+    </div>
+    <div class="seg" id="seg">
+      <button class="on" data-f="" onclick="setFilter('')">All</button>
+      <button data-f="STORE" onclick="setFilter('STORE')">At Store</button>
+      <button data-f="WORKSHOP" onclick="setFilter('WORKSHOP')">At Workshop</button>
+      <button data-f="MECH" onclick="setFilter('MECH')">With mechanic</button>
+    </div>
+    <input type="text" id="q" placeholder="Search order, asset or part" oninput="renderOpen()" style="margin-bottom:10px;padding:8px 10px;font-size:13px;">
+    <div class="items" id="items"><div class="empty">Loading…</div></div>
+    <div class="hint" id="listFoot"></div>
+  </div>
+</div>
+
+<!-- ============ DRAWER ============ -->
+<div class="drawer-bg" id="dbg" onclick="closeDrawer()"></div>
+<div class="drawer" id="drawer" aria-hidden="true">
+  <div class="dh"><h3 id="dr-title">—</h3><button class="x" onclick="closeDrawer()" aria-label="Close">×</button></div>
+  <div class="db">
+    <div class="facts" id="dr-facts"></div>
+    <div class="stage" id="st-mech">
+      <h4>1. Handed to mechanic</h4>
+      <div id="mech-done" hidden></div>
+      <div id="mech-form">
+        <input type="text" id="f-mech" list="dl-nurses" placeholder="Mechanic's name" autocomplete="off" oninput="checkMech()">
+        <datalist id="dl-nurses"></datalist>
+        <div class="err" id="e-mech"></div>
+        <div class="hint">Records the mechanic and the time now as the starting time.</div>
+        <button class="btn btn-primary" style="margin-top:8px;" id="mechBtn" onclick="saveMech()">Hand to mechanic</button>
+      </div>
+    </div>
+    <div class="stage" id="st-close">
+      <h4>2. Completed: job code</h4>
+      <input type="text" id="f-job" list="dl-jobs" placeholder="Completion job code, e.g. WSP01" autocomplete="off" oninput="checkJob()">
+      <datalist id="dl-jobs"></datalist>
+      <div class="err" id="e-job"></div>
+      <div class="hint" id="jobHint">Records the finish time (now), department and estimated duration, and closes the order.</div>
+      <button class="btn btn-primary" style="margin-top:8px;" id="closeBtn" onclick="saveClose()">Close order</button>
+    </div>
+    <div class="status" id="dr-status"></div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const TABLE = 'control';
+const TZ = 'Africa/Lagos';
+const REFRESH_MS = 60000;
+let SESSION_TOKEN = SUPABASE_ANON_KEY, ME = null;
+let ASSETS = {}, EXTRUDERS = {}, PARTS = {}, NURSES = {}, JOBS = {};
+let DEST = null, OPEN = [], FILTER = '', DR = null;
+
+// ---------- time: control stores WAT wall-clock text, same as the sheet ----------
+function watParts(d) {
+  const p = {};
+  new Intl.DateTimeFormat('en-GB', { timeZone: TZ, year:'numeric', month:'2-digit', day:'2-digit',
+    hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false }).formatToParts(d).forEach(x => p[x.type] = x.value);
+  if (p.hour === '24') p.hour = '00';
+  return p;
+}
+function toDbTs(d)   { const p = watParts(d); return p.year + '-' + p.month + '-' + p.day + 'T' + p.hour + ':' + p.minute + ':' + p.second; }
+function toDbDate(d) { const p = watParts(d); return p.year + '-' + p.month + '-' + p.day; }
+function showTs(d)   { const p = watParts(d); return p.hour + ':' + p.minute + ':' + p.second; }
+function showDate(d) { return new Intl.DateTimeFormat('en-GB', { timeZone: TZ, day:'2-digit', month:'short', year:'numeric' }).format(d); }
+function shiftFor(d) { const h = Number(watParts(d).hour); return (h >= 7 && h < 19) ? 'Morning' : 'Night'; }
+// Read a stored WAT wall-clock text back as a real moment
+function fromDb(s) {
+  const m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/);
+  return m ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4] - 1, +m[5], +(m[6] || 0))) : null;
+}
+function dmyhm(s) { const d = fromDb(s); if (!d) return '—'; const p = watParts(d); return p.day + '/' + p.month + ' ' + p.hour + ':' + p.minute; }
+function ageText(s) {
+  const d = fromDb(s); if (!d) return '';
+  const m = Math.max(0, Math.round((Date.now() - d) / 60000));
+  if (m < 60) return m + ' min'; if (m < 1440) return Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'm';
+  return Math.floor(m / 1440) + ' day' + (m >= 2880 ? 's' : '');
+}
+
+// ---------- boot ----------
+document.addEventListener('DOMContentLoaded', async () => {
+  try {
+    ME = await requireAuth('../../login.html');
+    if (!ME) return;
+    try { const { data: { session } } = await sb.auth.getSession(); SESSION_TOKEN = session?.access_token || SUPABASE_ANON_KEY; } catch (e) {}
+    tick(); setInterval(tick, 1000);
+    await loadRef();
+    document.getElementById('loadingBar').hidden = true;
+    document.getElementById('formWrap').hidden = false;
+    document.getElementById('f-asset').focus();
+    await loadOpen();
+    setInterval(() => { if (!document.hidden && !DR) loadOpen(); }, REFRESH_MS);
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && DR) closeDrawer(); });
+  } catch (e) {
+    document.getElementById('loadingBar').innerHTML = '<span style="color:var(--bad)">❌ ' + esc(e.message || e) + '</span>';
+  }
+});
+function tick() {
+  const n = new Date();
+  document.getElementById('d-date').textContent = showDate(n);
+  document.getElementById('d-clock').textContent = showTs(n);
+  document.getElementById('a-shift').textContent = shiftFor(n);
+}
+
+async function loadRef() {
+  const [assets, ext, parts, nurses, jobs] = await Promise.all([
+    apiGetAll('cr_assets?select=asset,shed,grp,section&is_active=eq.true&order=asset.asc'),
+    apiGetAll('cr_extruder_groups?select=asset,type,nozzles,denier&is_active=eq.true').catch(() => []),
+    apiGetAll('cr_parts?select=part_name&is_active=eq.true&order=part_name.asc'),
+    apiGetAll('cr_nurses?select=full_name&is_active=eq.true&order=full_name.asc'),
+    apiGetAll('cr_job_codes?select=job_code,estimated_min,department,description&is_active=eq.true&order=job_code.asc')
+  ]);
+  assets.forEach(a => ASSETS[norm(a.asset)] = a);
+  ext.forEach(x => EXTRUDERS[norm(x.asset)] = x);
+  parts.forEach(p => PARTS[norm(p.part_name)] = p.part_name);
+  nurses.forEach(n => NURSES[norm(n.full_name)] = n.full_name);
+  jobs.forEach(j => JOBS[norm(j.job_code)] = j);
+  document.getElementById('dl-assets').innerHTML = assets.map(a => '<option value="' + esc(a.asset) + '"></option>').join('');
+  document.getElementById('dl-parts').innerHTML  = parts.map(p => '<option value="' + esc(p.part_name) + '"></option>').join('');
+  document.getElementById('dl-nurses').innerHTML = nurses.map(n => '<option value="' + esc(n.full_name) + '"></option>').join('');
+  document.getElementById('dl-jobs').innerHTML   = jobs.map(j => '<option value="' + esc(j.job_code) + '">' + esc([j.description, j.department].filter(Boolean).join(' · ')) + '</option>').join('');
+}
+
+// ---------- raise ----------
+let _dupT = null;
+function onAsset() {
+  const a = ASSETS[norm(val('f-asset'))];
+  setTxt('a-shed', a ? (a.shed || '—') : '—'); setTxt('a-unit', a ? (a.grp || '—') : '—'); setTxt('a-section', a ? (a.section || '—') : '—');
+  document.getElementById('f-asset').classList.remove('invalid'); setTxt('e-asset', '');
+  clearTimeout(_dupT); _dupT = setTimeout(checkDup, 300);
+}
+function onPart() { document.getElementById('f-part').classList.remove('invalid'); setTxt('e-part', ''); clearTimeout(_dupT); _dupT = setTimeout(checkDup, 300); }
+function setDest(d) {
+  DEST = d; setTxt('e-dest', '');
+  document.querySelectorAll('.dest button').forEach(b => b.classList.toggle('on', b.dataset.d === d));
+}
+// Warn if the same part is already open for the same asset
+function checkDup() {
+  const a = ASSETS[norm(val('f-asset'))], p = PARTS[norm(val('f-part'))], w = document.getElementById('dupWarn');
+  const hits = a ? OPEN.filter(r => norm(r.assets) === norm(a.asset) && (!p || norm(r.part_needed) === norm(p))) : [];
+  if (!hits.length) { w.hidden = true; return; }
+  w.textContent = a.asset + ' already has ' + hits.length + ' open workshop order(s)' + (p ? ' for ' + p : '') + ': ' +
+    hits.map(r => r.work_order + (p ? '' : ' (' + (r.part_needed || '—') + ')')).join(', ') + '. Check before raising another.';
+  w.hidden = false;
+}
+
+async function saveOrder() {
+  const a = ASSETS[norm(val('f-asset'))], part = PARTS[norm(val('f-part'))];
+  let bad = false;
+  if (!a)    { bad = true; document.getElementById('f-asset').classList.add('invalid'); setTxt('e-asset', 'Pick an asset from the list.'); }
+  if (!DEST) { bad = true; setTxt('e-dest', 'Choose Store or Workshop.'); }
+  if (!part) { bad = true; document.getElementById('f-part').classList.add('invalid'); setTxt('e-part', 'Pick a part from the list.'); }
+  if (bad) return status('form-status', 'Fix the fields marked in red.', 'err');
+
+  const btn = document.getElementById('saveBtn'); btn.disabled = true; status('form-status', 'Saving…', '');
+  try {
+    const { data: wo, error } = await sb.rpc('next_workshop_order');
+    if (error || !wo) throw new Error(error ? error.message : 'Could not get an order number.');
+    const now = new Date(), ex = EXTRUDERS[norm(a.asset)] || null, user = ME.username || null;
+    await apiPost(TABLE + '?select=work_order', {
+      work_order: wo, assets: a.asset, nurse_name: DEST, date: toDbDate(now), duration: '0',
+      mc_stoppage_time: toDbTs(now), starting_time: toDbTs(now), shift: shiftFor(now),
+      shed: a.shed || null, unit: a.grp || null, section: a.section || null,
+      nozzle: ex ? ex.nozzles : null, type: ex && ex.type != null ? String(ex.type) : null, denier: ex ? ex.denier : null,
+      part_needed: part, description: val('f-desc').trim() || null,
+      source_system: 'rumbu', created_by: user, updated_by: user
+    });
+    toast('✓ ' + wo + ' saved: ' + part + ' for ' + a.asset + ' sent to ' + (DEST === 'STORE' ? 'Store' : 'Workshop'));
+    ['f-asset','f-part','f-desc'].forEach(id => document.getElementById(id).value = '');
+    onAsset(); setDest(null); status('form-status', '', '');
+    document.getElementById('dupWarn').hidden = true;
+    document.getElementById('f-asset').focus();
+    loadOpen();
+  } catch (e) { status('form-status', 'Error: ' + e.message, 'err'); }
+  finally { btn.disabled = false; }
+}
+
+// ---------- open list ----------
+async function loadOpen() {
+  try {
+    OPEN = await apiGetAll(TABLE + '?select=id,work_order,assets,nurse_name,part_needed,description,shed,unit,section,shift,mc_stoppage_time,starting_time,mechanic,created_by' +
+      '&work_order=like.W*&finish_time=is.null&created_by=not.is.null&order=mc_stoppage_time.asc');
+    renderOpen();
+    document.getElementById('listFoot').textContent = 'Updated ' + showTs(new Date()).slice(0, 5) + ' · orders raised in this app. Orders from the sheet stay in the sheet until it is retired.';
+  } catch (e) { document.getElementById('items').innerHTML = '<div class="empty" style="color:var(--bad)">❌ ' + esc(e.message) + '</div>'; }
+}
+function setFilter(f) { FILTER = f; document.querySelectorAll('#seg button').forEach(b => b.classList.toggle('on', b.dataset.f === f)); renderOpen(); }
+function renderOpen() {
+  const q = norm(val('q'));
+  const list = OPEN.filter(r =>
+    (!FILTER || (FILTER === 'MECH' ? !!r.mechanic : (!r.mechanic && norm(r.nurse_name) === FILTER))) &&
+    (!q || norm([r.work_order, r.assets, r.part_needed].join(' ')).includes(q)));
+  setTxt('openCount', OPEN.length);
+  const box = document.getElementById('items');
+  if (!list.length) { box.innerHTML = '<div class="empty">' + (OPEN.length ? 'Nothing matches.' : '✓ No open workshop orders.') + '</div>'; return; }
+  box.innerHTML = list.map(r => {
+    const old = (Date.now() - (fromDb(r.mc_stoppage_time) || Date.now())) > 3 * 86400000;
+    const st = r.mechanic ? '<span class="pill p-mech">With ' + esc(r.mechanic) + '</span>'
+      : norm(r.nurse_name) === 'STORE' ? '<span class="pill p-store">At Store</span>' : '<span class="pill p-shop">At Workshop</span>';
+    return '<div class="item" onclick="openDrawer(' + r.id + ')">' +
+      '<div class="l1"><span><span class="wo">' + esc(r.work_order) + '</span> · <b>' + esc(r.assets) + '</b></span>' + st + '</div>' +
+      '<div class="l2"><span class="part">' + esc(r.part_needed || '—') + '</span> · sent ' + dmyhm(r.mc_stoppage_time) +
+      ' · <span' + (old ? ' class="pill p-old"' : '') + '>' + ageText(r.mc_stoppage_time) + '</span></div></div>';
+  }).join('');
+}
+
+// ---------- drawer ----------
+function openDrawer(id) {
+  const r = OPEN.find(x => x.id === id); if (!r) return;
+  DR = r;
+  setTxt('dr-title', r.work_order + ' · ' + r.assets);
+  const f = [['Part', r.part_needed], ['Sent to', norm(r.nurse_name) === 'STORE' ? 'Store' : 'Workshop'], ['Sent at', dmyhm(r.mc_stoppage_time)],
+    ['Open for', ageText(r.mc_stoppage_time)], ['Shed / unit', [r.shed, r.unit].filter(Boolean).join(' · ') || '—'], ['Section', r.section || '—']];
+  if (r.description) f.push(['Description', r.description]);
+  document.getElementById('dr-facts').innerHTML = f.map(x => '<div' + (x[0] === 'Description' ? ' style="grid-column:1/-1"' : '') +
+    '><div class="k">' + x[0] + '</div><div class="v">' + esc(x[1] || '—') + '</div></div>').join('');
+  const has = !!r.mechanic;
+  document.getElementById('mech-form').hidden = has;
+  document.getElementById('mech-done').hidden = !has;
+  document.getElementById('mech-done').innerHTML = has ? '✓ <b>' + esc(r.mechanic) + '</b> from ' + dmyhm(r.starting_time) : '';
+  document.getElementById('st-mech').classList.toggle('done', has);
+  ['f-mech','f-job'].forEach(i => { document.getElementById(i).value = ''; document.getElementById(i).classList.remove('invalid'); });
+  setTxt('e-mech', ''); setTxt('e-job', ''); status('dr-status', '', '');
+  document.getElementById('f-job').disabled = !has; document.getElementById('closeBtn').disabled = !has;
+  setTxt('jobHint', has ? 'Records the finish time (now), department and estimated duration, and closes the order.' : 'Hand the part to a mechanic first.');
+  document.getElementById('dbg').classList.add('open');
+  document.getElementById('drawer').classList.add('open');
+  document.getElementById('drawer').setAttribute('aria-hidden', 'false');
+  setTimeout(() => document.getElementById(has ? 'f-job' : 'f-mech').focus(), 250);
+}
+function closeDrawer() {
+  DR = null;
+  document.getElementById('dbg').classList.remove('open');
+  document.getElementById('drawer').classList.remove('open');
+  document.getElementById('drawer').setAttribute('aria-hidden', 'true');
+}
+function checkMech() { document.getElementById('f-mech').classList.remove('invalid'); setTxt('e-mech', ''); }
+function checkJob() {
+  document.getElementById('f-job').classList.remove('invalid'); setTxt('e-job', '');
+  const j = JOBS[norm(val('f-job'))];
+  if (j) setTxt('jobHint', [j.description, j.department, j.estimated_min != null ? 'est. ' + j.estimated_min + ' min' : ''].filter(Boolean).join(' · '));
+}
+
+async function saveMech() {
+  if (!DR) return;
+  const m = NURSES[norm(val('f-mech'))];
+  if (!m) { document.getElementById('f-mech').classList.add('invalid'); setTxt('e-mech', 'Pick the mechanic from the list.'); return; }
+  const btn = document.getElementById('mechBtn'); btn.disabled = true; status('dr-status', 'Saving…', '');
+  try {
+    // mechanic=is.null stops two people recording a hand-over on the same order
+    const res = await apiPatch(TABLE + '?id=eq.' + DR.id + '&mechanic=is.null&finish_time=is.null&select=id', {
+      mechanic: m, starting_time: toDbTs(new Date()), updated_by: ME.username || null, updated_at: new Date().toISOString() });
+    const wo = DR.work_order; closeDrawer();
+    toast(res && res.length ? '✓ ' + wo + ' handed to ' + m : wo + ' was already updated by someone else', !(res && res.length));
+    loadOpen();
+  } catch (e) { status('dr-status', 'Error: ' + e.message, 'err'); }
+  finally { btn.disabled = false; }
+}
+async function saveClose() {
+  if (!DR) return;
+  const j = JOBS[norm(val('f-job'))];
+  if (!j) { document.getElementById('f-job').classList.add('invalid'); setTxt('e-job', 'Pick a job code from the list.'); return; }
+  const btn = document.getElementById('closeBtn'); btn.disabled = true; status('dr-status', 'Saving…', '');
+  try {
+    const res = await apiPatch(TABLE + '?id=eq.' + DR.id + '&finish_time=is.null&select=id', {
+      job_code: j.job_code, finish_time: toDbTs(new Date()), department: j.department || null,
+      estimated_duration: j.estimated_min != null ? String(j.estimated_min) : null,
+      updated_by: ME.username || null, updated_at: new Date().toISOString() });
+    const wo = DR.work_order; closeDrawer();
+    toast(res && res.length ? '✓ ' + wo + ' closed with ' + j.job_code : wo + ' was already closed by someone else', !(res && res.length));
+    loadOpen();
+  } catch (e) { status('dr-status', 'Error: ' + e.message, 'err'); }
+  finally { btn.disabled = false; }
+}
+
+// ---------- helpers ----------
+let _tt = null;
+function toast(m, err) { const t = document.getElementById('toast'); t.textContent = m; t.className = 'toast show' + (err ? ' err' : ''); clearTimeout(_tt); _tt = setTimeout(() => t.className = 'toast', 3800); }
+function status(id, m, c) { const el = document.getElementById(id); el.textContent = m; el.className = 'status' + (c ? ' ' + c : ''); }
+function setTxt(id, t) { document.getElementById(id).textContent = t; }
+function val(id) { return document.getElementById(id).value || ''; }
+function norm(s) { return String(s == null ? '' : s).trim().replace(/\s+/g, ' ').toUpperCase(); }
+function esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function headers(x) { return Object.assign({ 'apikey': SUPABASE_ANON_KEY, 'Authorization': 'Bearer ' + SESSION_TOKEN, 'Content-Type': 'application/json' }, x || {}); }
+function base() { return SUPABASE_URL.replace(/\/+$/, '') + '/rest/v1/'; }
+function apiGet(p) { return fetch(base() + p, { headers: headers() }).then(r => r.ok ? r.json() : r.text().then(t => { throw new Error(t); })); }
+async function apiGetAll(path) {
+  const PAGE = 1000;
+  const resp = await fetch(base() + path, { headers: headers({ 'Prefer': 'count=exact', 'Range': '0-' + (PAGE - 1) }) });
+  if (!resp.ok) throw new Error(await resp.text());
+  const first = await resp.json();
+  const total = parseInt(((resp.headers.get('content-range') || '').split('/')[1] || '0'), 10) || first.length;
+  if (total <= first.length) return first;
+  const rest = [];
+  for (let off = PAGE; off < total; off += PAGE) rest.push(apiGet(path + '&limit=' + PAGE + '&offset=' + off));
+  return first.concat(...(await Promise.all(rest)));
+}
+function apiPost(p, b) { return fetch(base() + p, { method: 'POST', headers: headers({ 'Prefer': 'return=representation' }), body: JSON.stringify(b) })
+  .then(r => r.ok ? r.json() : r.text().then(t => { throw new Error(t); })); }
+function apiPatch(p, b) { return fetch(base() + p, { method: 'PATCH', headers: headers({ 'Prefer': 'return=representation' }), body: JSON.stringify(b) })
+  .then(r => r.ok ? r.json() : r.text().then(t => { throw new Error(t); })); }
+</script>
+</body>
+</html>

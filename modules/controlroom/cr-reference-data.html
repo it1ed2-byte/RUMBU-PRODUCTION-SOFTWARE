@@ -161,7 +161,7 @@
 
     <div class="card" style="margin-bottom:12px;padding:14px 20px;">
       <h2 style="margin:0 0 2px;font-size:17px;color:var(--heading);">Control Room — Reference Data</h2>
-      <p style="margin:0;font-size:12px;color:var(--muted);">Admin-only. Manage nurses, job codes, assets, extruder specifications, operators and stop codes.</p>
+      <p style="margin:0;font-size:12px;color:var(--muted);">Admin-only. Manage nurses, job codes, assets, extruder specifications, operators, stop codes and parts.</p>
     </div>
 
     <!-- TABS -->
@@ -172,6 +172,7 @@
       <button class="tab-btn" onclick="switchTab('extruders',this)">⚙ Extruder Specs</button>
       <button class="tab-btn" onclick="switchTab('operators',this)">🧑‍🏭 Operators</button>
       <button class="tab-btn" onclick="switchTab('stopcodes',this)">⛔ Stop Codes</button>
+      <button class="tab-btn" onclick="switchTab('parts',this)">🔩 Parts</button>
     </div>
 
     <!-- ===================== NURSES TAB ===================== -->
@@ -367,6 +368,36 @@
       </div>
     </div>
 
+    <!-- ===================== PARTS TAB ===================== -->
+    <div class="tab-panel" id="tab-parts">
+      <div class="card">
+        <h3>Add New Part</h3>
+        <div class="fgrid">
+          <div><label>Part name <span class="req">*</span></label><input type="text" id="p-name" placeholder="e.g. BEARING 204"></div>
+          <div style="align-self:end;">
+            <button class="btn btn-primary" onclick="addRecord('parts')">Add Part</button>
+          </div>
+        </div>
+        <div class="status" id="p-status" style="margin-top:8px;"></div>
+        <p style="margin:8px 0 0;font-size:11.5px;color:var(--muted);">The Part Needed list on Workshop Orders. Keep one spelling per part, for example <b>BEARING 204</b>, not BEARING-204 and BRG 204. To merge two spellings, deactivate the wrong one.</p>
+      </div>
+      <div class="card">
+        <div class="search-row">
+          <input type="text" placeholder="Search part…" oninput="filterTable('pt-tbl',this.value)">
+          <select onchange="filterActive('pt-tbl',this.value)">
+            <option value="">All</option><option value="active">Active</option><option value="inactive">Inactive</option>
+          </select>
+          <span class="rec-count" id="pt-count"></span>
+        </div>
+        <div class="tbl-wrap">
+          <table id="pt-tbl">
+            <thead><tr><th>Part</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
   </div><!-- /mainContent -->
 </div><!-- /wrap -->
 
@@ -393,6 +424,7 @@ const ASSETS_T   = 'cr_assets';
 const EXTRUDER_T = 'cr_extruder_groups';
 const OPS_T      = 'cr_operators';
 const CODES_T    = 'cr_stop_codes';
+const PARTS_T    = 'cr_parts';
 
 let SESSION_TOKEN = SUPABASE_ANON_KEY;
 let EDIT_STATE    = null; // { table, id, fields }
@@ -434,12 +466,12 @@ document.addEventListener('DOMContentLoaded', async function () {
 
     if (crAdminOnly) {
       switchTab('operators', document.querySelector('.tab-btn[onclick*="operators"]'));
-      await Promise.all([loadTable('operators'), loadTable('stopcodes')]);
+      await Promise.all([loadTable('operators'), loadTable('stopcodes'), loadTable('parts')]);
     } else {
       await Promise.all([
         loadTable('nurses'), loadTable('jobcodes'),
         loadTable('assets'), loadTable('extruders'),
-        loadTable('operators'), loadTable('stopcodes')
+        loadTable('operators'), loadTable('stopcodes'), loadTable('parts')
       ]);
     }
   } catch (err) {
@@ -506,6 +538,10 @@ function tabConfig(tab) {
     stopcodes: {
       tblId: 'sc-tbl', supaTable: CODES_T, countId: 'sc-count', order: 'sort_order.asc,id.asc',
       buildRow: r => buildRow_stopcodes(r)
+    },
+    parts: {
+      tblId: 'pt-tbl', supaTable: PARTS_T, countId: 'pt-count', order: 'part_name.asc',
+      buildRow: r => buildRow_parts(r)
     }
   };
   return cfg[tab];
@@ -588,6 +624,15 @@ function buildRow_stopcodes(r) {
   tr.innerHTML = '<td>' + (r.sort_order ?? '—') + '</td><td><strong>' + esc(r.code) + '</strong></td>' +
     '<td>' + badge(r.is_active) + '</td>' +
     '<td>' + actionBtns('stopcodes', r.id, r.is_active) + '</td>';
+  return tr;
+}
+
+function buildRow_parts(r) {
+  const tr = document.createElement('tr');
+  tr.dataset.search = (r.part_name||'').toLowerCase();
+  tr.dataset.active = r.is_active ? 'active' : 'inactive';
+  tr.innerHTML = '<td><strong>' + esc(r.part_name) + '</strong></td><td>' + badge(r.is_active) + '</td>' +
+    '<td>' + actionBtns('parts', r.id, r.is_active) + '</td>';
   return tr;
 }
 
@@ -691,6 +736,14 @@ function addConfig(tab) {
         return true;
       }
     },
+    parts: {
+      supaTable: PARTS_T, statusId: 'p-status', conflictCol: 'part_name',
+      payload: () => ({
+        part_name: (document.getElementById('p-name').value || '').trim().replace(/^[.\-\s]+/, '').replace(/\s+/g, ' ').toUpperCase(),
+        is_active: true
+      }),
+      validate: p => (p.part_name.length < 2 ? 'Part name is required.' : null)
+    },
     stopcodes: {
       supaTable: CODES_T, statusId: 's-status', conflictCol: 'code',
       payload: () => ({
@@ -730,7 +783,8 @@ function clearAddForm(tab) {
     assets:   ['a-asset','a-shed','a-grp','a-sect'],
     extruders:['e-asset','e-type','e-nozzles','e-denier','e-length'],
     operators:['o-id','o-name','o-rank','o-dept'],
-    stopcodes:['s-code','s-order']
+    stopcodes:['s-code','s-order'],
+    parts:['p-name']
   };
   (maps[tab] || []).forEach(id => { document.getElementById(id).value = ''; });
 }
@@ -739,7 +793,7 @@ function clearAddForm(tab) {
 // TOGGLE ACTIVE
 // =============================================
 async function toggleActive(tab, id, currentlyActive) {
-  const supaTable = { nurses: NURSES_T, jobcodes: JOB_T, assets: ASSETS_T, extruders: EXTRUDER_T, operators: OPS_T, stopcodes: CODES_T }[tab];
+  const supaTable = { nurses: NURSES_T, jobcodes: JOB_T, assets: ASSETS_T, extruders: EXTRUDER_T, operators: OPS_T, stopcodes: CODES_T, parts: PARTS_T }[tab];
   const action    = currentlyActive ? 'Deactivate' : 'Reactivate';
   if (!confirm(action + ' this record?')) return;
   try {
@@ -754,14 +808,14 @@ async function toggleActive(tab, id, currentlyActive) {
 // EDIT MODAL
 // =============================================
 async function openEdit(tab, id) {
-  const supaTable = { nurses: NURSES_T, jobcodes: JOB_T, assets: ASSETS_T, extruders: EXTRUDER_T, operators: OPS_T, stopcodes: CODES_T }[tab];
+  const supaTable = { nurses: NURSES_T, jobcodes: JOB_T, assets: ASSETS_T, extruders: EXTRUDER_T, operators: OPS_T, stopcodes: CODES_T, parts: PARTS_T }[tab];
   try {
     const rows = await apiGet(supaTable + '?id=eq.' + id);
     if (!rows || !rows[0]) return alert('Record not found.');
     const r = rows[0];
     EDIT_STATE = { tab, supaTable, id };
 
-    const titles = { nurses: 'Edit Nurse', jobcodes: 'Edit Job Code', assets: 'Edit Asset', extruders: 'Edit Extruder Asset', operators: 'Edit Operator', stopcodes: 'Edit Stop Code' };
+    const titles = { nurses: 'Edit Nurse', jobcodes: 'Edit Job Code', assets: 'Edit Asset', extruders: 'Edit Extruder Asset', operators: 'Edit Operator', stopcodes: 'Edit Stop Code', parts: 'Edit Part' };
     document.getElementById('modalTitle').textContent = titles[tab];
 
     const container = document.getElementById('modalFields');
@@ -773,7 +827,8 @@ async function openEdit(tab, id) {
       assets:   [['asset','Asset Code','text',r.asset],['shed','Shed','text',r.shed||''],['grp','Group','text',r.grp||''],['section','Section','text',r.section||'']],
       extruders:[['asset','Asset Code','text',r.asset],['type','Type','number',r.type],['nozzles','Nozzles','number',r.nozzles],['denier','Denier','number',r.denier],['length','Length','number',r.length]],
       operators:[['operator_id','Operator ID','text',r.operator_id],['operator_name','Full Name','text',r.operator_name],['rank','Rank','text',r.rank||''],['department','Department','text',r.department||'']],
-      stopcodes:[['code','Stop Code','text',r.code],['sort_order','Order in list','number',r.sort_order]]
+      stopcodes:[['code','Stop Code','text',r.code],['sort_order','Order in list','number',r.sort_order]],
+      parts:[['part_name','Part name','text',r.part_name]]
     };
 
     fieldDefs[tab].forEach(([key, label, type, val]) => {
@@ -801,10 +856,11 @@ async function saveEdit() {
     assets:   ['asset','shed','grp','section'],
     extruders:['asset','type','nozzles','denier','length'],
     operators:['operator_id','operator_name','rank','department'],
-    stopcodes:['code','sort_order']
+    stopcodes:['code','sort_order'],
+    parts:['part_name']
   };
   const numericKeys = new Set(['estimated_min','type','nozzles','denier','length','sort_order']);
-  const upperKeys = new Set(['operator_id','operator_name','rank']);
+  const upperKeys = new Set(['operator_id','operator_name','rank','part_name']);
 
   const payload = {};
   fieldKeys[tab].forEach(key => {
@@ -862,7 +918,7 @@ function filterActive(tblId, val) {
 }
 
 function updateCount(tblId) {
-  const countIds = { 'nurses-tbl':'nurses-count','jc-tbl':'jc-count','asset-tbl':'asset-count','ext-tbl':'ext-count','op-tbl':'op-count','sc-tbl':'sc-count' };
+  const countIds = { 'nurses-tbl':'nurses-count','jc-tbl':'jc-count','asset-tbl':'asset-count','ext-tbl':'ext-count','op-tbl':'op-count','sc-tbl':'sc-count','pt-tbl':'pt-count' };
   const visible = document.querySelectorAll('#' + tblId + ' tbody tr:not([style*="display: none"])').length;
   const cid = countIds[tblId];
   if (cid) document.getElementById(cid).textContent = visible + ' record(s)';
