@@ -63,6 +63,7 @@
   .ov table{width:100%;border-collapse:collapse;font-size:12.5px;margin:6px 0 10px;}
   .ov th{background:var(--heading);color:#fff;text-align:left;padding:5px 8px;font-size:11.5px;}
   .ov td{padding:5px 8px;border-bottom:1px solid var(--line);}
+  .ov .fs-sec h4{margin:12px 0 4px;color:var(--heading);font-size:13px;}
 
   /* Bag labels (wide label, about A5 landscape, 2 per A4 sheet) */
   .qr-grid{margin-top:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(min(420px,100%),1fr));gap:14px;}
@@ -999,6 +1000,71 @@ function secLine(title, enabled, passed, purity, limit, cats){
   return `<tr><td>${title}</td><td><b style="color:${passed===false?"var(--bad)":"var(--ok)"};">${passed===false?"Failed":"Passed"}</b></td><td>${purity!=null?Number(purity).toFixed(3)+"%":"—"} <span style="color:var(--muted);">(limit ${limit??0}%)</span></td><td style="color:var(--bad);">${failing||""}</td></tr>`;
 }
 
+// ---------------------------- full Flake Scan result (everything the lab uploaded) ----------------------------
+const FS_SECTIONS=[["color_a","Colour A"],["color_b","Colour B"],["material_a","Material A"],["material_b","Material B"]];
+const fsN=(v,d)=>v==null||v===""?"—":Number(v).toLocaleString("en-GB",{minimumFractionDigits:d,maximumFractionDigits:d});
+const fsYes=v=>v===true?"Yes":v===false?"No":"—";
+function fsPassWord(v){ return v===false?`<b style="color:var(--bad);">Failed</b>`:v===true?`<b style="color:var(--ok);">Passed</b>`:"—"; }
+function fullSectionHtml(r,key,title){
+  if(r[key+"_enabled"]===false) return `<div class="fs-sec"><h4>${title}: <span style="color:var(--muted);font-weight:600;">not enabled in this scan</span></h4></div>`;
+  const cats=Array.isArray(r[key+"_categories"])?r[key+"_categories"]:[];
+  return `<div class="fs-sec">
+    <h4>${title}: ${fsPassWord(r[key+"_passed"])}</h4>
+    <div class="kv">Total purity <b>${fsN(r[key+"_total_purity"],3)}%</b> (limit ${fsN(r[key+"_limit_total_purity"],3)}%) · Total purity check ${fsPassWord(r[key+"_passed_total_purity"])} · Individual purity check ${fsPassWord(r[key+"_passed_individual_purity"])}</div>
+    ${cats.length?`<table><thead><tr><th>Category</th><th style="text-align:right;">Percent</th><th style="text-align:right;">PPM</th><th style="text-align:right;">Limit</th><th>Good material</th><th>Result</th></tr></thead><tbody>${
+      cats.map(c=>`<tr style="${c&&c.passed===false?"background:#fee2e2;":""}"><td>${esc(c.name)}</td><td style="text-align:right;">${fsN(c.percent,3)}%</td><td style="text-align:right;">${fsN(c.ppm,0)}</td><td style="text-align:right;">${fsN(c.limit,3)}</td><td>${fsYes(c.good)}</td><td>${fsPassWord(c.passed)}</td></tr>`).join("")
+    }</tbody></table>`:`<p class="kv" style="color:var(--muted);">No categories reported.</p>`}
+  </div>`;
+}
+// Every field saved from the lab's Flake Scan _full.csv upload, laid out in full.
+function fullResultHtml(r){
+  if(!r) return `<div class="correction-note">No lab result is on file for this batch.</div>`;
+  const row=(k,v)=>`<tr><td style="width:38%;color:var(--muted);">${k}</td><td><b>${v}</b></td></tr>`;
+  return `
+    <div style="text-align:center;margin:8px 0;">${r.passed===false?`<span class="pill p-bad" style="font-size:14px;padding:5px 18px;">❌ Flake Scan machine: FAILED</span>`:`<span class="pill p-ok" style="font-size:14px;padding:5px 18px;">✅ Flake Scan machine: PASSED</span>`}</div>
+    <table><tbody>
+      ${row("Scan ID",esc(r.scan_id||"—"))}
+      ${row("File name",esc(r.filename||"—"))}
+      ${row("Description",esc(r.description||"—"))}
+      ${row("Product",esc([r.product_name,r.product_description].filter(Boolean).join(" · ")||"—")+(r.product_ref_id?` <span style="color:var(--muted);font-weight:400;">(ID ${esc(r.product_ref_id)})</span>`:""))}
+      ${row("Scan started",esc(fmtDT(r.execution_start)))}
+      ${row("Scan finished",esc(fmtDT(r.execution_stop)))}
+      ${row("Duration",esc(r.execution_duration||"—"))}
+      ${row("Sample weight",fsN(r.sample_weight,2)+" g")}
+      ${row("Metal check",r.metal_evaluation_enabled===false?"Not enabled":(fsN(r.metal_pieces,0)+" piece(s), limit "+fsN(r.metal_limit,0)+" · "+fsPassWord(r.metal_passed)))}
+      ${row("Uploaded",esc(fmtDT(r.updated_at||r.created_at)))}
+    </tbody></table>
+    ${FS_SECTIONS.map(([k,t])=>fullSectionHtml(r,k,t)).join("")}`;
+}
+// Opens the full result as a clean A4 page; the browser's print window can save it as PDF.
+function printFullResult(id){
+  const b=RUN_BATCHES.find(x=>x.id===id), r=(REVIEW_CTX&&REVIEW_CTX.id===id)?REVIEW_CTX.result:null;
+  if(!b||!r){ alert("Open the result again, then print."); return; }
+  const w=window.open("","_blank");
+  if(!w){ alert("Your browser blocked the window. Allow pop-ups for this site and try again."); return; }
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Flake Scan result, ${esc(CURRENT_PROD.form_number||"")} Batch ${b.batch_no}</title>
+  <style>
+    @page{size:A4;margin:14mm 12mm;}
+    body{font-family:Arial,Helvetica,sans-serif;font-size:10.5pt;color:#111;margin:0;}
+    h2{font-size:14pt;color:#1F3864;margin:0 0 2px;} h4{font-size:11pt;color:#1F3864;margin:12px 0 4px;}
+    .sub{font-size:9pt;color:#555;margin-bottom:10px;}
+    table{width:100%;border-collapse:collapse;margin:4px 0 8px;font-size:9pt;}
+    th{background:#1F3864;color:#fff;text-align:left;padding:4px 6px;} td{border-bottom:1px solid #ddd;padding:4px 6px;}
+    .kv{font-size:9.5pt;margin:2px 0 4px;} .pill{border:1px solid #999;border-radius:12px;padding:3px 12px;font-weight:bold;}
+    .fs-sec{break-inside:avoid;} :root{--bad:#c0392b;--ok:#15803d;--muted:#666;}
+  </style></head><body>
+  <h2>RUMBU INDUSTRIES GROUP · Flake Scan result</h2>
+  <div class="sub">Form ${esc(CURRENT_PROD.form_number||"")} · Batch ${b.batch_no} · Grade ${esc(bGrade(b))} · ${fmt(bTotal(b))} kg · Batch date ${esc(fmtD(b.batch_date))} · Printed ${esc(fmtDT(new Date().toISOString()))}</div>
+  ${fullResultHtml(r)}
+  <scr`+`ipt>window.onload=function(){ setTimeout(function(){ window.print(); },300); };</scr`+`ipt>
+  </body></html>`);
+  w.document.close();
+}
+function onReadToggle(){
+  const ok=document.getElementById("rvRead")?.checked;
+  document.querySelectorAll(".rv-dec").forEach(bt=>{ bt.disabled=!ok; bt.style.opacity=ok?"1":".45"; });
+}
+
 async function openReview(id){
   const b=RUN_BATCHES.find(x=>x.id===id); if(!b) return;
   await refreshCompany();
@@ -1013,7 +1079,7 @@ async function openReview(id){
   const lines=(stdRes&&stdRes.data)||[];
   const checks = r ? stdEvaluate(r,lines) : [];
   const sum = stdSum(checks);
-  REVIEW_CTX={ id, companyId, companyName, lines, checks, sum };
+  REVIEW_CTX={ id, companyId, companyName, lines, checks, sum, result:r };
   const weights=Array.isArray(b.bag_weights)?b.bag_weights:[];
 
   let stdHtml;
@@ -1030,17 +1096,7 @@ async function openReview(id){
     stdHtml = banner + stdTable(checks);
   }
 
-  const resHtml = !r ? `<div class="correction-note">No lab result is on file for this batch.</div>` : `
-    <div style="text-align:center;margin:8px 0;">${r.passed===false?`<span class="pill p-bad" style="font-size:14px;padding:5px 18px;">❌ Flake Scan machine: FAILED</span>`:`<span class="pill p-ok" style="font-size:14px;padding:5px 18px;">✅ Flake Scan machine: PASSED</span>`}</div>
-    <div class="tiles"><div class="tile"><div class="v">${esc(r.sample_weight??"—")} g</div><div class="l">Sample weight</div></div>
-      <div class="tile ${r.metal_pieces>0?"warn":""}"><div class="v">${esc(r.metal_pieces??0)}</div><div class="l">Metal pieces</div></div>
-      <div class="tile"><div class="v" style="font-size:13px;">${esc(r.scan_id||"—")}</div><div class="l">Scan ID</div></div></div>
-    <table><thead><tr><th>Section</th><th>Result</th><th>Purity</th><th>Failing categories</th></tr></thead><tbody>
-      ${secLine("Color A",r.color_a_enabled,r.color_a_passed,r.color_a_total_purity,r.color_a_limit_total_purity,r.color_a_categories)}
-      ${secLine("Color B",r.color_b_enabled,r.color_b_passed,r.color_b_total_purity,r.color_b_limit_total_purity,r.color_b_categories)}
-      ${secLine("Material A",r.material_a_enabled,r.material_a_passed,r.material_a_total_purity,r.material_a_limit_total_purity,r.material_a_categories)}
-      ${secLine("Material B",r.material_b_enabled,r.material_b_passed,r.material_b_total_purity,r.material_b_limit_total_purity,r.material_b_categories)}
-    </tbody></table>`;
+  const resHtml = fullResultHtml(r);
   const allTests=(attRes&&!attRes.error&&attRes.data)||[];
   const curTests=allTests.filter(a=>(a.rerun_no||0)===(b.rerun_count||0));
   const olderTests=allTests.length-curTests.length;
@@ -1055,10 +1111,11 @@ async function openReview(id){
     <div class="sec-title">Your decision</div>
     <label style="margin-top:0;">Note (required for a retest, a rerun, or to pass a result that is outside the standard)</label>
     <textarea id="rvNote" rows="2" placeholder="For example: sample looked contaminated, please retest / material mixed, make the batch again"></textarea>
+    <label style="display:flex;gap:8px;align-items:center;font-weight:700;color:var(--heading);margin:10px 0 0;cursor:pointer;"><input type="checkbox" id="rvRead" style="width:auto;" onchange="onReadToggle()"> I have read the full lab result above</label>
     <div class="actions">
-      <button id="rvApprove" onclick="decideBatch(${id},'approve')" style="background:${overrule?"#b45309":"var(--ok)"};" >${overrule?"✔ Pass anyway (outside the standard)":"✔ Pass and approve"}</button>
-      <button onclick="decideBatch(${id},'retest')" style="background:#b45309;">↻ Fail: request retest</button>
-      <button onclick="decideBatch(${id},'rerun')" style="background:var(--bad);">⟲ Fail: request rerun</button>
+      <button id="rvApprove" class="rv-dec" disabled onclick="decideBatch(${id},'approve')" style="background:${overrule?"#b45309":"var(--ok)"};opacity:.45;" >${overrule?"✔ Pass anyway (outside the standard)":"✔ Pass and approve"}</button>
+      <button class="rv-dec" disabled onclick="decideBatch(${id},'retest')" style="background:#b45309;opacity:.45;">↻ Fail: request retest</button>
+      <button class="rv-dec" disabled onclick="decideBatch(${id},'rerun')" style="background:var(--bad);opacity:.45;">⟲ Fail: request rerun</button>
     </div>` : `<div class="note-box">${CAN.review?"This batch is not waiting for a decision.":"You can view this result. Only the result approver can pass or fail it."}</div>`;
 
   document.getElementById("rvBox").innerHTML=`
@@ -1069,8 +1126,8 @@ async function openReview(id){
     <div class="kv" style="margin-top:6px;">Grade <b>${esc(bGrade(b))}</b> · ${b.bag_count||weights.length} bags · ${fmt(bTotal(b))} kg · ${esc(fmtD(b.batch_date))}<br>
       <b>Company:</b> ${esc(companyName||"not set")} · <b>Supervisor(s):</b> ${esc(b.operator_name||"—")} · <b>Shift leader:</b> ${esc(b.shift_leader_name||"—")} · Retests ${b.retest_count||0} · Reruns ${b.rerun_count||0}</div>
     ${weights.length?`<div class="bagchips">${weights.map((w,i)=>`<span class="bagchip">Bag ${i+1}: ${fmt(w)} kg</span>`).join("")}</div>`:""}
-    <div class="sec-title">Company standard compared with the lab result</div>${stdHtml}
-    <div class="sec-title">Lab result</div>${resHtml}
+    <div class="sec-title" style="display:flex;justify-content:space-between;align-items:center;gap:8px;">1 · Full lab result, as uploaded by the lab ${r?`<button class="btn-ghost btn-sm" onclick="printFullResult(${id})">🖨️ Print / save as PDF</button>`:""}</div>${resHtml}
+    <div class="sec-title">2 · Company standard compared with the lab result</div>${stdHtml}
     <div class="sec-title">Lab tests on this batch</div>${testsHtml}
     <div class="sec-title">History of this batch</div>${histHtml}
     ${decisionHtml}
@@ -1088,6 +1145,7 @@ async function decideBatch(id, kind){
   const bad=m=>{ st.style.color="var(--bad)"; st.textContent=m; };
   if(!CAN.review){ bad("Only the result approver can decide on a result."); return; }
   if(bStatus(b)!=="lab_done"){ bad("This batch is not waiting for review any more. Close and refresh."); return; }
+  if(!document.getElementById("rvRead")?.checked){ bad("Read the full lab result first, then tick the box."); return; }
   if((kind==="retest"||kind==="rerun") && !note){ bad("Write a note: the lab or production needs to know why."); return; }
   const res=RUN_RESULTS[id];
   const ctx=(REVIEW_CTX && REVIEW_CTX.id===id) ? REVIEW_CTX : null;
