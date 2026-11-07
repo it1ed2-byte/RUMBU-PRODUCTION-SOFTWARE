@@ -161,7 +161,7 @@
 
     <div class="card" style="margin-bottom:12px;padding:14px 20px;">
       <h2 style="margin:0 0 2px;font-size:17px;color:var(--heading);">Control Room — Reference Data</h2>
-      <p style="margin:0;font-size:12px;color:var(--muted);">Admin-only. Manage nurses, job codes, assets and extruder specifications.</p>
+      <p style="margin:0;font-size:12px;color:var(--muted);">Admin-only. Manage nurses, job codes, assets, extruder specifications, operators and stop codes.</p>
     </div>
 
     <!-- TABS -->
@@ -170,6 +170,8 @@
       <button class="tab-btn" onclick="switchTab('jobcodes',this)">🔧 Job Codes</button>
       <button class="tab-btn" onclick="switchTab('assets',this)">🏭 Assets</button>
       <button class="tab-btn" onclick="switchTab('extruders',this)">⚙ Extruder Specs</button>
+      <button class="tab-btn" onclick="switchTab('operators',this)">🧑‍🏭 Operators</button>
+      <button class="tab-btn" onclick="switchTab('stopcodes',this)">⛔ Stop Codes</button>
     </div>
 
     <!-- ===================== NURSES TAB ===================== -->
@@ -299,6 +301,72 @@
       </div>
     </div>
 
+    <!-- ===================== OPERATORS TAB ===================== -->
+    <div class="tab-panel" id="tab-operators">
+      <div class="card">
+        <h3>Add New Operator</h3>
+        <div class="fgrid">
+          <div><label>Operator ID <span class="req">*</span></label><input type="text" id="o-id" placeholder="e.g. RD1091"></div>
+          <div><label>Full Name <span class="req">*</span></label><input type="text" id="o-name" placeholder="e.g. HARUNA ABUBAKAR"></div>
+          <div><label>Rank</label><input type="text" id="o-rank" list="dl-ranks" placeholder="e.g. JUNIOR OPERATOR"></div>
+          <div><label>Department</label><input type="text" id="o-dept" placeholder="e.g. Mat Weaving"></div>
+          <div style="align-self:end;">
+            <button class="btn btn-primary" onclick="addRecord('operators')">Add Operator</button>
+          </div>
+        </div>
+        <datalist id="dl-ranks"></datalist>
+        <div class="status" id="o-status" style="margin-top:8px;"></div>
+        <p style="margin:8px 0 0;font-size:11.5px;color:var(--muted);">Used by Report Stop. Operators whose ID is shared with another person are flagged <b>Shared ID</b>: correct one of the IDs, then click <b>Mark reviewed</b>.</p>
+      </div>
+      <div class="card">
+        <div class="search-row">
+          <input type="text" placeholder="Search ID, name or rank…" oninput="filterTable('op-tbl',this.value)">
+          <select onchange="filterActive('op-tbl',this.value)">
+            <option value="">All</option><option value="active">Active</option><option value="inactive">Inactive</option>
+            <option value="review">Shared ID (needs review)</option>
+          </select>
+          <span class="rec-count" id="op-count"></span>
+        </div>
+        <div class="tbl-wrap">
+          <table id="op-tbl">
+            <thead><tr><th>Operator ID</th><th>Name</th><th>Rank</th><th>Department</th><th>Check</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== STOP CODES TAB ===================== -->
+    <div class="tab-panel" id="tab-stopcodes">
+      <div class="card">
+        <h3>Add New Stop Code</h3>
+        <div class="fgrid">
+          <div><label>Stop Code <span class="req">*</span></label><input type="text" id="s-code" placeholder="e.g. No Repair (Bad Loading)"></div>
+          <div><label>Order in list</label><input type="number" id="s-order" step="1" placeholder="e.g. 8"></div>
+          <div style="align-self:end;">
+            <button class="btn btn-primary" onclick="addRecord('stopcodes')">Add Stop Code</button>
+          </div>
+        </div>
+        <div class="status" id="s-status" style="margin-top:8px;"></div>
+        <p style="margin:8px 0 0;font-size:11.5px;color:var(--muted);">The codes the Monitoring Room picks on Report Stop. <b>Technical Loss</b> is the code that appears on the Live Board; codes starting with <b>No Repair</b> are counted on the Monitoring Board. A code cannot be renamed once in use; deactivate it and add the new one instead.</p>
+      </div>
+      <div class="card">
+        <div class="search-row">
+          <input type="text" placeholder="Search code…" oninput="filterTable('sc-tbl',this.value)">
+          <select onchange="filterActive('sc-tbl',this.value)">
+            <option value="">All</option><option value="active">Active</option><option value="inactive">Inactive</option>
+          </select>
+          <span class="rec-count" id="sc-count"></span>
+        </div>
+        <div class="tbl-wrap">
+          <table id="sc-tbl">
+            <thead><tr><th>Order</th><th>Stop Code</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
   </div><!-- /mainContent -->
 </div><!-- /wrap -->
 
@@ -323,6 +391,8 @@ const NURSES_T   = 'cr_nurses';
 const JOB_T      = 'cr_job_codes';
 const ASSETS_T   = 'cr_assets';
 const EXTRUDER_T = 'cr_extruder_groups';
+const OPS_T      = 'cr_operators';
+const CODES_T    = 'cr_stop_codes';
 
 let SESSION_TOKEN = SUPABASE_ANON_KEY;
 let EDIT_STATE    = null; // { table, id, fields }
@@ -339,7 +409,18 @@ document.addEventListener('DOMContentLoaded', async function () {
     // 2. Role gate: super_admin, admin, or the Head of IT
     const role = String(profile.role || '').toLowerCase().replace(/[^a-z]/g, '');
     const allowed = ['superadmin', 'admin', 'headofit'].includes(role) || !!profile.is_head_of_it;
+    // A Control Room admin (appointed on Staff Access) maintains Operators and Stop Codes only
+    let crAdminOnly = false;
     if (!allowed) {
+      try { const { data } = await sb.rpc('can_manage_module', { p_module: 'Control Room' }); crAdminOnly = !!data; } catch (e) {}
+    }
+    if (crAdminOnly) {
+      ['nurses','jobcodes','assets','extruders'].forEach(t => {
+        const b = document.querySelector('.tab-btn[onclick*="\'' + t + '\'"]'); if (b) b.remove();
+        const p = document.getElementById('tab-' + t); if (p) p.remove();
+      });
+    }
+    if (!allowed && !crAdminOnly) {
       document.getElementById('deniedBox').style.display = 'block';
       return;
     }
@@ -351,10 +432,16 @@ document.addEventListener('DOMContentLoaded', async function () {
       SESSION_TOKEN = session?.access_token || SUPABASE_ANON_KEY;
     } catch (e) { /* fall back to anon key */ }
 
-    await Promise.all([
-      loadTable('nurses'), loadTable('jobcodes'),
-      loadTable('assets'), loadTable('extruders')
-    ]);
+    if (crAdminOnly) {
+      switchTab('operators', document.querySelector('.tab-btn[onclick*="operators"]'));
+      await Promise.all([loadTable('operators'), loadTable('stopcodes')]);
+    } else {
+      await Promise.all([
+        loadTable('nurses'), loadTable('jobcodes'),
+        loadTable('assets'), loadTable('extruders'),
+        loadTable('operators'), loadTable('stopcodes')
+      ]);
+    }
   } catch (err) {
     console.error('cr-reference-data boot failed', err);
   }
@@ -375,9 +462,13 @@ function switchTab(name, btn) {
 // LOAD TABLE DATA
 // =============================================
 async function loadTable(tab) {
-  const { tblId, supaTable, buildRow, countId } = tabConfig(tab);
+  const { tblId, supaTable, buildRow, countId, order } = tabConfig(tab);
   try {
-    const rows = await apiGetAll(supaTable + '?order=id.asc');
+    const rows = await apiGetAll(supaTable + '?order=' + (order || 'id.asc'));
+    if (tab === 'operators') {
+      const ranks = Array.from(new Set(rows.map(r => r.rank).filter(Boolean))).sort();
+      document.getElementById('dl-ranks').innerHTML = ranks.map(x => '<option value="' + esc(x) + '"></option>').join('');
+    }
     const tbody = document.querySelector('#' + tblId + ' tbody');
     tbody.innerHTML = '';
     rows.forEach(r => tbody.appendChild(buildRow(r)));
@@ -407,6 +498,14 @@ function tabConfig(tab) {
     extruders: {
       tblId: 'ext-tbl', supaTable: EXTRUDER_T, countId: 'ext-count',
       buildRow: r => buildRow_extruders(r)
+    },
+    operators: {
+      tblId: 'op-tbl', supaTable: OPS_T, countId: 'op-count', order: 'operator_id.asc,id.asc',
+      buildRow: r => buildRow_operators(r)
+    },
+    stopcodes: {
+      tblId: 'sc-tbl', supaTable: CODES_T, countId: 'sc-count', order: 'sort_order.asc,id.asc',
+      buildRow: r => buildRow_stopcodes(r)
     }
   };
   return cfg[tab];
@@ -468,17 +567,48 @@ function buildRow_extruders(r) {
   return tr;
 }
 
+function buildRow_operators(r) {
+  const tr = document.createElement('tr');
+  tr.dataset.search = ((r.operator_id||'') + ' ' + (r.operator_name||'') + ' ' + (r.rank||'')).toLowerCase();
+  tr.dataset.active = r.is_active ? 'active' : 'inactive';
+  tr.dataset.review = r.needs_review ? '1' : '0';
+  tr.innerHTML = '<td><strong>' + esc(r.operator_id) + '</strong></td>' +
+    '<td>' + esc(r.operator_name) + '</td><td>' + esc(r.rank || '—') + '</td><td>' + esc(r.department || '—') + '</td>' +
+    '<td>' + (r.needs_review ? '<span class="badge inactive" title="This ID is also used by another person">⚠ Shared ID</span>' : '') + '</td>' +
+    '<td>' + badge(r.is_active) + '</td>' +
+    '<td>' + actionBtns('operators', r.id, r.is_active) +
+      (r.needs_review ? '<button class="act-btn" onclick="markReviewed(' + r.id + ')">Mark reviewed</button>' : '') + '</td>';
+  return tr;
+}
+
+function buildRow_stopcodes(r) {
+  const tr = document.createElement('tr');
+  tr.dataset.search = (r.code||'').toLowerCase();
+  tr.dataset.active = r.is_active ? 'active' : 'inactive';
+  tr.innerHTML = '<td>' + (r.sort_order ?? '—') + '</td><td><strong>' + esc(r.code) + '</strong></td>' +
+    '<td>' + badge(r.is_active) + '</td>' +
+    '<td>' + actionBtns('stopcodes', r.id, r.is_active) + '</td>';
+  return tr;
+}
+
+async function markReviewed(id) {
+  if (!confirm('Mark this operator as reviewed? Do this once the shared ID has been corrected or confirmed.')) return;
+  try { await apiPatch(OPS_T + '?id=eq.' + id, { needs_review: false, updated_at: new Date().toISOString() }); await loadTable('operators'); }
+  catch (e) { alert('Failed: ' + e.message); }
+}
+
 // =============================================
 // ADD RECORD
 // =============================================
 async function addRecord(tab) {
-  const { payload, validate, supaTable, statusId, conflictCol } = addConfig(tab);
+  const { payload, validate, supaTable, statusId, conflictCol, precheck } = addConfig(tab);
   const p = payload();
   const err = validate(p);
   if (err) return setStatus(statusId, err, 'err');
   setStatus(statusId, 'Saving…', '');
   try {
-    await apiPost(supaTable + '?on_conflict=' + conflictCol, p);
+    if (precheck) { const go = await precheck(p); if (!go) return setStatus(statusId, 'Not added.', ''); }
+    await apiPost(supaTable + (conflictCol ? '?on_conflict=' + conflictCol : ''), p);
     setStatus(statusId, '✓ Added successfully.', 'ok');
     clearAddForm(tab);
     await loadTable(tab);
@@ -532,6 +662,48 @@ function addConfig(tab) {
         return null;
       }
     },
+    operators: {
+      supaTable: OPS_T, statusId: 'o-status', conflictCol: null,
+      payload: () => ({
+        operator_id:   (document.getElementById('o-id').value   || '').trim().toUpperCase(),
+        operator_name: (document.getElementById('o-name').value || '').trim().replace(/\s+/g, ' ').toUpperCase(),
+        rank:          (document.getElementById('o-rank').value || '').trim().replace(/\s+/g, ' ').toUpperCase() || null,
+        department:    (document.getElementById('o-dept').value || '').trim() || 'Mat Weaving',
+        is_active:     true
+      }),
+      validate: p => {
+        if (!p.operator_id)   return 'Operator ID is required.';
+        if (!/\d/.test(p.operator_id)) return 'Operator ID must be a real ID with numbers, for example RD1091.';
+        if (!p.operator_name) return 'Name is required.';
+        return null;
+      },
+      // Same ID already used: same name is refused; a different name is allowed only after a warning, and flagged
+      precheck: async p => {
+        const rows = await apiGet(OPS_T + '?select=operator_name&operator_id=ilike.' + encodeURIComponent(p.operator_id));
+        if (!rows.length) return true;
+        if (rows.some(r => (r.operator_name || '').toUpperCase() === p.operator_name)) {
+          alert(p.operator_id + ' · ' + p.operator_name + ' already exists.'); return false;
+        }
+        if (!confirm('ID ' + p.operator_id + ' is already used by ' + rows.map(r => r.operator_name).join(', ') +
+                     '.\n\nAdd anyway? Both will be flagged as Shared ID until corrected.')) return false;
+        p.needs_review = true;
+        await apiPatch(OPS_T + '?operator_id=ilike.' + encodeURIComponent(p.operator_id), { needs_review: true });
+        return true;
+      }
+    },
+    stopcodes: {
+      supaTable: CODES_T, statusId: 's-status', conflictCol: 'code',
+      payload: () => ({
+        code:       (document.getElementById('s-code').value || '').trim().replace(/\s+/g, ' '),
+        sort_order: parseInt(document.getElementById('s-order').value || '99', 10),
+        is_active:  true
+      }),
+      validate: p => {
+        if (!p.code) return 'Stop code is required.';
+        if (isNaN(p.sort_order)) return 'Order must be a whole number.';
+        return null;
+      }
+    },
     extruders: {
       supaTable: EXTRUDER_T, statusId: 'e-status', conflictCol: 'asset',
       payload: () => ({
@@ -556,7 +728,9 @@ function clearAddForm(tab) {
     nurses:   ['n-name','n-id'],
     jobcodes: ['j-code','j-est','j-dept','j-desc'],
     assets:   ['a-asset','a-shed','a-grp','a-sect'],
-    extruders:['e-asset','e-type','e-nozzles','e-denier','e-length']
+    extruders:['e-asset','e-type','e-nozzles','e-denier','e-length'],
+    operators:['o-id','o-name','o-rank','o-dept'],
+    stopcodes:['s-code','s-order']
   };
   (maps[tab] || []).forEach(id => { document.getElementById(id).value = ''; });
 }
@@ -565,7 +739,7 @@ function clearAddForm(tab) {
 // TOGGLE ACTIVE
 // =============================================
 async function toggleActive(tab, id, currentlyActive) {
-  const supaTable = { nurses: NURSES_T, jobcodes: JOB_T, assets: ASSETS_T, extruders: EXTRUDER_T }[tab];
+  const supaTable = { nurses: NURSES_T, jobcodes: JOB_T, assets: ASSETS_T, extruders: EXTRUDER_T, operators: OPS_T, stopcodes: CODES_T }[tab];
   const action    = currentlyActive ? 'Deactivate' : 'Reactivate';
   if (!confirm(action + ' this record?')) return;
   try {
@@ -580,14 +754,14 @@ async function toggleActive(tab, id, currentlyActive) {
 // EDIT MODAL
 // =============================================
 async function openEdit(tab, id) {
-  const supaTable = { nurses: NURSES_T, jobcodes: JOB_T, assets: ASSETS_T, extruders: EXTRUDER_T }[tab];
+  const supaTable = { nurses: NURSES_T, jobcodes: JOB_T, assets: ASSETS_T, extruders: EXTRUDER_T, operators: OPS_T, stopcodes: CODES_T }[tab];
   try {
     const rows = await apiGet(supaTable + '?id=eq.' + id);
     if (!rows || !rows[0]) return alert('Record not found.');
     const r = rows[0];
     EDIT_STATE = { tab, supaTable, id };
 
-    const titles = { nurses: 'Edit Nurse', jobcodes: 'Edit Job Code', assets: 'Edit Asset', extruders: 'Edit Extruder Asset' };
+    const titles = { nurses: 'Edit Nurse', jobcodes: 'Edit Job Code', assets: 'Edit Asset', extruders: 'Edit Extruder Asset', operators: 'Edit Operator', stopcodes: 'Edit Stop Code' };
     document.getElementById('modalTitle').textContent = titles[tab];
 
     const container = document.getElementById('modalFields');
@@ -597,14 +771,16 @@ async function openEdit(tab, id) {
       nurses:   [['name','Name','text',r.name],['emp_id','Staff ID','text',r.emp_id]],
       jobcodes: [['job_code','Job Code','text',r.job_code],['description','Description','text',r.description],['estimated_min','Est. Duration (min)','number',r.estimated_min],['department','Department','text',r.department]],
       assets:   [['asset','Asset Code','text',r.asset],['shed','Shed','text',r.shed||''],['grp','Group','text',r.grp||''],['section','Section','text',r.section||'']],
-      extruders:[['asset','Asset Code','text',r.asset],['type','Type','number',r.type],['nozzles','Nozzles','number',r.nozzles],['denier','Denier','number',r.denier],['length','Length','number',r.length]]
+      extruders:[['asset','Asset Code','text',r.asset],['type','Type','number',r.type],['nozzles','Nozzles','number',r.nozzles],['denier','Denier','number',r.denier],['length','Length','number',r.length]],
+      operators:[['operator_id','Operator ID','text',r.operator_id],['operator_name','Full Name','text',r.operator_name],['rank','Rank','text',r.rank||''],['department','Department','text',r.department||'']],
+      stopcodes:[['code','Stop Code','text',r.code],['sort_order','Order in list','number',r.sort_order]]
     };
 
     fieldDefs[tab].forEach(([key, label, type, val]) => {
       const div = document.createElement('div');
       div.innerHTML = '<label>' + esc(label) + '</label>' +
         '<input type="' + type + '" id="me-' + key + '" value="' + esc(String(val ?? '')) + '"' +
-        (key === 'emp_id' || (key === 'asset' && tab !== 'nurses') ? ' style="opacity:.7;" readonly' : '') + '>';
+        (key === 'emp_id' || key === 'code' || (key === 'asset' && tab !== 'nurses') ? ' style="opacity:.7;" readonly' : '') + '>';
       container.appendChild(div);
     });
 
@@ -623,17 +799,25 @@ async function saveEdit() {
     nurses:   ['name','emp_id'],
     jobcodes: ['job_code','description','estimated_min','department'],
     assets:   ['asset','shed','grp','section'],
-    extruders:['asset','type','nozzles','denier','length']
+    extruders:['asset','type','nozzles','denier','length'],
+    operators:['operator_id','operator_name','rank','department'],
+    stopcodes:['code','sort_order']
   };
-  const numericKeys = new Set(['estimated_min','type','nozzles','denier','length']);
+  const numericKeys = new Set(['estimated_min','type','nozzles','denier','length','sort_order']);
+  const upperKeys = new Set(['operator_id','operator_name','rank']);
 
   const payload = {};
   fieldKeys[tab].forEach(key => {
     const el = document.getElementById('me-' + key);
     if (!el || el.readOnly) return;
     const v = el.value.trim();
-    payload[key] = numericKeys.has(key) ? (v === '' ? null : parseFloat(v)) : (v || null);
+    payload[key] = numericKeys.has(key) ? (v === '' ? null : parseFloat(v)) : (v ? (upperKeys.has(key) ? v.replace(/\s+/g, ' ').toUpperCase() : v) : null);
   });
+  if (tab === 'operators') {
+    if (!payload.operator_id || !/\d/.test(payload.operator_id)) return setStatus('modal-status', 'Operator ID must be a real ID with numbers.', 'err');
+    if (!payload.operator_name) return setStatus('modal-status', 'Name is required.', 'err');
+    payload.updated_at = new Date().toISOString();
+  }
 
   setStatus('modal-status', 'Saving…', '');
   document.getElementById('modalSaveBtn').disabled = true;
@@ -671,14 +855,14 @@ function filterTable(tblId, query) {
 
 function filterActive(tblId, val) {
   document.querySelectorAll('#' + tblId + ' tbody tr').forEach(tr => {
-    const match = !val || tr.dataset.active === val;
+    const match = !val || (val === 'review' ? tr.dataset.review === '1' : tr.dataset.active === val);
     tr.style.display = match ? '' : 'none';
   });
   updateCount(tblId);
 }
 
 function updateCount(tblId) {
-  const countIds = { 'nurses-tbl':'nurses-count','jc-tbl':'jc-count','asset-tbl':'asset-count','ext-tbl':'ext-count' };
+  const countIds = { 'nurses-tbl':'nurses-count','jc-tbl':'jc-count','asset-tbl':'asset-count','ext-tbl':'ext-count','op-tbl':'op-count','sc-tbl':'sc-count' };
   const visible = document.querySelectorAll('#' + tblId + ' tbody tr:not([style*="display: none"])').length;
   const cid = countIds[tblId];
   if (cid) document.getElementById(cid).textContent = visible + ' record(s)';
