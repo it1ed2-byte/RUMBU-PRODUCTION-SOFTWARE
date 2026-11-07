@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Staff Access — Control Room</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+(function(){
+  function apply(t){ if(t) document.documentElement.setAttribute("data-theme",t); }
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+  try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+})();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  [hidden] { display: none !important; }
+  body { padding: 18px; }
+  .wrap { max-width: 1400px; margin: 0 auto; }
+  .hdr h2 { margin: 0 0 2px; font-size: 17px; color: var(--heading); }
+  .hdr p { margin: 0 0 12px; font-size: 12px; color: var(--muted); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin-bottom: 12px; }
+  .card h3 { margin: 0 0 4px; font-size: 14px; color: var(--heading); }
+  .card .sub { font-size: 12px; color: var(--muted); margin: 0 0 10px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  input[type=text], select { padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px;
+                             background: var(--bg); color: var(--text); font-family: inherit; }
+  .btn { padding: 7px 13px; border: none; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-ghost { background: transparent; border: 1px solid var(--line); color: var(--text); }
+  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-x { background: transparent; border: 0; color: var(--bad, #dc2626); font-weight: 800; cursor: pointer; padding: 0 4px; }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 6px 4px 11px; border-radius: 999px;
+          background: var(--bg); border: 1px solid var(--line); font-size: 12.5px; font-weight: 700; color: var(--heading); }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .tbl-wrap { overflow: auto; max-height: 62vh; border: 1px solid var(--line); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { padding: 7px 9px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; vertical-align: middle; }
+  th { position: sticky; top: 0; z-index: 1; background: var(--bg); font-size: 10.5px; font-weight: 700; text-transform: uppercase;
+       letter-spacing: .3px; color: var(--muted); }
+  th.pg { text-align: center; white-space: normal; min-width: 74px; max-width: 90px; line-height: 1.25; }
+  td.pg { text-align: center; }
+  td.pg input { width: 17px; height: 17px; cursor: pointer; }
+  .name { font-weight: 800; color: var(--heading); }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 800; }
+  .p-yes { background: #dcfce7; color: #15803d; } .p-no { background: var(--bg); border: 1px solid var(--line); color: var(--muted); }
+  [data-theme="dark"] .p-yes { background: #052e16; color: #4ade80; }
+  tr.dirty td { background: rgba(217,119,6,.08); }
+  tr.nologin td { opacity: .6; }
+  .bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+  .bar .grow { flex: 1; }
+  .status { font-size: 12px; font-weight: 700; }
+  .status.ok { color: #16a34a; } .status.err { color: var(--bad, #dc2626); }
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px); background: #16a34a; color: #fff;
+    padding: 12px 20px; border-radius: 10px; font-size: 14px; font-weight: 700; opacity: 0; pointer-events: none;
+    transition: opacity .2s, transform .2s; z-index: 300; box-shadow: 0 8px 24px rgba(0,0,0,.2); }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.err { background: #dc2626; }
+  .denied { max-width: 520px; margin: 10vh auto; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hdr">
+    <h2>Staff Access · Control Room</h2>
+    <p>Give Control Room staff the pages they need. Only Control Room pages are changed here; access to other modules is untouched.</p>
+  </div>
+
+  <div id="loading" class="card">Loading…</div>
+  <div id="denied" class="card denied" hidden>
+    <h3>Not available</h3>
+    <p class="muted">This page is for Control Room admins. Ask the Head of IT to appoint you if you need it.</p>
+  </div>
+
+  <!-- ===== Super Admin only ===== -->
+  <div id="superBox" hidden>
+    <div class="card">
+      <h3>Control Room admins</h3>
+      <p class="sub">They can give and remove Control Room pages for the staff below. They cannot change their own access, other modules, or Super Admin accounts.</p>
+      <div class="chips" id="adminChips"></div>
+      <div class="row">
+        <input type="text" id="adminPick" list="dl-logins" placeholder="Type a username or staff name" style="min-width:320px;">
+        <datalist id="dl-logins"></datalist>
+        <button class="btn btn-primary" onclick="addAdmin()">Appoint admin</button>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Which staff belong to the Control Room</h3>
+      <p class="sub">Staff are read from the employees table by department and unit. Leave the unit empty to include the whole department.</p>
+      <div class="chips" id="scopeChips"></div>
+      <div class="row">
+        <select id="scopeDept"></select>
+        <select id="scopeUnit"></select>
+        <button class="btn btn-ghost" onclick="addScope()">Add</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Staff and their pages ===== -->
+  <div id="staffBox" class="card" hidden>
+    <h3>Staff and their Control Room pages</h3>
+    <p class="sub">Tick the pages each person may open, then Save. Staff without a login cannot be given pages; ask IT or HR to create one.</p>
+    <div class="bar">
+      <input type="text" id="q" placeholder="Search name or employee ID" oninput="renderStaff()" style="min-width:240px;">
+      <select id="fUnit" onchange="renderStaff()"><option value="">All units</option></select>
+      <select id="fLogin" onchange="renderStaff()">
+        <option value="">Everyone</option><option value="yes">With login</option><option value="no">No login</option>
+      </select>
+      <span class="grow"></span>
+      <span class="status" id="saveStatus"></span>
+      <button class="btn btn-ghost" onclick="loadStaff()">↻ Reload</button>
+      <button class="btn btn-primary" id="saveAll" onclick="saveAll()" disabled>Save changes</button>
+    </div>
+    <div class="tbl-wrap"><table id="staffTbl"></table></div>
+    <p class="muted" style="margin-top:8px;">Presets tick the usual pages for a role; you can adjust them before saving.</p>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const MODULE = 'Control Room';
+const ACCESS_PAGE = 'controlroom/staff-access';
+// Usual page sets. Paths not present in the module are ignored.
+const PRESETS = {
+  'Nurse / technician':     ['controlroom/new-work-order', 'controlroom/live-board', 'controlroom/work-orders'],
+  'Control room operator':  ['controlroom/new-work-order', 'controlroom/live-board', 'controlroom/monitoring-room', 'controlroom/work-orders', 'controlroom/edit-record'],
+  'Monitoring room':        ['controlroom/report-stop', 'controlroom/live-board', 'controlroom/monitoring-room', 'controlroom/tracking-table-viewer'],
+  'Supervisor (all pages)': '*',
+  'No access':              []
+};
+
+let ME = null, IS_SUPER = false, PAGES = [], STAFF = [], ORIGINAL = {}, CURRENT = {};
+
+document.addEventListener('DOMContentLoaded', async () => {
+  try {
+    ME = await requireAuth('../../login.html');
+    if (!ME) return;
+    const [{ data: full }, { data: mine }] = await Promise.all([
+      sb.rpc('is_full_access_admin'), sb.rpc('can_manage_module', { p_module: MODULE })
+    ]);
+    IS_SUPER = !!full;
+    document.getElementById('loading').hidden = true;
+    if (!mine) { document.getElementById('denied').hidden = false; return; }
+    const { data: pages, error } = await sb.rpc('module_grantable_pages', { p_module: MODULE });
+    if (error) throw error;
+    PAGES = pages || [];
+    if (IS_SUPER) { document.getElementById('superBox').hidden = false; await Promise.all([loadAdmins(), loadScope()]); }
+    document.getElementById('staffBox').hidden = false;
+    await loadStaff();
+  } catch (e) {
+    document.getElementById('loading').innerHTML = '<span style="color:var(--bad)">❌ ' + esc(e.message || e) + '</span>';
+  }
+});
+
+// =============================================
+// SUPER ADMIN: admins and scope
+// =============================================
+let LOGINS = {};
+async function loadAdmins() {
+  const [{ data: admins }, { data: profiles }, { data: emps }] = await Promise.all([
+    sb.from('module_admins').select('profile_id').eq('module_name', MODULE),
+    sb.from('profiles').select('id, username, role').order('username'),
+    sb.from('employees').select('full_name, linked_profile_id').not('linked_profile_id', 'is', null)
+  ]);
+  const nameOf = {}; (emps || []).forEach(e => { nameOf[e.linked_profile_id] = e.full_name; });
+  LOGINS = {};
+  const opts = [];
+  (profiles || []).forEach(p => {
+    if (p.role === 'super_admin') return;
+    const label = p.username + (nameOf[p.id] ? ' · ' + nameOf[p.id] : '');
+    LOGINS[label.toUpperCase()] = p; LOGINS[String(p.username).toUpperCase()] = p;
+    opts.push('<option value="' + esc(label) + '"></option>');
+  });
+  document.getElementById('dl-logins').innerHTML = opts.join('');
+  const byId = {}; (profiles || []).forEach(p => { byId[p.id] = p; });
+  const chips = (admins || []).map(a => {
+    const p = byId[a.profile_id] || { username: a.profile_id };
+    return '<span class="chip">' + esc(p.username) + (nameOf[a.profile_id] ? ' · ' + esc(nameOf[a.profile_id]) : '') +
+      ' <button class="btn-x" title="Remove as admin" onclick="removeAdmin(\'' + a.profile_id + '\')">×</button></span>';
+  });
+  document.getElementById('adminChips').innerHTML = chips.length ? chips.join('') : '<span class="muted">No Control Room admin appointed yet.</span>';
+}
+async function addAdmin() {
+  const v = document.getElementById('adminPick').value.trim().toUpperCase();
+  const p = LOGINS[v];
+  if (!p) return toast('Pick a login from the list.', true);
+  const { error } = await sb.rpc('set_module_admin', { p_module: MODULE, p_profile: p.id, p_on: true, p_access_page: ACCESS_PAGE });
+  if (error) return toast(error.message, true);
+  document.getElementById('adminPick').value = '';
+  toast('✓ ' + p.username + ' is now a Control Room admin');
+  loadAdmins();
+}
+async function removeAdmin(id) {
+  if (!confirm('Remove this person as Control Room admin? Their own page access is not otherwise changed.')) return;
+  const { error } = await sb.rpc('set_module_admin', { p_module: MODULE, p_profile: id, p_on: false, p_access_page: ACCESS_PAGE });
+  if (error) return toast(error.message, true);
+  toast('✓ Admin removed'); loadAdmins();
+}
+
+async function loadScope() {
+  const [{ data: scope }, { data: emps }] = await Promise.all([
+    sb.from('module_staff_scope').select('department, unit').eq('module_name', MODULE),
+    sb.from('employees').select('department, unit')
+  ]);
+  document.getElementById('scopeChips').innerHTML = (scope || []).map(s =>
+    '<span class="chip">' + esc(s.department) + (s.unit ? ' › ' + esc(s.unit) : ' (whole department)') +
+    ' <button class="btn-x" title="Remove" onclick="removeScope(\'' + escJs(s.department) + '\',\'' + escJs(s.unit || '') + '\')">×</button></span>'
+  ).join('') || '<span class="muted">No units chosen: the admin will see no staff.</span>';
+  const tree = {};
+  (emps || []).forEach(e => { if (!e.department) return; const d = String(e.department).toUpperCase(); (tree[d] = tree[d] || new Set()); if (e.unit) tree[d].add(String(e.unit).toUpperCase()); });
+  const ds = document.getElementById('scopeDept'), us = document.getElementById('scopeUnit');
+  ds.innerHTML = Object.keys(tree).sort().map(d => '<option>' + esc(d) + '</option>').join('');
+  const fillUnits = () => { us.innerHTML = '<option value="">Whole department</option>' + Array.from(tree[ds.value] || []).sort().map(u => '<option>' + esc(u) + '</option>').join(''); };
+  ds.onchange = fillUnits;
+  if (tree['TECHNICAL']) ds.value = 'TECHNICAL';
+  fillUnits();
+}
+async function addScope() {
+  const d = document.getElementById('scopeDept').value, u = document.getElementById('scopeUnit').value;
+  const { error } = await sb.rpc('set_module_scope', { p_module: MODULE, p_department: d, p_unit: u || null, p_on: true });
+  if (error) return toast(error.message, true);
+  toast('✓ Added'); await loadScope(); loadStaff();
+}
+async function removeScope(d, u) {
+  if (!confirm('Remove ' + d + (u ? ' › ' + u : '') + ' from the Control Room staff list? Pages already given are not removed.')) return;
+  const { error } = await sb.rpc('set_module_scope', { p_module: MODULE, p_department: d, p_unit: u || null, p_on: false });
+  if (error) return toast(error.message, true);
+  await loadScope(); loadStaff();
+}
+
+// =============================================
+// STAFF AND PAGES
+// =============================================
+async function loadStaff() {
+  if (dirtyCount() && !confirm('Discard unsaved changes?')) return;
+  const { data, error } = await sb.rpc('module_staff', { p_module: MODULE });
+  if (error) { toast(error.message, true); return; }
+  STAFF = data || [];
+  ORIGINAL = {}; CURRENT = {};
+  STAFF.forEach(s => { if (s.profile_id) { ORIGINAL[s.profile_id] = new Set(s.paths || []); CURRENT[s.profile_id] = new Set(s.paths || []); } });
+  const units = Array.from(new Set(STAFF.map(s => s.unit || '(no unit)'))).sort();
+  const fu = document.getElementById('fUnit'), keep = fu.value;
+  fu.innerHTML = '<option value="">All units</option>' + units.map(u => '<option' + (u === keep ? ' selected' : '') + '>' + esc(u) + '</option>').join('');
+  renderStaff(); updateSaveBar();
+}
+
+function renderStaff() {
+  const q = document.getElementById('q').value.trim().toLowerCase();
+  const fu = document.getElementById('fUnit').value, fl = document.getElementById('fLogin').value;
+  const list = STAFF.filter(s =>
+    (!q || [s.full_name, s.employee_id, s.username].join(' ').toLowerCase().includes(q)) &&
+    (!fu || (s.unit || '(no unit)') === fu) &&
+    (!fl || (fl === 'yes' ? !!s.profile_id : !s.profile_id)));
+  const tbl = document.getElementById('staffTbl');
+  const head = '<thead><tr><th>Staff</th><th>Unit</th><th>Login</th><th>Preset</th>' +
+    PAGES.map(p => '<th class="pg" title="' + esc(p.module_path) + '">' + esc(p.name) + '</th>').join('') + '</tr></thead>';
+  if (!list.length) { tbl.innerHTML = head + '<tbody><tr><td colspan="' + (4 + PAGES.length) + '" class="muted" style="text-align:center;padding:30px;">' +
+    (STAFF.length ? 'No staff match the filters.' : 'No staff found for the chosen units.') + '</td></tr></tbody>'; return; }
+  tbl.innerHTML = head + '<tbody>' + list.map(s => {
+    const id = s.profile_id, has = !!id, superAcc = s.role === 'super_admin', self = id === ME.id && !IS_SUPER;
+    const locked = !has || superAcc || self;
+    const cur = has ? CURRENT[id] : new Set();
+    const note = !has ? '<span class="pill p-no">No login</span>' : superAcc ? '<span class="pill p-no">Super Admin</span>' :
+      '<span class="pill p-yes">' + esc(s.username) + '</span>';
+    return '<tr id="r-' + (id || s.employee_key) + '" class="' + (has ? '' : 'nologin') + (has && isDirty(id) ? ' dirty' : '') + '">' +
+      '<td><div class="name">' + esc(s.full_name) + '</div><div class="muted">' + esc(s.employee_id || '') + '</div></td>' +
+      '<td>' + esc(s.unit || '—') + '</td><td>' + note + (self ? ' <span class="muted">(you)</span>' : '') + '</td>' +
+      '<td>' + (locked ? '' : '<select onchange="applyPreset(\'' + id + '\', this)"><option value="">Choose…</option>' +
+        Object.keys(PRESETS).map(k => '<option>' + esc(k) + '</option>').join('') + '</select>') + '</td>' +
+      PAGES.map(p => '<td class="pg"><input type="checkbox" ' + (cur.has(p.module_path) ? 'checked ' : '') + (locked ? 'disabled ' : '') +
+        'onchange="togglePage(\'' + id + '\',\'' + escJs(p.module_path) + '\', this.checked)" title="' + esc(p.name) + '"></td>').join('') +
+    '</tr>';
+  }).join('') + '</tbody>';
+}
+
+function togglePage(id, path, on) { if (on) CURRENT[id].add(path); else CURRENT[id].delete(path); markRow(id); }
+function applyPreset(id, sel) {
+  const p = PRESETS[sel.value]; if (p === undefined) return;
+  const all = PAGES.map(x => x.module_path);
+  CURRENT[id] = new Set(p === '*' ? all : p.filter(x => all.includes(x)));
+  sel.value = '';
+  renderStaff(); updateSaveBar();
+}
+function isDirty(id) {
+  const a = ORIGINAL[id], b = CURRENT[id]; if (!a || !b) return false;
+  if (a.size !== b.size) return true; for (const x of a) if (!b.has(x)) return true; return false;
+}
+function dirtyCount() { return Object.keys(CURRENT).filter(isDirty).length; }
+function markRow(id) { const r = document.getElementById('r-' + id); if (r) r.classList.toggle('dirty', isDirty(id)); updateSaveBar(); }
+function updateSaveBar() {
+  const n = dirtyCount(), b = document.getElementById('saveAll'), st = document.getElementById('saveStatus');
+  b.disabled = !n; b.textContent = n ? 'Save changes (' + n + ')' : 'Save changes';
+  st.textContent = n ? n + ' person' + (n === 1 ? '' : 's') + ' changed, not yet saved' : ''; st.className = 'status';
+}
+
+async function saveAll() {
+  const ids = Object.keys(CURRENT).filter(isDirty);
+  if (!ids.length) return;
+  const btn = document.getElementById('saveAll'), st = document.getElementById('saveStatus');
+  btn.disabled = true; st.textContent = 'Saving…'; st.className = 'status';
+  let ok = 0; const failed = [];
+  for (const id of ids) {
+    const { error } = await sb.rpc('set_module_staff_pages', { p_module: MODULE, p_profile: id, p_paths: Array.from(CURRENT[id]) });
+    if (error) { const s = STAFF.find(x => x.profile_id === id); failed.push((s ? s.full_name : id) + ': ' + error.message); }
+    else { ORIGINAL[id] = new Set(CURRENT[id]); ok++; }
+  }
+  renderStaff(); updateSaveBar();
+  if (failed.length) { st.textContent = failed.join(' · '); st.className = 'status err'; toast(failed.length + ' could not be saved', true); }
+  else { st.textContent = '✓ Saved for ' + ok + ' person' + (ok === 1 ? '' : 's') + '. Changes apply the next time they open the app.'; st.className = 'status ok'; toast('✓ Access saved'); }
+}
+window.addEventListener('beforeunload', e => { if (dirtyCount()) { e.preventDefault(); e.returnValue = ''; } });
+
+// =============================================
+// HELPERS
+// =============================================
+let _tt = null;
+function toast(msg, err) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.className = 'toast show' + (err ? ' err' : '');
+  clearTimeout(_tt); _tt = setTimeout(() => { t.className = 'toast'; }, 3800);
+}
+function esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function escJs(s) { return String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/'/g, "\\'"); }
+</script>
+</body>
+</html>
