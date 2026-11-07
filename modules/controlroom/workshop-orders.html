@@ -185,11 +185,11 @@
       </div>
     </div>
     <div class="stage" id="st-close">
-      <h4>2. Completed: job code</h4>
+      <h4>2. Workshop job completed: job code</h4>
       <input type="text" id="f-job" list="dl-jobs" placeholder="Completion job code, e.g. WSP01" autocomplete="off" oninput="checkJob()">
       <datalist id="dl-jobs"></datalist>
       <div class="err" id="e-job"></div>
-      <div class="hint" id="jobHint">Records the finish time (now), department and estimated duration, and closes the order.</div>
+      <div class="hint" id="jobHint">Closes this order and opens the mechanic's job for fitting, which runs until he records his own job code.</div>
       <button class="btn btn-primary" style="margin-top:8px;" id="closeBtn" onclick="saveClose()">Close order</button>
     </div>
     <div class="status" id="dr-status"></div>
@@ -376,7 +376,7 @@ function openDrawer(id) {
   ['f-mech','f-job'].forEach(i => { document.getElementById(i).value = ''; document.getElementById(i).classList.remove('invalid'); });
   setTxt('e-mech', ''); setTxt('e-job', ''); status('dr-status', '', '');
   document.getElementById('f-job').disabled = !has; document.getElementById('closeBtn').disabled = !has;
-  setTxt('jobHint', has ? 'Records the finish time (now), department and estimated duration, and closes the order.' : 'Hand the part to a mechanic first.');
+  setTxt('jobHint', has ? 'Closes this order and opens the mechanic\'s job for fitting, which runs until he records his own job code.' : 'Hand the part to a mechanic first.');
   document.getElementById('dbg').classList.add('open');
   document.getElementById('drawer').classList.add('open');
   document.getElementById('drawer').setAttribute('aria-hidden', 'false');
@@ -416,12 +416,12 @@ async function saveClose() {
   if (!j) { document.getElementById('f-job').classList.add('invalid'); setTxt('e-job', 'Pick a job code from the list.'); return; }
   const btn = document.getElementById('closeBtn'); btn.disabled = true; status('dr-status', 'Saving…', '');
   try {
-    const res = await apiPatch(TABLE + '?id=eq.' + DR.id + '&finish_time=is.null&select=id', {
-      job_code: j.job_code, finish_time: toDbTs(new Date()), department: j.department || null,
-      estimated_duration: j.estimated_min != null ? String(j.estimated_min) : null,
-      updated_by: ME.username || null, updated_at: new Date().toISOString() });
-    const wo = DR.work_order; closeDrawer();
-    toast(res && res.length ? '✓ ' + wo + ' closed with ' + j.job_code : wo + ' was already closed by someone else', !(res && res.length));
+    // One database step: closes the W-order and opens the mechanic's work order, or does neither
+    const { data: newWo, error } = await sb.rpc('close_workshop_order', {
+      p_id: DR.id, p_job_code: j.job_code, p_finish: toDbTs(new Date()), p_user: ME.username || null });
+    if (error) throw new Error(error.message);
+    const wo = DR.work_order, mech = DR.mechanic; closeDrawer();
+    toast(newWo ? '✓ ' + wo + ' closed · job ' + newWo + ' opened for ' + mech : wo + ' was already closed by someone else', !newWo);
     loadOpen();
   } catch (e) { status('dr-status', 'Error: ' + e.message, 'err'); }
   finally { btn.disabled = false; }

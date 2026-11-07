@@ -85,32 +85,65 @@ let ME = null, CURRENT = null;
 // Field map: label -> {col, type, editable}. Work order is the lookup key (not editable).
 const FIELDS = [
   { label:"Work Order",        col:"work_order",         type:"text",   editable:false },
-  { label:"Assets",            col:"assets",             type:"text" },
-  { label:"Nurse Name",        col:"nurse_name",         type:"text" },
+  { label:"Assets",            col:"assets",             type:"text", list:"assets" },
+  { label:"Nurse Name",        col:"nurse_name",         type:"text", list:"nurses" },
   { label:"Date",              col:"date",               type:"date" },
   { label:"Duration",          col:"duration",           type:"text" },
-  { label:"Job Code",          col:"job_code",           type:"text" },
+  { label:"Job Code",          col:"job_code",           type:"text", list:"jobs" },
   { label:"MC Stoppage Time",  col:"mc_stoppage_time",   type:"datetime-local" },
   { label:"Starting Time",     col:"starting_time",      type:"datetime-local" },
   { label:"Finish Time",       col:"finish_time",        type:"datetime-local" },
-  { label:"Part Needed",       col:"part_needed",        type:"text" },
+  { label:"Part Needed",       col:"part_needed",        type:"text", list:"parts" },
   { label:"Description",       col:"description",        type:"text" },
-  { label:"Shift",             col:"shift",              type:"text" },
-  { label:"Department",        col:"department",         type:"text" },
+  { label:"Shift",             col:"shift",              type:"text", options:["Morning","Night"] },
+  { label:"Department",        col:"department",         type:"text", list:"depts" },
   { label:"Shed",              col:"shed",               type:"text" },
   { label:"Unit",              col:"unit",               type:"text" },
   { label:"Section",           col:"section",            type:"text" },
   { label:"Estimated Duration",col:"estimated_duration", type:"text" },
-  { label:"Nozzles",           col:"nozzles",            type:"text",   rule:"integer" },
+  { label:"Nozzles",           col:"nozzle",             type:"text",   rule:"number" },
   { label:"Type",              col:"type",               type:"text",   rule:"number" },
   { label:"Denier",            col:"denier",             type:"number", rule:"number" },
   { label:"Inserted Timestamp",col:"inserted_timestamp", type:"datetime-local", editable:false }   // when the record was created (read-only)
 ];
 
+// Lists that the dropdown fields must match (only fields you change are checked, so old records still open)
+const LISTS = { assets:{}, nurses:{}, jobs:{}, parts:{}, depts:{} };
+let ASSET_ROWS = {}, JOB_ROWS = {};
+const nrm = s => String(s == null ? "" : s).trim().replace(/\s+/g, " ").toUpperCase();
+async function getAll(path){
+  const out = []; let off = 0;
+  for(;;){
+    const r = await fetch(SUPABASE_URL + "/rest/v1/" + path + "&limit=1000&offset=" + off, { headers: authHeaders() });
+    if(!r.ok) throw new Error(await r.text());
+    const rows = await r.json(); out.push(...rows);
+    if(rows.length < 1000) return out; off += 1000;
+  }
+}
+async function loadLists(){
+  try{
+    const [assets, nurses, jobs, parts] = await Promise.all([
+      getAll("cr_assets?select=asset,shed,grp,section&is_active=eq.true&order=asset.asc"),
+      getAll("cr_nurses?select=full_name&is_active=eq.true&order=full_name.asc"),
+      getAll("cr_job_codes?select=job_code,department,estimated_min&is_active=eq.true&order=job_code.asc"),
+      getAll("cr_parts?select=part_name&is_active=eq.true&order=part_name.asc")
+    ]);
+    assets.forEach(a => { LISTS.assets[nrm(a.asset)] = a.asset; ASSET_ROWS[nrm(a.asset)] = a; });
+    nurses.forEach(n => { LISTS.nurses[nrm(n.full_name)] = n.full_name; });
+    ["STORE","WORKSHOP"].forEach(x => { LISTS.nurses[x] = x; });          // workshop orders
+    jobs.forEach(j => { LISTS.jobs[nrm(j.job_code)] = j.job_code; JOB_ROWS[nrm(j.job_code)] = j; if(j.department) LISTS.depts[nrm(j.department)] = j.department; });
+    parts.forEach(p => { LISTS.parts[nrm(p.part_name)] = p.part_name; });
+    const dl = (id, obj) => { const d = document.createElement("datalist"); d.id = id;
+      d.innerHTML = Object.values(obj).sort().map(v => '<option value="' + String(v).replace(/"/g,'&quot;') + '"></option>').join(""); document.body.appendChild(d); };
+    Object.keys(LISTS).forEach(k => dl("dl-" + k, LISTS[k]));
+  }catch(e){ console.warn("Edit Record: lists could not be loaded", e); }
+}
+
 async function init(){
   ME = await requireAuth("../../login.html");
   await loadSessionToken();
   if(!ME) return;
+  await loadLists();
   document.getElementById("statusBox").style.display = "none";
   document.getElementById("appArea").style.display = "block";
   document.getElementById("lockDays").textContent = LOCK_DAYS;
@@ -186,7 +219,7 @@ function describeDifferences(list, row){
   return list.map(x => x.f.label + ": you saved " + shownValue(x.f, x.want) + ", the database holds " + shownValue(x.f, x.have)).join("\n");
 }
 function hasUnsavedEdits(){
-  return Array.from(document.querySelectorAll("#editFields input[data-col]")).some(el => !el.disabled && el.value !== el.getAttribute("data-orig"));
+  return Array.from(document.querySelectorAll("#editFields [data-col]")).some(el => !el.disabled && el.value !== el.getAttribute("data-orig"));
 }
 function showMsg(color, text){ const m = document.getElementById("editMsg"); m.style.color = color; m.style.whiteSpace = "pre-line"; m.innerText = text; }
 
@@ -258,18 +291,35 @@ function renderEdit(row){
     const dis = (f.editable === false || locked) ? "disabled" : "";
     const extra = f.type === "datetime-local" ? ' step="1"' : (f.type === "number" ? ' step="any"' : "");
     const shown = String(val).replace(/"/g,'&quot;');
-    return `<div class="field"><label>${f.label}</label>`
-         + `<input type="${f.type}" data-col="${f.col}" data-orig="${shown}" value="${shown}"${extra} ${dis}></div>`;
+    if(f.options){
+      const opts = f.options.slice(); if(val && !opts.includes(val)) opts.unshift(val);
+      return `<div class="field"><label>${f.label}</label><select data-col="${f.col}" ${dis}>`
+           + (val ? "" : '<option value=""></option>')
+           + opts.map(o => `<option${o === val ? " selected" : ""}>${String(o).replace(/</g,"&lt;")}</option>`).join("") + `</select></div>`;
+    }
+    const list = f.list ? ` list="dl-${f.list}" autocomplete="off" placeholder="Pick from the list"` : "";
+    return `<div class="field"><label>${f.label}${f.list ? ' <span style="font-weight:500;color:var(--muted);font-size:11px;">(list)</span>' : ""}</label>`
+         + `<input type="${f.type}" data-col="${f.col}" data-orig="${shown}" value="${shown}"${extra}${list} ${dis}></div>`;
   }).join("");
+  wireAutoFill();
 
   // Remember what every box shows AFTER the browser has tidied it (e.g. "19:19:00" becomes "19:19"),
   // so only boxes the user really changed are saved.
-  document.querySelectorAll("#editFields input[data-col]").forEach(el => el.setAttribute("data-orig", el.value));
+  document.querySelectorAll("#editFields [data-col]").forEach(el => el.setAttribute("data-orig", el.value));
 
   document.getElementById("saveBtn").style.display = locked ? "none" : "";
   document.getElementById("delBtn").style.display  = locked ? "none" : "";
   document.getElementById("editMsg").innerText = "";
   document.getElementById("editCard").style.display = "block";
+}
+
+// Picking an asset fills shed, unit and section; picking a job code fills department and estimated duration
+function wireAutoFill(){
+  const box = c => document.querySelector('#editFields [data-col="' + c + '"]');
+  const set = (c, v) => { const el = box(c); if(el && !el.disabled && v != null) el.value = String(v); };
+  const a = box("assets"), j = box("job_code");
+  if(a) a.addEventListener("change", () => { const r = ASSET_ROWS[nrm(a.value)]; if(!r) return; a.value = r.asset; set("shed", r.shed); set("unit", r.grp); set("section", r.section); });
+  if(j) j.addEventListener("change", () => { const r = JOB_ROWS[nrm(j.value)]; if(!r) return; j.value = r.job_code; set("department", r.department); set("estimated_duration", r.estimated_min); });
 }
 
 async function saveRecord(){
@@ -281,12 +331,17 @@ async function saveRecord(){
   // field at a time). Untouched fields - including the exact seconds on the times - are never rewritten.
   const payload = {};
   let problem = "";
-  document.querySelectorAll("#editFields input[data-col]").forEach(el=>{
+  document.querySelectorAll("#editFields [data-col]").forEach(el=>{
     const f = FIELDS.find(x=>x.col === el.getAttribute("data-col"));
     if(!f || f.editable === false || problem) return;
     const v = el.value;
     if(v === el.getAttribute("data-orig")) return;                 // not changed
     if(v === ""){ payload[f.col] = null; return; }                 // cleared -> empty in the database
+    if(f.list){
+      const hit = LISTS[f.list][nrm(v)];
+      if(!hit){ problem = f.label + " \"" + v + "\" is not in the list. Pick it from the list" + (f.list === "parts" ? ", or add it in Reference Data → Parts first." : "."); return; }
+      payload[f.col] = hit; return;                                // saved with the list's exact spelling
+    }
     if(f.rule === "integer" && !/^-?\d+$/.test(v.trim())){ problem = f.label + " must be a whole number."; return; }
     if(f.rule === "number" && !Number.isFinite(Number(v))){ problem = f.label + " must be a number."; return; }
     if(f.type === "number"){ payload[f.col] = parseFloat(v); return; }
