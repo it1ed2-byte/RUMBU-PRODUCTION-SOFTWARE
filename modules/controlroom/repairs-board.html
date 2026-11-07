@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Repairs Board — Control Room</title>
+<link rel="stylesheet" href="../../styles.css">
+<script>
+(function(){
+  function apply(t){ if(t) document.documentElement.setAttribute("data-theme",t); }
+  window.addEventListener("message",function(e){ if(e.data&&e.data.rumbuTheme) apply(e.data.rumbuTheme); });
+  try{ apply(localStorage.getItem("rumbu_theme")); }catch(e){}
+})();
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="../../auth.js"></script>
+<style>
+  [hidden] { display: none !important; }
+  body { padding: 16px; }
+  .wrap { max-width: 1600px; margin: 0 auto; }
+  .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+  .top h2 { margin: 0; font-size: 18px; color: var(--heading); }
+  .top p { margin: 2px 0 0; font-size: 12px; color: var(--muted); }
+  .clock { font-family: 'JetBrains Mono', Consolas, monospace; font-size: 18px; font-weight: 800; color: var(--accent); }
+  .bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  select, input[type=text] { padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; background: var(--bg); color: var(--text); font-family: inherit; }
+  .btn { padding: 7px 13px; border: 1px solid var(--line); border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer; background: transparent; color: var(--text); }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .upd { margin-left: auto; font-size: 12px; color: var(--muted); }
+
+  .sec { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 14px; }
+  .sec-h { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+  .sec-h h3 { margin: 0; font-size: 15px; color: var(--heading); }
+  .sec-h .n { font-size: 13px; font-weight: 800; padding: 1px 9px; border-radius: 999px; }
+  .sec.stop .sec-h .n { background: #fee2e2; color: #991b1b; }
+  .sec.rep .sec-h .n { background: #dbeafe; color: #1e40af; }
+  .sec-h .sub { font-size: 12px; color: var(--muted); }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(178px, 1fr)); gap: 10px; }
+  .tile { border: 1px solid var(--line); border-left: 5px solid #16a34a; border-radius: 10px; padding: 10px 11px; background: var(--bg); display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .tile.warn { border-left-color: #d97706; } .tile.bad { border-left-color: #dc2626; }
+  .tile .a { font-size: 17px; font-weight: 900; color: var(--heading); display: flex; justify-content: space-between; gap: 6px; }
+  .tile .a small { font-size: 11px; font-weight: 700; color: var(--muted); align-self: center; white-space: nowrap; }
+  .tile .t { font-family: 'JetBrains Mono', Consolas, monospace; font-size: 20px; font-weight: 800; color: #16a34a; }
+  .tile.warn .t { color: #d97706; } .tile.bad .t { color: #dc2626; }
+  .tile .who { font-size: 12.5px; font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tile .meta { font-size: 11px; color: var(--muted); }
+  .tile .acts { display: flex; gap: 6px; margin-top: 6px; }
+  .tile .acts button { flex: 1; padding: 6px 4px; font-size: 12px; font-weight: 800; border-radius: 7px; cursor: pointer; border: 1px solid var(--line); background: var(--card); color: var(--text); }
+  .tile .acts .go { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 7px 9px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+  th { font-size: 10.5px; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); }
+  td.t { font-family: 'JetBrains Mono', Consolas, monospace; font-weight: 800; }
+  td.t.warn { color: #d97706; } td.t.bad { color: #dc2626; } td.t.ok { color: #16a34a; }
+  .empty { text-align: center; color: var(--muted); padding: 22px; font-size: 13px; }
+
+  .modal-bg { position: fixed; inset: 0; background: rgba(10,18,35,.5); z-index: 200; display: flex; align-items: center; justify-content: center; padding: 16px; }
+  .modal { background: var(--card); border-radius: 14px; width: min(420px, 100%); padding: 18px 20px; box-shadow: 0 20px 50px rgba(0,0,0,.3); }
+  .modal h3 { margin: 0 0 4px; color: var(--heading); font-size: 16px; }
+  .modal p { margin: 0 0 12px; font-size: 12.5px; color: var(--muted); }
+  .modal input { width: 100%; box-sizing: border-box; padding: 10px 12px; font-size: 14px; }
+  .modal .err { color: var(--bad, #dc2626); font-size: 12px; min-height: 15px; margin-top: 4px; }
+  .modal .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px); background: #16a34a; color: #fff; padding: 12px 20px; border-radius: 10px; font-size: 14px; font-weight: 700; opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 300; }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); } .toast.err { background: #dc2626; }
+
+  /* TV view */
+  body.tv { background: #0b1220; padding: 12px; }
+  body.tv .hide-tv { display: none !important; }
+  body.tv .sec { background: #111a2e; border-color: #1f2a44; }
+  body.tv .sec-h h3, body.tv .top h2 { color: #f1f5f9; }
+  body.tv .tile { background: #0b1220; border-color: #1f2a44; }
+  body.tv .tile .a { color: #f8fafc; } body.tv .tile .who { color: #cbd5e1; }
+  body.tv .tiles { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div>
+      <h2>Repairs Board</h2>
+      <p id="sub">Stop Assets wait for a mechanic; Repairs are being worked on. Time counts from the stop time.</p>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center;">
+      <span class="clock" id="clock">—</span>
+      <button class="btn" onclick="toggleTv()">📺 TV view</button>
+    </div>
+  </div>
+
+  <div class="bar hide-tv">
+    <select id="fShed" onchange="render()"><option value="">All sheds</option></select>
+    <input type="text" id="q" placeholder="Search asset, mechanic, problem" oninput="render()" style="min-width:220px;">
+    <button class="btn on" id="vTiles" onclick="setView('tiles')">Tiles</button>
+    <button class="btn" id="vList" onclick="setView('list')">List</button>
+    <button class="btn" onclick="load()">↻ Refresh</button>
+    <span class="upd" id="upd"></span>
+  </div>
+
+  <div class="sec stop">
+    <div class="sec-h"><h3>Stop Assets</h3><span class="n" id="nStop">0</span><span class="sub">reported, waiting for a mechanic</span></div>
+    <div id="stopBox"><div class="empty">Loading…</div></div>
+  </div>
+  <div class="sec rep">
+    <div class="sec-h"><h3>Repairs</h3><span class="n" id="nRep">0</span><span class="sub">issued to a mechanic, repair in progress</span></div>
+    <div id="repBox"><div class="empty">Loading…</div></div>
+  </div>
+  <p class="hide-tv" style="font-size:11.5px;color:var(--muted);">Shows orders entered in the app. Orders typed in the Google Sheet stay on the sheet's Repairs and Stop Assets tabs until the sheet is retired.
+    Colours: green under 1 hour, amber 1 to 4 hours, red over 4 hours.</p>
+</div>
+
+<div class="modal-bg" id="mBg" hidden onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <h3 id="mTitle">—</h3>
+    <p id="mSub">—</p>
+    <input type="text" id="mInput" autocomplete="off" onkeydown="if(event.key==='Enter')saveModal()">
+    <datalist id="dl-nurses"></datalist><datalist id="dl-jobs"></datalist>
+    <div class="err" id="mErr"></div>
+    <div class="row"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn btn-primary" id="mSave" onclick="saveModal()">Save</button></div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const TABLE = 'control', TZ = 'Africa/Lagos', REFRESH_MS = 30000;
+let SESSION_TOKEN = SUPABASE_ANON_KEY, ME = null, ROWS = [], VIEW = 'tiles', NURSES = {}, JOBS = {}, MODAL = null;
+
+function watParts(d) {
+  const p = {};
+  new Intl.DateTimeFormat('en-GB', { timeZone: TZ, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false })
+    .formatToParts(d).forEach(x => p[x.type] = x.value);
+  if (p.hour === '24') p.hour = '00';
+  return p;
+}
+function toDbTs(d) { const p = watParts(d); return p.year + '-' + p.month + '-' + p.day + 'T' + p.hour + ':' + p.minute + ':' + p.second; }
+// control stores WAT wall clock text; turn it into a real moment (WAT = UTC+1)
+function fromDb(s) {
+  const m = String(s || '').match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/);
+  return m ? new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4] - 1, +m[5], +(m[6] || 0))) : null;
+}
+function hms(ms) {
+  if (ms == null || ms < 0) return '—';
+  const s = Math.floor(ms / 1000), h = Math.floor(s / 3600);
+  return String(h).padStart(2, '0') + ':' + String(Math.floor(s % 3600 / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+}
+function hm(s) { const d = fromDb(s); if (!d) return '—'; const p = watParts(d), n = watParts(new Date());
+  return (p.day !== n.day ? p.day + '/' + p.month + ' ' : '') + p.hour + ':' + p.minute; }
+function band(ms) { return ms == null ? '' : ms >= 4 * 3600e3 ? 'bad' : ms >= 3600e3 ? 'warn' : 'ok'; }
+
+document.addEventListener('DOMContentLoaded', async () => {
+  try {
+    ME = await requireAuth('../../login.html');
+    if (!ME) return;
+    try { const { data: { session } } = await sb.auth.getSession(); SESSION_TOKEN = session?.access_token || SUPABASE_ANON_KEY; } catch (e) {}
+    ['1','2','3','4','5','6','MamaSannu','Others'].forEach(s => document.getElementById('fShed').insertAdjacentHTML('beforeend',
+      '<option value="' + s + '">' + (/^\d$/.test(s) ? 'Shed ' + s : s) + '</option>'));
+    const [nurses, jobs] = await Promise.all([
+      apiGetAll('cr_nurses?select=full_name&is_active=eq.true&order=full_name.asc'),
+      apiGetAll('cr_job_codes?select=job_code,estimated_min,department,description&is_active=eq.true&order=job_code.asc')
+    ]);
+    nurses.forEach(n => NURSES[norm(n.full_name)] = n.full_name.trim());
+    jobs.forEach(j => JOBS[norm(j.job_code)] = j);
+    document.getElementById('dl-nurses').innerHTML = Object.values(NURSES).map(v => '<option value="' + esc(v) + '"></option>').join('');
+    document.getElementById('dl-jobs').innerHTML = jobs.map(j => '<option value="' + esc(j.job_code) + '">' + esc([j.description, j.department].filter(Boolean).join(' · ')) + '</option>').join('');
+    await load();
+    setInterval(() => { if (!document.hidden && !MODAL) load(); }, REFRESH_MS);
+    setInterval(tick, 1000); tick();
+    if (new URLSearchParams(location.search).get('tv') === '1') toggleTv();
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') { if (MODAL) closeModal(); else if (document.body.classList.contains('tv')) toggleTv(); } });
+  } catch (e) { document.getElementById('stopBox').innerHTML = '<div class="empty" style="color:var(--bad)">❌ ' + esc(e.message || e) + '</div>'; }
+});
+
+async function load() {
+  try {
+    ROWS = await apiGetAll(TABLE + '?select=id,work_order,assets,nurse_name,description,shed,unit,section,mc_stoppage_time,starting_time' +
+      '&finish_time=is.null&created_by=not.is.null&work_order=not.like.W*&order=mc_stoppage_time.asc');
+    render();
+    const p = watParts(new Date());
+    document.getElementById('upd').textContent = 'Updated ' + p.hour + ':' + p.minute;
+  } catch (e) { toast('❌ ' + e.message, true); }
+}
+
+function setView(v) { VIEW = v; document.getElementById('vTiles').classList.toggle('on', v === 'tiles'); document.getElementById('vList').classList.toggle('on', v === 'list'); render(); }
+function toggleTv() {
+  const on = document.body.classList.toggle('tv');
+  if (on) { setView('tiles'); try { document.documentElement.requestFullscreen && document.documentElement.requestFullscreen(); } catch (e) {} }
+  else { try { document.fullscreenElement && document.exitFullscreen(); } catch (e) {} }
+}
+
+function render() {
+  const shed = document.getElementById('fShed').value, q = norm(document.getElementById('q').value);
+  const list = ROWS.filter(r => (!shed || String(r.shed) === shed) &&
+    (!q || norm([r.assets, r.nurse_name, r.description, r.work_order].join(' ')).includes(q)));
+  const stops = list.filter(r => !r.starting_time), reps = list.filter(r => r.starting_time);
+  document.getElementById('nStop').textContent = stops.length;
+  document.getElementById('nRep').textContent = reps.length;
+  document.getElementById('stopBox').innerHTML = draw(stops, 'stop');
+  document.getElementById('repBox').innerHTML = draw(reps, 'rep');
+  tick();
+}
+
+function draw(rows, kind) {
+  if (!rows.length) return '<div class="empty">' + (kind === 'stop' ? '✓ No machine is waiting for a mechanic.' : '✓ No repair in progress.') + '</div>';
+  if (VIEW === 'list') {
+    return '<div style="overflow:auto"><table><thead><tr><th>Asset</th><th>Shed / unit</th><th>Time down</th><th>Stopped</th>' +
+      (kind === 'rep' ? '<th>Mechanic</th><th>On repair</th>' : '<th>Problem</th>') + '<th>WO</th><th class="hide-tv"></th></tr></thead><tbody>' +
+      rows.map(r => '<tr><td><b>' + esc(r.assets) + '</b></td><td>' + esc([r.shed, r.unit].filter(Boolean).join(' · ')) + '</td>' +
+        '<td class="t" data-since="' + esc(r.mc_stoppage_time || '') + '">—</td><td>' + hm(r.mc_stoppage_time) + '</td>' +
+        (kind === 'rep' ? '<td>' + esc(r.nurse_name || '—') + '</td><td class="t" data-since="' + esc(r.starting_time) + '" data-plain="1">—</td>'
+                        : '<td>' + esc(r.description || '—') + '</td>') +
+        '<td>' + esc(r.work_order) + '</td><td class="hide-tv">' + actions(r, kind, true) + '</td></tr>').join('') + '</tbody></table></div>';
+  }
+  return '<div class="tiles">' + rows.map(r =>
+    '<div class="tile" data-tile="' + esc(r.mc_stoppage_time || '') + '">' +
+      '<div class="a">' + esc(r.assets) + '<small>' + esc(r.shed && /^\d$/.test(String(r.shed)) ? 'Shed ' + r.shed : (r.unit || r.shed || '')) + '</small></div>' +
+      '<div class="t" data-since="' + esc(r.mc_stoppage_time || '') + '" data-noclass="1">—</div>' +
+      '<div class="who" title="' + esc(kind === 'rep' ? r.nurse_name : r.description) + '">' + esc(kind === 'rep' ? (r.nurse_name || '—') : (r.description || 'Problem not given')) + '</div>' +
+      '<div class="meta">' + (kind === 'rep' ? 'On repair since ' + hm(r.starting_time) + (r.description ? ' · ' + esc(r.description) : '') : 'Stopped ' + hm(r.mc_stoppage_time)) + ' · ' + esc(r.work_order) + '</div>' +
+      '<div class="acts hide-tv">' + actions(r, kind, false) + '</div>' +
+    '</div>').join('') + '</div>';
+}
+function actions(r, kind, small) {
+  const s = small ? ' style="padding:4px 9px;font-size:12px;"' : '';
+  return (kind === 'stop' ? '<button class="go btn"' + s + ' onclick="openModal(\'issue\',' + r.id + ')">Issue</button>' : '') +
+         '<button class="btn"' + s + ' onclick="openModal(\'close\',' + r.id + ')">Close</button>';
+}
+
+// Live timers, every second
+function tick() {
+  const now = Date.now(), p = watParts(new Date());
+  document.getElementById('clock').textContent = p.hour + ':' + p.minute + ':' + p.second;
+  document.querySelectorAll('[data-since]').forEach(el => {
+    const d = fromDb(el.getAttribute('data-since'));
+    const ms = d ? now - d : null;
+    el.textContent = d ? hms(ms) : 'time not recorded';
+    if (el.tagName === 'TD' && !el.hasAttribute('data-plain')) el.className = 't ' + band(ms);
+  });
+  document.querySelectorAll('[data-tile]').forEach(el => {
+    const d = fromDb(el.getAttribute('data-tile')); const b = d ? band(now - d) : '';
+    el.className = 'tile' + (b && b !== 'ok' ? ' ' + b : '');
+  });
+}
+
+// ---------- issue / close ----------
+function openModal(kind, id) {
+  const r = ROWS.find(x => x.id === id); if (!r) return;
+  MODAL = { kind, r };
+  const inp = document.getElementById('mInput');
+  inp.value = ''; inp.setAttribute('list', kind === 'issue' ? 'dl-nurses' : 'dl-jobs');
+  inp.placeholder = kind === 'issue' ? 'Mechanic / nurse name' : 'Job code, e.g. BR01';
+  document.getElementById('mTitle').textContent = (kind === 'issue' ? 'Issue ' : 'Close ') + r.assets + ' · ' + r.work_order;
+  document.getElementById('mSub').textContent = kind === 'issue'
+    ? 'Problem: ' + (r.description || '—') + '. The repair starts now and the asset moves to Repairs.'
+    : 'Records the finish time (now), department and estimated duration, and closes the order.';
+  document.getElementById('mErr').textContent = '';
+  document.getElementById('mBg').hidden = false;
+  setTimeout(() => inp.focus(), 50);
+}
+function closeModal() { MODAL = null; document.getElementById('mBg').hidden = true; }
+async function saveModal() {
+  if (!MODAL) return;
+  const v = norm(document.getElementById('mInput').value), r = MODAL.r, btn = document.getElementById('mSave');
+  let path, body, msg;
+  if (MODAL.kind === 'issue') {
+    const n = NURSES[v]; if (!n) { document.getElementById('mErr').textContent = 'Pick the mechanic from the list.'; return; }
+    path = TABLE + '?id=eq.' + r.id + '&starting_time=is.null&finish_time=is.null&select=id';
+    body = { nurse_name: n, starting_time: toDbTs(new Date()) };
+    msg = '✓ ' + r.assets + ' issued to ' + n;
+  } else {
+    const j = JOBS[v]; if (!j) { document.getElementById('mErr').textContent = 'Pick a job code from the list.'; return; }
+    path = TABLE + '?id=eq.' + r.id + '&finish_time=is.null&select=id';
+    body = { job_code: j.job_code, finish_time: toDbTs(new Date()), department: j.department || null,
+             estimated_duration: j.estimated_min != null ? String(j.estimated_min) : null };
+    msg = '✓ ' + r.work_order + ' closed with ' + j.job_code;
+  }
+  body.updated_by = ME.username || null; body.updated_at = new Date().toISOString();
+  btn.disabled = true;
+  try {
+    const res = await apiPatch(path, body);
+    closeModal();
+    toast(res && res.length ? msg : r.work_order + ' was already updated by someone else', !(res && res.length));
+    load();
+  } catch (e) { document.getElementById('mErr').textContent = e.message; }
+  finally { btn.disabled = false; }
+}
+
+// ---------- helpers ----------
+let _tt = null;
+function toast(m, err) { const t = document.getElementById('toast'); t.textContent = m; t.className = 'toast show' + (err ? ' err' : ''); clearTimeout(_tt); _tt = setTimeout(() => t.className = 'toast', 3800); }
+function norm(s) { return String(s == null ? '' : s).trim().replace(/\s+/g, ' ').toUpperCase(); }
+function esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function headers(x) { return Object.assign({ 'apikey': SUPABASE_ANON_KEY, 'Authorization': 'Bearer ' + SESSION_TOKEN, 'Content-Type': 'application/json' }, x || {}); }
+function base() { return SUPABASE_URL.replace(/\/+$/, '') + '/rest/v1/'; }
+function apiGet(p) { return fetch(base() + p, { headers: headers() }).then(r => r.ok ? r.json() : r.text().then(t => { throw new Error(t); })); }
+async function apiGetAll(path) {
+  const PAGE = 1000;
+  const resp = await fetch(base() + path, { headers: headers({ 'Prefer': 'count=exact', 'Range': '0-' + (PAGE - 1) }) });
+  if (!resp.ok) throw new Error(await resp.text());
+  const first = await resp.json();
+  const total = parseInt(((resp.headers.get('content-range') || '').split('/')[1] || '0'), 10) || first.length;
+  if (total <= first.length) return first;
+  const rest = []; for (let off = PAGE; off < total; off += PAGE) rest.push(apiGet(path + '&limit=' + PAGE + '&offset=' + off));
+  return first.concat(...(await Promise.all(rest)));
+}
+function apiPatch(p, b) { return fetch(base() + p, { method: 'PATCH', headers: headers({ 'Prefer': 'return=representation' }), body: JSON.stringify(b) })
+  .then(r => r.ok ? r.json() : r.text().then(t => { throw new Error(t); })); }
+</script>
+</body>
+</html>

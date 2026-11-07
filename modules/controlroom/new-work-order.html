@@ -249,11 +249,20 @@
       </div>
 
       <div class="field">
-        <label><span class="step-no">2</span>Nurse Name <span class="req">*</span></label>
+        <label><span class="step-no">2</span>Nurse / Mechanic <span class="opt">(leave blank if no mechanic is free yet)</span></label>
         <input type="text" id="f-nurse" list="dl-nurses" autocomplete="off"
-               placeholder="Type or pick nurse">
+               placeholder="Type or pick nurse" oninput="renderAuto()">
         <datalist id="dl-nurses"></datalist>
         <div class="field-err" id="err-nurse"></div>
+      </div>
+
+      <div class="field">
+        <label><span class="step-no">2b</span>Problem <span class="opt">(required when no mechanic is chosen)</span></label>
+        <input type="text" id="f-problem" list="dl-problems" autocomplete="off"
+               placeholder="Pick the problem, e.g. NO KNIFE" oninput="renderAuto()">
+        <datalist id="dl-problems"></datalist>
+        <div class="field-err" id="err-problem"></div>
+        <div class="hint">No mechanic: saved as a <b>Stop Asset</b> (waiting) on the Repairs Board, where it is issued to a mechanic later.</div>
       </div>
 
       <div class="field">
@@ -450,12 +459,15 @@ function tickClock() {
 // REFERENCE DATA
 // =============================================
 async function loadReferenceData() {
-  const [assets, jobs, nurses, ext] = await Promise.all([
+  const [assets, jobs, nurses, ext, problems] = await Promise.all([
     cachedGetAll('assets','cr_assets?select=asset,shed,grp,section&is_active=eq.true&order=asset.asc'),
     cachedGetAll('jobs2','cr_job_codes?select=job_code,estimated_min,department,description&is_active=eq.true&order=job_code.asc'),
     cachedGetAll('nurses','cr_nurses?select=full_name&is_active=eq.true&order=full_name.asc'),
-    cachedGetAll('ext','cr_extruder_groups?select=asset,type,nozzles,denier&is_active=eq.true&order=asset.asc')
+    cachedGetAll('ext','cr_extruder_groups?select=asset,type,nozzles,denier&is_active=eq.true&order=asset.asc'),
+    apiGetAll('cr_problems?select=problem&is_active=eq.true&order=problem.asc').catch(() => [])
   ]);
+  problems.forEach(p => { if (p.problem) PROBLEMS[norm(p.problem)] = p.problem; });
+  document.getElementById('dl-problems').innerHTML = problems.map(p => '<option value="' + esc(p.problem) + '"></option>').join('');
 
   const fill = (id, values) => {
     const dl = document.getElementById(id);
@@ -479,9 +491,11 @@ async function loadReferenceData() {
 // =============================================
 // STRICT PICKERS: only values that exist in the database are accepted
 // =============================================
+const PROBLEMS = {};
 const PICKERS = {
   'f-asset':   { err: 'err-asset',   label: 'asset',     find: v => ASSETS[norm(v)] ? ASSETS[norm(v)].asset : null,     required: true,  after: () => onAssetChange() },
-  'f-nurse':   { err: 'err-nurse',   label: 'nurse name', find: v => NURSES[norm(v)] || null,                            required: true,  after: () => {} },
+  'f-nurse':   { err: 'err-nurse',   label: 'nurse name', find: v => NURSES[norm(v)] || null,                            required: false, after: () => renderAuto() },
+  'f-problem': { err: 'err-problem', label: 'problem',    find: v => PROBLEMS[norm(v)] || null,                          required: false, after: () => renderAuto() },
   'f-jobcode': { err: 'err-jobcode', label: 'job code',  find: v => JOBS[norm(v)] ? JOBS[norm(v)].job_code : null,     required: false, after: () => onJobCodeChange() }
 };
 
@@ -629,8 +643,9 @@ function renderAuto() {
   };
   set('a-shed', AUTO.shed);  set('a-unit', AUTO.unit);  set('a-section', AUTO.section);
   set('a-stop',   AUTO.stop   ? showTs(AUTO.stop)   : null);
-  set('a-start',  AUTO.start  ? showTs(AUTO.start)  : null);
-  set('a-shift',  AUTO.shift);
+  const hasNurse = !!document.getElementById('f-nurse').value.trim();
+  set('a-start',  AUTO.start && hasNurse ? showTs(AUTO.start) : (AUTO.start ? 'when issued' : null));
+  set('a-shift',  hasNurse ? AUTO.shift : (AUTO.stop ? shiftFor(AUTO.stop) : null));
   set('a-finish', AUTO.finish ? showTs(AUTO.finish) : null);
   set('a-dept', AUTO.dept);  set('a-est', AUTO.est);
   set('a-nozzle', AUTO.nozzle); set('a-type', AUTO.type); set('a-denier', AUTO.denier);
@@ -639,7 +654,7 @@ function renderAuto() {
   const pill = document.getElementById('d-state');
   pill.textContent = closed ? 'CLOSED' : 'PENDING';
   pill.className = 'state-pill ' + (closed ? 'closed' : 'pending');
-  document.getElementById('submitBtn').textContent = closed ? 'Save and Close' : 'Save as Pending';
+  document.getElementById('submitBtn').textContent = closed ? 'Save and Close' : (hasNurse ? 'Save as Pending' : 'Save as Stop Asset (waiting)');
 }
 
 // =============================================
@@ -650,13 +665,21 @@ async function submitForm() {
 
   const okAsset = enforcePicker('f-asset');
   const okNurse = enforcePicker('f-nurse');
+  const okProb  = enforcePicker('f-problem');
+  const nurseGiven = !!document.getElementById('f-nurse').value.trim();
+  const probGiven  = !!document.getElementById('f-problem').value.trim();
+  if (okNurse && !nurseGiven && !probGiven) {
+    document.getElementById('err-problem').textContent = 'Pick the problem, or choose the mechanic.';
+    document.getElementById('f-problem').classList.add('invalid');
+    return setStatus('With no mechanic, the problem is required.', 'err');
+  }
   const okJob   = enforcePicker('f-jobcode');
   const dErr    = durationError();
   if (dErr) {
     document.getElementById('err-duration').textContent = dErr;
     document.getElementById('f-duration').classList.add('invalid');
   }
-  if (!okAsset || !okNurse || !okJob || dErr || !AUTO.start) {
+  if (!okAsset || !okNurse || !okProb || !okJob || dErr || !AUTO.start) {
     return setStatus('Fix the fields marked in red. Asset, nurse and job code must be picked from the list.', 'err');
   }
   const a = ASSETS[norm(document.getElementById('f-asset').value)];
@@ -667,12 +690,13 @@ async function submitForm() {
 
   const payload = {
     assets:             a.asset,
-    nurse_name:         nurseVal,
+    nurse_name:         nurseVal || null,
     date:               toDbDate(AUTO.date || AUTO.start),
     duration:           String(Number(durIn)),
     mc_stoppage_time:   toDbTs(AUTO.stop),
-    starting_time:      toDbTs(AUTO.start),
-    shift:              AUTO.shift,
+    starting_time:      nurseVal ? toDbTs(AUTO.start) : null,          // no mechanic yet: waiting (Stop Asset)
+    shift:              nurseVal ? AUTO.shift : shiftFor(AUTO.stop),
+    description:        document.getElementById('f-problem').value.trim() || null,
     shed:               AUTO.shed,
     unit:               AUTO.unit,
     section:            AUTO.section,
@@ -696,7 +720,7 @@ async function submitForm() {
     const wo  = res && res[0] && res[0].work_order;
     const closed = !!payload.finish_time;
     resetForm();
-    showToast('✓ ' + (wo || 'Work order') + (closed ? ' saved and closed' : ' saved as pending'));
+    showToast('✓ ' + (wo || 'Work order') + (closed ? ' saved and closed' : (payload.nurse_name ? ' saved as pending' : ' saved as Stop Asset: waiting for a mechanic on the Repairs Board')));
     loadPending();
     setStatus('', '');
   } catch (e) {
@@ -707,11 +731,11 @@ async function submitForm() {
 }
 
 function resetForm() {
-  ['f-asset','f-nurse','f-duration','f-jobcode'].forEach(id => {
+  ['f-asset','f-nurse','f-problem','f-duration','f-jobcode'].forEach(id => {
     const el = document.getElementById(id);
     el.value = ''; el.classList.remove('valid', 'invalid');
   });
-  ['err-asset','err-nurse','err-duration','err-jobcode'].forEach(id => { document.getElementById(id).textContent = ''; });
+  ['err-asset','err-nurse','err-problem','err-duration','err-jobcode'].forEach(id => { document.getElementById(id).textContent = ''; });
   clearAuto(Object.keys(AUTO));
   document.getElementById('openWoWarn').hidden = true;
   setStatus('', '');
@@ -758,7 +782,7 @@ async function loadPending() {
   try {
     PENDING = await apiGetAll(TABLE +
       '?select=id,work_order,assets,nurse_name,section,unit,shift,mc_stoppage_time,starting_time' +
-      '&finish_time=is.null&created_by=not.is.null&work_order=not.like.W*&order=mc_stoppage_time.asc.nullslast');
+      '&finish_time=is.null&created_by=not.is.null&work_order=not.like.W*&starting_time=not.is.null&order=mc_stoppage_time.asc.nullslast');
     renderPending();
     const p = watParts(new Date());
     document.getElementById('p-foot').textContent = 'Updated ' + p.hour + ':' + p.minute + ' · refreshes every 30 s';
