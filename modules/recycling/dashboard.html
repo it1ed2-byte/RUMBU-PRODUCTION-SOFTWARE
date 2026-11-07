@@ -124,6 +124,92 @@
 let ME = null;
 let ASSET_TARGETS = {};
 
+// ── Downtime from the control room (same rules as the Production Report) ──────────────────────────
+// A stoppage belongs to the shift it started in (Morning 7-14, Afternoon 14-22, Night 22-7; after midnight it counts to the
+// previous day's Night). An entry counts the stoppages of its machine, branch, date and shift, never more than its shift length.
+const SHIFT_MIN = { Morning:420, Afternoon:480, Night:540 };
+let CMAP = new Map(), CMAP_CODES = [], EXCL_JOBS = new Set(), CTRL_ALL = [];
+const CTRL = { mapOk:false, mapMsg:"", dataOk:false, dataMsg:"" };
+
+function normCode(s){ return String(s==null?"":s).trim().replace(/\s+/g," ").toUpperCase(); }
+function parseStamp(v){
+  const m=/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/.exec(String(v||""));
+  if(!m) return null;
+  return { ms:Date.UTC(+m[1],+m[2]-1,+m[3],+m[4],+m[5],+(m[6]||0)), date:m[1]+"-"+m[2]+"-"+m[3], hour:+m[4] };
+}
+function addDays(d,n){ const t=new Date(d+"T00:00:00Z"); t.setUTCDate(t.getUTCDate()+n); return t.toISOString().slice(0,10); }
+function shiftOfStop(st){
+  const h=st.hour;
+  if(h>=7&&h<14)  return { shift:"Morning",   date:st.date };
+  if(h>=14&&h<22) return { shift:"Afternoon", date:st.date };
+  return { shift:"Night", date:(h<7?addDays(st.date,-1):st.date) };
+}
+function branchOfControl(raw,mapped){
+  if(mapped) return mapped;
+  const t=(String(raw.unit||"")+" "+String(raw.section||"")).toLowerCase();
+  return (/mama/.test(t)||String(raw.assets||"").toUpperCase().startsWith("MS-"))?"MamaSannu":"Rumbu Mainmat";
+}
+function normaliseControl(rows){
+  const out=[];
+  rows.forEach(function(r){
+    const map=CMAP.get(normCode(r.assets)); if(!map) return;
+    const stop=parseStamp(r.mc_stoppage_time), fin=parseStamp(r.finish_time);
+    if(!stop||!fin) return;                                   // open stoppage: not counted until it has a finish time
+    const minutes=Math.round((fin.ms-stop.ms)/60000);
+    if(minutes<0||EXCL_JOBS.has(r.job_code||"")) return;      // invalid, or a job code that is not downtime
+    const sh=shiftOfStop(stop), mod=map.module, br=branchOfControl(r,map.branch);
+    out.push({ key:mod+"|"+br+"|"+sh.date+"|"+sh.shift, minutes:minutes });
+  });
+  return out;
+}
+async function loadControlSupport(){
+  CTRL.mapOk=false; CTRL.mapMsg="";
+  try{
+    const { data, error } = await sb.from("recycling_control_map").select("control_asset,module_asset,branch");
+    if(error) throw new Error("the mapping table could not be read ("+error.message+"). Run recycling_control_map.sql in Supabase.");
+    if(!data||!data.length) throw new Error("the mapping table is empty. Run recycling_control_map.sql in Supabase.");
+    CMAP=new Map(data.map(function(r){ return [normCode(r.control_asset),{module:r.module_asset,branch:r.branch||null}]; }));
+    CMAP_CODES=data.map(function(r){ return r.control_asset; });
+    CTRL.mapOk=true;
+  }catch(e){ CTRL.mapMsg=e.message; console.warn(e); }
+  try{
+    const { data } = await sb.from("job_table").select("job_code");
+    if(data) EXCL_JOBS=new Set(data.map(function(r){ return r.job_code; }));
+  }catch(e){ console.warn(e); }
+}
+async function loadControlData(from,to){
+  CTRL.dataOk=false; CTRL.dataMsg=""; CTRL_ALL=[];
+  if(!CTRL.mapOk) return;
+  try{
+    let all=[], offset=0;
+    while(true){
+      const { data, error } = await sb.from("control")
+        .select("work_order,assets,date,unit,section,job_code,mc_stoppage_time,finish_time")
+        .in("assets",CMAP_CODES).gte("date",addDays(from,-3)).lte("date",addDays(to,1))
+        .order("id",{ascending:true}).range(offset,offset+999);
+      if(error) throw new Error("control: "+error.message);
+      all=all.concat(data||[]);
+      if(!data||data.length<1000) break; offset+=1000;
+    }
+    CTRL_ALL=normaliseControl(all); CTRL.dataOk=true;
+  }catch(e){ CTRL.dataMsg=e.message; console.warn(e); }
+}
+function ctrlReason(){ return !CTRL.mapOk?("Control-room downtime is not set up: "+CTRL.mapMsg):(!CTRL.dataOk?("Control-room downtime could not be loaded: "+CTRL.dataMsg):""); }
+function rowKey(r){ return r.asset_code+"|"+r.branch+"|"+r.production_date+"|"+r.shift; }
+function attachDowntime(rows){
+  const by={};
+  if(CTRL.mapOk&&CTRL.dataOk) CTRL_ALL.forEach(function(c){ by[c.key]=(by[c.key]||0)+c.minutes; });
+  rows.forEach(function(r){
+    const m=by[rowKey(r)]||0, lim=SHIFT_MIN[r.shift]||0;
+    r.dt_min=lim?Math.min(m,lim):m;
+  });
+}
+function targetOf(r){ return ASSET_TARGETS[r.asset_code]?ASSET_TARGETS[r.asset_code].target:0; }
+// Actual target of one entry = target - output lost to downtime (target x downtime minutes / shift minutes).
+function atgOf(r){ const t=targetOf(r), m=SHIFT_MIN[r.shift]||0; return m?t-(t*Math.min(1,(r.dt_min||0)/m)):t; }
+function durText(min){ min=Math.round(min); return Math.floor(min/60)+"h "+(min%60)+"m"; }
+function esc(t){ return String(t==null?"":t).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+
 function fmt(v){ return v==null ? "0" : (Math.abs(v)>=1000 ? (v/1000).toFixed(1)+"k" : Number(v).toFixed(0)); }
 
 function setRange(range, btn){
@@ -158,6 +244,7 @@ async function init(){
 
     setRange("week", document.querySelector('.qbtn[data-range="week"]'));
     await loadFixedKpis();
+    await loadControlSupport();
     await runDashboard();
   }catch(e){
     status.style.display = "block";
@@ -199,11 +286,13 @@ async function runDashboard(){
     if(error) throw error;
 
     const rows = data||[];
+    await loadControlData(from,to);
+    attachDowntime(rows);
     renderFilteredKpis(rows);
     renderCharts(rows);
 
     document.getElementById("dash").style.display = "block";
-    status.className="status ok"; status.textContent = rows.length + " production record(s) in this period.";
+    status.className="status ok"; status.textContent = rows.length + " production record(s) in this period." + (ctrlReason()?" ⚠ Control-room downtime is not available: efficiency is shown WITHOUT downtime.":"");
   }catch(e){
     status.className="status err"; status.textContent="Error: "+e.message;
   }
@@ -212,19 +301,18 @@ window.runDashboard = runDashboard;
 
 function renderFilteredKpis(rows){
   const totalKg = rows.reduce((s,r)=>s+Number(r.kg_produced||0),0);
-  let totalTarget = 0;
-  const daysSeen = new Set(rows.map(r=>r.production_date+"|"+r.shift+"|"+r.asset_code));
-  daysSeen.forEach(key=>{
-    const assetCode = key.split("|")[2];
-    if(ASSET_TARGETS[assetCode]) totalTarget += ASSET_TARGETS[assetCode].target;
-  });
-  const performance = totalTarget>0 ? (totalKg/totalTarget*100) : null;
+  const totalTarget = rows.reduce((s,r)=>s+targetOf(r),0);
+  const totalAtg = rows.reduce((s,r)=>s+atgOf(r),0);
+  const totalDt = rows.reduce((s,r)=>s+(r.dt_min||0),0);
+  const efficiency = totalAtg>0 ? (totalKg/totalAtg*100) : null;
   const machinesUsed = new Set(rows.map(r=>r.asset_code)).size;
+  const dtOk = !ctrlReason();
 
   document.getElementById("kpisFiltered").innerHTML = `
     <div class="kpi" style="--kc:var(--r-green);"><div class="icon">♻️</div><div class="n">${fmt(totalKg)}</div><div class="l">KG Produced</div></div>
-    <div class="kpi" style="--kc:var(--r-lime);"><div class="icon">🎯</div><div class="n">${fmt(totalTarget)}</div><div class="l">Target (KG, approx)</div></div>
-    <div class="kpi" style="--kc:var(--r-teal);"><div class="icon">📊</div><div class="n">${performance!=null?performance.toFixed(1)+"%":"—"}</div><div class="l">Performance vs Target</div></div>
+    <div class="kpi" style="--kc:var(--r-lime);" title="Target of every entry, before downtime"><div class="icon">🎯</div><div class="n">${fmt(totalTarget)}</div><div class="l">Target (KG)</div></div>
+    <div class="kpi" style="--kc:var(--r-teal);" title="KG produced ÷ actual target. Actual target = target − output lost to control-room downtime (target × downtime minutes ÷ shift minutes). Actual target: ${fmt(totalAtg)} KG"><div class="icon">📊</div><div class="n">${efficiency!=null?efficiency.toFixed(1)+"%":"—"}</div><div class="l">Efficiency</div></div>
+    <div class="kpi" style="--kc:var(--r-red);" title="${dtOk?"Stoppages from the control room log, per entry never more than its shift length":esc(ctrlReason())}"><div class="icon">⏱️</div><div class="n">${dtOk?durText(totalDt):"—"}</div><div class="l">Downtime (Control Room)</div></div>
     <div class="kpi" style="--kc:var(--r-blue);"><div class="icon">⚙️</div><div class="n">${machinesUsed}</div><div class="l">Machines Used</div></div>
   `;
 }
@@ -251,31 +339,23 @@ function renderCharts(rows){
 
   const kgDayMap = {};
   const targetDayMap = {};
-  const dayAssetSeen = new Set();
   rows.forEach(r=>{
     kgDayMap[r.production_date] = (kgDayMap[r.production_date]||0)+Number(r.kg_produced||0);
-    const key = r.production_date+"|"+r.asset_code;
-    if(!dayAssetSeen.has(key)){
-      dayAssetSeen.add(key);
-      const t = ASSET_TARGETS[r.asset_code] ? ASSET_TARGETS[r.asset_code].target : 0;
-      targetDayMap[r.production_date] = (targetDayMap[r.production_date]||0) + t;
-    }
+    targetDayMap[r.production_date] = (targetDayMap[r.production_date]||0)+atgOf(r);
   });
   dualLineChart("chartVsTarget",
     Object.entries(kgDayMap).sort((a,b)=>a[0]<b[0]?-1:1),
     Object.entries(targetDayMap).sort((a,b)=>a[0]<b[0]?-1:1),
-    "#059669", "#065f46", "KG Produced", "Target (approx, per day machine ran)");
+    "#059669", "#065f46", "KG Produced", "Actual target (after downtime)");
 
-  const assetTotals = {};
-  rows.forEach(r=>{ assetTotals[r.asset_code]=(assetTotals[r.asset_code]||0)+Number(r.kg_produced||0); });
-  const daysRun = {};
-  rows.forEach(r=>{ const key=r.asset_code+"|"+r.production_date; daysRun[r.asset_code]=(daysRun[r.asset_code]||new Set()); daysRun[r.asset_code].add(r.production_date); });
+  const assetTotals = {}, assetExpected = {};
+  rows.forEach(r=>{
+    assetTotals[r.asset_code]=(assetTotals[r.asset_code]||0)+Number(r.kg_produced||0);
+    assetExpected[r.asset_code]=(assetExpected[r.asset_code]||0)+atgOf(r);
+  });
   const belowTarget = Object.keys(assetTotals).map(code=>{
-    const t = ASSET_TARGETS[code] ? ASSET_TARGETS[code].target : 0;
-    const daysCount = daysRun[code] ? daysRun[code].size : 1;
-    const expected = t * daysCount;
     const label = (ASSET_TARGETS[code]&&ASSET_TARGETS[code].name) ? ASSET_TARGETS[code].name : code;
-    return [label, expected, assetTotals[code]];
+    return [label, assetExpected[code], assetTotals[code]];
   }).filter(([,expected,actual])=>expected>0 && actual<expected)
     .map(([label,expected,actual])=>[label, Math.round((1-actual/expected)*100)])
     .sort((a,b)=>b[1]-a[1]);

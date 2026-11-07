@@ -197,7 +197,11 @@
         <b>Efficiency %</b> = KG produced ÷ actual target KG × 100. &nbsp;<b>Actual target</b> = target KG − output lost to downtime, where
         output lost to downtime = target KG × downtime minutes ÷ shift minutes (Morning 7 h, Afternoon 8 h, Night 9 h).
         Machine, shift and overall lines add up the KG and the actual targets first, then divide. Hover over an efficiency figure to see its actual target.
+        <br><b>Downtime</b> is taken only from the control room's stoppage log (control table): the stoppages of the same machine, branch, date and shift as each entry, for the machines linked in recycling_control_map.
+        An entry never counts more than its shift length. Stoppages with no finish time are not counted yet, and an entry with no stoppage has no downtime.
       </div>
+
+      <div id="ctrlWarn" style="display:none;font-size:12px;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 12px;margin:0 0 12px;"></div>
 
       <div class="card">
         <!-- Tabs — visible on screen only; both views stack when printing -->
@@ -228,6 +232,7 @@
           Downtime
         </div>
         <div class="tbl-wrap" id="viewDowntime" style="display:none;"></div>
+
       </div>
 
     </div><!-- #reportArea -->
@@ -252,6 +257,113 @@ function atgOf(r){
 function authHeaders(){
   return {"apikey":SUPABASE_ANON_KEY,"Authorization":"Bearer "+SUPABASE_ANON_KEY};
 }
+
+// ── Control-room stoppages (the technicians' log in the control table) ─────────────────────────
+// Each stoppage is counted in the recycling shift it started in (Morning 7-14, Afternoon 14-22, Night 22-7;
+// after midnight counts to the previous day's Night) and capped at that shift's length. The uncapped time is shown too.
+// It is a separate source from the operators' downtime and the two can overlap, so they are never added together.
+let SESSION_TOKEN = SUPABASE_ANON_KEY;       // the signed-in user's token: the control table is only readable by signed-in users
+function ctrlHeaders(){ return {"apikey":SUPABASE_ANON_KEY,"Authorization":"Bearer "+SESSION_TOKEN}; }
+let CMAP = new Map();                        // control code (UPPER CASE) -> { module, branch }
+let CMAP_CODES = [];                         // control codes exactly as written in recycling_control_map
+let EXCL_JOBS = new Set();                   // job codes the weaving report leaves out of downtime (job_table)
+let CTRL_ALL = [];                           // every mapped control record loaded for the current run, normalised
+const CTRL = { mapOk:false, mapMsg:"", jobOk:false, dataOk:false, dataMsg:"" };
+
+function normCode(s){ return String(s==null?"":s).trim().replace(/\s+/g," ").toUpperCase(); }
+function parseStamp(v){
+  const m=/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/.exec(String(v||""));
+  if(!m) return null;
+  return { ms:Date.UTC(+m[1],+m[2]-1,+m[3],+m[4],+m[5],+(m[6]||0)), date:m[1]+"-"+m[2]+"-"+m[3], hour:+m[4], hm:m[4]+":"+m[5] };
+}
+function addDays(d,n){ const t=new Date(d+"T00:00:00Z"); t.setUTCDate(t.getUTCDate()+n); return t.toISOString().slice(0,10); }
+function shiftOfStop(st){
+  const h=st.hour;
+  if(h>=7&&h<14)  return { shift:"Morning",   date:st.date };
+  if(h>=14&&h<22) return { shift:"Afternoon", date:st.date };
+  return { shift:"Night", date:(h<7?addDays(st.date,-1):st.date) };
+}
+function branchOfControl(raw,mapped){
+  if(mapped) return mapped;
+  const t=(String(raw.unit||"")+" "+String(raw.section||"")).toLowerCase();
+  return (/mama/.test(t)||String(raw.assets||"").toUpperCase().startsWith("MS-"))?"MamaSannu":"Rumbu Mainmat";
+}
+function normaliseControl(rows){
+  return rows.map(function(r){
+    const map=CMAP.get(normCode(r.assets)); if(!map) return null;
+    const stop=parseStamp(r.mc_stoppage_time), fin=parseStamp(r.finish_time);
+    const o={ wo:r.work_order, code:String(r.assets||"").trim(), mod:map.module, branch:branchOfControl(r,map.branch),
+              job:r.job_code||"", stop:stop, fin:fin, date:String(r.date||"").slice(0,10), shift:null };
+    if(stop){ const s=shiftOfStop(stop); o.shift=s.shift; o.date=s.date; o.key=o.mod+"|"+o.branch+"|"+o.date+"|"+o.shift; }
+    if(!stop||!fin){ o.status="open"; return o; }
+    o.minutes=Math.round((fin.ms-stop.ms)/60000);
+    if(o.minutes<0){ o.status="invalid"; return o; }
+    if(EXCL_JOBS.has(o.job)){ o.status="excluded"; return o; }
+    o.status="ok"; o.limit=SHIFT_MIN[o.shift]; o.capped=Math.min(o.minutes,o.limit); o.long=o.minutes>o.limit;
+    return o;
+  }).filter(Boolean);
+}
+
+async function loadControlSupport(){
+  CTRL.mapOk=false; CTRL.mapMsg=""; CTRL.jobOk=false;
+  try{
+    const res=await fetch(SUPABASE_URL+"/rest/v1/recycling_control_map?select=control_asset,module_asset,branch",{headers:ctrlHeaders()});
+    if(!res.ok) throw new Error("the mapping table could not be read (HTTP "+res.status+"). Run recycling_control_map.sql in Supabase.");
+    const rows=await res.json();
+    if(!rows.length) throw new Error("the mapping table is empty. Run recycling_control_map.sql in Supabase.");
+    CMAP=new Map(rows.map(function(r){ return [normCode(r.control_asset),{module:r.module_asset,branch:r.branch||null}]; }));
+    CMAP_CODES=rows.map(function(r){ return r.control_asset; });
+    CTRL.mapOk=true;
+  }catch(e){ CTRL.mapMsg=e.message; console.warn(e); }
+  try{
+    const jr=await fetch(SUPABASE_URL+"/rest/v1/job_table?select=job_code",{headers:ctrlHeaders()});
+    if(jr.ok){ const jrows=await jr.json(); EXCL_JOBS=new Set(jrows.map(function(r){ return r.job_code; })); CTRL.jobOk=jrows.length>0; }
+  }catch(e){ console.warn(e); }
+}
+
+async function loadControlData(from,to){
+  CTRL.dataOk=false; CTRL.dataMsg=""; CTRL_ALL=[];
+  if(!CTRL.mapOk) return;
+  try{
+    const list=CMAP_CODES.map(function(c){ return '"'+String(c).replace(/"/g,'\\"')+'"'; }).join(",");
+    const base=SUPABASE_URL+"/rest/v1/control?select=work_order,assets,date,unit,section,job_code,mc_stoppage_time,finish_time"+
+      "&assets=in.("+encodeURIComponent(list)+")&date=gte."+addDays(from,-3)+"&date=lte."+addDays(to,1)+"&order=id.asc";
+    let all=[], offset=0;
+    while(true){
+      const res=await fetch(base+"&limit=1000&offset="+offset,{headers:ctrlHeaders()});
+      if(!res.ok) throw new Error("control: HTTP "+res.status);
+      const page=await res.json(); all=all.concat(page);
+      if(page.length<1000) break; offset+=1000;
+    }
+    CTRL_ALL=normaliseControl(all); CTRL.dataOk=true;
+  }catch(e){ CTRL.dataMsg=e.message; console.warn(e); }
+}
+
+// The stoppages that match the filters chosen on the page (dates, shift, branch, machine).
+function controlView(){
+  const from=document.getElementById("fromDate").value, to=document.getElementById("toDate").value;
+  const shift=document.getElementById("shiftFilter").value, branch=document.getElementById("branchFilter").value, asset=document.getElementById("assetFilter").value;
+  const list=CTRL_ALL.filter(function(c){
+    if(!c.date||c.date<from||c.date>to) return false;
+    if(shift!=="All"&&c.shift!==shift) return false;
+    if(asset!=="All"&&c.mod!==asset) return false;
+    if(branch!=="All"){ if(c.branch!==branch) return false; } else if(MY_SECTIONS.indexOf(c.branch)<0) return false;
+    return true;
+  });
+  return { list:list };
+}
+function controlSummary(list){
+  const s={ n:0, capped:0, unc:0, long:0, open:0, excluded:0, invalid:0, byAsset:{}, byKey:{} };
+  list.forEach(function(c){
+    if(c.status==="open"){ s.open++; return; }
+    if(c.status==="invalid"){ s.invalid++; return; }
+    if(c.status==="excluded"){ s.excluded++; return; }
+    s.n++; s.capped+=c.capped; s.unc+=c.minutes; if(c.long) s.long++;
+    const a=(s.byAsset[c.mod]=s.byAsset[c.mod]||{n:0,capped:0,unc:0,long:0}); a.n++; a.capped+=c.capped; a.unc+=c.minutes; if(c.long) a.long++;
+    const k=c.mod+"|"+c.branch, b=(s.byKey[k]=s.byKey[k]||{mod:c.mod,branch:c.branch,n:0,capped:0,unc:0,long:0}); b.n++; b.capped+=c.capped; b.unc+=c.minutes; if(c.long) b.long++;
+  });
+  return s;
+}
 function iso(d){ return d.toISOString().slice(0,10); }
 function fmt(v,dec=1){
   const x=parseFloat(v);
@@ -275,8 +387,31 @@ function fmtDate(d){
 }
 
 // ── Downtime helpers ───────────────────────────────────────
-let DT_OK = true;   // false when the database does not have the downtime columns yet
-function dtMin(r){ const n=parseInt(r.downtime_minutes,10); return isNaN(n)||n<0?0:n; }
+// Downtime comes ONLY from the control room's stoppage log. attachDowntime() gives every production entry
+// r.dt_min (minutes counted: the stoppages of that machine, branch, date and shift, never more than the shift length),
+// r.dt_n (number of stoppages) and r.dt_unc (the same stoppages added up without the cap).
+function dtMin(r){ return r.dt_min>0?r.dt_min:0; }
+function rowKey(r){ return r.asset_code+"|"+r.branch+"|"+r.production_date+"|"+r.shift; }
+function attachDowntime(rows){
+  const by={};
+  if(CTRL.mapOk&&CTRL.dataOk){
+    CTRL_ALL.forEach(function(c){
+      if(c.status!=="ok") return;
+      const b=(by[c.key]=by[c.key]||{n:0,unc:0}); b.n++; b.unc+=c.minutes;
+    });
+  }
+  rows.forEach(function(r){
+    const b=by[rowKey(r)], lim=SHIFT_MIN[r.shift]||0;
+    r.dt_n=b?b.n:0; r.dt_unc=b?b.unc:0;
+    r.dt_min=b?(lim?Math.min(b.unc,lim):b.unc):0;
+  });
+}
+function ctrlReason(){ return !CTRL.mapOk?("Control-room downtime is not set up: "+CTRL.mapMsg):(!CTRL.dataOk?("Control-room downtime could not be loaded: "+CTRL.dataMsg):""); }
+function ctrlStatusNote(){ return ctrlReason()?" ⚠ Control-room downtime is not available: efficiency is shown WITHOUT downtime.":""; }
+function updateCtrlWarn(){
+  const el=document.getElementById("ctrlWarn"); if(!el) return;
+  const r=ctrlReason(); el.style.display=r?"block":"none"; el.textContent=r?("⚠ "+r+" Efficiency is shown without downtime."):"";
+}
 function durText(min){ min=Math.round(min); const h=Math.floor(min/60), m=min%60; return (h?h+"h ":"")+m+"m"; }   // 85 -> "1h 25m"
 function durHtml(min){ min=Math.round(min); return min>0?`<span title="${min} minutes">${durText(min)}</span>`:'<span class="dash">—</span>'; }
 function hhmm(t){ return t?String(t).slice(0,5):"—"; }
@@ -305,6 +440,14 @@ async function init(){
     );
     if(!res.ok) throw new Error("recycling_assets: HTTP "+res.status);
     ASSETS=await res.json();
+
+    // the signed-in user's token, so the control table (readable by signed-in users only) can be read
+    try{
+      const { data:{ session } } = await sb.auth.getSession();
+      SESSION_TOKEN=(session&&session.access_token)||SUPABASE_ANON_KEY;
+      sb.auth.onAuthStateChange(function(_e,s2){ SESSION_TOKEN=(s2&&s2.access_token)||SUPABASE_ANON_KEY; });
+    }catch(e){ console.warn("Could not read the signed-in session; using the public key.",e); }
+    await loadControlSupport();      // never stops the report: control-room figures just show as unavailable
 
     const af=document.getElementById("assetFilter");
     af.innerHTML='<option value="All">All Machines</option>'+
@@ -348,7 +491,7 @@ async function runReport(){
 
   try{
     let url=SUPABASE_URL+"/rest/v1/recycling_production"+
-      "?select=production_date,shift,asset_code,branch,kg_produced,operator_id,operator_name,had_downtime,downtime_start,downtime_end,downtime_minutes,downtime_reason"+
+      "?select=production_date,shift,asset_code,branch,kg_produced,operator_id,operator_name"+
       "&production_date=gte."+from+"&production_date=lte."+to+
       "&order=production_date.asc";
 
@@ -362,26 +505,31 @@ async function runReport(){
     }
 
     let res=await fetch(url,{headers:authHeaders()});
-    DT_OK=true;
-    if(res.status===400){
-      // the downtime columns are not in the database yet: load without them so the report still works
-      res=await fetch(url.replace(",downtime_reason","").replace(",downtime_minutes","").replace(",downtime_end","").replace(",downtime_start","").replace(",had_downtime",""),{headers:authHeaders()});
-      DT_OK=false;
-    }
     if(!res.ok) throw new Error("recycling_production: HTTP "+res.status);
     ROWS=await res.json();
+    await loadControlData(from,to);     // control-room stoppages for the same dates (never stops the report)
+    attachDowntime(ROWS);               // the downtime of each entry, from the control room
 
     // Reset operator filter and repopulate from new records
     populateOperatorFilter(ROWS);
     FILTERED=ROWS;
 
     status.className="status ok";
-    status.textContent=ROWS.length.toLocaleString()+" record(s) loaded."+
-      (DT_OK?"":" Downtime is not available yet: the downtime database update has not been run.");
+    status.textContent=ROWS.length.toLocaleString()+" record(s) loaded."+ctrlStatusNote();
 
     if(!ROWS.length){
-      document.getElementById("reportArea").style.display="none";
-      status.textContent="No data for the selected filters.";
+      // no production entries for these filters: still show the control-room stoppages if there are any
+      const cvCount=(CTRL.mapOk&&CTRL.dataOk)?controlView().list.length:0;
+      if(!cvCount){
+        document.getElementById("reportArea").style.display="none";
+        status.textContent="No data for the selected filters.";
+        return;
+      }
+      status.textContent="No production entries for these filters, but "+cvCount+" control-room record(s) match. Showing the Control Room tab.";
+      document.getElementById("reportArea").style.display="block";
+      renderAll(FILTERED);
+      const tabs=document.querySelectorAll(".tab");
+      if(tabs.length) showView("downtime",tabs[tabs.length-1]);
       return;
     }
 
@@ -439,6 +587,7 @@ function renderAll(rows){
   renderByAsset(rows);
   renderByOperator(rows);
   renderDowntime(rows);
+  updateCtrlWarn();
   updatePrintHeader();
 }
 
@@ -490,7 +639,14 @@ function renderKPIs(rows){
     `<div class="kpi"><div class="n">${fmt(totalKg)}</div><div class="l">Total KG Produced</div></div>`+
     `<div class="kpi"><div class="n">${fmt(totalTgt)}</div><div class="l">Total Target KG</div></div>`+
     `<div class="kpi ${cls}" title="${ev?"KG "+fmt(totalKg)+" ÷ actual target "+fmt(ev.atg)+"  (target "+fmt(totalTgt)+" − downtime loss "+fmt(ev.lost)+")":""}"><div class="n">${eff==null?"—":eff.toFixed(1)+"%"}</div><div class="l">Overall Efficiency</div></div>`+
-    `<div class="kpi"><div class="n">${rows.length}</div><div class="l">Total Entries</div></div>`;
+    `<div class="kpi"><div class="n">${rows.length}</div><div class="l">Total Entries</div></div>`+ctrlKpi(rows);
+}
+function ctrlKpi(rows){
+  if(!CTRL.mapOk||!CTRL.dataOk){
+    return `<div class="kpi" title="${esc(ctrlReason())}"><div class="n"><span class="dash">—</span></div><div class="l">Downtime (Control Room)</div></div>`;
+  }
+  const min=rows.reduce((t,r)=>t+dtMin(r),0), n=rows.reduce((t,r)=>t+(r.dt_n||0),0), unc=rows.reduce((t,r)=>t+(r.dt_unc||0),0);
+  return `<div class="kpi" title="${n} control-room stoppage(s) on these entries. Counted ${Math.round(min)} min (an entry never counts more than its shift length); added up without the cap: ${Math.round(unc)} min."><div class="n">${durText(min)}</div><div class="l">Downtime (Control Room)</div></div>`;
 }
 
 // ── By Shift view ──────────────────────────────────────────
@@ -555,13 +711,13 @@ function renderByAsset(rows){
     m.tgt+=getTarget(r.asset_code);
     m.entries+=1;
     m.atg+=atgOf(r);
-    if(dtMin(r)>0){ m.ev+=1; m.dt+=dtMin(r); }
+    m.ev+=(r.dt_n||0); m.dt+=dtMin(r);
   });
 
   let html='<table><thead><tr>'+
     '<th style="text-align:left;">Machine</th>'+
     '<th>Entries</th><th>KG Produced</th><th>Target KG</th><th>Efficiency %</th>'+
-    '<th>Downtime Events</th><th>Downtime</th>'+
+    '<th>Stoppages</th><th>Downtime</th>'+
     '</tr></thead><tbody>';
 
   let tKg=0,tTgt=0,tEnt=0,tEv=0,tDt=0,tAtg=0;
@@ -621,7 +777,7 @@ function renderByOperator(rows){
       sRows.slice().sort((x,y)=>String(x.production_date).localeCompare(String(y.production_date))).forEach(r=>{
         const ops=opsOf(r), et=sumOf(); addTo(et,r);
         const dtCell=dtMin(r)>0
-          ? `<span title="${esc((r.downtime_reason||"")+(r.downtime_start?" ("+hhmm(r.downtime_start)+" to "+hhmm(r.downtime_end)+")":""))}">${durText(dtMin(r))}</span>`
+          ? `<span title="${r.dt_n||0} control-room stoppage(s); added up without the cap: ${Math.round(r.dt_unc||0)} min">${durText(dtMin(r))}</span>`
           : '<span class="dash">—</span>';
         html+=`<tr class="g3"><td class="indent2">${fmtDate(r.production_date)}</td>`+
           `<td class="opcell" title="${esc(ops.map(o=>o.id||o.name).join(", "))}">${ops.length?esc(ops.map(o=>o.name).join(", ")):'<span class="dash">No operator recorded</span>'}</td>`+
@@ -636,55 +792,75 @@ function renderByOperator(rows){
     '<div style="font-size:11px;color:var(--muted);margin-top:6px;text-align:left;">'+
     'Operators on the same machine, date and shift work as one crew, so the crew has one combined KG, target, efficiency and downtime. Nothing is divided between people. '+
     'Efficiency = KG produced ÷ actual target KG × 100 (actual target = target minus the output lost to downtime). Machine and shift lines add up the KG and actual targets first, then divide. '+
-    'Hover over a Downtime figure to see its reason and times.</div>';
+    'Downtime is taken from the control room log for that machine and shift (see the Downtime tab).</div>';
   box.innerHTML=html;
 }
 
 // ── Downtime view ──────────────────────────────────────────
 function renderDowntime(rows){
   const box=document.getElementById("viewDowntime");
-  if(!DT_OK){ box.innerHTML="<p style='color:var(--muted);'>Downtime is not available yet: the downtime database update has not been run.</p>"; return; }
-  const dts=rows.filter(r=>dtMin(r)>0);
-  if(!dts.length){ box.innerHTML="<p style='color:var(--muted);'>No downtime was recorded for the selected filters.</p>"; return; }
+  const note=function(t){ return '<p style="color:var(--muted);font-size:13px;">'+esc(t)+'</p>'; };
+  if(!CTRL.mapOk){ box.innerHTML=note("Downtime is not available: "+CTRL.mapMsg); return; }
+  if(!CTRL.dataOk){ box.innerHTML=note("Downtime could not be loaded: "+CTRL.dataMsg); return; }
+  const opKey=document.getElementById("operatorFilter").value;
+  const keys=new Set(rows.map(rowKey));
+  let list=controlView().list;
+  if(opKey) list=list.filter(function(c){ return c.key&&keys.has(c.key); });   // an operator is selected: only stoppages on that operator's machine and shifts
+  const s=controlSummary(list);
+  const dash='<span class="dash">—</span>';
+  const counted=rows.reduce(function(t,r){ return t+dtMin(r); },0);
+  const noEntry=list.filter(function(c){ return c.status==="ok"&&!keys.has(c.key); });
 
-  const total=dts.reduce((s,r)=>s+dtMin(r),0);
-  const machines=new Set(dts.map(r=>r.asset_code)).size;
-  let html='<div class="kpis" style="margin-top:12px;">'+
-    `<div class="kpi bad"><div class="n">${durText(total)}</div><div class="l">Total Downtime</div></div>`+
-    `<div class="kpi"><div class="n">${dts.length}</div><div class="l">Downtime Events</div></div>`+
-    `<div class="kpi"><div class="n">${machines}</div><div class="l">Machines Affected</div></div>`+
-    `<div class="kpi"><div class="n">${durText(total/dts.length)}</div><div class="l">Average per Event</div></div>`+
+  let html='<div class="kpis">'+
+    '<div class="kpi"><div class="n">'+s.n+'</div><div class="l">Stoppages</div></div>'+
+    '<div class="kpi"><div class="n">'+durText(counted)+'</div><div class="l">Counted in efficiency</div></div>'+
+    '<div class="kpi"><div class="n">'+durText(s.unc)+'</div><div class="l">Without the cap</div></div>'+
+    '<div class="kpi'+(s.long?' warn':'')+'"><div class="n">'+s.long+'</div><div class="l">Longer than their shift</div></div>'+
+    '<div class="kpi"><div class="n">'+s.open+'</div><div class="l">Open (no finish time)</div></div>'+
+    '<div class="kpi"><div class="n">'+s.excluded+'</div><div class="l">Left out by job code</div></div>'+
+    '<div class="kpi"><div class="n">'+noEntry.length+'</div><div class="l">With no production entry</div></div>'+
     '</div>';
 
-  // by reason (same wording in different case or spacing counts as one reason)
-  const rmap={};
-  dts.forEach(r=>{
-    const label=String(r.downtime_reason||"").trim()||"(No reason given)";
-    const key=label.toLowerCase().replace(/\s+/g," ");
-    if(!rmap[key]) rmap[key]={label,ev:0,dt:0};
-    rmap[key].ev++; rmap[key].dt+=dtMin(r);
+  const keysSorted=Object.keys(s.byKey).sort(function(a,b){
+    const x=s.byKey[a], y=s.byKey[b];
+    return (ASSETS.findIndex(function(q){return q.asset_code===x.mod;})-ASSETS.findIndex(function(q){return q.asset_code===y.mod;}))||x.branch.localeCompare(y.branch);
   });
-  const reasons=Object.values(rmap).sort((a,b)=>b.dt-a.dt);
-  html+='<div style="font-weight:bold;color:var(--navy);margin:14px 0 2px;">Downtime by reason</div>'+
-    '<table><thead><tr><th style="text-align:left;">Reason</th><th>Events</th><th>Total Time</th><th>Share</th></tr></thead><tbody>'+
-    reasons.map(x=>`<tr><td class="asset-cell">${esc(x.label)}</td><td>${x.ev}</td><td>${durHtml(x.dt)}</td><td>${(x.dt/total*100).toFixed(1)}%</td></tr>`).join("")+
-    `<tr class="total-row"><td class="asset-cell">TOTAL</td><td>${dts.length}</td><td>${durHtml(total)}</td><td>100.0%</td></tr></tbody></table>`;
+  html+='<table><thead><tr><th style="text-align:left;">Machine</th><th style="text-align:left;">Branch</th>'+
+    '<th>Stoppages</th><th>Counted in efficiency</th><th>Without the cap</th><th>Longer than shift</th></tr></thead><tbody>';
+  let tN=0,tC=0,tU=0,tL=0;
+  keysSorted.forEach(function(k){
+    const b=s.byKey[k];
+    const cnt=rows.filter(function(r){ return r.asset_code===b.mod&&r.branch===b.branch; }).reduce(function(t,r){ return t+dtMin(r); },0);
+    tN+=b.n; tC+=cnt; tU+=b.unc; tL+=b.long;
+    html+='<tr><td class="asset-cell">'+esc(assetName(b.mod))+'</td><td style="text-align:left;">'+esc(branchLabel(b.branch))+'</td>'+
+      '<td>'+b.n+'</td><td>'+durHtml(cnt)+'</td><td>'+durHtml(b.unc)+'</td><td>'+(b.long||dash)+'</td></tr>';
+  });
+  if(!keysSorted.length) html+='<tr><td colspan="6" style="text-align:left;color:var(--muted);">No control-room stoppages for these filters.</td></tr>';
+  else html+='<tr class="total-row"><td class="asset-cell">TOTAL</td><td></td><td>'+tN+'</td><td>'+durHtml(tC)+'</td><td>'+durHtml(tU)+'</td><td>'+tL+'</td></tr>';
+  html+='</tbody></table>';
 
-  // every record
-  const order={Morning:0,Afternoon:1,Night:2};
-  const list=dts.slice().sort((a,b)=>String(b.production_date).localeCompare(String(a.production_date))
-    || (order[a.shift]-order[b.shift]) || String(assetName(a.asset_code)).localeCompare(String(assetName(b.asset_code))));
-  html+='<div style="font-weight:bold;color:var(--navy);margin:16px 0 2px;">Downtime records</div>'+
-    '<table><thead><tr><th>Date</th><th>Shift</th><th>Branch</th><th style="text-align:left;">Machine</th><th>Start</th><th>End</th><th>Duration</th><th style="text-align:left;">Reason</th><th style="text-align:left;">Operators</th></tr></thead><tbody>'+
-    list.map(r=>`<tr><td>${fmtDate(r.production_date)}</td><td>${esc(r.shift)}</td><td>${esc(branchLabel(r.branch))}</td>`+
-      `<td class="asset-cell">${esc(assetName(r.asset_code))}</td><td>${hhmm(r.downtime_start)}</td><td>${hhmm(r.downtime_end)}</td>`+
-      `<td><b>${durHtml(dtMin(r))}</b></td><td style="text-align:left;white-space:normal;">${esc(r.downtime_reason||"—")}</td>`+
-      `<td style="text-align:left;white-space:normal;">${esc(opsOf(r).map(o=>o.name).join(", ")||"—")}</td></tr>`).join("")+
-    '</tbody></table>';
+  const recs=list.filter(function(c){ return c.status==="ok"; }).sort(function(a,b){ return (a.date+a.stop.hm).localeCompare(b.date+b.stop.hm); });
+  if(recs.length){
+    const LIM=300;
+    html+='<div style="font-weight:bold;color:var(--navy);margin:16px 0 4px;">Stoppages ('+recs.length+(recs.length>LIM?', first '+LIM+' shown':'')+')</div>'+
+      '<table><thead><tr><th style="text-align:left;">Date</th><th>Shift</th><th style="text-align:left;">Machine</th><th style="text-align:left;">Branch</th><th style="text-align:left;">Control code</th>'+
+      '<th>Stopped</th><th>Finished</th><th>Minutes</th><th>Job code</th><th>Work order</th><th title="Is there a production entry for this machine, shift and date?">Entry</th></tr></thead><tbody>'+
+      recs.slice(0,LIM).map(function(c){
+        const days=Math.round((Date.UTC(+c.fin.date.slice(0,4),+c.fin.date.slice(5,7)-1,+c.fin.date.slice(8,10))-Date.UTC(+c.stop.date.slice(0,4),+c.stop.date.slice(5,7)-1,+c.stop.date.slice(8,10)))/86400000);
+        return '<tr><td style="text-align:left;">'+fmtDate(c.date)+'</td><td>'+esc(c.shift)+'</td><td class="asset-cell">'+esc(assetName(c.mod))+'</td><td style="text-align:left;">'+esc(branchLabel(c.branch))+'</td>'+
+          '<td style="text-align:left;">'+esc(c.code)+'</td><td>'+c.stop.hm+'</td><td>'+c.fin.hm+(days>0?' <span title="finished on '+c.fin.date+'">+'+days+'d</span>':'')+'</td>'+
+          '<td>'+(c.long?'<span class="b" title="Longer than the '+c.limit+' minute '+esc(c.shift)+' shift: an entry never counts more than its shift length">'+durText(c.minutes)+'</span>':durText(c.minutes))+'</td>'+
+          '<td>'+esc(c.job||'—')+'</td><td>'+esc(c.wo)+'</td><td>'+(keys.has(c.key)?'✓':dash)+'</td></tr>';
+      }).join('')+'</tbody></table>';
+  }
+  html+='<div style="font-size:11px;color:var(--muted);margin-top:8px;text-align:left;">'+
+    'Source: the control room\'s stoppage log (control table) for the machines linked in recycling_control_map. A stoppage belongs to the shift it started in (Morning 7 h, Afternoon 8 h, Night 9 h; after midnight it counts to the previous day\'s Night). '+
+    'An entry never counts more than its shift length, so the counted time can be lower than the time without the cap. '+
+    (CTRL.jobOk?'Job codes left out of downtime by the weaving report are left out here too. ':'<b>The job code list could not be loaded, so nothing was left out by job code.</b> ')+
+    'Stoppages with no finish time are not counted yet. A new spelling of a machine code is added in recycling_control_map.</div>';
   box.innerHTML=html;
 }
 
-// ── Tab switching (screen only) ────────────────────────────
 function showView(view,tabEl){
   document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));
   tabEl.classList.add("active");
